@@ -1,0 +1,107 @@
+name: "Technical Preview Release"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Candidate source branch (must match the committed manifest)"
+        required: true
+        type: string
+        default: "main"
+      manifest:
+        description: "Committed technical-preview release manifest"
+        required: true
+        type: string
+        default: ".release-notes/clodex-technical-preview.json"
+      confirm:
+        description: "Type RELEASE to create the tag and GitHub pre-release"
+        required: true
+        type: string
+
+run-name: "Technical Preview: ${{ inputs.ref }}"
+
+concurrency:
+  group: technical-preview-release
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+  id-token: write
+  pull-requests: read
+
+jobs:
+  preflight:
+    name: Validate immutable preview plan
+    runs-on: ubuntu-latest
+    outputs:
+      release_ref: ${{ steps.plan.outputs.release_ref }}
+      rollback_tag: ${{ steps.plan.outputs.rollback_tag }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+
+    steps:
+      - name: Require explicit confirmation
+        env:
+          RELEASE_CONFIRMATION: ${{ inputs.confirm }}
+        run: |
+          if [ "$RELEASE_CONFIRMATION" != "RELEASE" ]; then
+            echo "::error::Confirmation must be exactly RELEASE"
+            exit 1
+          fi
+
+      - name: Checkout candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Fetch release and rollback tags
+        run: git fetch --force --tags origin
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: ".node-version"
+
+      - name: Validate committed preview plan
+        id: plan
+        env:
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_SOURCE_REF: ${{ inputs.ref }}
+        run: |
+          node scripts/release/validate-technical-preview-plan.mjs \
+            --manifest="$RELEASE_MANIFEST" \
+            --source-ref="$RELEASE_SOURCE_REF" \
+            --require-new-tag \
+            --require-rollback-tag \
+            --github-output="$GITHUB_OUTPUT"
+
+      - name: Summarize immutable release plan
+        env:
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+        run: |
+          node - <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.env.RELEASE_MANIFEST, 'utf8'));
+          console.log('## Technical Preview Plan');
+          console.log('');
+          console.log(`- **Version:** ${plan.version}`);
+          console.log(`- **Tag:** ${plan.tag}`);
+          console.log(`- **Build channel:** ${plan.buildChannel}`);
+          console.log(`- **Rollback target:** ${plan.rollbackTag}`);
+          console.log(`- **OAuth/WebAuth ready:** ${plan.authentication.oauthWebAuthReady}`);
+          console.log('');
+          console.log('The reusable release workflow will pin the resolved candidate SHA.');
+          NODE
+
+  release:
+    name: Build and publish technical preview
+    needs: preflight
+    uses: ./.github/workflows/_release-browser.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      tag: ${{ needs.preflight.outputs.tag }}
+      channel: preview
+      ref: ${{ needs.preflight.outputs.release_ref }}
+    secrets: inherit

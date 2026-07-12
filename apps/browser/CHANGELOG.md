@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.16.0-preview.2 (2026-07-13)
+
+Technical Preview. Rollback target: `v1.16.0-preview.1`.
+
+### Reliability
+
+* make Karton WebSocket startup event-driven and deterministic instead of relying on fixed sleeps
+* restore the complete 15/15 visual regression suite, including Generated Apps fixtures
+* allow Karton consumers to use either React 18 or React 19
+
+### Architecture
+
+* extract a characterized ShutdownCoordinator while preserving teardown order and timeout behavior
+* extract tested AgentsList grouping, filtering, pinning, and project derivation logic
+
+### Interface
+
+* restore the Clodex green interface palette while preserving the current application badge
+
+### Authentication Scope
+
+* OAuth/WebAuth is not included in this technical preview and is not claimed as ready; existing provider credential configuration remains the supported path
+
 ## 1.16.0 (2026-06-30)
 
 ### Features

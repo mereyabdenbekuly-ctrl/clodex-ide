@@ -14,7 +14,7 @@ on:
       channel:
         required: true
         type: string
-        description: "Release channel (alpha, beta, nightly, release)"
+        description: "Release channel (preview, alpha, beta, nightly, release)"
       ref:
         required: false
         type: string
@@ -69,6 +69,19 @@ jobs:
     name: Validate release safety gates
     runs-on: ubuntu-latest
     steps:
+      - name: Validate release channel input
+        shell: bash
+        env:
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+        run: |
+          case "$RELEASE_CHANNEL_INPUT" in
+            preview|alpha|beta|nightly|release) ;;
+            *)
+              echo "::error::Unsupported release channel: $RELEASE_CHANNEL_INPUT"
+              exit 1
+              ;;
+          esac
+
       - name: Validate distributable release configuration
         shell: bash
         env:
@@ -183,7 +196,7 @@ jobs:
           if-no-files-found: error
 
       - name: Validate isolated agent runtime prerelease observation build
-        if: inputs.channel == 'alpha' || inputs.channel == 'beta'
+        if: inputs.channel == 'preview' || inputs.channel == 'alpha' || inputs.channel == 'beta'
         run: pnpm --dir apps/browser check:isolated-agent-runtime-observation-build
         env:
           RELEASE_CHANNEL: prerelease
@@ -191,7 +204,7 @@ jobs:
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
 
       - name: Validate Agentic App Runtime prerelease observation build
-        if: inputs.channel == 'alpha' || inputs.channel == 'beta'
+        if: inputs.channel == 'preview' || inputs.channel == 'alpha' || inputs.channel == 'beta'
         run: pnpm --dir apps/browser check:agentic-app-runtime-observation-build
         env:
           RELEASE_CHANNEL: prerelease

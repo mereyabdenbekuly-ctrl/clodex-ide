@@ -28,6 +28,7 @@
     "version:clodex:beta": "tsx scripts/release/index.ts --package clodex --channel beta",
     "version:clodex:release": "tsx scripts/release/index.ts --package clodex --channel release",
     "release:validate:macos": "pnpm --dir apps/browser release:validate:macos",
+    "release:preview:validate": "node scripts/release/validate-technical-preview-plan.mjs --manifest=.release-notes/clodex-technical-preview.json",
     "version:karton": "tsx scripts/release/index.ts --package karton",
     "extract:compression-test-data": "tsx scripts/experiments/extract-compression-test-data.ts",
     "security:secrets": "scripts/security/scan-secrets.sh working-tree",

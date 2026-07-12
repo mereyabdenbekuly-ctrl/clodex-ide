@@ -1,7 +1,8 @@
 name: "Auto Release"
 
 # Detects unreleased package versions and triggers builds + releases.
-# Technical Preview releases are started explicitly by a maintainer.
+# Technical Preview releases use technical-preview-release.yml and preserve
+# the public vX.Y.Z-preview.N tag series without changing package metadata.
 
 on:
   workflow_dispatch:

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "releaseKind": "technical-preview",
+  "version": "1.16.0-preview.2",
+  "tag": "v1.16.0-preview.2",
+  "sourceRef": "main",
+  "channel": "preview",
+  "buildChannel": "prerelease",
+  "rollbackTag": "v1.16.0-preview.1",
+  "authentication": {
+    "oauthWebAuthReady": false,
+    "releaseClaim": "OAuth/WebAuth is not included in this technical preview; existing provider credential configuration remains the supported path."
+  },
+  "githubArtifactBundles": [
+    "clodex-macos-arm64",
+    "clodex-macos-x64",
+    "clodex-linux-x64",
+    "clodex-windows-x64"
+  ],
+  "validationArtifacts": [
+    "macos-arm64-1.16.0-preview.2.json",
+    "macos-arm64-1.16.0-preview.2.sha256",
+    "macos-x64-1.16.0-preview.2.json",
+    "macos-x64-1.16.0-preview.2.sha256",
+    "windows-x64-1.16.0-preview.2.json",
+    "windows-x64-1.16.0-preview.2.sha256",
+    "linux-x64-1.16.0-preview.2.json",
+    "linux-x64-1.16.0-preview.2.sha256"
+  ]
+}

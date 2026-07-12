@@ -11,7 +11,7 @@ on:
           - clodex
           - karton
       channel:
-        description: "Release channel"
+        description: "SemVer channel (technical previews use Technical Preview Release)"
         required: true
         type: choice
         options:
@@ -54,8 +54,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version-file: '.node-version'
-          cache: 'pnpm'
+          node-version-file: ".node-version"
+          cache: "pnpm"
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
@@ -134,7 +134,7 @@ jobs:
 
           ---
 
-          > Merge this PR to trigger the auto-release pipeline on \`${{ github.ref_name }}\`."
+          > Merge this PR, then explicitly dispatch the \`Auto Release\` workflow on \`${{ github.ref_name }}\`."
 
           gh pr create \
             --base "${{ github.ref_name }}" \
@@ -153,4 +153,4 @@ jobs:
           echo "- **Tag:** \`${{ steps.bump.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch:** \`${{ steps.branch.outputs.name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Merge the PR to trigger the release." >> $GITHUB_STEP_SUMMARY
+          echo "Merge the PR, then explicitly dispatch the Auto Release workflow." >> $GITHUB_STEP_SUMMARY
