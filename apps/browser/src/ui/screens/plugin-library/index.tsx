@@ -120,7 +120,7 @@ function NoticeBanner({ notice }: { notice: PluginLibraryNotice }) {
         notice.tone === 'success' &&
           'border-success-solid/20 bg-success-solid/6 text-success-foreground',
         notice.tone === 'info' &&
-          'border-codex-blue-400/20 bg-codex-blue-400/6 text-token-text-secondary',
+          'border-clodex-green-400/20 bg-clodex-green-400/6 text-token-text-secondary',
       )}
     >
       {notice.tone === 'error' ? (
@@ -303,7 +303,7 @@ function PluginCard({
             <div className="min-w-0">
               <button
                 type="button"
-                className="block max-w-full truncate text-left font-semibold text-base text-token-text-primary hover:text-codex-blue-400 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-token-focus-border"
+                className="block max-w-full truncate text-left font-semibold text-base text-token-text-primary hover:text-clodex-green-400 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-token-focus-border"
                 onClick={() => onOpen(item.id)}
               >
                 {item.displayName}
@@ -319,7 +319,7 @@ function PluginCard({
                   ? item.enabled
                     ? 'bg-success-solid/10 text-success-foreground'
                     : 'bg-token-bg-tertiary text-token-text-tertiary'
-                  : 'bg-codex-blue-400/9 text-codex-blue-400',
+                  : 'bg-clodex-green-400/9 text-clodex-green-400',
               )}
             >
               {item.installed
@@ -349,7 +349,7 @@ function PluginCard({
           </span>
         )}
         {item.updateAvailable && (
-          <span className="rounded-full bg-codex-blue-400/9 px-2 py-0.5 font-medium text-[11px] text-codex-blue-400">
+          <span className="rounded-full bg-clodex-green-400/9 px-2 py-0.5 font-medium text-[11px] text-clodex-green-400">
             Update available
           </span>
         )}
@@ -642,7 +642,7 @@ export function PluginLibraryCatalog({
                 className="flex w-full items-start gap-3 px-4 py-4 text-left transition-colors hover:bg-token-list-hover-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-token-focus-border focus-visible:ring-inset"
                 onClick={() => onOpenPlugin(skill.pluginId)}
               >
-                <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-codex-blue-400/9 text-codex-blue-400">
+                <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-clodex-green-400/9 text-clodex-green-400">
                   <SparklesIcon className="size-4" />
                 </span>
                 <span className="min-w-0 flex-1">
@@ -939,7 +939,7 @@ export function PluginLibraryDetail({
                   {item.permissions.map((permission) => (
                     <SettingsPanel key={permission} className="p-4">
                       <div className="flex items-start gap-3">
-                        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-codex-blue-400/9 text-codex-blue-400">
+                        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-clodex-green-400/9 text-clodex-green-400">
                           <ShieldCheckIcon className="size-4" />
                         </span>
                         <div>
@@ -973,7 +973,7 @@ export function PluginLibraryDetail({
                       key={skill.name}
                       className="flex items-start gap-3 px-4 py-4"
                     >
-                      <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-codex-blue-400/9 text-codex-blue-400">
+                      <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-clodex-green-400/9 text-clodex-green-400">
                         <SparklesIcon className="size-4" />
                       </span>
                       <div>

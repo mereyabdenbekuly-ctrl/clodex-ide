@@ -209,7 +209,7 @@ function patchLineClass(line: string): string {
     return 'bg-token-bg-secondary text-token-text-tertiary';
   }
   if (line.startsWith('@@')) {
-    return 'bg-codex-blue-400/8 text-codex-blue-500';
+    return 'bg-clodex-green-400/8 text-clodex-green-500';
   }
   if (line.startsWith('+')) {
     return 'bg-success-foreground/8 text-token-text-primary';
@@ -270,7 +270,7 @@ function FilePatch({
       className={cn(
         'overflow-hidden rounded-xl border bg-token-main-surface-primary shadow-codex-hairline',
         active
-          ? 'border-codex-blue-400/35 ring-1 ring-codex-blue-400/12'
+          ? 'border-clodex-green-400/35 ring-1 ring-clodex-green-400/12'
           : 'border-token-border-light',
       )}
     >
@@ -335,9 +335,9 @@ function FilePatch({
                           type="button"
                           disabled={targetLocked}
                           className={cn(
-                            'app-no-drag flex size-5 items-center justify-center rounded-md text-token-text-tertiary opacity-0 transition-colors hover:bg-codex-blue-400/12 hover:text-codex-blue-500 focus-visible:opacity-100 disabled:pointer-events-none group-hover/line:opacity-100',
+                            'app-no-drag flex size-5 items-center justify-center rounded-md text-token-text-tertiary opacity-0 transition-colors hover:bg-clodex-green-400/12 hover:text-clodex-green-500 focus-visible:opacity-100 disabled:pointer-events-none group-hover/line:opacity-100',
                             (pendingComment || editorOpen) &&
-                              'bg-codex-blue-400/10 text-codex-blue-500 opacity-100',
+                              'bg-clodex-green-400/10 text-clodex-green-500 opacity-100',
                           )}
                           aria-label={`${pendingComment ? 'Edit' : 'Add'} comment on ${file.path} line ${target.line}`}
                           onClick={() => {
@@ -370,7 +370,7 @@ function FilePatch({
                   </div>
 
                   {editorOpen && editor && (
-                    <div className="border-codex-blue-400/25 border-y bg-token-main-surface-primary px-4 py-3 font-sans">
+                    <div className="border-clodex-green-400/25 border-y bg-token-main-surface-primary px-4 py-3 font-sans">
                       <textarea
                         autoFocus
                         disabled={reviewLocked}
@@ -381,7 +381,7 @@ function FilePatch({
                         placeholder="Leave an inline comment…"
                         aria-label={`Comment on ${file.path} line ${editor.line}`}
                         maxLength={65_536}
-                        className="min-h-20 w-full resize-y rounded-lg border border-token-border-light bg-token-input-background px-3 py-2 text-xs leading-5 outline-none placeholder:text-token-text-tertiary focus:border-codex-blue-400/55"
+                        className="min-h-20 w-full resize-y rounded-lg border border-token-border-light bg-token-input-background px-3 py-2 text-xs leading-5 outline-none placeholder:text-token-text-tertiary focus:border-clodex-green-400/55"
                       />
                       <div className="mt-2 flex items-center justify-between gap-3">
                         <span className="text-[10px] text-token-text-tertiary">
@@ -411,9 +411,9 @@ function FilePatch({
                   )}
 
                   {pendingComment && !editorOpen && (
-                    <div className="border-codex-blue-400/18 border-y bg-codex-blue-400/5 px-4 py-2.5 font-sans">
+                    <div className="border-clodex-green-400/18 border-y bg-clodex-green-400/5 px-4 py-2.5 font-sans">
                       <div className="flex items-start gap-2">
-                        <MessageSquarePlusIcon className="mt-0.5 size-3.5 shrink-0 text-codex-blue-500" />
+                        <MessageSquarePlusIcon className="mt-0.5 size-3.5 shrink-0 text-clodex-green-500" />
                         <p className="min-w-0 flex-1 whitespace-pre-wrap text-token-text-secondary text-xs leading-5">
                           {pendingComment.body}
                         </p>
@@ -450,7 +450,7 @@ function FilePatch({
             </p>
             <button
               type="button"
-              className="text-codex-blue-500 text-xs hover:underline"
+              className="text-clodex-green-500 text-xs hover:underline"
               onClick={() => onOpenExternal(file.blobUrl)}
             >
               Open file on GitHub
@@ -1072,7 +1072,7 @@ export function HostedPullRequestReview({
               )}
             >
               <div className="flex items-start gap-3">
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-codex-blue-400/10 text-codex-blue-500">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-clodex-green-400/10 text-clodex-green-500">
                   <MessageSquarePlusIcon className="size-4" />
                 </span>
                 <div className="min-w-0 flex-1">
@@ -1102,7 +1102,7 @@ export function HostedPullRequestReview({
                     aria-label="Review summary"
                     maxLength={65_536}
                     disabled={isWriting}
-                    className="mt-3 min-h-20 w-full resize-y rounded-xl border border-token-border-light bg-token-input-background px-3 py-2 text-xs leading-5 outline-none placeholder:text-token-text-tertiary focus:border-codex-blue-400/55"
+                    className="mt-3 min-h-20 w-full resize-y rounded-xl border border-token-border-light bg-token-input-background px-3 py-2 text-xs leading-5 outline-none placeholder:text-token-text-tertiary focus:border-clodex-green-400/55"
                   />
 
                   {reviewUnavailableMessage && (
@@ -1112,8 +1112,8 @@ export function HostedPullRequestReview({
                     </div>
                   )}
                   {inlineEditor && (
-                    <div className="mt-2 flex items-start gap-2 rounded-lg border border-codex-blue-400/20 bg-codex-blue-400/6 px-3 py-2 text-token-text-secondary text-xs leading-5">
-                      <PencilIcon className="mt-0.5 size-3.5 shrink-0 text-codex-blue-500" />
+                    <div className="mt-2 flex items-start gap-2 rounded-lg border border-clodex-green-400/20 bg-clodex-green-400/6 px-3 py-2 text-token-text-secondary text-xs leading-5">
+                      <PencilIcon className="mt-0.5 size-3.5 shrink-0 text-clodex-green-500" />
                       Save or cancel the open inline comment before submitting.
                     </div>
                   )}
@@ -1139,7 +1139,7 @@ export function HostedPullRequestReview({
                       {submission.reviewUrl && (
                         <button
                           type="button"
-                          className="app-no-drag shrink-0 text-codex-blue-500 hover:underline"
+                          className="app-no-drag shrink-0 text-clodex-green-500 hover:underline"
                           onClick={() =>
                             onOpenExternal(submission.reviewUrl ?? '')
                           }
@@ -1285,7 +1285,7 @@ export function HostedPullRequestReview({
           {!isMerging && <DialogClose />}
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <LockKeyholeIcon className="size-4 text-codex-blue-500" />
+              <LockKeyholeIcon className="size-4 text-clodex-green-500" />
               Protected merge
             </DialogTitle>
             <DialogDescription>
@@ -1376,7 +1376,7 @@ export function HostedPullRequestReview({
                 );
                 setMergeSubmission({ status: 'idle' });
               }}
-              className="mt-1.5 h-9 w-full rounded-lg border border-token-border-light bg-token-input-background px-3 text-token-text-primary text-xs outline-none focus:border-codex-blue-400/55 disabled:opacity-50"
+              className="mt-1.5 h-9 w-full rounded-lg border border-token-border-light bg-token-input-background px-3 text-token-text-primary text-xs outline-none focus:border-clodex-green-400/55 disabled:opacity-50"
             >
               {pullRequest.mergePolicy.availableMethods.length === 0 && (
                 <option value="">No direct merge method available</option>
@@ -1412,7 +1412,7 @@ export function HostedPullRequestReview({
                 setMergeConfirmation(event.currentTarget.value);
                 setMergeSubmission({ status: 'idle' });
               }}
-              className="mt-1.5 h-9 w-full rounded-lg border border-token-border-light bg-token-input-background px-3 font-mono text-token-text-primary text-xs outline-none placeholder:text-token-text-tertiary focus:border-codex-blue-400/55 disabled:opacity-50"
+              className="mt-1.5 h-9 w-full rounded-lg border border-token-border-light bg-token-input-background px-3 font-mono text-token-text-primary text-xs outline-none placeholder:text-token-text-tertiary focus:border-clodex-green-400/55 disabled:opacity-50"
               placeholder={pullRequest.mergePolicy.confirmationText}
             />
           </label>

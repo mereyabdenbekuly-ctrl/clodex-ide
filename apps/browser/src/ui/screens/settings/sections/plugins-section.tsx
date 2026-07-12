@@ -136,7 +136,7 @@ function PluginCard({
                 className={cn(
                   'rounded-full px-2 py-0.5 font-medium text-[11px]',
                   isEnabled
-                    ? 'bg-codex-blue-400/9 text-codex-blue-400'
+                    ? 'bg-clodex-green-400/9 text-clodex-green-400'
                     : 'bg-token-bg-tertiary text-token-text-tertiary',
                 )}
               >
@@ -454,7 +454,7 @@ function PluginDetailView({
                   key={skill.name}
                   className="flex items-start gap-3 px-4 py-3.5"
                 >
-                  <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-codex-blue-400/9 text-codex-blue-400">
+                  <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-clodex-green-400/9 text-clodex-green-400">
                     <SparklesIcon className="size-3.5" />
                   </span>
                   <div className="min-w-0">
@@ -670,7 +670,7 @@ function MarketplacePanel({
                         v{item.manifest.version}
                       </span>
                       {item.installedVersion && (
-                        <span className="rounded-full bg-codex-blue-400/9 px-2 py-0.5 font-medium text-[11px] text-codex-blue-400">
+                        <span className="rounded-full bg-clodex-green-400/9 px-2 py-0.5 font-medium text-[11px] text-clodex-green-400">
                           Installed v{item.installedVersion}
                         </span>
                       )}
@@ -1150,7 +1150,7 @@ function PrivateMarketplacePanel({
                                 v{item.manifest.version}
                               </span>
                               {item.installedVersion && (
-                                <span className="rounded-full bg-codex-blue-400/9 px-2 py-0.5 font-medium text-[11px] text-codex-blue-400">
+                                <span className="rounded-full bg-clodex-green-400/9 px-2 py-0.5 font-medium text-[11px] text-clodex-green-400">
                                   Installed v{item.installedVersion}
                                 </span>
                               )}

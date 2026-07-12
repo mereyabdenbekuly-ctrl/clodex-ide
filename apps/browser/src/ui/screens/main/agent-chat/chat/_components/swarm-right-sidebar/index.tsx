@@ -43,7 +43,7 @@ function SwarmStatusIndicator({
   switch (status) {
     case 'running':
       return (
-        <div className="size-2.5 shrink-0 animate-pulse rounded-[2px] bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]" />
+        <div className="size-2.5 shrink-0 animate-pulse rounded-[2px] bg-clodex-green-brand shadow-[0_0_8px_rgba(0,238,120,0.8)]" />
       );
     case 'completed':
       return <div className="size-2.5 shrink-0 rounded-[2px] bg-zinc-500" />;
@@ -79,7 +79,7 @@ function TaskRow({ task }: { task: SwarmTaskState }) {
     <div
       className={cn(
         'mx-1 flex w-[calc(100%-0.5rem)] flex-row items-start gap-1.5 rounded px-1 py-0.5 text-xs transition-colors',
-        task.status === 'running' && 'bg-blue-500/10',
+        task.status === 'running' && 'bg-clodex-green-brand/10',
         task.status === 'failed' && 'bg-red-500/10',
       )}
     >
@@ -91,7 +91,7 @@ function TaskRow({ task }: { task: SwarmTaskState }) {
           <span
             className={cn(
               'min-w-0 truncate leading-5 transition-colors',
-              task.status === 'running' && 'text-blue-200',
+              task.status === 'running' && 'text-clodex-green-200',
               task.status === 'completed'
                 ? 'text-subtle-foreground'
                 : 'text-foreground',
@@ -107,7 +107,7 @@ function TaskRow({ task }: { task: SwarmTaskState }) {
               className={cn(
                 'shrink-0 rounded border border-border/40 px-1 text-[10px] text-muted-foreground leading-4',
                 task.status === 'running' &&
-                  'border-blue-400/30 bg-blue-500/10 text-blue-200',
+                  'border-clodex-green-300/30 bg-clodex-green-brand/10 text-clodex-green-200',
                 didFallback &&
                   'border-amber-400/40 bg-amber-500/10 text-amber-200',
               )}
@@ -157,7 +157,7 @@ function TaskRow({ task }: { task: SwarmTaskState }) {
         <div
           className={cn(
             'shrink-0 pt-0.5 text-[10px] text-subtle-foreground',
-            task.status === 'running' && 'text-blue-200',
+            task.status === 'running' && 'text-clodex-green-200',
           )}
         >
           {task.metrics.tokens > 0 && `${task.metrics.tokens} tok`}
@@ -268,7 +268,7 @@ function SwarmRunContent({ run }: { run: SwarmRunState }) {
                   className={cn(
                     'truncate font-medium text-xs',
                     phase.status === 'running'
-                      ? 'text-blue-200'
+                      ? 'text-clodex-green-200'
                       : 'text-subtle-foreground',
                     phase.status === 'failed' && 'text-destructive',
                   )}
@@ -280,7 +280,7 @@ function SwarmRunContent({ run }: { run: SwarmRunState }) {
                     className={cn(
                       'h-full rounded-full transition-[width,background-color] duration-300',
                       phase.status === 'failed' && 'bg-red-500',
-                      phase.status === 'running' && 'bg-blue-500',
+                      phase.status === 'running' && 'bg-clodex-green-brand',
                       phase.status === 'completed' && 'bg-zinc-500',
                       phase.status === 'pending' && 'bg-zinc-700',
                     )}
@@ -351,7 +351,7 @@ function SwarmRunCard({ run }: { run: SwarmRunState }) {
             className={cn(
               'rounded border border-border/40 px-1.5 text-[10px] uppercase leading-4',
               run.status === 'running' &&
-                'border-blue-500/40 bg-blue-500/10 text-blue-200',
+                'border-clodex-green-brand/40 bg-clodex-green-brand/10 text-clodex-green-200',
               run.status === 'completed' &&
                 'border-zinc-500/40 bg-zinc-500/10 text-zinc-300',
               run.status === 'failed' &&

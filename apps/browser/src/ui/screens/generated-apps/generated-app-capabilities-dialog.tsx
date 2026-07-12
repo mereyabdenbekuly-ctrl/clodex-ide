@@ -211,8 +211,8 @@ export function GeneratedAppCapabilitiesDialog({
           </div>
         ) : (
           <div className="grid gap-5">
-            <div className="flex items-center gap-2 rounded-xl border border-codex-blue-400/18 bg-codex-blue-400/7 p-3 text-token-text-secondary text-xs">
-              <ShieldCheckIcon className="size-4 shrink-0 text-codex-blue-400" />
+            <div className="flex items-center gap-2 rounded-xl border border-clodex-green-400/18 bg-clodex-green-400/7 p-3 text-token-text-secondary text-xs">
+              <ShieldCheckIcon className="size-4 shrink-0 text-clodex-green-400" />
               Requests are rate-limited to 30 per minute and results are capped
               at 1 MB.
             </div>

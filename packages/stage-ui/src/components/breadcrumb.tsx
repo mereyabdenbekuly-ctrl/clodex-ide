@@ -24,7 +24,7 @@ function BreadcrumbItem({ className, ...props }: React.ComponentProps<'li'>) {
     <li
       data-slot="breadcrumb-item"
       className={cn(
-        'inline-flex max-w-42 cursor-pointer select-none items-center gap-1.5 truncate rounded-full px-2 py-1 hover:bg-blue-500/5',
+        'inline-flex max-w-42 cursor-pointer select-none items-center gap-1.5 truncate rounded-full px-2 py-1 hover:bg-primary-500/5',
         className,
       )}
       {...props}
@@ -37,7 +37,7 @@ function BreadcrumbLink({ className, ...props }: React.ComponentProps<'a'>) {
     <a
       data-slot="breadcrumb-link"
       className={cn(
-        'sleect-none cursor-pointer rounded-full px-2 py-1 transition-colors hover:bg-blue-500/5 hover:text-foreground',
+        'sleect-none cursor-pointer rounded-full px-2 py-1 transition-colors hover:bg-primary-500/5 hover:text-foreground',
         className,
       )}
       {...props}
@@ -53,7 +53,7 @@ function BreadcrumbPage({ className, ...props }: React.ComponentProps<'span'>) {
       aria-disabled="true"
       aria-current="page"
       className={cn(
-        'cursor-pointer select-none rounded-full px-2 py-1 font-normal text-foreground hover:bg-blue-500/5',
+        'cursor-pointer select-none rounded-full px-2 py-1 font-normal text-foreground hover:bg-primary-500/5',
         className,
       )}
       {...props}
@@ -89,7 +89,7 @@ function BreadcrumbEllipsis({
       role="presentation"
       aria-hidden="true"
       className={cn(
-        'flex size-9 items-center justify-center rounded-full px-2 py-1 hover:bg-blue-500/5',
+        'flex size-9 items-center justify-center rounded-full px-2 py-1 hover:bg-primary-500/5',
         className,
       )}
       {...props}

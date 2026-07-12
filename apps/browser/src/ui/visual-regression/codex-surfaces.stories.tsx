@@ -565,7 +565,7 @@ function SettingsFixture() {
         <aside className="flex h-full flex-col border-token-border-light border-r bg-token-bg-secondary/55 p-3">
           <div className="px-2 pt-2 pb-4">
             <div className="flex items-center gap-2.5">
-              <span className="flex size-8 items-center justify-center rounded-xl bg-codex-blue-400 text-white shadow-codex-md">
+              <span className="flex size-8 items-center justify-center rounded-xl bg-clodex-green-400 text-white shadow-codex-md">
                 <SparklesIcon className="size-4" />
               </span>
               <div>
@@ -599,12 +599,12 @@ function SettingsFixture() {
                   )}
                 >
                   {item.active && (
-                    <span className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-codex-blue-400" />
+                    <span className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-clodex-green-400" />
                   )}
                   <Icon
                     className={cn(
                       'size-4',
-                      item.active && 'text-codex-blue-400',
+                      item.active && 'text-clodex-green-400',
                     )}
                   />
                   {item.label}
@@ -685,7 +685,7 @@ function SettingsFixture() {
 
             <div className="grid grid-cols-2 gap-4">
               <SettingsPanel interactive className="p-5">
-                <span className="flex size-9 items-center justify-center rounded-xl bg-codex-blue-400/10 text-codex-blue-400">
+                <span className="flex size-9 items-center justify-center rounded-xl bg-clodex-green-400/10 text-clodex-green-400">
                   <CircleGaugeIcon className="size-4" />
                 </span>
                 <h3 className="mt-4 font-medium text-sm">Reasoning effort</h3>

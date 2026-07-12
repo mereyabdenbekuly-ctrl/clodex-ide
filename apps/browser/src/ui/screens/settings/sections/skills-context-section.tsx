@@ -204,7 +204,7 @@ function SkillRow({
             className={cn(
               'mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg',
               isEnabled
-                ? 'bg-codex-blue-400/9 text-codex-blue-400'
+                ? 'bg-clodex-green-400/9 text-clodex-green-400'
                 : 'bg-token-bg-tertiary text-token-text-tertiary',
             )}
           >
@@ -479,7 +479,7 @@ function GlobalSkillsDetails({ query }: { query: string }) {
                     className={cn(
                       'flex size-9 shrink-0 items-center justify-center rounded-xl',
                       dirEnabled
-                        ? 'bg-codex-blue-400/9 text-codex-blue-400'
+                        ? 'bg-clodex-green-400/9 text-clodex-green-400'
                         : 'bg-token-bg-tertiary text-token-text-tertiary',
                     )}
                   >

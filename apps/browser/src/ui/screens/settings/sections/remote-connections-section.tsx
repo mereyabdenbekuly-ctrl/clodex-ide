@@ -100,7 +100,7 @@ function statusInfo(connection: RemoteConnectionPublic) {
       label: 'Connecting',
       icon: <LoaderCircleIcon className="size-3 animate-spin" />,
       className:
-        'border-codex-blue-400/20 bg-codex-blue-400/7 text-codex-blue-400',
+        'border-clodex-green-400/20 bg-clodex-green-400/7 text-clodex-green-400',
     };
   }
   if (connection.status === 'error') {
@@ -518,7 +518,7 @@ export function RemoteConnectionsSection() {
                       className={cn(
                         'w-full rounded-xl border p-3 text-left transition-colors',
                         selectedId === connection.id
-                          ? 'border-codex-blue-400/35 bg-codex-blue-400/6'
+                          ? 'border-clodex-green-400/35 bg-clodex-green-400/6'
                           : 'border-token-border-light bg-token-main-surface-primary/70 hover:border-token-border-default',
                       )}
                       onClick={() => {
@@ -543,7 +543,7 @@ export function RemoteConnectionsSection() {
                         {info.label}
                       </span>
                       {runnerConnectionId === connection.id && (
-                        <span className="mt-2 ml-1 inline-flex items-center gap-1 rounded-full border border-codex-blue-400/30 bg-codex-blue-400/8 px-2 py-0.5 font-medium text-[10px] text-codex-blue-400">
+                        <span className="mt-2 ml-1 inline-flex items-center gap-1 rounded-full border border-clodex-green-400/30 bg-clodex-green-400/8 px-2 py-0.5 font-medium text-[10px] text-clodex-green-400">
                           <ServerCogIcon className="size-2.5" />
                           SSH runner
                         </span>

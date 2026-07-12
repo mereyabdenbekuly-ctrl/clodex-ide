@@ -341,7 +341,7 @@ function ThemeBadge({
       className={cn(
         'group relative flex h-16 w-32 shrink-0 items-start justify-end overflow-hidden rounded-xl p-2 ring-1 ring-token-border-light transition-[opacity,box-shadow,transform] duration-150 ease-out',
         active
-          ? 'scale-[1.02] opacity-100 shadow-codex-md ring-2 ring-codex-blue-400/55'
+          ? 'scale-[1.02] opacity-100 shadow-codex-md ring-2 ring-clodex-green-400/55'
           : 'opacity-65 hover:-translate-y-px hover:opacity-90 hover:shadow-codex-sm',
       )}
     >
@@ -577,7 +577,7 @@ function ThemeSetting() {
             <button
               key={theme.id}
               type="button"
-              className="group rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-codex-blue-400/55"
+              className="group rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-clodex-green-400/55"
               onClick={() => handleThemeChange(theme.id)}
               aria-checked={active}
               aria-label={`Use ${theme.name} theme`}
@@ -689,7 +689,7 @@ export function PersonalizationSettingsSection() {
             title="Notifications"
             description="Choose how Clodex alerts you when agent work needs attention."
             trailing={
-              <span className="flex size-8 items-center justify-center rounded-lg bg-codex-blue-400/8 text-codex-blue-400">
+              <span className="flex size-8 items-center justify-center rounded-lg bg-clodex-green-400/8 text-clodex-green-400">
                 <BellRingIcon className="size-4" />
               </span>
             }

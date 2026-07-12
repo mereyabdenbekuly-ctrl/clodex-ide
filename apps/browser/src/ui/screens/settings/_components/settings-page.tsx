@@ -34,7 +34,7 @@ export function SettingsPage({
           <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0 max-w-2xl">
               {eyebrow && (
-                <p className="mb-1.5 font-medium text-codex-blue-400 text-xs uppercase tracking-[0.12em]">
+                <p className="mb-1.5 font-medium text-clodex-green-400 text-xs uppercase tracking-[0.12em]">
                   {eyebrow}
                 </p>
               )}
@@ -133,7 +133,7 @@ export function SettingsSummaryCard({
       className={cn(
         'flex min-w-0 items-center gap-3 rounded-xl border px-3.5 py-3',
         accent
-          ? 'border-codex-blue-400/20 bg-codex-blue-400/6'
+          ? 'border-clodex-green-400/20 bg-clodex-green-400/6'
           : 'border-token-border-light bg-token-bg-secondary/45',
       )}
     >
@@ -142,7 +142,7 @@ export function SettingsSummaryCard({
           className={cn(
             'flex size-8 shrink-0 items-center justify-center rounded-lg',
             accent
-              ? 'bg-codex-blue-400/12 text-codex-blue-400'
+              ? 'bg-clodex-green-400/12 text-clodex-green-400'
               : 'bg-token-bg-tertiary text-token-text-secondary',
           )}
         >

@@ -184,7 +184,7 @@ export function TaskGoalCard({ agentId }: { agentId: string }) {
       case 'cancelled':
         return 'text-token-text-tertiary bg-token-bg-tertiary';
       default:
-        return 'text-codex-blue-400 bg-codex-blue-400/10';
+        return 'text-clodex-green-400 bg-clodex-green-400/10';
     }
   }, [goal?.status]);
 
@@ -208,7 +208,7 @@ export function TaskGoalCard({ agentId }: { agentId: string }) {
     return (
       <div className="mx-2 mb-2 rounded-xl border border-token-border-light bg-token-bg-secondary/45 p-3 shadow-codex-hairline">
         <div className="flex items-center gap-2 font-medium text-sm text-token-text-primary">
-          <FlagIcon className="size-3.5 text-codex-blue-400" />
+          <FlagIcon className="size-3.5 text-clodex-green-400" />
           {goal ? 'Edit task goal' : 'Set task goal'}
         </div>
         <textarea
@@ -285,7 +285,7 @@ export function TaskGoalCard({ agentId }: { agentId: string }) {
   return (
     <div className="mx-2 mb-2 rounded-xl border border-token-border-light bg-token-bg-secondary/35 px-3 py-2.5 shadow-codex-hairline">
       <div className="flex items-start gap-2">
-        <FlagIcon className="mt-0.5 size-3.5 shrink-0 text-codex-blue-400" />
+        <FlagIcon className="mt-0.5 size-3.5 shrink-0 text-clodex-green-400" />
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <p className="line-clamp-2 text-sm text-token-text-primary leading-5">
@@ -311,7 +311,7 @@ export function TaskGoalCard({ agentId }: { agentId: string }) {
                         ? 'bg-error-solid'
                         : tokenProgress >= 80
                           ? 'bg-warning-solid'
-                          : 'bg-codex-blue-400',
+                          : 'bg-clodex-green-400',
                     )}
                     style={{ width: `${tokenProgress}%` }}
                   />
@@ -339,7 +339,7 @@ export function TaskGoalCard({ agentId }: { agentId: string }) {
                           ? 'bg-error-solid'
                           : timeProgress >= 80
                             ? 'bg-warning-solid'
-                            : 'bg-codex-blue-400',
+                            : 'bg-clodex-green-400',
                       )}
                       style={{ width: `${timeProgress}%` }}
                     />

@@ -732,7 +732,7 @@ export function AutomationsSettingsSection() {
           <div
             className={`rounded-xl border px-4 py-3 text-xs leading-5 ${
               snapshot.wakeScheduler.mode === 'native'
-                ? 'border-codex-blue-400/18 bg-codex-blue-400/7 text-token-text-secondary'
+                ? 'border-clodex-green-400/18 bg-clodex-green-400/7 text-token-text-secondary'
                 : 'border-warning-solid/20 bg-warning-solid/7 text-token-text-secondary'
             }`}
           >

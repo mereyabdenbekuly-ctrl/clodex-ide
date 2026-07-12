@@ -92,7 +92,7 @@ export function CloudTaskArtifactPart({
   return (
     <section className="overflow-hidden rounded-xl border border-token-border-light bg-token-bg-secondary/35 shadow-codex-hairline">
       <div className="flex items-start gap-3 px-3.5 py-3">
-        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-codex-blue-400/10 text-codex-blue-400">
+        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-clodex-green-400/10 text-clodex-green-400">
           <FileArchiveIcon className="size-4" />
         </span>
         <div className="min-w-0 flex-1">

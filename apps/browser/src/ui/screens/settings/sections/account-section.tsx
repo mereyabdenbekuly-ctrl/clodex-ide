@@ -200,7 +200,7 @@ function AuthenticatedView({
       <div className="flex flex-col gap-2 p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-codex-blue-400/18 bg-codex-blue-400/8 text-codex-blue-400">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-clodex-green-400/18 bg-clodex-green-400/8 text-clodex-green-400">
               <UserRoundIcon className="size-4.5" />
             </span>
             <div className="min-w-0">
@@ -395,7 +395,8 @@ function ApiKeyManager({
                 key={key.id}
                 className={cn(
                   'w-full items-start rounded-xl border border-token-border-light bg-token-bg-secondary/30 p-3 transition-colors hover:border-token-border-default hover:bg-token-bg-secondary/55',
-                  isActive && 'border-codex-blue-400/28 bg-codex-blue-400/6',
+                  isActive &&
+                    'border-clodex-green-400/28 bg-clodex-green-400/6',
                 )}
               >
                 <Radio value={key.id} className="mt-0.5" />
@@ -417,7 +418,7 @@ function ApiKeyManager({
                       </div>
                     </div>
                     {isActive && (
-                      <span className="shrink-0 rounded-full bg-codex-blue-400/9 px-2 py-0.5 font-medium text-[10px] text-codex-blue-400 uppercase tracking-[0.06em]">
+                      <span className="shrink-0 rounded-full bg-clodex-green-400/9 px-2 py-0.5 font-medium text-[10px] text-clodex-green-400 uppercase tracking-[0.06em]">
                         Active
                       </span>
                     )}

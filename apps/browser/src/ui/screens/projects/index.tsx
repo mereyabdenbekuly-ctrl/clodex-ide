@@ -141,7 +141,7 @@ function ProjectCard({
           className={cn(
             'flex size-10 shrink-0 items-center justify-center rounded-xl border',
             project.rootPath
-              ? 'border-codex-blue-400/18 bg-codex-blue-400/9 text-codex-blue-400'
+              ? 'border-clodex-green-400/18 bg-clodex-green-400/9 text-clodex-green-400'
               : 'border-token-border-light bg-token-bg-secondary text-token-text-tertiary',
           )}
         >
@@ -209,7 +209,7 @@ function ProjectCard({
                 className={cn(
                   'group/session flex min-h-11 w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-[background-color,box-shadow] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-token-focus-border',
                   current
-                    ? 'bg-codex-blue-400/8 shadow-codex-hairline'
+                    ? 'bg-clodex-green-400/8 shadow-codex-hairline'
                     : 'hover:bg-token-list-hover-background',
                 )}
                 onClick={() => onOpenSession(session.id)}
@@ -218,7 +218,7 @@ function ProjectCard({
                   className={cn(
                     'flex size-7 shrink-0 items-center justify-center rounded-lg',
                     current
-                      ? 'bg-codex-blue-400/12 text-codex-blue-400'
+                      ? 'bg-clodex-green-400/12 text-clodex-green-400'
                       : 'bg-token-bg-secondary text-token-text-tertiary group-hover/session:text-token-text-secondary',
                   )}
                 >
@@ -235,7 +235,7 @@ function ProjectCard({
                   </span>
                 </span>
                 {current && (
-                  <span className="shrink-0 font-medium text-[10px] text-codex-blue-400 uppercase tracking-[0.08em]">
+                  <span className="shrink-0 font-medium text-[10px] text-clodex-green-400 uppercase tracking-[0.08em]">
                     Current
                   </span>
                 )}

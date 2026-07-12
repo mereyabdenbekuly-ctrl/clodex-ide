@@ -261,7 +261,7 @@ function StatusBadge({
     connecting: {
       label: 'Connecting',
       className:
-        'border-codex-blue-400/20 bg-codex-blue-400/7 text-codex-blue-400',
+        'border-clodex-green-400/20 bg-clodex-green-400/7 text-clodex-green-400',
       icon: <LoaderCircleIcon className="size-3 animate-spin" />,
     },
     'authorization-required': {
@@ -373,7 +373,7 @@ function CloudToolCard({ tool }: { tool: ClodexMcpCapabilityTool }) {
             'flex size-9 shrink-0 items-center justify-center rounded-xl border',
             tool.requiresApproval
               ? 'border-warning-solid/20 bg-warning-solid/8 text-warning-solid'
-              : 'border-codex-blue-400/18 bg-codex-blue-400/8 text-codex-blue-400',
+              : 'border-clodex-green-400/18 bg-clodex-green-400/8 text-clodex-green-400',
           )}
         >
           {tool.requiresApproval ? (
@@ -662,7 +662,7 @@ function ServerEditor({
 }) {
   const isEditing = draft.editingId !== null;
   return (
-    <SettingsPanel className="overflow-hidden border-codex-blue-400/20">
+    <SettingsPanel className="overflow-hidden border-clodex-green-400/20">
       <div className="border-token-border-light border-b p-4">
         <SettingsSectionHeader
           title={isEditing ? `Edit ${draft.displayName}` : 'Add MCP server'}
@@ -894,7 +894,7 @@ function CredentialManager({
     (credential) => credential.custom,
   );
   return (
-    <SettingsPanel className="overflow-hidden border-codex-blue-400/20">
+    <SettingsPanel className="overflow-hidden border-clodex-green-400/20">
       <div className="border-token-border-light border-b p-4">
         <SettingsSectionHeader
           title="Custom MCP credentials"
@@ -1304,7 +1304,7 @@ function ServerCard({
         <div className="border-token-border-light border-t bg-token-bg-secondary/20">
           {details.loading ? (
             <div className="flex min-h-24 items-center justify-center">
-              <LoaderCircleIcon className="size-4 animate-spin text-codex-blue-400" />
+              <LoaderCircleIcon className="size-4 animate-spin text-clodex-green-400" />
             </div>
           ) : (
             <div className="space-y-4 p-4">
@@ -1540,7 +1540,7 @@ function ImportPreviewPanel({
         ),
     );
   return (
-    <SettingsPanel className="overflow-hidden border-codex-blue-400/20">
+    <SettingsPanel className="overflow-hidden border-clodex-green-400/20">
       <div className="border-token-border-light border-b p-4">
         <SettingsSectionHeader
           title="Claude Desktop import preview"
@@ -1574,7 +1574,7 @@ function ImportPreviewPanel({
                   checked={checked}
                   disabled={!server.supported}
                   aria-label={`Import ${server.displayName}`}
-                  className="mt-1 size-4 accent-codex-blue-400"
+                  className="mt-1 size-4 accent-clodex-green-400"
                   onChange={(event) =>
                     onSelectedChange(server.proposedId, event.target.checked)
                   }
@@ -2217,7 +2217,7 @@ export function McpSettingsSection() {
       <div className="space-y-8">
         {loading && !snapshot ? (
           <div className="flex min-h-48 items-center justify-center rounded-2xl border border-token-border-light bg-token-main-surface-primary/65">
-            <LoaderCircleIcon className="size-5 animate-spin text-codex-blue-400" />
+            <LoaderCircleIcon className="size-5 animate-spin text-clodex-green-400" />
           </div>
         ) : (
           <>

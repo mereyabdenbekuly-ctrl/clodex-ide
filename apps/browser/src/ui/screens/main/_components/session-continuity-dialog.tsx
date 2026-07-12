@@ -194,7 +194,7 @@ export function SessionContinuityDialog({
                 </p>
               </div>
               <div className="col-span-2 flex items-center gap-2 rounded-xl border border-token-border-light bg-token-bg-secondary/40 p-3 text-token-text-secondary text-xs">
-                <ShieldCheckIcon className="size-4 text-codex-blue-400" />
+                <ShieldCheckIcon className="size-4 text-clodex-green-400" />
                 Tools and attachments are excluded from shared copies.
               </div>
             </div>

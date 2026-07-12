@@ -254,7 +254,7 @@ export function WebsitePermissionsSection() {
                 className={cn(
                   'flex items-center justify-between gap-4 px-4 py-3.5 transition-colors',
                   isOverridden
-                    ? 'bg-codex-blue-400/5'
+                    ? 'bg-clodex-green-400/5'
                     : 'hover:bg-token-list-hover-background',
                 )}
               >
@@ -266,7 +266,7 @@ export function WebsitePermissionsSection() {
                     className={cn(
                       'mt-0.5 text-xs',
                       isOverridden
-                        ? 'text-codex-blue-400'
+                        ? 'text-clodex-green-400'
                         : 'text-token-text-tertiary',
                     )}
                   >

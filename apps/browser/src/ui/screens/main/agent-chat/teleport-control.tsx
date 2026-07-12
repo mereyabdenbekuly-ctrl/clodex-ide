@@ -316,7 +316,9 @@ export function TeleportControl({
 
 function TeleportPhaseIcon({ phase }: { phase: CloudTaskTeleportPhase }) {
   if (phase === 'restoring' || phase === 'suspending' || phase === 'resuming') {
-    return <Loader2Icon className="size-3.5 animate-spin text-blue-500" />;
+    return (
+      <Loader2Icon className="size-3.5 animate-spin text-clodex-green-300" />
+    );
   }
   if (phase === 'suspended') {
     return <PauseCircleIcon className="size-3.5 text-amber-500" />;
@@ -324,7 +326,7 @@ function TeleportPhaseIcon({ phase }: { phase: CloudTaskTeleportPhase }) {
   return (
     <CloudIcon
       className={`size-3.5 ${
-        phase === 'failed' ? 'text-red-500' : 'text-blue-500'
+        phase === 'failed' ? 'text-red-500' : 'text-clodex-green-300'
       }`}
     />
   );

@@ -575,7 +575,7 @@ export function AboutSection() {
                     rel="noopener noreferrer"
                     className={cn(
                       buttonVariants({ variant: 'link', size: 'sm' }),
-                      'inline-flex h-auto max-w-full justify-start truncate p-0 text-codex-blue-400',
+                      'inline-flex h-auto max-w-full justify-start truncate p-0 text-clodex-green-400',
                     )}
                   >
                     {appInfo.homepage}

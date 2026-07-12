@@ -53,7 +53,7 @@ function QueryPrompt({
   return (
     <div className="flex min-h-screen items-start justify-center bg-token-main-surface-primary px-4 pt-[clamp(5rem,16vh,10rem)]">
       <div className="w-full max-w-xl rounded-2xl border border-token-border-light bg-token-main-surface-primary p-6 shadow-codex-xl">
-        <div className="flex size-10 items-center justify-center rounded-xl bg-codex-blue-400/10 text-codex-blue-400">
+        <div className="flex size-10 items-center justify-center rounded-xl bg-clodex-green-400/10 text-clodex-green-400">
           <GitPullRequestArrowIcon className="size-5" />
         </div>
         <h1 className="mt-4 font-semibold text-lg text-token-text-primary">

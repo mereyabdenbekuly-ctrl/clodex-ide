@@ -35,13 +35,13 @@ export const SwarmInlineProgress = memo(function SwarmInlineProgress({
   const activePhaseTitle = getActivePhaseTitle(run);
 
   return (
-    <div className="mt-3 w-full max-w-xl rounded-lg border border-blue-500/20 bg-blue-500/8 p-3 shadow-[0_0_0_1px_rgba(59,130,246,0.08)]">
+    <div className="mt-3 w-full max-w-xl rounded-lg border border-clodex-green-brand/20 bg-clodex-green-brand/8 p-3 shadow-[0_0_0_1px_rgba(0,238,120,0.08)]">
       <div className="flex items-center gap-2">
         <div
           className={cn(
             'size-2.5 shrink-0 rounded-[2px]',
             run.status === 'running' &&
-              'animate-pulse bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]',
+              'animate-pulse bg-clodex-green-brand shadow-[0_0_8px_rgba(0,238,120,0.8)]',
             run.status === 'completed' && 'bg-zinc-500',
             run.status === 'failed' && 'bg-red-500',
           )}
@@ -51,7 +51,7 @@ export const SwarmInlineProgress = memo(function SwarmInlineProgress({
             <span className="font-medium text-foreground">
               Swarm выполняет задачу
             </span>
-            <span className="text-blue-200">
+            <span className="text-clodex-green-200">
               {progress.completed}/{progress.total}
             </span>
           </div>
@@ -59,7 +59,7 @@ export const SwarmInlineProgress = memo(function SwarmInlineProgress({
             {activePhaseTitle}
           </div>
         </div>
-        <span className="shrink-0 rounded border border-blue-500/30 px-1.5 text-[10px] text-blue-200 uppercase leading-4">
+        <span className="shrink-0 rounded border border-clodex-green-brand/30 px-1.5 text-[10px] text-clodex-green-200 uppercase leading-4">
           {run.status === 'running' ? 'running' : run.status}
         </span>
       </div>
@@ -67,7 +67,7 @@ export const SwarmInlineProgress = memo(function SwarmInlineProgress({
         <div
           className={cn(
             'h-full rounded-full transition-[width,background-color] duration-300',
-            run.status === 'running' && 'bg-blue-500',
+            run.status === 'running' && 'bg-clodex-green-brand',
             run.status === 'completed' && 'bg-zinc-500',
             run.status === 'failed' && 'bg-red-500',
           )}

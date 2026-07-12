@@ -407,7 +407,7 @@ export function FileDiffSection(
         className={cn(
           'mx-1 flex min-h-10 w-[calc(100%-0.5rem)] flex-row items-center justify-between gap-2 border px-3 py-2 text-xs shadow-codex-sm transition-colors has-[button:hover]:text-token-text-secondary',
           hasPendingDiffs
-            ? 'border-codex-blue-400/20 bg-codex-blue-400/6 text-token-text-secondary hover:border-codex-blue-400/35 hover:bg-codex-blue-400/10'
+            ? 'border-clodex-green-400/20 bg-clodex-green-400/6 text-token-text-secondary hover:border-clodex-green-400/35 hover:bg-clodex-green-400/10'
             : 'border-token-border-light bg-token-bg-secondary/60 text-token-text-secondary hover:bg-token-list-hover-background',
           isOpen ? 'rounded-t-xl border-b-token-border-light' : 'rounded-xl',
         )}
@@ -461,7 +461,7 @@ export function FileDiffSection(
     ),
     scrollable: true,
     contentClassName: hasPendingDiffs
-      ? 'mx-1 mb-1 w-[calc(100%-0.5rem)] rounded-b-xl border-x border-b border-codex-blue-400/20 bg-token-bg-secondary/35 px-0 pb-1'
+      ? 'mx-1 mb-1 w-[calc(100%-0.5rem)] rounded-b-xl border-x border-b border-clodex-green-400/20 bg-token-bg-secondary/35 px-0 pb-1'
       : 'px-0',
     content:
       pendingDiffs?.length > 0 ? (
@@ -512,7 +512,7 @@ export function PendingProposedEditSection(
     trigger: (isOpen: boolean) => (
       <div
         className={cn(
-          'mx-1 flex min-h-10 w-[calc(100%-0.5rem)] flex-row items-center justify-between gap-2 border border-codex-blue-400/20 bg-codex-blue-400/6 px-3 py-2 text-token-text-secondary text-xs shadow-codex-sm transition-colors hover:border-codex-blue-400/35 hover:bg-codex-blue-400/10 has-[button:hover]:text-token-text-secondary',
+          'mx-1 flex min-h-10 w-[calc(100%-0.5rem)] flex-row items-center justify-between gap-2 border border-clodex-green-400/20 bg-clodex-green-400/6 px-3 py-2 text-token-text-secondary text-xs shadow-codex-sm transition-colors hover:border-clodex-green-400/35 hover:bg-clodex-green-400/10 has-[button:hover]:text-token-text-secondary',
           isOpen ? 'rounded-t-xl border-b-token-border-light' : 'rounded-xl',
         )}
       >
@@ -567,7 +567,7 @@ export function PendingProposedEditSection(
     ),
     scrollable: true,
     contentClassName:
-      'mx-1 mb-1 w-[calc(100%-0.5rem)] rounded-b-xl border-x border-b border-codex-blue-400/20 bg-token-bg-secondary/35 px-0 pb-1',
+      'mx-1 mb-1 w-[calc(100%-0.5rem)] rounded-b-xl border-x border-b border-clodex-green-400/20 bg-token-bg-secondary/35 px-0 pb-1',
     content: (
       <FileDiffList
         diffs={diffs}

@@ -385,7 +385,7 @@ function ExperimentalFeaturesSetting() {
                   <h3 className="font-medium text-sm text-token-text-primary">
                     {definition.name}
                   </h3>
-                  <span className="rounded-full border border-codex-blue-400/18 bg-codex-blue-400/8 px-2 py-0.5 font-medium text-[10px] text-codex-blue-400 uppercase tracking-[0.06em]">
+                  <span className="rounded-full border border-clodex-green-400/18 bg-clodex-green-400/8 px-2 py-0.5 font-medium text-[10px] text-clodex-green-400 uppercase tracking-[0.06em]">
                     {definition.stage}
                   </span>
                 </div>
@@ -752,7 +752,7 @@ function DictationDiagnosticsSetting() {
               role="meter"
             >
               <div
-                className="h-full rounded-full bg-codex-blue-400 transition-[width] duration-75"
+                className="h-full rounded-full bg-clodex-green-400 transition-[width] duration-75"
                 style={{ width: `${Math.round(microphoneLevel * 100)}%` }}
               />
             </div>

@@ -281,7 +281,7 @@ export function ClearDataSection() {
                   className={cn(
                     'flex min-h-20 cursor-pointer select-none items-start gap-3 rounded-2xl border bg-token-main-surface-primary/72 p-3.5 shadow-codex-sm transition-[border-color,background-color,box-shadow,transform] duration-150 hover:-translate-y-px hover:border-token-border-default hover:bg-token-main-surface-primary hover:shadow-codex-md',
                     isSelected
-                      ? 'border-codex-blue-400/28 bg-codex-blue-400/5'
+                      ? 'border-clodex-green-400/28 bg-clodex-green-400/5'
                       : 'border-token-border-light',
                   )}
                   htmlFor={`clear-data-${option.id}`}

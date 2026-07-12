@@ -754,7 +754,7 @@ function Page() {
           <Button
             variant="primary"
             size="sm"
-            className="rounded-full border-codex-blue-400 bg-codex-blue-400 px-3 shadow-codex-sm hover:bg-codex-blue-500"
+            className="rounded-full border-clodex-green-400 bg-clodex-green-400 px-3 shadow-codex-sm hover:bg-clodex-green-500"
             onClick={handleAcceptAll}
           >
             <CheckIcon className="size-3.5" />

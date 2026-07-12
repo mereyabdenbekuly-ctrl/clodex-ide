@@ -499,7 +499,7 @@ export function SpacesIndex({ onBack }: { onBack: () => void }) {
                     className="flex min-h-72 flex-col overflow-hidden"
                   >
                     <div className="flex items-start gap-3 p-5">
-                      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-codex-blue-400/20 bg-codex-blue-400/8 text-codex-blue-400">
+                      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-clodex-green-400/20 bg-clodex-green-400/8 text-clodex-green-400">
                         <Layers3Icon className="size-4.5" />
                       </span>
                       <div className="min-w-0 flex-1">
@@ -580,7 +580,7 @@ export function SpacesIndex({ onBack }: { onBack: () => void }) {
                           <button
                             key={link.id}
                             type="button"
-                            className="flex items-center gap-2 truncate text-left text-codex-blue-400 text-xs hover:underline"
+                            className="flex items-center gap-2 truncate text-left text-clodex-green-400 text-xs hover:underline"
                             onClick={() => window.open(link.url, '_blank')}
                           >
                             <ExternalLinkIcon className="size-3 shrink-0" />

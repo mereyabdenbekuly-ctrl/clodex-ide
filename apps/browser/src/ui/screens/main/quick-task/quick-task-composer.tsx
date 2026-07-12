@@ -178,7 +178,7 @@ export function QuickTaskComposer({
         )}
       >
         <div className="flex min-w-0 items-center gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-codex-blue-400/10 text-codex-blue-400 ring-1 ring-codex-blue-400/15">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-clodex-green-400/10 text-clodex-green-400 ring-1 ring-clodex-green-400/15">
             <MessageSquarePlusIcon className="size-4.5" />
           </span>
           <div className="min-w-0">
@@ -232,7 +232,7 @@ export function QuickTaskComposer({
               className={cn(
                 'flex min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2 text-left text-xs transition-[background-color,border-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-token-focus-border disabled:cursor-not-allowed disabled:opacity-50',
                 useCurrentWorkspace && hasCurrentWorkspace
-                  ? 'border-codex-blue-400/20 bg-codex-blue-400/8 text-token-text-primary shadow-codex-hairline'
+                  ? 'border-clodex-green-400/20 bg-clodex-green-400/8 text-token-text-primary shadow-codex-hairline'
                   : 'border-token-border-light bg-token-main-surface-primary/55 text-token-text-secondary hover:bg-token-list-hover-background',
               )}
               onClick={() => setUseCurrentWorkspace((current) => !current)}
@@ -241,7 +241,7 @@ export function QuickTaskComposer({
                 className={cn(
                   'flex size-6 shrink-0 items-center justify-center rounded-lg',
                   useCurrentWorkspace && hasCurrentWorkspace
-                    ? 'bg-codex-blue-400/12 text-codex-blue-400'
+                    ? 'bg-clodex-green-400/12 text-clodex-green-400'
                     : 'bg-token-bg-tertiary text-token-text-tertiary',
                 )}
               >
@@ -301,7 +301,7 @@ export function QuickTaskComposer({
                   requestAnimationFrame(() => textareaRef.current?.focus());
                 }}
               >
-                <SparklesIcon className="size-3 text-codex-blue-400" />
+                <SparklesIcon className="size-3 text-clodex-green-400" />
                 {suggestion}
               </button>
             ))}

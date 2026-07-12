@@ -92,7 +92,7 @@ function FeatureCard({
   return (
     <SettingsPanel className="space-y-4 p-4">
       <div className="flex items-start gap-3">
-        <div className="rounded-xl border border-codex-blue-400/18 bg-codex-blue-400/8 p-2 text-codex-blue-400">
+        <div className="rounded-xl border border-clodex-green-400/18 bg-clodex-green-400/8 p-2 text-clodex-green-400">
           {icon}
         </div>
         <div className="min-w-0 flex-1">
@@ -100,7 +100,7 @@ function FeatureCard({
             <h2 className="font-medium text-sm text-token-text-primary">
               {title}
             </h2>
-            <span className="rounded-full border border-codex-blue-400/18 bg-codex-blue-400/8 px-2 py-0.5 font-medium text-[10px] text-codex-blue-400 uppercase tracking-[0.06em]">
+            <span className="rounded-full border border-clodex-green-400/18 bg-clodex-green-400/8 px-2 py-0.5 font-medium text-[10px] text-clodex-green-400 uppercase tracking-[0.06em]">
               {resolved.definition.stage}
             </span>
           </div>
@@ -960,7 +960,7 @@ function GuardianDogfoodSettings() {
       description:
         'The current policy still needs a representative reviewed sample.',
       className:
-        'border-codex-blue-400/18 bg-codex-blue-400/8 text-codex-blue-400',
+        'border-clodex-green-400/18 bg-clodex-green-400/8 text-clodex-green-400',
     },
     'needs-tuning': {
       label: 'Needs tuning',

@@ -122,7 +122,7 @@ export function SettingsSidebar() {
                       onClick={() => handleSelectSection(item.section)}
                     >
                       {active && (
-                        <span className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-codex-blue-400" />
+                        <span className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-clodex-green-400" />
                       )}
                       {item.icon}
                       <span className="truncate">

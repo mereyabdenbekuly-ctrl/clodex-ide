@@ -1083,7 +1083,7 @@ export const ChatInputActions = memo(function ChatInputActions({
                 size="icon-sm"
                 variant="ghost"
                 disabled={swarmModeDisabled}
-                className="z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 disabled:opacity-50 data-[active=true]:bg-codex-blue-400/12 data-[active=true]:text-codex-blue-400 data-[active=true]:ring-1 data-[active=true]:ring-codex-blue-400/25"
+                className="z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 disabled:opacity-50 data-[active=true]:bg-clodex-green-400/12 data-[active=true]:text-clodex-green-400 data-[active=true]:ring-1 data-[active=true]:ring-clodex-green-400/25"
                 data-active={swarmModeActive}
                 aria-label="Toggle Deep Think"
                 onClick={(e) => {
@@ -1109,7 +1109,7 @@ export const ChatInputActions = memo(function ChatInputActions({
                 size="icon-sm"
                 variant="ghost"
                 disabled={swarmModeDisabled}
-                className="z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 disabled:opacity-50 data-[active=true]:bg-codex-blue-400/12 data-[active=true]:text-codex-blue-400 data-[active=true]:ring-1 data-[active=true]:ring-codex-blue-400/25"
+                className="z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 disabled:opacity-50 data-[active=true]:bg-clodex-green-400/12 data-[active=true]:text-clodex-green-400 data-[active=true]:ring-1 data-[active=true]:ring-clodex-green-400/25"
                 data-active={battleModeActive}
                 aria-label="Toggle Battle Agent"
                 onClick={(e) => {
@@ -1157,7 +1157,7 @@ export const ChatInputActions = memo(function ChatInputActions({
                 onClick={onSubmit}
                 aria-label="Send message"
                 variant="primary"
-                className="z-10 size-8 shrink-0 cursor-pointer rounded-full border-codex-blue-400 bg-codex-blue-400 p-1 shadow-codex-md transition-all hover:bg-codex-blue-500 disabled:opacity-40 disabled:shadow-none"
+                className="z-10 size-8 shrink-0 cursor-pointer rounded-full border-clodex-green-400 bg-clodex-green-400 p-1 shadow-codex-md transition-all hover:bg-clodex-green-500 disabled:opacity-40 disabled:shadow-none"
               >
                 <ArrowUpIcon className="size-4 stroke-3" />
               </Button>

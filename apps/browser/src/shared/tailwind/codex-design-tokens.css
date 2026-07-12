@@ -1,25 +1,24 @@
 /**
- * Codex-inspired application design system.
+ * Clodex application design system.
  *
- * The source blueprint exposes CSS variables from the production UI, but its
- * Electron/VS Code aliases cannot be copied verbatim into Clodex. This layer
- * keeps the useful, stable values (neutral ramp, Codex blue, radii, shadows,
- * typography and semantic surface roles) and maps them onto the existing
- * stage-ui token contract.
+ * Stable neutral, emerald brand, typography, surface, radius and elevation
+ * tokens mapped onto the shared stage-ui contract.
  */
 
 @theme default {
-  /* Primitive palette recovered from the Codex frontend blueprint. */
-  --color-codex-blue-50: #e5f3ff;
-  --color-codex-blue-100: #99ceff;
-  --color-codex-blue-200: #66b5ff;
-  --color-codex-blue-300: #339cff;
-  --color-codex-blue-400: #0285ff;
-  --color-codex-blue-500: #0077e6;
-  --color-codex-blue-600: #0069cc;
-  --color-codex-blue-700: #0054a3;
-  --color-codex-blue-800: #003d78;
-  --color-codex-blue-900: #00284d;
+  /* Clodex emerald palette. The neon brand shade is reserved for identity,
+   * focus and glow; solid controls use the contrast-safe 400 shade. */
+  --color-clodex-green-brand: #00ee78;
+  --color-clodex-green-50: #eafff4;
+  --color-clodex-green-100: #c8ffe0;
+  --color-clodex-green-200: #80ffb6;
+  --color-clodex-green-300: #00d96d;
+  --color-clodex-green-400: #008442;
+  --color-clodex-green-500: #00713a;
+  --color-clodex-green-600: #005d30;
+  --color-clodex-green-700: #004724;
+  --color-clodex-green-800: #00341b;
+  --color-clodex-green-900: #002312;
 
   --color-base-50: #ffffff;
   --color-base-100: #f9f9f9;
@@ -41,7 +40,7 @@
   --color-base-900: #181818;
   --color-base-950: #0d0d0d;
 
-  /* Existing stage-ui roles now resolve to the Codex palette. */
+  /* Existing stage-ui roles resolve to the Clodex palette. */
   --color-app-background: var(--color-base-100);
   --color-background: var(--color-base-50);
   --color-foreground: #1a1c1f;
@@ -51,14 +50,14 @@
   --color-surface-1: var(--color-base-100);
   --color-surface-2: var(--color-base-150);
   --color-surface-3: var(--color-base-200);
-  --color-surface-tinted: var(--color-codex-blue-50);
+  --color-surface-tinted: var(--color-clodex-green-50);
   --color-border: rgb(13 13 13 / 8%);
   --color-border-subtle: rgb(13 13 13 / 5%);
-  --color-primary-foreground: var(--color-codex-blue-600);
-  --color-primary-solid: var(--color-codex-blue-400);
+  --color-primary-foreground: var(--color-clodex-green-600);
+  --color-primary-solid: var(--color-clodex-green-400);
   --color-solid-foreground: #ffffff;
 
-  /* Codex semantic aliases. They are available as Tailwind colors too:
+  /* Application semantic aliases. They are available as Tailwind colors too:
    * bg-token-bg-primary, text-token-text-secondary, border-token-border...
    */
   --color-token-bg-primary: var(--color-app-background);
@@ -77,9 +76,9 @@
   --color-token-border-light: var(--color-border-subtle);
   --color-token-border-heavy: rgb(13 13 13 / 14%);
   --color-token-list-hover-background: rgb(13 13 13 / 5%);
-  --color-token-focus-border: var(--color-codex-blue-300);
-  --color-token-primary: var(--color-codex-blue-400);
-  --color-token-button-background: var(--color-codex-blue-400);
+  --color-token-focus-border: var(--color-clodex-green-brand);
+  --color-token-primary: var(--color-clodex-green-400);
+  --color-token-button-background: var(--color-clodex-green-400);
   --color-token-button-foreground: #ffffff;
   --color-token-charts-green: var(--color-success-foreground);
   --color-token-charts-red: var(--color-error-foreground);
@@ -140,11 +139,11 @@
   --color-surface-1: var(--color-base-750);
   --color-surface-2: var(--color-base-700);
   --color-surface-3: var(--color-base-600);
-  --color-surface-tinted: var(--color-codex-blue-900);
+  --color-surface-tinted: var(--color-clodex-green-900);
   --color-border: rgb(255 255 255 / 8%);
   --color-border-subtle: rgb(255 255 255 / 4%);
-  --color-primary-foreground: var(--color-codex-blue-300);
-  --color-primary-solid: var(--color-codex-blue-400);
+  --color-primary-foreground: var(--color-clodex-green-300);
+  --color-primary-solid: var(--color-clodex-green-400);
 
   --color-token-border-heavy: rgb(255 255 255 / 16%);
   --color-token-list-hover-background: rgb(255 255 255 / 7%);
@@ -166,7 +165,7 @@
   }
 
   ::selection {
-    background: color-mix(in srgb, var(--color-codex-blue-400) 28%, transparent);
+    background: color-mix(in srgb, var(--color-clodex-green-brand) 28%, transparent);
   }
 }
 
@@ -175,7 +174,7 @@
     background:
       radial-gradient(
         circle at 48% -20%,
-        color-mix(in srgb, var(--color-codex-blue-400) 4%, transparent),
+        color-mix(in srgb, var(--color-clodex-green-brand) 4%, transparent),
         transparent 34%
       ),
       var(--color-app-background);
@@ -272,7 +271,7 @@
     background:
       radial-gradient(
         circle at 55% -30%,
-        color-mix(in srgb, var(--color-codex-blue-400) 4%, transparent),
+        color-mix(in srgb, var(--color-clodex-green-400) 4%, transparent),
         transparent 38%
       ),
       var(--color-token-main-surface-primary);
@@ -309,12 +308,12 @@
   .codex-review-card[data-targeted="true"] {
     border-color: color-mix(
       in srgb,
-      var(--color-codex-blue-400) 45%,
+      var(--color-clodex-green-400) 45%,
       var(--color-token-border-default)
     );
     box-shadow:
       0 0 0 1px
-        color-mix(in srgb, var(--color-codex-blue-400) 12%, transparent),
+        color-mix(in srgb, var(--color-clodex-green-400) 12%, transparent),
       var(--shadow-codex-md);
   }
 
@@ -322,7 +321,7 @@
     background:
       radial-gradient(
         circle at 50% -18%,
-        color-mix(in srgb, var(--color-codex-blue-400) 3.5%, transparent),
+        color-mix(in srgb, var(--color-clodex-green-400) 3.5%, transparent),
         transparent 32%
       ),
       var(--color-token-main-surface-primary);

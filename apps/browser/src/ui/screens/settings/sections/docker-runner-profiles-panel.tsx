@@ -315,7 +315,7 @@ export function DockerRunnerProfilesPanel({
                   className={cn(
                     'w-full rounded-xl border p-3 text-left transition-colors',
                     selectedId === profile.id
-                      ? 'border-codex-blue-400/35 bg-codex-blue-400/6'
+                      ? 'border-clodex-green-400/35 bg-clodex-green-400/6'
                       : 'border-token-border-light hover:border-token-border-default',
                   )}
                   onClick={() => {
@@ -329,7 +329,7 @@ export function DockerRunnerProfilesPanel({
                       {profile.name}
                     </span>
                     {snapshot.selectedProfileId === profile.id && (
-                      <ServerCogIcon className="size-3.5 shrink-0 text-codex-blue-400" />
+                      <ServerCogIcon className="size-3.5 shrink-0 text-clodex-green-400" />
                     )}
                   </div>
                   <div className="mt-1 truncate font-mono text-[10px] text-token-text-tertiary">

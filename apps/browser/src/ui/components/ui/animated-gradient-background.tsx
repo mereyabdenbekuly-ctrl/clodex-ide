@@ -26,9 +26,9 @@ export const AnimatedGradientBackground = ({
       </defs>
 
       {/* This rectangle acts as the solid base color for the entire SVG canvas.
-          It's set to the dark blue you requested and is NOT blurred.
+          It's set to the dark emerald you requested and is NOT blurred.
         */}
-      <rect width="800" height="800" fill="#000f68" />
+      <rect width="800" height="800" fill="#03150c" />
 
       {/* This group element <g> wraps all our shapes. 
           The `filter` attribute applies our blur effect to every element inside the group.
@@ -40,8 +40,8 @@ export const AnimatedGradientBackground = ({
             The `begin` attribute is set to a small positive delay to stagger the start and prevent initial freezing.
           */}
 
-        {/* Blob 1: Color #1e90ff (Brighter Blue, Larger Radius) */}
-        <circle cx="100" cy="400" r="260" fill="#1e90ff">
+        {/* Blob 1: Color #00ee78 (Brand Emerald, Larger Radius) */}
+        <circle cx="100" cy="400" r="260" fill="#00ee78">
           {/* Animate the horizontal position (cx) over 15 seconds */}
           <animate
             attributeName="cx"
@@ -66,8 +66,8 @@ export const AnimatedGradientBackground = ({
           />
         </circle>
 
-        {/* Blob 2: Color #c300ff (Brighter Purple) */}
-        <circle cx="700" cy="100" r="220" fill="#c300ff">
+        {/* Blob 2: Color #19c96b (Secondary Emerald) */}
+        <circle cx="700" cy="100" r="220" fill="#19c96b">
           {/* Animate the horizontal position (cx) over 12 seconds */}
           <animate
             attributeName="cx"
@@ -92,8 +92,8 @@ export const AnimatedGradientBackground = ({
           />
         </circle>
 
-        {/* Blob 3: Color #0055ff (Brighter Blue, Larger Radius) */}
-        <circle cx="400" cy="700" r="240" fill="#0055ff">
+        {/* Blob 3: Color #007a3d (Brand Emerald, Larger Radius) */}
+        <circle cx="400" cy="700" r="240" fill="#007a3d">
           {/* Animate the horizontal position (cx) over 18 seconds with multiple points for more complex movement */}
           <animate
             attributeName="cx"

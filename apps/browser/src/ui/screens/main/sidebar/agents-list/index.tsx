@@ -2356,7 +2356,7 @@ export function AgentsList() {
                 className={cn(
                   'h-9 shrink-0 rounded-lg border border-token-border-light bg-token-main-surface-primary/35 text-token-text-secondary shadow-codex-sm hover:bg-token-list-hover-background hover:text-token-text-primary',
                   projectsOpen &&
-                    'border-codex-blue-400/20 bg-codex-blue-400/9 text-codex-blue-400',
+                    'border-clodex-green-400/20 bg-clodex-green-400/9 text-clodex-green-400',
                 )}
                 onClick={() => openProjects()}
               >

@@ -166,8 +166,8 @@ function StatusBadge({ status }: { status: GeneratedApp['status'] }) {
     regenerating: {
       label: 'Regenerating',
       className:
-        'border-codex-blue-400/20 bg-codex-blue-400/8 text-codex-blue-400',
-      dot: 'bg-codex-blue-400 animate-pulse',
+        'border-clodex-green-400/20 bg-clodex-green-400/8 text-clodex-green-400',
+      dot: 'bg-clodex-green-400 animate-pulse',
     },
   }[status];
 
@@ -196,7 +196,7 @@ function NoticeBanner({ notice }: { notice: GeneratedAppsNotice }) {
         notice.tone === 'success' &&
           'border-success-solid/20 bg-success-solid/6 text-success-foreground',
         notice.tone === 'info' &&
-          'border-codex-blue-400/20 bg-codex-blue-400/6 text-token-text-secondary',
+          'border-clodex-green-400/20 bg-clodex-green-400/6 text-token-text-secondary',
       )}
     >
       {notice.tone === 'error' ? (
@@ -260,7 +260,7 @@ function GeneratedAppCard({
       className="group/app flex h-full min-h-72 flex-col overflow-hidden"
     >
       <div className="flex items-start gap-3 p-5 pb-4">
-        <span className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-codex-blue-400/18 bg-codex-blue-400/8 text-codex-blue-400 shadow-codex-hairline">
+        <span className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-clodex-green-400/18 bg-clodex-green-400/8 text-clodex-green-400 shadow-codex-hairline">
           <AppWindowIcon className="size-5" />
         </span>
         <div className="min-w-0 flex-1">
@@ -268,7 +268,7 @@ function GeneratedAppCard({
             <div className="min-w-0">
               <button
                 type="button"
-                className="block max-w-full truncate text-left font-semibold text-base text-token-text-primary hover:text-codex-blue-400 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-token-focus-border"
+                className="block max-w-full truncate text-left font-semibold text-base text-token-text-primary hover:text-clodex-green-400 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-token-focus-border"
                 onClick={() => onOpenDetails(app)}
               >
                 {app.title}
@@ -673,7 +673,7 @@ export function GeneratedAppsCatalog({
             </SettingsPanel>
           ) : apps.length === 0 ? (
             <SettingsPanel className="flex min-h-80 flex-col items-center justify-center p-8 text-center">
-              <span className="flex size-14 items-center justify-center rounded-2xl border border-codex-blue-400/18 bg-codex-blue-400/8 text-codex-blue-400">
+              <span className="flex size-14 items-center justify-center rounded-2xl border border-clodex-green-400/18 bg-clodex-green-400/8 text-clodex-green-400">
                 <BoxIcon className="size-6" />
               </span>
               <h2 className="mt-4 font-semibold text-lg">
@@ -826,7 +826,7 @@ export function GeneratedAppDetail({
     return (
       <div className="flex h-screen items-center justify-center bg-token-main-surface-primary">
         <div className="flex items-center gap-2 text-sm text-token-text-secondary">
-          <LoaderCircleIcon className="size-4 animate-spin text-codex-blue-400" />
+          <LoaderCircleIcon className="size-4 animate-spin text-clodex-green-400" />
           Loading generated app…
         </div>
       </div>
@@ -950,7 +950,7 @@ export function GeneratedAppDetail({
           <SettingsPanel className="overflow-hidden">
             <div className="flex items-center justify-between gap-3 border-token-border-light border-b px-4 py-3">
               <div className="flex items-center gap-2">
-                <span className="flex size-8 items-center justify-center rounded-lg bg-codex-blue-400/10 text-codex-blue-400">
+                <span className="flex size-8 items-center justify-center rounded-lg bg-clodex-green-400/10 text-clodex-green-400">
                   <AppWindowIcon className="size-4" />
                 </span>
                 <div>
@@ -977,7 +977,7 @@ export function GeneratedAppDetail({
                     className={cn(
                       'flex size-14 items-center justify-center rounded-2xl border',
                       runnable
-                        ? 'border-codex-blue-400/18 bg-codex-blue-400/8 text-codex-blue-400'
+                        ? 'border-clodex-green-400/18 bg-clodex-green-400/8 text-clodex-green-400'
                         : 'border-warning-solid/18 bg-warning-solid/8 text-warning',
                     )}
                   >

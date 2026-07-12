@@ -1,13 +1,13 @@
 @property --H {
   syntax: '<number>';
   inherits: true;
-  initial-value: 265;
+  initial-value: 152;
 }
 
 @property --H-primary {
   syntax: '<number>';
   inherits: true;
-  initial-value: 265;
+  initial-value: 152;
 }
 
 @property --H-base {
@@ -29,7 +29,7 @@
 }
 
 @theme default {
-  --H: 265;
+  --H: 152; /* Clodex emerald brand hue */
   --H-primary: var(--H);
   --H-base: 85; /* Warm complement of primary, used for base neutrals */
   --primary-chroma-scale: 1;

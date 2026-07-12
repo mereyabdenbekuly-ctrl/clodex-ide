@@ -583,7 +583,7 @@ export function HistorySection() {
     <div className="h-full w-full overflow-hidden px-4 pt-16 pb-8 sm:px-6 sm:pt-20 lg:px-8">
       <div className="mx-auto flex h-full w-full max-w-4xl flex-col">
         <header className="shrink-0 pb-6">
-          <p className="mb-1.5 font-medium text-codex-blue-400 text-xs uppercase tracking-[0.12em]">
+          <p className="mb-1.5 font-medium text-clodex-green-400 text-xs uppercase tracking-[0.12em]">
             Browser
           </p>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -631,7 +631,7 @@ export function HistorySection() {
         >
           {isLoading ? (
             <div className="flex h-full items-center justify-center">
-              <Loader2Icon className="size-6 animate-spin text-codex-blue-400" />
+              <Loader2Icon className="size-6 animate-spin text-clodex-green-400" />
             </div>
           ) : error ? (
             <div className="flex h-full flex-col items-center justify-center px-4">
@@ -718,7 +718,7 @@ export function HistorySection() {
               />
               {isLoadingMore && (
                 <div className="absolute inset-x-0 bottom-0 flex h-14 items-center justify-center bg-linear-to-t from-token-bg-primary to-transparent">
-                  <Loader2Icon className="size-5 animate-spin text-codex-blue-400" />
+                  <Loader2Icon className="size-5 animate-spin text-clodex-green-400" />
                 </div>
               )}
             </>
