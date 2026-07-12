@@ -1,0 +1,285 @@
+name: Agentic App Runtime promotion evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact main commit being promoted
+        required: true
+        type: string
+      aggregate_gzip_base64:
+        description: Gzip+base64 content-free Agentic App dogfood aggregate JSON
+        required: true
+        type: string
+      preview_lifecycle_passed:
+        description: Preview lifecycle was manually reviewed and passed
+        required: true
+        default: false
+        type: boolean
+      ephemeral_grant_reload_passed:
+        description: Ephemeral grants were verified absent after reload
+        required: true
+        default: false
+        type: boolean
+      sensitive_approval_passed:
+        description: Sensitive capability approval flow was reviewed and passed
+        required: true
+        default: false
+        type: boolean
+      async_cancel_timeout_passed:
+        description: Async cancellation and timeout behavior was reviewed and passed
+        required: true
+        default: false
+        type: boolean
+      runtime_inspector_passed:
+        description: Runtime Inspector was reviewed and remained content-free
+        required: true
+        default: false
+        type: boolean
+      package_trust_review_passed:
+        description: Package trust and revocation behavior was reviewed and passed
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentic-app-runtime-promotion-${{ inputs.source_commit }}
+  cancel-in-progress: false
+
+jobs:
+  collect_and_verify:
+    name: Collect commit-bound Agentic App evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: agentic-app-runtime-promotion
+    env:
+      CI: "true"
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      INPUT_DIRECTORY: /tmp/clodex-agentic-app-runtime-inputs
+      OUTPUT_DIRECTORY: /tmp/clodex-agentic-app-runtime-promotion
+      AGGREGATE_GZIP_BASE64: ${{ inputs.aggregate_gzip_base64 }}
+      PREVIEW_LIFECYCLE_PASSED: ${{ inputs.preview_lifecycle_passed }}
+      EPHEMERAL_GRANT_RELOAD_PASSED: ${{ inputs.ephemeral_grant_reload_passed }}
+      SENSITIVE_APPROVAL_PASSED: ${{ inputs.sensitive_approval_passed }}
+      ASYNC_CANCEL_TIMEOUT_PASSED: ${{ inputs.async_cancel_timeout_passed }}
+      RUNTIME_INSPECTOR_PASSED: ${{ inputs.runtime_inspector_passed }}
+      PACKAGE_TRUST_REVIEW_PASSED: ${{ inputs.package_trust_review_passed }}
+
+    steps:
+      - name: Check out trusted main workflow revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify trusted source and explicit manual gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Agentic App promotion must run from refs/heads/main" >&2
+            exit 1
+          fi
+          if [[ ! "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "source_commit must be a full lowercase SHA" >&2
+            exit 1
+          fi
+          if [[ "$SOURCE_COMMIT" != "$GITHUB_SHA" ]]; then
+            echo "Agentic App evidence must bind to the trusted main workflow commit" >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$SOURCE_COMMIT" ]]; then
+            echo "Trusted workflow checkout drifted from source_commit" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "Trusted workflow checkout is not clean" >&2
+            git status --short >&2
+            exit 1
+          fi
+          for variable in \
+            PREVIEW_LIFECYCLE_PASSED \
+            EPHEMERAL_GRANT_RELOAD_PASSED \
+            SENSITIVE_APPROVAL_PASSED \
+            ASYNC_CANCEL_TIMEOUT_PASSED \
+            RUNTIME_INSPECTOR_PASSED \
+            PACKAGE_TRUST_REVIEW_PASSED; do
+            if [[ "${!variable}" != "true" ]]; then
+              echo "Required manual gate is false: $variable" >&2
+              exit 1
+            fi
+          done
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install trusted evidence tooling
+        run: pnpm install --frozen-lockfile --filter 'clodex...'
+
+      - name: Decode bounded content-free dogfood aggregate
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$INPUT_DIRECTORY" "$OUTPUT_DIRECTORY"
+          mkdir -p "$INPUT_DIRECTORY" "$OUTPUT_DIRECTORY"
+          chmod 700 "$INPUT_DIRECTORY" "$OUTPUT_DIRECTORY"
+          python3 - <<'PY'
+          import base64
+          import binascii
+          import gzip
+          import io
+          import json
+          import os
+          from pathlib import Path
+
+          encoded = os.environ.get("AGGREGATE_GZIP_BASE64", "")
+          if not encoded or len(encoded) > 60_000:
+              raise SystemExit("aggregate input must contain 1-60000 characters")
+          try:
+              compressed = base64.b64decode(encoded, validate=True)
+              with gzip.GzipFile(fileobj=io.BytesIO(compressed), mode="rb") as stream:
+                  decoded = stream.read(1024 * 1024 + 1)
+          except (binascii.Error, gzip.BadGzipFile, EOFError, OSError) as error:
+              raise SystemExit(f"aggregate input is not valid gzip+base64: {error}") from error
+          if not decoded or len(decoded) > 1024 * 1024 or b"\x00" in decoded:
+              raise SystemExit("decoded aggregate size/content is invalid")
+          parsed = json.loads(decoded)
+          if not isinstance(parsed, dict):
+              raise SystemExit("decoded aggregate must be a JSON object")
+          target = Path(os.environ["INPUT_DIRECTORY"]) / "aggregate.json"
+          target.write_bytes(decoded)
+          target.chmod(0o600)
+          PY
+
+      - name: Run deterministic Agentic App evaluation
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          pnpm --dir apps/browser eval:agentic-app-runtime -- \
+            --output "$INPUT_DIRECTORY/evaluation.json"
+          pnpm --dir apps/browser check:agentic-app-runtime-evaluation -- \
+            --evidence "$INPUT_DIRECTORY/evaluation.json"
+
+      - name: Collect and verify promotion evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          pnpm --dir apps/browser collect:agentic-app-runtime-promotion-evidence -- \
+            --dogfood-aggregate "$INPUT_DIRECTORY/aggregate.json" \
+            --source-commit "$SOURCE_COMMIT" \
+            --evaluation-evidence "$INPUT_DIRECTORY/evaluation.json" \
+            --preview-lifecycle-passed \
+            --ephemeral-grant-reload-passed \
+            --sensitive-approval-passed \
+            --async-cancel-timeout-passed \
+            --runtime-inspector-passed \
+            --package-trust-review-passed \
+            --output "$OUTPUT_DIRECTORY/agentic-app-runtime.json" \
+            --bundled-evaluation-output "$OUTPUT_DIRECTORY/agentic-app-runtime-evaluation.json"
+
+          pnpm --silent --dir apps/browser check:agentic-app-runtime-promotion -- \
+            --require-evidence \
+            --evidence "$OUTPUT_DIRECTORY/agentic-app-runtime.json" \
+            --evaluation-evidence "$OUTPUT_DIRECTORY/agentic-app-runtime-evaluation.json" \
+            --build-commit "$SOURCE_COMMIT" \
+            --json > "$OUTPUT_DIRECTORY/agentic-app-runtime-promotion-readiness.json"
+
+          pnpm --dir apps/browser check:main-plan-readiness -- \
+            --channel prerelease \
+            --require-clean \
+            --require-promotion generated-app-capability-bridge \
+            --agentic-app-evidence "$OUTPUT_DIRECTORY/agentic-app-runtime.json" \
+            --agentic-app-evaluation "$OUTPUT_DIRECTORY/agentic-app-runtime-evaluation.json" \
+            --out "$OUTPUT_DIRECTORY/main-plan-readiness.json"
+
+      - name: Write immutable workflow metadata
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          output = Path(os.environ["OUTPUT_DIRECTORY"])
+          expected = {
+              "agentic-app-runtime.json",
+              "agentic-app-runtime-evaluation.json",
+              "agentic-app-runtime-promotion-readiness.json",
+              "main-plan-readiness.json",
+          }
+          actual = {entry.name for entry in output.iterdir()}
+          if actual != expected:
+              raise SystemExit(f"unexpected promotion output paths: {sorted(actual)}")
+          artifact_hashes = {}
+          for name in sorted(expected):
+              entry = output / name
+              if entry.is_symlink() or not entry.is_file():
+                  raise SystemExit(f"promotion output is not a regular file: {entry}")
+              raw = entry.read_bytes()
+              if len(raw) < 2 or len(raw) > 2 * 1024 * 1024 or b"\x00" in raw:
+                  raise SystemExit(f"promotion output size/content is invalid: {entry}")
+              json.loads(raw)
+              artifact_hashes[name] = hashlib.sha256(raw).hexdigest()
+
+          metadata = {
+              "format": "clodex-agentic-app-runtime-promotion-workflow",
+              "version": 1,
+              "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "trustedWorkflowCommitSha": os.environ["GITHUB_SHA"],
+              "sourceCommitSha": os.environ["SOURCE_COMMIT"],
+              "artifactSha256": artifact_hashes,
+              "workflowRunUrl": os.environ["RUN_URL"],
+              "actor": os.environ["GITHUB_ACTOR"],
+          }
+          target = output / "workflow-metadata.json"
+          target.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+          target.chmod(0o600)
+          PY
+
+      - name: Build checksummed bundle
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/agentic-app-runtime-${SOURCE_COMMIT:0:12}.tar.gz"
+          checksum="$bundle.sha256"
+          tar --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -C "$OUTPUT_DIRECTORY" \
+            -czf "$bundle" .
+          (cd "$(dirname "$bundle")" && sha256sum "$(basename "$bundle")") > "$checksum"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Agentic App promotion evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agentic-app-runtime-promotion-${{ inputs.source_commit }}
+          path: |
+            ${{ env.OUTPUT_DIRECTORY }}/
+            ${{ steps.bundle.outputs.bundle }}
+            ${{ steps.bundle.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 30

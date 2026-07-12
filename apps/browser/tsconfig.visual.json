@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "tsBuildInfoFile": "node_modules/.cache/tsbuildinfo/tsconfig.visual.tsbuildinfo",
+    "baseUrl": ".",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2022",
+    "types": ["node", "@playwright/test"]
+  },
+  "include": ["playwright.visual.config.ts", "visual-regression/**/*.ts"],
+  "exclude": ["node_modules", "dist", "coverage", "tmp", ".turbo"]
+}

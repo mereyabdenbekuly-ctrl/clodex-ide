@@ -1,0 +1,94 @@
+# Clodex
+
+> Clodex is an open-source Agentic IDE for the complete development loop.
+> It combines persistent tasks, code, terminals, browser workflows, GitHub,
+> MCP, remote machines, agents, automations, and human review.
+
+## Product
+
+Clodex is built around durable engineering tasks rather than isolated prompts.
+The task keeps its project context, workspaces, worktrees, shell sessions,
+browser state, Pending Edits, agents, artifacts, and review workflow while work
+moves from request to verified result.
+
+### Core capabilities
+
+- Persistent Tasks and Projects with search, grouping, resume, and worktrees.
+- Multi-file editing, terminal sessions, local services, browser/CDP, logs, and
+  visual verification.
+- Pending Edits and line-by-line diff review with accept or reject controls.
+- GitHub pull-request inspection, inline review, policy gates, and protected
+  merge.
+- Swarm orchestration and collaboration modes for scoped parallel work.
+- Encrypted SSH profiles, connection testing, persistent sessions, remote
+  execution, remote paths, and terminal handoff.
+- An isolated MCP runtime for stdio, Streamable HTTP, SSE, OAuth, tools,
+  resources, prompts, elicitation, timeouts, cancellation, and redaction.
+- Skills, signed plugins, publisher identities, pinned private marketplaces,
+  staged updates, rollback, integrity validation, and quarantine.
+- Generated Apps owned by their source task with preview, regeneration, and an
+  experimental capability bridge.
+- Agent OS features including memory, Guardian, Quick Task, dictation, desktop
+  automation preview, remote control, and protected task artifacts.
+
+## Remote and hybrid execution
+
+Clodex can keep one task while work moves between the local machine, SSH
+environments, and controlled cloud execution targets. Cloud Tasks are a preview
+and use bounded snapshots, short-lived credentials, event streams, quotas, and
+verifiable artifacts. Session Teleport and expiring read-only share links are
+experimental.
+
+## Clodex Labs
+
+- Scheduled Tasks and Wake Scheduler: one-time, interval, and cron schedules,
+  wake recovery, missed-run policies, retries, capability grants, and
+  local/cloud targets.
+- Generated App Capability Bridge: explicitly granted read-only MCP calls,
+  bounded model questions, automation launch, rate limits, and output limits.
+- Executable Extensions: integrity-bound stdio MCP runtimes distributed through
+  signed plugins.
+- Spaces: encrypted persistent containers for workspaces, links, and
+  instructions.
+- Session Continuity: cloud readiness, session teleport, expiring share links,
+  and revocation.
+
+## Security
+
+- Agent execution, MCP tools, and executable extensions use separate process and
+  policy boundaries.
+- Credentials use OS-backed encryption and are referenced by ID.
+- Sensitive attachments, shell logs, memory, Chronicle, diff history, and
+  caches can use AES-256-GCM protected storage.
+- Guardian and human approvals gate high-impact shell, browser, network, MCP,
+  sandbox, desktop, and remote actions.
+- Plugin trust combines catalog signing, publisher signing, package and tree
+  integrity, source provenance, rollback, and quarantine.
+- Audit events are designed to avoid prompts, code, audio, screenshots, and
+  secrets.
+
+## Models
+
+Clodex supports cloud providers, BYOK, existing subscriptions,
+OpenAI-compatible endpoints, private infrastructure, and local or self-hosted
+inference inside one Agent OS.
+
+## In development
+
+- Task forks and lineage.
+- Real archive and restore.
+- Goals, token budgets, and time budgets.
+- Exact usage and provider rate-limit dashboards.
+- Unified permission profiles.
+- A task background-process manager.
+- Live steering of an active turn.
+- Configuration and session import from other agent clients.
+- A stronger trusted-hooks model.
+- Managed team plugin distribution.
+
+## Pages
+
+- Homepage: https://clodex.io/
+- Download: https://clodex.io/download
+- Documentation: https://docs.clodex.io
+- Contact: sales@clodex.io

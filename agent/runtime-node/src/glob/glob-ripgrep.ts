@@ -1,0 +1,184 @@
+import type {
+  FileSystemOperations,
+  GlobResult,
+  GlobOptions,
+} from '../types.js';
+import { existsSync } from 'node:fs';
+import { type ChildProcess, spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import path from 'node:path';
+import { getRipgrepPath } from '../vscode-ripgrep/get-path.js';
+import { toPosixPath } from './utils.js';
+
+/**
+ * Builds ripgrep command-line arguments for file listing (glob).
+ * Follows VS Code's pattern: rg --files --no-config --hidden -g '<pattern>' -g '!<exclude>'
+ *
+ * @param pattern - Glob pattern (e.g., "src/*.ts" or recursive patterns)
+ * @param searchPath - Path to search in
+ * @param options - Glob options
+ * @returns Array of command-line arguments
+ */
+function buildRipgrepGlobArgs(
+  pattern: string,
+  options?: GlobOptions,
+): string[] {
+  const args: string[] = [];
+
+  // List files instead of searching content
+  args.push('--files');
+
+  // Ignore user config files for deterministic behavior (VS Code pattern)
+  args.push('--no-config');
+
+  // Include hidden files (dotfiles) but exclude .git directory;
+  // --hidden does not auto-exclude .git in any ripgrep version.
+  args.push('--hidden');
+  args.push('-g', '!.git');
+
+  // Include pattern (skip for '**' which is match-all; rg --files already lists everything)
+  if (pattern !== '**') args.push('-g', pattern);
+
+  // Exclude patterns
+  if (options?.excludePatterns && options.excludePatterns.length > 0)
+    for (const excludePattern of options.excludePatterns)
+      args.push('-g', `!${excludePattern}`);
+
+  // Gitignore handling
+  if (options?.respectGitignore === false) args.push('--no-ignore');
+
+  return args;
+}
+
+/**
+ * Parses ripgrep --files output (simple line-based format).
+ * Each line is a file path.
+ *
+ * @param stdout - Readable stream from ripgrep
+ * @param workingDirectory - Working directory for relative path calculation
+ * @param onError - Optional error callback
+ * @returns Promise resolving to GlobResult
+ */
+async function parseRipgrepGlobOutput(
+  stdout: NodeJS.ReadableStream,
+  workingDirectory: string,
+  onError?: (error: Error) => void,
+  options?: { maxResults?: number; childProcess?: ChildProcess },
+): Promise<GlobResult> {
+  const paths: string[] = [];
+  let limitReached = false;
+
+  return new Promise((resolve) => {
+    const rl = createInterface({
+      input: stdout,
+      crlfDelay: Number.POSITIVE_INFINITY,
+    });
+
+    rl.on('line', (line: string) => {
+      if (limitReached || !line.trim()) return;
+
+      try {
+        paths.push(toPosixPath(line));
+
+        if (options?.maxResults && paths.length >= options.maxResults) {
+          limitReached = true;
+          rl.close();
+          options.childProcess?.kill();
+          return;
+        }
+      } catch (error) {
+        onError?.(new Error(`Failed to process ripgrep output line: ${error}`));
+      }
+    });
+
+    rl.on('close', () => {
+      resolve({
+        success: true,
+        message: `Found ${paths.length} matching paths`,
+        relativePaths: paths,
+        absolutePaths: paths.map((p) => path.join(workingDirectory, p)), // TODO: Fix resolving paths when 'absoluteSearchPath' is provided
+        totalMatches: paths.length,
+      });
+    });
+
+    rl.on('error', (error) => {
+      onError?.(new Error(`Error reading ripgrep output: ${error}`));
+      resolve({
+        success: false,
+        message: `Failed to parse ripgrep output: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        relativePaths: [],
+        absolutePaths: [],
+      });
+    });
+  });
+}
+
+/**
+ * Executes glob using ripgrep binary for improved performance.
+ * Follows VS Code's pattern: uses `rg --files` with glob filters.
+ *
+ * This function attempts to use the platform-specific ripgrep binary for
+ * file enumeration. If ripgrep is not available or fails, it returns null to
+ * allow fallback to the Node.js implementation.
+ *
+ * @param fileSystem - File system provider for path resolution
+ * @param pattern - Glob pattern (e.g., "src/*.ts" or recursive patterns)
+ * @param rgBinaryBasePath - Base directory where ripgrep binary is installed
+ * @param options - Glob options
+ * @returns GlobResult if successful, null if ripgrep unavailable/failed
+ */
+export async function globWithRipgrep(
+  fileSystem: FileSystemOperations,
+  pattern: string,
+  rgBinaryBasePath: string,
+  options?: GlobOptions,
+  onError?: (error: Error) => void,
+): Promise<GlobResult | null> {
+  try {
+    const rgPath = getRipgrepPath(rgBinaryBasePath);
+
+    // Check if ripgrep executable exists
+    if (!rgPath || !existsSync(rgPath)) return null;
+
+    // Determine search path
+    const searchPath = options?.absoluteSearchPath
+      ? options.absoluteSearchPath
+      : fileSystem.getCurrentWorkingDirectory();
+
+    // Build ripgrep arguments
+    const args = buildRipgrepGlobArgs(pattern, options);
+
+    // Spawn ripgrep process
+    const process = spawn(rgPath, args, {
+      stdio: ['ignore', 'pipe', 'pipe'], // stdin ignored, stdout/stderr piped
+      windowsHide: true, // Don't show console window on Windows
+      cwd: searchPath,
+    });
+
+    // Check if the process spawned successfully
+    if (!process.stdout) return null;
+
+    // Handle process errors
+    process.on('error', (error) => {
+      onError?.(new Error(`Ripgrep process error: ${error}`));
+    });
+
+    const result = await parseRipgrepGlobOutput(
+      process.stdout,
+      fileSystem.getCurrentWorkingDirectory(),
+      onError,
+      { maxResults: options?.maxResults, childProcess: process },
+    );
+
+    return result;
+  } catch (error) {
+    // Any error during ripgrep execution - log and return null for fallback
+    onError?.(
+      new Error(
+        `Ripgrep execution failed, falling back to Node.js implementation: ${error}`,
+      ),
+    );
+    return null;
+  }
+}

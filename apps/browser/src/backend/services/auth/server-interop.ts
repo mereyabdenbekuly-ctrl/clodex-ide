@@ -1,0 +1,192 @@
+import { createApiClient } from '@clodex/api-client';
+import { createHash, randomBytes } from 'node:crypto';
+import { shell } from 'electron';
+import { createAuthClient } from 'better-auth/client';
+import { emailOTPClient } from 'better-auth/client/plugins';
+import { electronClient } from '@better-auth/electron/client';
+import type { Logger } from '../logger';
+import { AUTH_CALLBACK_SCHEME } from './callback-scheme';
+import type { SocialAuthProvider } from '@shared/karton-contracts/ui/shared-types';
+
+export const API_URL =
+  process.env.API_URL || process.env.CLODEX_API_URL || 'https://clodex.xyz/api';
+const CONSOLE_URL =
+  process.env.CLODEX_CONSOLE_URL ||
+  process.env.CLODEX_ORIGIN ||
+  'https://clodex.xyz';
+const ELECTRON_CLIENT_ID = 'electron';
+// @better-auth/electron stores Electron OAuth PKCE code verifiers in this
+// process-global map keyed by OAuth state. Our API-hosted handoff constructs
+// the same PKCE request manually, so it must seed the official store before
+// calling `authClient.authenticate({ token })`.
+const ELECTRON_AUTH_STORE = Symbol.for('better-auth:electron');
+
+type BetterAuthClientOptions = {
+  plugins: [
+    ReturnType<typeof emailOTPClient>,
+    ReturnType<typeof electronClient>,
+  ];
+};
+
+export const API_AUTH_CALLBACK_SCHEME = AUTH_CALLBACK_SCHEME;
+
+export type BetterAuthClient = ReturnType<
+  typeof createAuthClient<BetterAuthClientOptions>
+>;
+
+export type SocialAuthRedirectTarget =
+  | { kind: 'custom-scheme'; scheme: string }
+  | { kind: 'loopback'; callbackUrl: string };
+
+function getElectronAuthStore(): Map<string, string> {
+  const globalStore = globalThis as Record<
+    symbol,
+    Map<string, string> | undefined
+  >;
+  let store = globalStore[ELECTRON_AUTH_STORE];
+  if (!store) {
+    store = new Map<string, string>();
+    globalStore[ELECTRON_AUTH_STORE] = store;
+  }
+  return store;
+}
+
+function createBase64UrlRandomString(byteLength: number): string {
+  return randomBytes(byteLength).toString('base64url');
+}
+
+export async function openSocialAuthInSystemBrowser(
+  provider: SocialAuthProvider,
+  redirectTarget: SocialAuthRedirectTarget = {
+    kind: 'custom-scheme',
+    scheme: AUTH_CALLBACK_SCHEME,
+  },
+): Promise<void> {
+  const state = createBase64UrlRandomString(16);
+  const codeVerifier = createBase64UrlRandomString(32);
+  const codeChallenge = createHash('sha256')
+    .update(codeVerifier)
+    .digest('base64url');
+
+  const authStore = getElectronAuthStore();
+  authStore.set(state, codeVerifier);
+
+  const url = new URL(`${API_URL}/v1/auth/electron/start`);
+  url.searchParams.set('provider', provider);
+  url.searchParams.set('client_id', ELECTRON_CLIENT_ID);
+  url.searchParams.set('code_challenge', codeChallenge);
+  url.searchParams.set('code_challenge_method', 'S256');
+  url.searchParams.set('state', state);
+  if (redirectTarget.kind === 'loopback') {
+    url.searchParams.set('callback_url', redirectTarget.callbackUrl);
+  } else {
+    url.searchParams.set('callback_scheme', redirectTarget.scheme);
+  }
+
+  try {
+    await shell.openExternal(url.toString(), { activate: true });
+  } catch (error) {
+    authStore.delete(state);
+    throw error;
+  }
+}
+
+/**
+ * Opens the system browser to the console login page for email sign-in.
+ *
+ * This follows the same PKCE pattern as `openSocialAuthInSystemBrowser`:
+ * generates a code verifier/challenge, stores the verifier in the
+ * `@better-auth/electron` global store, and opens the console with the
+ * PKCE params in the query string. The console completes the email OTP
+ * flow on a valid origin (where Turnstile works), then redirects back
+ * to the app's callback scheme (e.g. `clodex://`, `clodex-nightly://`)
+ * with the electron handoff token.
+ */
+export async function openEmailAuthInSystemBrowser(): Promise<void> {
+  const state = createBase64UrlRandomString(16);
+  const codeVerifier = createBase64UrlRandomString(32);
+  const codeChallenge = createHash('sha256')
+    .update(codeVerifier)
+    .digest('base64url');
+
+  const authStore = getElectronAuthStore();
+  authStore.set(state, codeVerifier);
+
+  const url = new URL(`${CONSOLE_URL}/login`);
+  url.searchParams.set('client_id', ELECTRON_CLIENT_ID);
+  url.searchParams.set('code_challenge', codeChallenge);
+  url.searchParams.set('code_challenge_method', 'S256');
+  url.searchParams.set('state', state);
+  url.searchParams.set('callback_scheme', API_AUTH_CALLBACK_SCHEME);
+  url.searchParams.set('desktop_email', '1');
+
+  try {
+    await shell.openExternal(url.toString(), { activate: true });
+  } catch (error) {
+    authStore.delete(state);
+    throw error;
+  }
+}
+
+/**
+ * Creates a better-auth client for the Electron main process.
+ *
+ * Uses bearer token auth (stored in our encrypted credential store)
+ * instead of browser cookies. The `getToken` callback lets the
+ * AuthService supply the current persisted token lazily.
+ *
+ * `onTokenReceived` is called whenever any response includes a
+ * `set-auth-token` header, handling both initial sign-in and
+ * automatic token refreshes from `getSession()`.
+ */
+export function createBetterAuthClient(
+  getToken: () => string | null,
+  onTokenReceived: (token: string) => void,
+): BetterAuthClient {
+  return createAuthClient({
+    baseURL: API_URL,
+    basePath: '/v1/auth',
+    disableDefaultFetchPlugins: true,
+    fetchOptions: {
+      auth: {
+        type: 'Bearer',
+        token: () => getToken() ?? '',
+      },
+      onSuccess: (ctx) => {
+        const authToken = ctx.response.headers.get('set-auth-token');
+        if (authToken) {
+          onTokenReceived(authToken);
+        }
+      },
+    },
+    plugins: [
+      emailOTPClient(),
+      electronClient({
+        protocol: {
+          scheme: API_AUTH_CALLBACK_SCHEME,
+        },
+        signInURL: `${API_URL}/v1/auth/electron/start`,
+        // Session persistence is handled by AuthService's encrypted
+        // `auth-session` store. The Electron plugin still requires a storage
+        // adapter for cookie/cache helpers, but this client uses bearer tokens
+        // and the API handoff, so those plugin-backed values are intentionally
+        // not persisted here.
+        storage: {
+          getItem: () => null,
+          setItem: () => {},
+        },
+      }),
+    ],
+  });
+}
+
+/**
+ * Interop layer for backend API calls that require authentication.
+ */
+export class AuthServerInterop {
+  private logger: Logger;
+
+  public constructor(logger: Logger) {
+    this.logger = logger;
+  }
+}

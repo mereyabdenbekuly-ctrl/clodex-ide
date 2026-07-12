@@ -1,0 +1,27 @@
+{
+  "extends": "../../packages/typescript-config/base.json",
+  "references": [
+    {
+      "path": "../../packages/stage-ui"
+    }
+  ],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "allowJs": true,
+    "noEmit": true,
+    "incremental": true,
+    "jsx": "preserve",
+    "moduleResolution": "bundler",
+    "module": "ESNext"
+  },
+  "include": ["next-env.d.ts", "src", ".next/types/**/*.ts"],
+  "exclude": ["node_modules", ".next", ".turbo", "out", "dist"]
+}

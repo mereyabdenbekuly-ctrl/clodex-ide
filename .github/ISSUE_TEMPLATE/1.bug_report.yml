@@ -1,0 +1,51 @@
+# These templates are heavily inspired by the ones from trpc.io
+name: 🐞 Bug Report
+description: Create a bug report for the core packages
+title: 'bug: '
+labels:
+  - 'bug: unconfirmed'
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please fill out this form as completely as possible.
+        Note that the more precise you are, the quicker we will be able to investigate the bug.
+
+  - type: checkboxes
+    attributes:
+      label: 🔍 Debugging guide
+      description: |
+        Please confirm:
+        
+        👉 [Read the How to debug guide](https://stagewise.io/docs/debug)
+      options:
+        - label: I have read the "How to debug" guide, but the problem still persists
+    validations:
+      required: true
+
+
+  - type: textarea
+    attributes:
+      label: Describe the bug
+      description: |
+        Please describe the bug as clearly and concisely as possible, and what behavior you were expecting.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: To reproduce
+      description: |
+        Describe how to reproduce your bug. Can be code or a link to a reproduction.
+
+  - type: textarea
+    attributes:
+      label: Additional information
+      description: Add any other information related to the bug here.
+
+  - type: checkboxes
+    attributes:
+      label: 👨‍👧‍👦 Contributing
+      description: We love contributors! Would you be willing to implement a fix?
+      options:
+        - label: 🙋‍♂️ Yes, I'd be down to file a PR fixing this bug!

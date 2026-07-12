@@ -1,0 +1,446 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'apps/browser/**'
+      - 'packages/**'
+      - 'agent/**'
+      - '.release-evidence/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/**'
+      - 'turbo.json'
+      - 'biome.json'
+  pull_request:
+    branches:
+      - main
+      - release-tests
+    paths:
+      - 'apps/browser/**'
+      - 'packages/**'
+      - 'agent/**'
+      - '.release-evidence/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/**'
+      - 'turbo.json'
+      - 'biome.json'
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Lint - runs in parallel with build
+  lint:
+    name: Lint (Biome)
+    runs-on: ubuntu-latest
+    env:
+      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate Bundled Assets
+        run: pnpm --dir apps/browser check:bundled
+
+      - name: Validate isolated agent runtime promotion gate
+        run: pnpm --dir apps/browser check:isolated-agent-runtime-promotion
+
+      - name: Validate Evidence Memory promotion gate
+        run: pnpm --dir apps/browser check:evidence-memory-promotion
+
+      - name: Validate Evidence Memory rollout policy
+        run: pnpm --dir apps/browser check:evidence-memory-rollout -- --channel prerelease
+        env:
+          CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY: ${{ secrets.CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY }}
+
+      - name: Evaluate Agentic App Runtime release gates
+        run: |
+          pnpm --dir apps/browser eval:agentic-app-runtime
+          pnpm --dir apps/browser check:agentic-app-runtime-evaluation
+          pnpm --dir apps/browser check:agentic-app-runtime-promotion
+
+      - name: Validate main plan closure gate
+        run: pnpm --dir apps/browser check:main-plan-readiness -- --channel prerelease
+        env:
+          CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY: ${{ secrets.CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY }}
+
+      - name: Run Biome Check
+        run: pnpm check
+
+  # Build - runs in parallel with lint
+  build:
+    name: Build Packages
+    runs-on: ubuntu-latest
+    env:
+      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build All Packages
+        run: pnpm build
+
+      - name: Cache Build Artifacts
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            packages/*/dist
+            agent/*/dist
+            apps/browser/dist
+          key: build-${{ github.sha }}
+
+  # Test - runs after build to use cached artifacts
+  test:
+    name: Unit Tests
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore Build Artifacts
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            packages/*/dist
+            agent/*/dist
+            apps/browser/dist
+          key: build-${{ github.sha }}
+          fail-on-cache-miss: true
+
+      - name: Run Tests
+        run: pnpm test
+
+  visual-regression:
+    name: Visual Regression
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm --dir apps/browser exec playwright install chromium
+
+      - name: Run Visual Regression
+        run: pnpm --dir apps/browser visual:test
+
+      - name: Upload Visual Regression Report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: visual-regression-report-${{ github.sha }}
+          path: |
+            apps/browser/playwright-report
+            apps/browser/test-results/visual-regression
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Cross-platform unit tests - catches platform-specific bugs (e.g. path handling on Windows)
+  test-windows:
+    name: Unit Tests (Windows)
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    env:
+      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
+    steps:
+      - name: Disable Windows Defender real-time monitoring
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+        shell: powershell
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build All Packages
+        run: pnpm build
+
+      - name: Run Tests
+        run: pnpm test
+
+  # Cross-platform Clodex builds - only on PRs to main/release-tests
+  # Required for merge
+  build-clodex:
+    name: Build Browser (${{ matrix.platform }})
+    if: github.event_name == 'pull_request'
+    needs: [lint, test]
+    environment: Dev
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            platform: darwin-arm64
+            arch: arm64
+          - os: macos-26-intel
+            platform: darwin-x64
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux-x64
+            arch: x64
+          - os: windows-latest
+            platform: win32-x64
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      NODE_OPTIONS: "--max-old-space-size=8192"
+      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
+      POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+      VITE_POSTHOG_API_KEY: ${{ secrets.VITE_POSTHOG_API_KEY }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+      API_URL: ${{ vars.API_URL }}
+      VITE_API_URL: ${{ vars.VITE_API_URL }}
+      STAGEWISE_CONSOLE_URL: ${{ vars.STAGEWISE_CONSOLE_URL }}
+      VITE_STAGEWISE_CONSOLE_URL: ${{ vars.VITE_STAGEWISE_CONSOLE_URL }}
+      LLM_PROXY_URL: ${{ vars.LLM_PROXY_URL }}
+      VITE_DISABLE_TELEMETRY: ${{ vars.VITE_DISABLE_TELEMETRY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build All Packages
+        run: pnpm build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+
+      - name: Build Clodex App
+        working-directory: apps/browser
+        run: pnpm make --arch=${{ matrix.arch }}
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+          BUILD_MODE: production
+          RELEASE_CHANNEL: dev
+
+      - name: Smoke Test (Linux - install xvfb)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Smoke Test
+        shell: bash
+        timeout-minutes: 2
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            BINARY="apps/browser/out/dev/clodex-dev-${PLATFORM}/clodex-dev.app/Contents/MacOS/clodex-dev"
+          elif [ "$RUNNER_OS" == "Linux" ]; then
+            BINARY="apps/browser/out/dev/clodex-dev-linux-x64/clodex-dev"
+          elif [ "$RUNNER_OS" == "Windows" ]; then
+            BINARY="apps/browser/out/dev/clodex-dev-win32-x64/clodex-dev.exe"
+          fi
+
+          echo "Launching smoke test: $BINARY --smoke-test"
+
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            xvfb-run --auto-servernum "$BINARY" --no-sandbox --smoke-test
+          else
+            "$BINARY" --smoke-test
+          fi
+
+          echo "Smoke test passed — app launched and exited cleanly."
+
+      - name: Validate macOS installer and clean-profile launch
+        if: runner.os == 'macOS'
+        working-directory: apps/browser
+        timeout-minutes: 5
+        run: >-
+          pnpm release:validate:macos --
+          --skip-make
+          --allow-adhoc
+          --ui-launch
+          --channel=dev
+          --arch=${{ matrix.arch }}
+
+      - name: Dictation Capability Smoke (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 2
+        run: >-
+          xvfb-run --auto-servernum
+          pnpm --dir apps/browser smoke:dictation-capabilities --
+          --expect-platform=linux
+          --output=../../dictation-smoke-${{ matrix.platform }}.json
+
+      - name: Dictation Capability Smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 2
+        run: >-
+          pnpm --dir apps/browser smoke:dictation-capabilities --
+          --expect-platform=win32
+          --output=../../dictation-smoke-${{ matrix.platform }}.json
+
+      - name: Upload Dictation Capability Report
+        if: always() && (runner.os == 'Linux' || runner.os == 'Windows')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clodex-dictation-smoke-${{ matrix.platform }}
+          path: dictation-smoke-${{ matrix.platform }}.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clodex-ci-${{ matrix.platform }}
+          path: |
+            apps/browser/out/*/make/**/*.dmg
+            apps/browser/out/*/make/**/*.zip
+            apps/browser/out/*/make/**/*.exe
+            apps/browser/out/*/make/**/*.nupkg
+            apps/browser/out/*/make/**/*.deb
+            apps/browser/out/*/make/**/*.rpm
+            apps/browser/out/*/validation/**
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Summary job for branch protection rules
+  ci-basic:
+    name: Basic CI
+    if: always()
+    needs: [lint, test, build, visual-regression]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Basic CI Status
+        run: |
+          if [ "${{ needs.lint.result }}" != "success" ] || \
+             [ "${{ needs.test.result }}" != "success" ] || \
+             [ "${{ needs.build.result }}" != "success" ] || \
+             [ "${{ needs.visual-regression.result }}" != "success" ]; then
+            echo "Basic CI failed"
+            exit 1
+          fi
+          echo "Basic CI passed"
+
+  # Summary job for PR merge requirements
+  ci-full:
+    name: Full CI (PR)
+    if: github.event_name == 'pull_request' && always()
+    needs: [lint, test, build, test-windows, build-clodex, visual-regression]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Full CI Status
+        run: |
+          if [ "${{ needs.lint.result }}" != "success" ] || \
+             [ "${{ needs.test.result }}" != "success" ] || \
+             [ "${{ needs.build.result }}" != "success" ] || \
+             [ "${{ needs.visual-regression.result }}" != "success" ] || \
+             [ "${{ needs.test-windows.result }}" != "success" ] || \
+             [ "${{ needs.build-clodex.result }}" != "success" ]; then
+            echo "## CI Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Lint | ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Test | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Visual regression | ${{ needs.visual-regression.result }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Test (Windows) | ${{ needs.test-windows.result }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Build Browser | ${{ needs.build-clodex.result }} |" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          echo "## CI Passed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All checks passed. This PR is ready for merge." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "Browser builds for all platforms completed successfully." >> $GITHUB_STEP_SUMMARY

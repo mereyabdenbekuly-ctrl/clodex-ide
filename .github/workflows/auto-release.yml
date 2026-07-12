@@ -1,0 +1,127 @@
+name: "Auto Release"
+
+# Detects unreleased package versions and triggers builds + releases.
+# Runs on push to main/release-tests (i.e., when a release PR is merged).
+
+on:
+  push:
+    branches:
+      - main
+      - release-tests
+
+# Only one release at a time per branch
+concurrency:
+  group: auto-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: read
+  id-token: write
+  actions: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Detect which packages have versions without a matching git tag
+  # ---------------------------------------------------------------------------
+  detect:
+    name: Detect Unreleased Packages
+    runs-on: ubuntu-latest
+    outputs:
+      clodex-needs-release: ${{ steps.check.outputs.clodex_needs_release }}
+      clodex-version: ${{ steps.check.outputs.clodex_version }}
+      clodex-tag: ${{ steps.check.outputs.clodex_tag }}
+      clodex-channel: ${{ steps.check.outputs.clodex_channel }}
+      karton-needs-release: ${{ steps.check.outputs.karton_needs_release }}
+      karton-version: ${{ steps.check.outputs.karton_version }}
+      karton-tag: ${{ steps.check.outputs.karton_tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Check package versions against tags
+        id: check
+        run: |
+          check_package() {
+            local name="$1"
+            local pkg_json="$2"
+            local tag_prefix="$3"
+
+            local version
+            version=$(node -p "require('./${pkg_json}').version")
+            local tag="${tag_prefix}${version}"
+            local previous_version=""
+
+            if git cat-file -e "${{ github.event.before }}:${pkg_json}" 2>/dev/null; then
+              previous_version=$(git show "${{ github.event.before }}:${pkg_json}" | node -e '
+                let input = "";
+                process.stdin.on("data", (chunk) => input += chunk);
+                process.stdin.on("end", () => {
+                  console.log(JSON.parse(input).version);
+                });
+              ')
+            fi
+
+            echo "Checking ${name}: previous=${previous_version:-none}, version=${version}, expected tag=${tag}"
+
+            if [ -n "$previous_version" ] && [ "$previous_version" = "$version" ]; then
+              echo "  ✅ Version unchanged — no release requested"
+              echo "${name}_needs_release=false" >> $GITHUB_OUTPUT
+            elif git rev-parse "refs/tags/${tag}" >/dev/null 2>&1; then
+              echo "  ✅ Tag exists — already released"
+              echo "${name}_needs_release=false" >> $GITHUB_OUTPUT
+            else
+              echo "  🚀 Tag missing — needs release"
+              echo "${name}_needs_release=true" >> $GITHUB_OUTPUT
+            fi
+
+            echo "${name}_version=${version}" >> $GITHUB_OUTPUT
+            echo "${name}_tag=${tag}" >> $GITHUB_OUTPUT
+
+            # Determine channel from version.
+            # Accepts both the new format (`1.0.0-alpha063`) and the legacy
+            # format (`1.0.0-alpha.63`) so re-runs of historical release PRs
+            # continue to classify correctly.
+            if [[ "$version" =~ -alpha(\.[0-9]+|[0-9]+)$ ]]; then
+              echo "${name}_channel=alpha" >> $GITHUB_OUTPUT
+            elif [[ "$version" =~ -beta(\.[0-9]+|[0-9]+)$ ]]; then
+              echo "${name}_channel=beta" >> $GITHUB_OUTPUT
+            else
+              echo "${name}_channel=release" >> $GITHUB_OUTPUT
+            fi
+          }
+
+          # --- Releasable packages (add new packages here) ---
+          check_package "clodex" "apps/browser/package.json" "clodex@"
+          check_package "karton" "packages/karton/package.json" "@clodex/karton@"
+
+  # ---------------------------------------------------------------------------
+  # Release: clodex (Electron app)
+  # ---------------------------------------------------------------------------
+  release-clodex:
+    name: Release clodex
+    needs: detect
+    if: needs.detect.outputs.clodex-needs-release == 'true'
+    uses: ./.github/workflows/_release-browser.yml
+    with:
+      version: ${{ needs.detect.outputs.clodex-version }}
+      tag: ${{ needs.detect.outputs.clodex-tag }}
+      channel: ${{ needs.detect.outputs.clodex-channel }}
+      ref: ${{ github.sha }}
+    secrets: inherit
+
+  # ---------------------------------------------------------------------------
+  # Release: karton (npm package)
+  # ---------------------------------------------------------------------------
+  release-karton:
+    name: Release karton
+    needs: detect
+    if: needs.detect.outputs.karton-needs-release == 'true'
+    uses: ./.github/workflows/_release-karton.yml
+    with:
+      version: ${{ needs.detect.outputs.karton-version }}
+      tag: ${{ needs.detect.outputs.karton-tag }}
+    secrets: inherit

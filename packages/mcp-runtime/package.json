@@ -1,0 +1,45 @@
+{
+  "name": "@clodex/mcp-runtime",
+  "author": "Clodex Labs",
+  "version": "0.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js"
+    },
+    "./policy": {
+      "types": "./dist/policy.d.ts",
+      "import": "./dist/policy.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "import": "./dist/protocol.js"
+    }
+  },
+  "scripts": {
+    "build": "node build.js",
+    "dev": "node build.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "zod": "4.3.5"
+  },
+  "devDependencies": {
+    "@clodex/typescript-config": "workspace:*",
+    "@types/node": "^22.10.2",
+    "esbuild": "0.25.9",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

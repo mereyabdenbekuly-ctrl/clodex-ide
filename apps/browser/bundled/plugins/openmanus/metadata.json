@@ -1,0 +1,5 @@
+{
+  "displayName": "OpenManus",
+  "description": "Runs FoundationAgents/OpenManus as an external autonomous Python agent from inside Clodex.",
+  "requiredCredentials": []
+}

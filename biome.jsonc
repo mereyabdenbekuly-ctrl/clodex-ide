@@ -1,0 +1,219 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
+  "files": {
+    "ignoreUnknown": false,
+    "includes": [
+      "**",
+      "!**/pnpm-lock.yaml",
+      "!**/lib/db/migrations",
+      "!**/lib/editor/react-renderer.tsx",
+      "!**/node_modules",
+      "!**/.next",
+      "!**/public",
+      "!**/.vercel",
+      "!**/src/types/db.ts",
+      "!**/.nuxt",
+      "!**/.svelte-kit",
+      "!**/.output",
+      "!**/.source",
+      "!apps/browser/bundled/generated-app-sdk",
+      "!apps/browser/src/backend/services/agent-os/remote-control-client.bundle.js",
+      "!**/routeTree.gen.ts",
+      "!**/tests/**/*",
+      "!**/test/**/*",
+      "!**/__tests__/**/*",
+      "!**/*.gen.ts"
+    ]
+  },
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "defaultBranch": "main",
+    "useIgnoreFile": true
+  },
+  "formatter": {
+    "enabled": true,
+    "formatWithErrors": false,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineEnding": "lf",
+    "lineWidth": 80,
+    "attributePosition": "auto"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "a11y": {
+        "useHtmlLang": "warn", // Not in recommended ruleset, turning on manually
+        "noHeaderScope": "warn", // Not in recommended ruleset, turning on manually
+        "useValidAriaRole": {
+          "level": "warn",
+          "options": {
+            "ignoreNonDom": false,
+            "allowInvalidRoles": ["none", "text"]
+          }
+        },
+        "useSemanticElements": "off", // Rule is buggy, revisit later
+        "noNoninteractiveElementToInteractiveRole": "off", // Allow custom interactive roles
+        "noSvgWithoutTitle": "off", // We do not intend to adhere to this rule
+        "useMediaCaption": "off", // We would need a cultural change to turn this on
+        "noAutofocus": "off", // We're highly intentional about when we use autofocus
+        "useFocusableInteractive": "off", // Disable focusable interactive element requirement
+        "useAriaPropsForRole": "off", // Disable required ARIA attributes check
+        "useKeyWithClickEvents": "off", // Disable keyboard event requirement with click events,
+        "noStaticElementInteractions": "off",
+        "useValidAutocomplete": "warn"
+      },
+      "complexity": {
+        "noUselessStringConcat": "warn", // Not in recommended ruleset, turning on manually
+        "noForEach": "off", // forEach is too familiar to ban
+        "noUselessSwitchCase": "off", // Turned off due to developer preferences
+        "noUselessThisAlias": "off", // Turned off due to developer preferences,
+        "noUselessContinue": "off" // Turned off due to developer preferences
+      },
+      "correctness": {
+        "useYield": "off", // Turned off due to developer preferences,
+        "noUnusedImports": "warn", // Not in recommended ruleset, turning on manually
+        "useJsxKeyInIterable": "off", // Rule is buggy, revisit later
+        "useExhaustiveDependencies": "off", // Community feedback on this rule has been poor, we will continue with ESLint
+        "noInvalidBuiltinInstantiation": "warn",
+        "noUnusedVariables": "warn",
+        "useUniqueElementIds": "off",
+        "noNestedComponentDefinitions": "warn",
+        "useHookAtTopLevel": "off" // Enabled in Biome 2.4 recommended; flags Base-UI render-prop helpers in select.tsx. Revisit in a dedicated pass.
+      },
+      "security": {
+        "noDangerouslySetInnerHtml": "off", // Covered by Conformance,
+        "noBlankTarget": "off"
+      },
+      "style": {
+        "useFragmentSyntax": "warn", // Not in recommended ruleset, turning on manually
+        "noYodaExpression": "warn", // Not in recommended ruleset, turning on manually
+        "useDefaultParameterLast": "warn", // Not in recommended ruleset, turning on manually
+        "useExponentiationOperator": "off", // Obscure and arguably not easily readable
+        "noUnusedTemplateLiteral": "off", // Stylistic opinion
+        "noUselessElse": "off", // Stylistic opinion
+        "noNonNullAssertion": "off", // Dude I wish I could turn this on,
+        "noParameterAssign": "error",
+        "useAsConstAssertion": "error",
+        "useEnumInitializers": "error",
+        "useSelfClosingElements": "error",
+        "useSingleVarDeclarator": "error",
+        "useNumberNamespace": "error",
+        "noInferrableTypes": "error",
+        "useArrayLiterals": "warn"
+      },
+      "suspicious": {
+        "noExplicitAny": "off", // We trust Vercelians to use any only when necessary,
+        "noHeadImportInDocument": "warn",
+        "noDocumentImportInPage": "warn",
+        "noDuplicateElseIf": "warn",
+        "noIrregularWhitespace": "warn",
+        "noDocumentCookie": "off",
+        "useIterableCallbackReturn": "off", // Enabled in Biome 2.4 recommended; mostly false positives for forEach/reduce patterns. Revisit in a dedicated pass.
+        "noArrayIndexKey": "off" // Enabled in Biome 2.4 recommended; existing code relies on stable-order arrays. Revisit in a dedicated pass.
+      },
+      "nursery": {
+        "useSortedClasses": {
+          "level": "warn",
+          "fix": "safe",
+          "options": {
+            "attributes": ["className"],
+            "functions": ["cn", "clsx", "cva", "tw", "tw.*"]
+          }
+        }
+      }
+    }
+  },
+  "javascript": {
+    "jsxRuntime": "reactClassic",
+    "formatter": {
+      "jsxQuoteStyle": "double",
+      "quoteProperties": "asNeeded",
+      "trailingCommas": "all",
+      "semicolons": "always",
+      "arrowParentheses": "always",
+      "bracketSpacing": true,
+      "bracketSameLine": false,
+      "quoteStyle": "single",
+      "attributePosition": "auto"
+    }
+  },
+  "json": {
+    "formatter": {
+      "enabled": true,
+      "trailingCommas": "none"
+    },
+    "parser": {
+      "allowComments": true,
+      "allowTrailingCommas": false
+    }
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    },
+    "formatter": {
+      "enabled": false
+    },
+    "linter": {
+      "enabled": false
+    }
+  },
+  "assist": { "actions": { "source": { "organizeImports": "off" } } },
+  "overrides": [
+    // Playwright requires an object destructure, even if empty
+    // https://github.com/microsoft/playwright/issues/30007
+    {
+      "includes": ["**/playwright/**"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noEmptyPattern": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["**/*.svelte", "**/*.astro", "**/*.vue"],
+      "linter": {
+        "rules": {
+          "style": {
+            "useConst": "off",
+            "useImportType": "off"
+          },
+          "correctness": {
+            "noUnusedImports": "off"
+          }
+        }
+      }
+    },
+    {
+      // Per SPEC D24: all filesystem access inside @clodex/agent-core
+      // must flow through packages/agent-core/src/fs/. Non-test source
+      // files in the package may not import node:fs / node:fs/promises
+      // directly. Test files and src/fs/ itself are exempt.
+      "includes": [
+        "packages/agent-core/src/**/*.ts",
+        "!packages/agent-core/src/**/*.test.ts",
+        "!packages/agent-core/src/fs/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "node:fs": "Import from '../fs' (packages/agent-core/src/fs) instead. See SPEC D24.",
+                  "node:fs/promises": "Import from '../fs' (packages/agent-core/src/fs) instead. See SPEC D24."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

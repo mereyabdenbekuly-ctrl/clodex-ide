@@ -1,0 +1,543 @@
+name: Model Fabric authenticated publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact main commit containing the trusted publication tooling
+        required: true
+        type: string
+      stage:
+        description: Authenticated rollout stage
+        required: true
+        default: canary
+        type: choice
+        options:
+          - canary
+          - production
+      release_channel:
+        description: Main-plan channel to validate against the publication stage
+        required: true
+        default: prerelease
+        type: choice
+        options:
+          - prerelease
+          - release
+      bootstrap:
+        description: Authorize the first canary only when no prior state exists
+        required: true
+        default: false
+        type: boolean
+      authority_gzip_base64:
+        description: Gzip+base64 root-signed publication authority JSON
+        required: true
+        type: string
+      snapshot_gzip_base64:
+        description: Gzip+base64 signed v3 policy snapshot JSON
+        required: true
+        type: string
+      approvals_gzip_base64:
+        description: Gzip+base64 JSON array of externally signed operator approvals
+        required: true
+        type: string
+      previous_state_gzip_base64:
+        description: Gzip+base64 prior signed state; empty only for bootstrap canary
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-fabric-publication-${{ inputs.stage }}-${{ inputs.source_commit }}
+  cancel-in-progress: false
+
+jobs:
+  validate_inputs:
+    name: Validate signed inputs without publisher secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CI: "true"
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      PUBLICATION_STAGE: ${{ inputs.stage }}
+      RELEASE_CHANNEL: ${{ inputs.release_channel }}
+      BOOTSTRAP: ${{ inputs.bootstrap }}
+      INPUT_DIRECTORY: /tmp/clodex-model-fabric-publication-input
+      AUTHORITY_GZIP_BASE64: ${{ inputs.authority_gzip_base64 }}
+      SNAPSHOT_GZIP_BASE64: ${{ inputs.snapshot_gzip_base64 }}
+      APPROVALS_GZIP_BASE64: ${{ inputs.approvals_gzip_base64 }}
+      PREVIOUS_STATE_GZIP_BASE64: ${{ inputs.previous_state_gzip_base64 }}
+
+    steps:
+      - name: Check out trusted main workflow revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify trusted source and rollout shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Model Fabric publication must run from refs/heads/main" >&2
+            exit 1
+          fi
+          if [[ ! "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "source_commit must be a full lowercase SHA" >&2
+            exit 1
+          fi
+          if [[ "$SOURCE_COMMIT" != "$GITHUB_SHA" ]] || \
+             [[ "$(git rev-parse HEAD)" != "$SOURCE_COMMIT" ]]; then
+            echo "Publication tooling must bind to the trusted main workflow commit" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "Trusted workflow checkout is not clean" >&2
+            git status --short >&2
+            exit 1
+          fi
+          if [[ "$PUBLICATION_STAGE" == "canary" && "$RELEASE_CHANNEL" == "release" ]]; then
+            echo "A canary publication cannot satisfy the release channel" >&2
+            exit 1
+          fi
+          if [[ "$BOOTSTRAP" == "true" ]]; then
+            if [[ "$PUBLICATION_STAGE" != "canary" ]]; then
+              echo "Only the first canary may use bootstrap" >&2
+              exit 1
+            fi
+            if [[ -n "$PREVIOUS_STATE_GZIP_BASE64" ]]; then
+              echo "Bootstrap must not include previous publication state" >&2
+              exit 1
+            fi
+          elif [[ -z "$PREVIOUS_STATE_GZIP_BASE64" ]]; then
+            echo "Non-bootstrap publication requires previous signed state" >&2
+            exit 1
+          fi
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install trusted publication tooling
+        run: pnpm install --frozen-lockfile --filter 'clodex...'
+
+      - name: Verify publication and promotion contracts
+        run: |
+          pnpm --dir apps/browser exec vitest run \
+            src/backend/services/model-fabric-policy-publication.test.ts \
+            src/backend/services/model-fabric-policy-publication-cli.test.ts \
+            src/backend/services/main-plan-promotion-assessments.test.ts
+
+      - name: Decode bounded signed inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$INPUT_DIRECTORY"
+          mkdir -p "$INPUT_DIRECTORY"
+          chmod 700 "$INPUT_DIRECTORY"
+          python3 - <<'PY'
+          import base64
+          import binascii
+          import gzip
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path
+
+          output = Path(os.environ["INPUT_DIRECTORY"])
+
+          def decode(environment_name, label, required=True):
+              encoded = os.environ.get(environment_name, "")
+              if not encoded:
+                  if required:
+                      raise SystemExit(f"{label} input is required")
+                  return None
+              if len(encoded) > 60_000:
+                  raise SystemExit(f"{label} input exceeds 60000 characters")
+              try:
+                  compressed = base64.b64decode(encoded, validate=True)
+                  with gzip.GzipFile(fileobj=io.BytesIO(compressed), mode="rb") as stream:
+                      decoded = stream.read(5 * 1024 * 1024 + 1)
+              except (binascii.Error, gzip.BadGzipFile, EOFError, OSError) as error:
+                  raise SystemExit(f"{label} is not valid gzip+base64: {error}") from error
+              if not decoded or len(decoded) > 5 * 1024 * 1024 or b"\x00" in decoded:
+                  raise SystemExit(f"{label} decoded size/content is invalid")
+              try:
+                  parsed = json.loads(decoded)
+              except json.JSONDecodeError as error:
+                  raise SystemExit(f"{label} is not valid JSON: {error}") from error
+              return parsed
+
+          authority = decode("AUTHORITY_GZIP_BASE64", "authority")
+          snapshot = decode("SNAPSHOT_GZIP_BASE64", "snapshot")
+          approvals = decode("APPROVALS_GZIP_BASE64", "approvals")
+          previous_state = decode(
+              "PREVIOUS_STATE_GZIP_BASE64", "previous state", required=False
+          )
+          if not isinstance(authority, dict) or not isinstance(snapshot, dict):
+              raise SystemExit("authority and snapshot must be JSON objects")
+          if not isinstance(approvals, list) or not 1 <= len(approvals) <= 64:
+              raise SystemExit("approvals must be a JSON array containing 1-64 entries")
+          if any(not isinstance(approval, dict) for approval in approvals):
+              raise SystemExit("every approval must be a JSON object")
+          if previous_state is not None and not isinstance(previous_state, dict):
+              raise SystemExit("previous state must be a JSON object")
+
+          files = {
+              "authority.json": authority,
+              "snapshot.json": snapshot,
+          }
+          for index, approval in enumerate(approvals, start=1):
+              files[f"approval-{index:03d}.json"] = approval
+          if previous_state is not None:
+              files["previous-state.json"] = previous_state
+
+          hashes = {}
+          for name, value in files.items():
+              raw = (json.dumps(value, separators=(",", ":")) + "\n").encode("utf-8")
+              target = output / name
+              target.write_bytes(raw)
+              target.chmod(0o600)
+              hashes[name] = hashlib.sha256(raw).hexdigest()
+
+          manifest = {
+              "format": "clodex-model-fabric-publication-input",
+              "version": 1,
+              "sourceCommitSha": os.environ["SOURCE_COMMIT"],
+              "stage": os.environ["PUBLICATION_STAGE"],
+              "releaseChannel": os.environ["RELEASE_CHANNEL"],
+              "bootstrap": os.environ["BOOTSTRAP"] == "true",
+              "fileSha256": hashes,
+          }
+          target = output / "input-manifest.json"
+          target.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          target.chmod(0o600)
+          PY
+
+      - name: Upload secretless signed inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: model-fabric-input-${{ inputs.source_commit }}-${{ inputs.stage }}
+          path: ${{ env.INPUT_DIRECTORY }}/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish_and_verify:
+    name: Publish with protected publisher identity
+    needs: validate_inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: model-fabric-publication
+    env:
+      CI: "true"
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      PUBLICATION_STAGE: ${{ inputs.stage }}
+      RELEASE_CHANNEL: ${{ inputs.release_channel }}
+      BOOTSTRAP: ${{ inputs.bootstrap }}
+      INPUT_DIRECTORY: /tmp/clodex-model-fabric-publication-input
+      KEY_DIRECTORY: /tmp/clodex-model-fabric-publication-keys
+      OUTPUT_DIRECTORY: /tmp/clodex-model-fabric-publication-output
+      PUBLISHER_KEY_ID: ${{ vars.CLODEX_MODEL_FABRIC_PUBLICATION_PUBLISHER_KEY_ID }}
+      ROOT_PUBLIC_KEY_SHA256: ${{ vars.CLODEX_MODEL_FABRIC_PUBLICATION_ROOT_PUBLIC_KEY_SHA256 }}
+      PUBLISHER_PUBLIC_KEY_SHA256: ${{ vars.CLODEX_MODEL_FABRIC_PUBLICATION_PUBLISHER_PUBLIC_KEY_SHA256 }}
+
+    steps:
+      - name: Check out trusted main workflow revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify protected publication boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]] || \
+             [[ "$SOURCE_COMMIT" != "$GITHUB_SHA" ]] || \
+             [[ "$(git rev-parse HEAD)" != "$SOURCE_COMMIT" ]]; then
+            echo "Protected publication must use the exact trusted main commit" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "Trusted publication checkout is not clean" >&2
+            git status --short >&2
+            exit 1
+          fi
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install trusted publication tooling
+        run: pnpm install --frozen-lockfile --filter 'clodex...'
+
+      - name: Download secretless signed inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: model-fabric-input-${{ inputs.source_commit }}-${{ inputs.stage }}
+          path: ${{ env.INPUT_DIRECTORY }}
+
+      - name: Verify signed-input transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          directory = Path(os.environ["INPUT_DIRECTORY"])
+          manifest_path = directory / "input-manifest.json"
+          if manifest_path.is_symlink() or not manifest_path.is_file():
+              raise SystemExit("input manifest is missing or not a regular file")
+          manifest = json.loads(manifest_path.read_bytes())
+          if set(manifest) != {
+              "format", "version", "sourceCommitSha", "stage",
+              "releaseChannel", "bootstrap", "fileSha256",
+          }:
+              raise SystemExit("input manifest contains unsupported fields")
+          if manifest["format"] != "clodex-model-fabric-publication-input" or manifest["version"] != 1:
+              raise SystemExit("input manifest format/version mismatch")
+          if manifest["sourceCommitSha"] != os.environ["SOURCE_COMMIT"]:
+              raise SystemExit("input source commit mismatch")
+          if manifest["stage"] != os.environ["PUBLICATION_STAGE"]:
+              raise SystemExit("input publication stage mismatch")
+          if manifest["releaseChannel"] != os.environ["RELEASE_CHANNEL"]:
+              raise SystemExit("input release channel mismatch")
+          if manifest["bootstrap"] != (os.environ["BOOTSTRAP"] == "true"):
+              raise SystemExit("input bootstrap mismatch")
+          hashes = manifest["fileSha256"]
+          if not isinstance(hashes, dict):
+              raise SystemExit("input manifest hashes are invalid")
+          names = set(hashes)
+          approvals = sorted(name for name in names if name.startswith("approval-") and name.endswith(".json"))
+          if "authority.json" not in names or "snapshot.json" not in names or not approvals:
+              raise SystemExit("input artifact is missing authority, snapshot, or approvals")
+          if len(approvals) > 64:
+              raise SystemExit("input artifact has too many approvals")
+          has_state = "previous-state.json" in names
+          if manifest["bootstrap"] == has_state:
+              raise SystemExit("previous-state presence does not match bootstrap mode")
+          expected_paths = names | {"input-manifest.json"}
+          actual_paths = {entry.name for entry in directory.iterdir()}
+          if actual_paths != expected_paths:
+              raise SystemExit(f"input artifact contains unexpected paths: {sorted(actual_paths)}")
+          for name, expected_hash in hashes.items():
+              entry = directory / name
+              if entry.is_symlink() or not entry.is_file():
+                  raise SystemExit(f"input path is not a regular file: {entry}")
+              raw = entry.read_bytes()
+              if len(raw) < 2 or len(raw) > 5 * 1024 * 1024 or b"\x00" in raw:
+                  raise SystemExit(f"input path size/content is invalid: {entry}")
+              json.loads(raw)
+              if hashlib.sha256(raw).hexdigest() != expected_hash:
+                  raise SystemExit(f"input transport hash mismatch: {name}")
+          PY
+
+      - name: Materialize protected publisher identity
+        shell: bash
+        env:
+          ROOT_PUBLIC_KEY_PEM: ${{ secrets.CLODEX_MODEL_FABRIC_PUBLICATION_ROOT_PUBLIC_KEY }}
+          PUBLISHER_PRIVATE_KEY_PEM: ${{ secrets.CLODEX_MODEL_FABRIC_PUBLICATION_PUBLISHER_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$ROOT_PUBLIC_KEY_PEM" || -z "$PUBLISHER_PRIVATE_KEY_PEM" ]]; then
+            echo "Model Fabric publication keys are not configured" >&2
+            exit 1
+          fi
+          if [[ ! "$PUBLISHER_KEY_ID" =~ ^[A-Za-z0-9._:-]{1,256}$ ]]; then
+            echo "Model Fabric publisher key ID is missing or invalid" >&2
+            exit 1
+          fi
+          if [[ ! "$ROOT_PUBLIC_KEY_SHA256" =~ ^[a-f0-9]{64}$ ]] || \
+             [[ ! "$PUBLISHER_PUBLIC_KEY_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "Model Fabric canonical public-key hashes are missing or invalid" >&2
+            exit 1
+          fi
+          rm -rf "$KEY_DIRECTORY" "$OUTPUT_DIRECTORY"
+          mkdir -p "$KEY_DIRECTORY" "$OUTPUT_DIRECTORY"
+          chmod 700 "$KEY_DIRECTORY" "$OUTPUT_DIRECTORY"
+          umask 077
+          printf '%s\n' "$ROOT_PUBLIC_KEY_PEM" > "$KEY_DIRECTORY/root.public.pem"
+          printf '%s\n' "$PUBLISHER_PRIVATE_KEY_PEM" > "$KEY_DIRECTORY/publisher.private.pem"
+          node - <<'NODE'
+          const { createHash, createPrivateKey, createPublicKey } = require('node:crypto');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const directory = process.env.KEY_DIRECTORY;
+          const spkiHash = (key) => createHash('sha256')
+            .update(createPublicKey(key).export({ type: 'spki', format: 'der' }))
+            .digest('hex');
+          const root = fs.readFileSync(path.join(directory, 'root.public.pem'));
+          const publisher = createPrivateKey(
+            fs.readFileSync(path.join(directory, 'publisher.private.pem')),
+          );
+          if (spkiHash(root) !== process.env.ROOT_PUBLIC_KEY_SHA256) {
+            throw new Error('Model Fabric root public key hash mismatch');
+          }
+          if (spkiHash(publisher) !== process.env.PUBLISHER_PUBLIC_KEY_SHA256) {
+            throw new Error('Model Fabric publisher public key hash mismatch');
+          }
+          NODE
+
+      - name: Authorize and publish signed policy state
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          state="$OUTPUT_DIRECTORY/model-fabric-publication-state.json"
+          receipt="$OUTPUT_DIRECTORY/model-fabric-publication-receipt.json"
+          snapshot="$OUTPUT_DIRECTORY/model-fabric-control-plane-snapshot.json"
+          if [[ "$BOOTSTRAP" != "true" ]]; then
+            cp "$INPUT_DIRECTORY/previous-state.json" "$state"
+            chmod 600 "$state"
+          fi
+          publication_args=(
+            publish
+            --authority "$INPUT_DIRECTORY/authority.json"
+            --root-public-key "$KEY_DIRECTORY/root.public.pem"
+            --snapshot "$INPUT_DIRECTORY/snapshot.json"
+            --publisher-id "$PUBLISHER_KEY_ID"
+            --publisher-private-key "$KEY_DIRECTORY/publisher.private.pem"
+            --stage "$PUBLICATION_STAGE"
+            --state "$state"
+            --receipt "$receipt"
+            --out "$snapshot"
+          )
+          if [[ "$BOOTSTRAP" == "true" ]]; then
+            publication_args+=(--bootstrap true)
+          fi
+          while IFS= read -r approval; do
+            publication_args+=(--approval "$approval")
+          done < <(find "$INPUT_DIRECTORY" -maxdepth 1 -type f -name 'approval-*.json' -print | sort)
+          pnpm --dir apps/browser policy:publication -- "${publication_args[@]}"
+          pnpm --dir apps/browser policy:publication -- verify-state \
+            --state "$state" \
+            --root-public-key "$KEY_DIRECTORY/root.public.pem"
+          cp "$KEY_DIRECTORY/root.public.pem" "$OUTPUT_DIRECTORY/model-fabric-root-public-key.pem"
+          chmod 600 "$OUTPUT_DIRECTORY/model-fabric-root-public-key.pem"
+
+      - name: Require Model Fabric main-plan promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          pnpm --dir apps/browser check:main-plan-readiness -- \
+            --channel "$RELEASE_CHANNEL" \
+            --require-clean \
+            --require-promotion model-fabric \
+            --model-fabric-state "$OUTPUT_DIRECTORY/model-fabric-publication-state.json" \
+            --model-fabric-root-public-key "$OUTPUT_DIRECTORY/model-fabric-root-public-key.pem" \
+            --out "$OUTPUT_DIRECTORY/main-plan-readiness.json"
+
+      - name: Write immutable workflow metadata
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          output = Path(os.environ["OUTPUT_DIRECTORY"])
+          expected = {
+              "model-fabric-publication-state.json",
+              "model-fabric-publication-receipt.json",
+              "model-fabric-control-plane-snapshot.json",
+              "model-fabric-root-public-key.pem",
+              "main-plan-readiness.json",
+          }
+          actual = {entry.name for entry in output.iterdir()}
+          if actual != expected:
+              raise SystemExit(f"unexpected publication output paths: {sorted(actual)}")
+          hashes = {}
+          for name in sorted(expected):
+              entry = output / name
+              if entry.is_symlink() or not entry.is_file():
+                  raise SystemExit(f"publication output is not a regular file: {entry}")
+              raw = entry.read_bytes()
+              if not raw or len(raw) > 8 * 1024 * 1024 or b"\x00" in raw:
+                  raise SystemExit(f"publication output size/content is invalid: {entry}")
+              if name.endswith(".json"):
+                  json.loads(raw)
+              hashes[name] = hashlib.sha256(raw).hexdigest()
+          metadata = {
+              "format": "clodex-model-fabric-publication-workflow",
+              "version": 1,
+              "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "trustedWorkflowCommitSha": os.environ["GITHUB_SHA"],
+              "sourceCommitSha": os.environ["SOURCE_COMMIT"],
+              "stage": os.environ["PUBLICATION_STAGE"],
+              "releaseChannel": os.environ["RELEASE_CHANNEL"],
+              "bootstrap": os.environ["BOOTSTRAP"] == "true",
+              "publisherKeyId": os.environ["PUBLISHER_KEY_ID"],
+              "inputManifestSha256": hashlib.sha256(
+                  (Path(os.environ["INPUT_DIRECTORY"]) / "input-manifest.json").read_bytes()
+              ).hexdigest(),
+              "artifactSha256": hashes,
+              "workflowRunUrl": os.environ["RUN_URL"],
+              "actor": os.environ["GITHUB_ACTOR"],
+          }
+          target = output / "workflow-metadata.json"
+          target.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+          target.chmod(0o600)
+          PY
+
+      - name: Remove protected key material
+        if: always()
+        shell: bash
+        run: rm -rf "$KEY_DIRECTORY"
+
+      - name: Build checksummed publication bundle
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/model-fabric-${PUBLICATION_STAGE}-${SOURCE_COMMIT:0:12}.tar.gz"
+          checksum="$bundle.sha256"
+          tar --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -C "$OUTPUT_DIRECTORY" \
+            -czf "$bundle" .
+          (cd "$(dirname "$bundle")" && sha256sum "$(basename "$bundle")") > "$checksum"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Model Fabric publication evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: model-fabric-${{ inputs.stage }}-${{ inputs.source_commit }}
+          path: |
+            ${{ env.OUTPUT_DIRECTORY }}/
+            ${{ steps.bundle.outputs.bundle }}
+            ${{ steps.bundle.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 30

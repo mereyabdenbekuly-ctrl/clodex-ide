@@ -1,0 +1,7 @@
+{
+  "name": "clodex-agent-host-fault-smoke",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "main.cjs"
+}

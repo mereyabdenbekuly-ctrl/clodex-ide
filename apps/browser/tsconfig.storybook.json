@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "composite": true,
+    "tsBuildInfoFile": "node_modules/.cache/tsbuildinfo/tsconfig.storybook.tsbuildinfo",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/ui/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@ui/*": ["./src/ui/*"],
+      "@sb/*": ["./.storybook/*"],
+      "tmp/*": ["./tmp/*"]
+    },
+    "types": ["node", "vite/client"],
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
+  },
+  "include": [
+    "src/ui/**/*.tsx",
+    "src/ui/**/*.ts",
+    "src/shared/**/*.ts",
+    "src/shared/**/*.tsx",
+    "src/types/**/*.d.ts",
+    ".storybook/decorators/**/*.ts",
+    ".storybook/decorators/**/*.tsx",
+    ".storybook/mocks/**/*.ts",
+    ".storybook/mocks/**/*.tsx",
+    ".storybook/*.ts",
+    ".storybook/*.tsx"
+  ],
+  "exclude": ["node_modules", "dist", "coverage", "tmp", ".turbo"]
+}

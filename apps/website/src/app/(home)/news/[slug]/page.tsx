@@ -1,0 +1,101 @@
+import { getNewsTypeBadgeLabel } from '@/lib/news';
+import { getAllNewsParams, getNewsPost } from '@/lib/source';
+import { getMDXComponents } from '@/mdx-components';
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { compileMDX } from 'next-mdx-remote/rsc';
+
+export default async function PostPage(props: {
+  params: Promise<{ slug: string }>;
+}) {
+  const { slug } = await props.params;
+  const post = getNewsPost(slug);
+  if (!post) notFound();
+
+  const { content } = await compileMDX({
+    source: post.source,
+    options: {
+      mdxOptions: { development: process.env.NODE_ENV !== 'production' },
+    },
+    components: getMDXComponents(),
+  });
+
+  return (
+    <div className="mt-12 flex w-full max-w-5xl flex-col gap-12 p-4">
+      <div className="flex flex-col items-start gap-4 text-left">
+        <span className="text-base text-muted-foreground">
+          {post.date.toLocaleString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          })}
+        </span>
+        <h1 className="font-medium text-3xl text-foreground tracking-tight md:text-5xl">
+          {post.title}
+        </h1>
+        <span className="inline-flex items-center rounded-full border border-derived-subtle bg-surface-tinted px-2 py-1 font-medium text-[11px] text-primary-foreground">
+          {getNewsTypeBadgeLabel(post.type)}
+        </span>
+        <p className="text-lg text-muted-foreground">{post.description}</p>
+        <div className="flex flex-row gap-4">
+          <Link
+            href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(
+              `https://clodex.io${post.url}?utm_source=linkedin&utm_medium=social&utm_campaign=news-user-share`,
+            )}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Share this post on LinkedIn"
+            className="flex h-8 items-center justify-center rounded-sm bg-[#0b66c2] px-4 text-sm text-white"
+          >
+            Share on <span className="ml-2 font-bold">in</span>
+          </Link>
+          <Link
+            href={`https://x.com/intent/tweet?text=${encodeURIComponent(
+              `Check out the news from @clodex_io: ${post.title}`,
+            )}&url=${encodeURIComponent(`https://clodex.io${post.url}?utm_source=x&utm_medium=social&utm_campaign=news-user-share`)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Share this post on X"
+            className="flex h-8 items-center justify-center rounded-sm bg-black px-4 text-sm text-white dark:bg-white dark:text-black"
+          >
+            Share on <span className="ml-2 font-bold">𝕏</span>
+          </Link>
+        </div>
+      </div>
+      <div className="news-prose prose prose-zinc dark:prose-invert max-w-none">
+        {content}
+      </div>
+    </div>
+  );
+}
+
+export async function generateStaticParams() {
+  return getAllNewsParams().map(({ slug }) => ({ slug: slug[0] }));
+}
+
+export async function generateMetadata(props: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
+  const { slug } = await props.params;
+  const post = getNewsPost(slug);
+  if (!post) notFound();
+
+  return {
+    title: `${post.title} · clodex Newsroom`,
+    description: post.description,
+    openGraph: {
+      title: `${post.title} · clodex Newsroom`,
+      description: post.description,
+      locale: 'en_US',
+    },
+    twitter: {
+      title: `${post.title} · clodex Newsroom`,
+      description: post.description,
+      creator: '@clodex_io',
+    },
+    category: 'News',
+    applicationName: 'clodex',
+    publisher: 'clodex',
+  };
+}

@@ -1,0 +1,1748 @@
+# Changelog
+
+## 1.16.0 (2026-06-30)
+
+### Features
+
+* add Sonnet 5 and hide Sonnet 4.6 by default (6c152ea)
+* add new file creation in file tree (53e18b7)
+* distinguish MiniMax Token Plan from Pay-as-you-go auth (e240bb5)
+
+### Bug Fixes
+
+* guard in-flight createFile results against workspace switch (b091d49)
+* clear pending file creation state on workspace switch (99a5341)
+* handle pagination stall in new file rename flow and remove unused var (f182c61)
+* address review — simplify Token Plan validation to Global-only (2721a06)
+
+### Other Changes
+
+* remove preferences migration for default-disabled models (8f61a09)
+* eliminate redundant git calls in startup worktree cleanup scan (ca9ee48)
+
+## 1.15.0 (2026-06-29)
+
+### Features
+
+* add feedback and founder call surveys with 96h dismiss cooldown (b8eefa1)
+* backfill firstUsedAt from oldest agent createdAt (dfcabb0)
+* add feedback and founder call surveys to sidebar (9431767)
+* add priority-based CMD+Enter shortcut registry (d1f83d6)
+
+### Bug Fixes
+
+* request terminal focus on creation and tab switch (4e198f4)
+* restore even padding for sidebar toast action buttons (53caf1f)
+* remove backdrop-blur from sidebar toasts to fix GPU compositing regression (b27f7c5)
+* prevent agent reset on settings toggle and widen default sidebar (32c7db8)
+* add in-flight guard to feedback submission (9dd3b1c)
+* make agent count refresh reachable and gate on loaded count (da89ba4)
+* await feedback submission, add noopener, reserve toast dismiss space, label textarea (9a0a1f1)
+* apply plausibility check to firstUsedAt backfill and add cooldown timer to survey UI (f6a8433)
+* guard concurrent agent count refresh and use DB as source of truth (7f8edaa)
+
+### Other Changes
+
+* remove duplicated telemetryLevel and clean up sound pack config (9722b78)
+* extract shared SidebarToast wrapper for all sidebar badges (ecbcc3e)
+
+## 1.14.0 (2026-06-26)
+
+### Features
+
+* add provider routing and coding-plan identity to agent telemetry (95f049b)
+* use project name for workspace tab titles in Skills & Context (b7645f5)
+* support third-party global skills from ~/.codex and ~/.claude (9918d54)
+
+### Bug Fixes
+
+* fix duplicate toggles, stale tab desync, N+1 global rebuilds (3657451)
+
+## 1.13.0 (2026-06-25)
+
+### Features
+
+* add model-restricted error UI with upgrade CTAs (dc8fda9)
+* route email sign-in through web console (271f2e8)
+* add Mistral model provider (aec1738)
+
+### Bug Fixes
+
+* accept callbacks on any valid clodex protocol, extend auth RPC timeout (9be28c7)
+* persist switchBranchTarget in workspace git action preferences (3f3f778)
+
+## 1.12.0 (2026-06-25)
+
+### Features
+
+* enable Turnstile token on clodex:// via on-demand solver (ea00153)
+* support Esc as additional abort trigger alongside Ctrl+C (7e6d251)
+
+## 1.11.0 (2026-06-24)
+
+### Features
+
+* add Xiaomi MiMo V2.5 model series (e557326)
+
+### Bug Fixes
+
+* restore worktree cleanup scan on startup (2ccc259)
+* preserve credential vars for user-facing terminals (dbb52a2)
+* stop bypassing BLOCKLIST in terminal env fallback (55b2be2)
+* pass shell type to sanitizeEnv in worktree setup (6de8e86)
+
+## 1.10.2 (2026-06-23)
+
+### Bug Fixes
+
+* remove unstable procedure from useEffect deps (1f06ead)
+
+## 1.10.1 (2026-06-23)
+
+### Bug Fixes
+
+* project browser env snapshot from contentTabs with agent filtering (06f4d10)
+
+### Other Changes
+
+* gate resize-driven screenshot capture on visibility and focus (e884cdc)
+* gate idle energy consumers behind focus and visibility (89131e3)
+
+## 1.10.0 (2026-06-19)
+
+### Features
+
+* add model alias presets with fixed thinking (18028e1)
+* cap large diff counts and refine tab bar controls (38f2097)
+* add inline/split diff view to file tab editor (47530cd)
+
+### Bug Fixes
+
+* support GLM coding plan endpoint (4e8f7ad)
+* use platform-correct worktree-setup script in git-path-actions tests (b5c3e04)
+* resolve stale git state in branch/worktree creation and dropdown refresh (d4a40f1)
+* add missing refreshSucceeded field to worktree-utils test fixtures (fd5947f)
+* refresh stale remote branches on dropdown open (d99dca6)
+* use listBranches kind check instead of slash heuristic (96e3b56)
+* robust remote fetch for branch and worktree creation (d7ca53c)
+* fetch all remote refs before creating worktrees and branches (890ee41)
+* address diff view PR review feedback (4778975)
+* harden diff view persistence and conflict safety (3c644a2)
+* balance diff gutter number spacing (19510ea)
+* remove diff revert-icon margin to reclaim gutter space (181bbc0)
+* trim inline diff gutter left padding (cca782d)
+* disable word wrap in all editors and diff modes (86b3009)
+* force consistent word wrap in split diff view (0245e5d)
+* use dedicated icons for diff view-mode toggle (679ae84)
+* default diff view to inline mode (aa59601)
+* prefix diff tab titles and use distinct icon (78f0606)
+* apply file-code zoom to diff editor (dd64210)
+* focus chat input on agent switch over web/terminal tabs (1830332)
+
+## 1.9.0 (2026-06-17)
+
+### Features
+
+* add GLM 5.2 (febd80d)
+* add omnibox focus hotkey (eb02d55)
+* show diff line counts on collapsed file tree toggle (8badbef)
+* add hotkeys for Files/Diff file tree views (8c41768)
+* add tooltips to Files/Diff tab toggle buttons (37fdf82)
+* split diff entry into filename + directory path (6d77d67)
+* polish diff panel — active file highlight, tab control styling, label visibility (5faa664)
+* show accumulated diff totals in sidebar tab (b7db7a9)
+* add git diff panel to file tree sidebar (6d2c44d)
+* add Kimi K2.7 Code (560614f)
+* add content tab arrow shortcuts (9f11e7c)
+* add model thinking controls (ccad6bc)
+* prepare thinking overrides backend (f768384)
+* add telemetry events for theme, loudness, and sound pack changes (155002c)
+* add appearance preference (ae17273)
+* refine personalization theme badges (4ab7536)
+* refine personalization themes (3507c90)
+* add personalization themes (ca61ab6)
+
+### Bug Fixes
+
+* use GLM max effort gateway value (a2b7f25)
+* avoid selecting settings on empty model search (21e9f30)
+* copy file tree item paths (59c802d)
+* auto-highlight filtered model result (b42c957)
+* prevent tab bar action overlap (e45d921)
+* drop pruned worktrees and sort sidebar by real age (93bcc36)
+* ensure root worktree always stays first when new keys prepended (6270073)
+* preserve new worktree key order instead of reversing (c8bf61b)
+* new worktrees sort to top, cap visible at 5, preserve manual order (d5e6a6f)
+* update deleted entry when untracked file recreated at same path (d702246)
+* promote merged entry to deleted when either side is deleted (a9985cf)
+* use separate status maps for staged and unstaged git diff (223154e)
+* enable rename detection in git diff --numstat and --name-status (0d2c0c4)
+* unregister getWorkspaceDiffSummary handler on teardown (b587166)
+* use fallback workspace key for diff revision tracking in toggle button (2f2d7c5)
+* tighten tab bar height and align toggle buttons (e57ca85)
+* prevent flicker in file tree and diff view on re-fetch (099fa1b)
+* keep diff view and toggle button in sync with file changes (e91b261)
+* use captureDominantly=false for diff hotkey so find bar wins (4f1dede)
+* add null guard on selectedWorkspaceKey in handleDiffOpenFile (b92aa53)
+* align command center agent source with file tree sidebar (a7b216e)
+* persist tutorial progress on restart and fix missing sidebar-panel tutorial anchor (0ad01d5)
+* register missing UI telemetry event names (7b34ca3)
+* error handling and rollback for personalization theme persistence (10aa063)
+
+### Other Changes
+
+* alias GitDiffNumstat types to shared contract definitions (241305e)
+* extract shared workspace mounts comparator to file-tree-utils (49bc235)
+* increase spacing on dirPath, use subtle foreground, strip trailing slash (023d979)
+
+## 1.8.0 (2026-06-12)
+
+### Features
+
+* add tutorial mode with step-by-step UI guides (d66ef8b)
+* add command center content file search (4e014ff)
+* clear delete notices on watcher add event (5fc9866)
+* file tab notices, binary preview, context menu, dirty dot fixes (8583c4b)
+* handle external file edits in preview tabs (41ddcf8)
+* file tree drag-drop, perf, editor status bar and dialog fixes (5cc2656)
+* refine file tree preview controls (9e3da34)
+* add file tree sidebar (3454e4b)
+* replace upload image button with attach file, gate element selector on browsing tab (b1140c1)
+
+### Bug Fixes
+
+* refresh sibling panel observers on re-attach with same container (ad573d1)
+* immediately restore scroll position on editor mount (d86b300)
+* observe sibling panels for bounds-syncing viewport desync (b513403)
+* persist file viewer tab state across switches (2729b2f)
+* stabilize file tree workspace mounts selector with structural comparison (870eae8)
+* queue same-commit tutorial registrations instead of overwriting (2d08d84)
+* harden tutorial mode against focus, locking, and persistence issues (42a6563)
+* prevent Tutorial cleanup from firing on every state change (b4432e8)
+* prevent progress regression, step skipping, observer thrash (405319e)
+* prevent stale queued tutorials from blocking the UI (8ec68d2)
+* queue tutorial registrations instead of dropping them (e76658b)
+* clamp tutorial popover to viewport bounds on narrow panels (83cf9ef)
+* serialize tutorial step writes to prevent race condition (2b19c78)
+* polish settings sidebar navigation (f24f4d2)
+* align file fuzzy search (79d90c4)
+* address review test and mention issues (951d591)
+* open historical file mentions (a6e3c06)
+* secure workspace previews and file badge clicks (f1da7b7)
+* address command center review findings (3c562c5)
+* remove workspace mount gating from diff-review header reveal (da41b2b)
+* handle filtered-out active tab in saveTabState (d3e1ddf)
+* remove dead openExternally code (d73faff)
+* resolve all valid review findings (3fb1766)
+* hide element selector when content panel is collapsed (8afd5d5)
+* gate Cmd+I hotkey on hasVisibleBrowsingTab and agent ownership (27d4def)
+* deactivate element selection on tab switch, gate on agent ownership (dcc073b)
+
+## 1.7.0 (2026-06-10)
+
+### Features
+
+* add windows-support for worktree-setups (6533536)
+
+## 1.6.0 (2026-06-08)
+
+### Features
+
+* add intel mac builds (0c96120)
+* open previews in browser tabs (9f1fa15)
+* prefer remote base for worktrees (db32c3b)
+* add sidebar-foreground color for legible sidebar labels (262b49d)
+
+### Bug Fixes
+
+* use intel mac runner (cd0448f)
+* fix dev origin for hosted API, improve signup UI, update error links (79741ab)
+* refine auth error actions (954cca2)
+* improve worktree branch picker (abded0e)
+* prevent remote branch checkout (da10524)
+* align sidebar-styles (0abced2)
+
+### Other Changes
+
+* refactor context-skills settings (da2dcee)
+
+## 1.5.0 (2026-06-03)
+
+### Features
+
+* add worktree setup settings and env-var refactor (1a2baa0)
+* add minimax m3 (96f22e0)
+* improve agent wake handling (b2ba4e5)
+
+### Bug Fixes
+
+* fix patch-behaviour in karton x agent-core bridge (e3e899d)
+* capture command output across PTY chunk boundaries (5585308)
+* prevent PS2 prompt noise from sentinel command wrapper (803ccf4)
+* stop shell-integration guard leaking into child PTYs (6b53401)
+* use zsh-safe substring expansion in OSC 7 cwd encoder (8a01e25)
+* deduplicate streamdown link listeners (57874c1)
+* refine browser tab shortcuts (05064b5)
+* refine awake setting and link routing (b58b46f)
+* refine closed-lid sleep toggle (1f8a6c3)
+* make workspace copy-path button work (a13635f)
+* prevent duplicate tab ids from crashing the UI (c1fa2dd)
+
+### Other Changes
+
+* emit OSC-stripped output in sentinel parser mode (d2ac3bc)
+* speed up dev startup and show window earlier (e3e1252)
+
+## 1.4.0 (2026-06-01)
+
+### Features
+
+* watch git worktree topology and HEAD for external changes (560433d)
+* improve sidebar workspace grouping (cc7675d)
+
+### Bug Fixes
+
+* reliably scroll the agent list to the active agent's first card (f7ec4e0)
+* sync sidebar worktree branch labels with external git switches (112db39)
+* remove worktree before deleting its agents (d063d22)
+* keep agents with deleted worktrees consistent in sidebar (993d2ff)
+* fix rust lsp server (78d043e)
+
+## 1.3.0 (2026-05-29)
+
+### Features
+
+* add rust and clang lsp (6ecb708)
+
+## 1.2.1 (2026-05-29)
+
+### Bug Fixes
+
+* harden renderer error handling (6145fde)
+
+## 1.2.0 (2026-05-28)
+
+### Features
+
+* add opus 4.8 (aefc28c)
+* move settings into main UI (2f96310)
+* add worktree setup lifecycle (be47444)
+* add worktree setup lifecycle (04eb706)
+* add ctrl-backtick for terminal focus (acd5478)
+
+### Bug Fixes
+
+* fix provider-thinking-signatures (d2816cd)
+* fix browser-tab rendering in cmd-k center (3012ec0)
+
+## 1.1.0 (2026-05-27)
+
+### Features
+
+* add reveal-file smart logic, platform-aware labels, and terminal tab hotkey (dd940c7)
+
+### Bug Fixes
+
+* ignore prerelease tags for stable baseline (a9112ed)
+* apply release version before packaging (c31d195)
+* make nightly versions squirrel-compatible (e0da7e6)
+* allow stop hotkey in chat input (eada218)
+* route stop hotkey through focused UI (7d76c94)
+* let focused terminal handle ctrl-c (cd424c1)
+* refine zoom hotkey behavior (b1a82fa)
+* cap terminal zoom at 150 percent max (70403c0)
+* add zoom for terminal tabs, fix UI zoom white space (4ab48ae)
+* split UI zoom from tab-content zoom hotkey handlers (d31ab98)
+
+## 1.0.1 (2026-05-27)
+
+### Bug Fixes
+
+* reduce cross-icon size on workspace-select (72e6f11)
+## 1.0.0 (2026-05-27)
+
+### Features
+
+* show worktree main as workspacename (59e9b24)
+* prepare nightly release infrastructure (23d9b03)
+* add agent notification sounds (f894e4d)
+* show new chat button and title in collapsed sidebar titlebar (e1072d1)
+* add user-controllable terminal tabs (c8d2046)
+* add more shortcut-controls and align design (1cbab15)
+* prompt cleanup for unused managed worktrees (eaa20b0)
+* use local branch as default for 'use branch' (d61013a)
+* show placeholder for worktree-/branch-creation (e874640)
+* saving git-option preferences (7af6e2a)
+* add full worktree support (8a0ced9)
+
+### Bug Fixes
+
+* make hotkeys QWERTZ-compatible (694ae1f)
+* preserve posix osc cwd paths (589ebd0)
+* validate shell command end metadata (d063d73)
+* validate shell cwd metadata (40f1d17)
+* harden shell cwd tracking (080f903)
+* track shell cwd for approvals (d26ecea)
+* harden shell output pattern matching (9caa51e)
+* address notification review findings (efba190)
+* distrust shell cwd metadata (c5da96b)
+* address review findings for shell tool refactor (6442259)
+* handle createAgent rejection and add min-w-0 for title truncation (70caae9)
+* fix agent tab ordering and collapsed sidebar create flow (a8f9369)
+* persist agent-created background tabs after restart (0d27d69)
+* gate subscribeCDPEvent and fix ignored validateTabAccess return (c12d7cd)
+* assign agent-created tabs to the creating agent and gate tab access (38369ba)
+* add PIN entry for Bluetooth providePin pairing (d08ef74)
+* correct permission request actions (e726d84)
+* mount only active tab content (285eba4)
+* debounce terminal resize events (6512304)
+* load user shell config in terminals (5b88835)
+* preserve powershell prompt status (4009cd4)
+* default terminals to user home (e96959d)
+* stabilize windows terminals (c5cb0f5)
+* address terminal review findings (5cd9ce1)
+* fix git-option selection staleness (56392bf)
+* fix PR issues (80adb79)
+* preserve switch worktree target defaults (2f6ef7d)
+* fix stale branch-names (a55adee)
+* fix optimistic msg filtering (40870a5)
+* truncate and simplify git-option error label (13625cc)
+
+### Other Changes
+
+* split shell tool into createShellSession + executeShellCommand (b99dac5)
+* remove downloads feature, redesign permission icons to outline (0170290)
+* remove unused browser suggestions (ac19b8f)
+* replace git-tools with git-service information (f19b4ad)
+
+## 1.0.0-alpha097 (2026-05-22)
+
+### Features
+
+* add hotkey-controls to cmd-center (6911e8b)
+* add cmd-k control center (1390e10)
+
+## 1.0.0-alpha096 (2026-05-21)
+
+### Bug Fixes
+
+* fix app-focus-behaviour on webcontents (525aa10)
+
+## 1.0.0-alpha095 (2026-05-20)
+
+### Features
+
+* add gemini 3.5 flash (d5cb1c6)
+
+## 1.0.0-alpha094 (2026-05-18)
+
+### Features
+
+* per-agent tabs with collapsible content panel (4234bbf)
+* per-agent browser tabs with persistence and toolbox scoping (585b6c4)
+* add UI zoom via Cmd/Ctrl+Plus/Minus, persisted in preferences (350227e)
+
+### Bug Fixes
+
+* reserve right padding for sidebar toggle in tab bar (cfe0007)
+* close window targets correct tab ids, guard internal pages, filter visible tabs (0d97fa1)
+* remove stale BackgroundWithCutout reference after rebase (75fdb59)
+* fix cmd-n (b42c993)
+* fix searchbar-focus issue (39331e7)
+
+### Other Changes
+
+* reorganize hotkey bindings, fix drag overlay, rewire shortcuts (50b4e73)
+* simplify agent-switch effect deps (aee5fa1)
+* lazy tab creation on agent switch (7596616)
+* remove shell sections from panel footer (451e0ee)
+
+## 1.0.0-alpha093 (2026-05-15)
+
+### Features
+
+* decrease history compression threshold (507a2aa)
+
+### Bug Fixes
+
+* add tabbing-highlights to pinned agents (9ba2f10)
+
+## 1.0.0-alpha092 (2026-05-14)
+
+### Features
+
+* support tabbing through agents (7f86c17)
+* support agent-pinning (0370c3e)
+
+### Bug Fixes
+
+* fix omnibox-focus-loss (5df221e)
+* enable cmd-b sidebar toggle when chat focused (275ef5f)
+
+## 1.0.0-alpha091 (2026-05-13)
+
+### Bug Fixes
+
+* fix sorting in agents-sidebar (90d5bdf)
+* fix lsp-crash on app-quit (5eb2e77)
+
+## 1.0.0-alpha090 (2026-05-13)
+
+### Bug Fixes
+
+* preserve slash-command bodies during history compression (bffd4b8)
+
+## 1.0.0-alpha089 (2026-05-12)
+
+### Features
+
+* carry over tool call permission mode (54597b7)
+* reuse tool call permission mode in new agents (a009c1b)
+
+### Bug Fixes
+
+* save and send missing reasoning signatures (49d6ac3)
+
+### Other Changes
+
+* put all agents into the sidebar (53980ca)
+
+## 1.0.0-alpha088 (2026-05-11)
+
+### Bug Fixes
+
+* remove backdrop blur to prevent flickering during scroll (066db83)
+* fix text-colors in browser downloads (3e32de6)
+
+## 1.0.0-alpha087 (2026-05-08)
+
+### Features
+
+* allow collapsing of sidebar (2f5acad)
+
+## 1.0.0-alpha086 (2026-05-07)
+
+### Bug Fixes
+
+* fix insert-position of attachments (0ffeb1a)
+* fix element-selection offset with zoomed content (44649f8)
+* show hidden title-bar on Windows (cb3e998)
+
+## 1.0.0-alpha085 (2026-05-07)
+
+### Bug Fixes
+
+* add app-drag to tabs containerQ (ba841ab)
+* fix delete-popover location (061f1b4)
+* fix app-crash on quit (c9f61fe)
+* fix diff-history hunks for empty files (7ebba5d)
+* fix diff-history hunks for empty files (af282ca)
+* reduce chat-input padding (20a6117)
+
+### Other Changes
+
+* enrich telemetry in onboarding (ded33e9)
+
+## 1.0.0-alpha084 (2026-05-07)
+
+### Features
+
+* add minimax-M2.7 (e9dad1c)
+
+## 1.0.0-alpha083 (2026-05-06)
+
+### Features
+
+* add coding-plan UI into onboarding flow (1975688)
+* add coding plans integration (28ce6ff)
+
+## 1.0.0-alpha082 (2026-05-06)
+
+### Features
+
+* integrate AWS profiles into model provider (9df0455)
+
+### Bug Fixes
+
+* harden ownership rules for plan-TODOs (0754148)
+
+## 1.0.0-alpha081 (2026-05-04)
+
+### Bug Fixes
+
+* increase maximum timeout for approval classification (9009c66)
+
+## 1.0.0-alpha080 (2026-05-04)
+
+### Features
+
+* add smart-approval mode (72c5551)
+
+## 1.0.0-alpha079 (2026-05-04)
+
+### Features
+
+* add context menu for agents (9909229)
+
+## 1.0.0-alpha078 (2026-05-01)
+
+### Bug Fixes
+
+* notify agents of workspace skill changes (37fd6e0)
+* prevent shell-history leakage for shell tool-calls (e0ad606)
+
+## 1.0.0-alpha077 (2026-05-01)
+
+### Bug Fixes
+
+* resolve race in pathReferences population (801d6a0)
+
+### Other Changes
+
+* bump posthog to fix 500ms+ flush call post agent step (035ad89)
+
+## 1.0.0-alpha076 (2026-04-30)
+
+### Features
+
+* implement fast-path cache probing to optimize file read performance (08a3365)
+* introduce tool approval modes (alwaysAllow and alwaysAsk) (765fabd)
+
+### Bug Fixes
+
+* add hard cap constants for history compression thresholds to optimize token usage (6257f00)
+
+## 1.0.0-alpha075 (2026-04-29)
+
+### Features
+
+* enhance command timeout and idle management with recent output tracking (d9016f3)
+* add support for DeepSeek and Z.ai providers (91203aa)
+* enhance error handling for upstream overloads and improve telemetry reporting (5854db2)
+* add agent-preview panels to agent-cards (449c7f8)
+
+### Bug Fixes
+
+* prevent editing agent title when agent is inactive (05572ed)
+
+## 1.0.0-alpha074 (2026-04-27)
+
+### Features
+
+* built-in video creation plugin (0b8ecd5)
+
+## 1.0.0-alpha073 (2026-04-27)
+
+### Features
+
+* add gpt-5-5 (f5419d9)
+* implement agent preview panel with workspace and touched files information (9d0a032)
+
+### Bug Fixes
+
+* update agent card button styling and improve chat input placeholder text (129b361)
+* fix flicker of preview-card on empty chat (1babbba)
+* implement gitignore-aware filtering and workspace root resolution for agent edits (6b7d5b7)
+
+## 1.0.0-alpha072 (2026-04-24)
+
+### Features
+
+* allow renaming agents (fccda0f)
+
+### Bug Fixes
+
+* show file badges properly inside "askUserQuestions" tool ui (b89c8d0)
+
+## 1.0.0-alpha071 (2026-04-24)
+
+### Bug Fixes
+
+* harden tool repair handler and fix shell description example (78e8a16)
+* simplify executeShellCommand schema and description to reduce LLM schema errors (afebb64)
+* surface zod issues from tool repair handler (7166e05)
+
+## 1.0.0-alpha070 (2026-04-23)
+
+### Features
+
+* improve responsiveness of shell tool execution (841c086)
+* enhance TSX function-body extraction for read previews (6cd383a)
+* add index on diff ops, add optimistic diff accepting/ rejecting (2037295)
+* add AST-previews to file-read-pipeline for files w/ src code (0f2b246)
+
+### Bug Fixes
+
+* overhaul shell session lifecycle and streaming (ad4fd91)
+
+## 1.0.0-alpha069 (2026-04-23)
+
+### Bug Fixes
+
+* fix-windows-shell-startup (b2edc3b)
+
+## 1.0.0-alpha068 (2026-04-23)
+
+### Features
+
+* fix diff-history performance issues by caching and batching sqlite queries (85ff9d8)
+
+### Bug Fixes
+
+* instruct agents to reuse open shell sessions (f1aeb93)
+
+## 1.0.0-alpha067 (2026-04-22)
+
+### Features
+
+* add kimi-k2.6 (d99a089)
+
+## 1.0.0-alpha066 (2026-04-22)
+
+### Bug Fixes
+
+* fix stuck base-agent on intermediary tool-calls (2aedc13)
+
+## 1.0.0-alpha065 (2026-04-21)
+
+### Features
+
+* add headless shell session UI (sidebar, badges, tool rendering) (b5e5891)
+* add env-changes to long-running shells (d055c22)
+* add file-logging to long-running shells (ba086e6)
+* add support for long-running shell sessions (5ec932d)
+
+### Bug Fixes
+
+* enhance shell session management by refining data handling and readiness checks (d9b8d5e)
+* unpack spawn-helper in asar build (463939f)
+* address shell session PTY lifecycle and schema issues (52d6343)
+* remove hover-effect on shell-section items (9c72809)
+* improve robustness of shell integration, remove unused integrations (f839667)
+* fix startup-script failure with pre-existing scripts (5be428b)
+* addressing remaining shell-issues on PR #907 (28c3e09)
+* addressing shell-issues on PR #907 (b370943)
+
+## 1.0.0-alpha064 (2026-04-21)
+
+### Bug Fixes
+
+* normalize agent-intances-db (separate messages) (86b0590)
+
+### Bug Fixes
+
+* fixing model-id-mismatch for direct anthropic requests (cc3ff69)
+
+### Features
+
+* integrate Cloudflare Turnstile for enhanced security in OTP flow (eff2fa4)
+
+### Bug Fixes
+
+* fix title generation logic and system prompt for conversations (b7a5c68)
+* add file system documentation to workspace-md-agent (dcb3b97)
+
+### Features
+
+* enhance skill definition sorting for builtin commands (abb6009)
+* add debug-command (cce574f)
+* implement HMAC-SHA256 signing for fetch requests (c538138)
+
+### Bug Fixes
+
+* try-catch ingest-server startup (076cf2e)
+* streamline log ingestion and validation in environment renderer and toolbox service (5119df9)
+
+### Features
+
+* add opus-4-7 (e6bad3a)
+
+### Bug Fixes
+
+* normalize error handling in streamText and runStep methods (6ffbf62)
+
+### Bug Fixes
+
+* strip backticks from rich text examples (1b98e57)
+* remove prompt for context-generation (b74f991)
+
+### Features
+
+* add learning skill that creates and updates skills (ab1421d)
+
+### Bug Fixes
+
+* fix model-ids for all models (c364f8c)
+* fix ask-user-tool (efa3a00)
+
+### Bug Fixes
+
+* fix document-search focus-bug (b1bb219)
+* use chat-model as compression fallback (8e67a38)
+
+### Other Changes
+
+* adapt browser to new backend-requirements (7851a62)
+
+### Features
+
+* support global skills (d96ea43)
+
+### Bug Fixes
+
+* add file-watcher for global skills (24cd233)
+* correct global skill override logic and path matching (e9850e5)
+* fix typo in 'isClodex' (5b1c088)
+* ui sometimes not showing up (89eed4a)
+* show loader in app startup screen (8b8ff5f)
+* dont show login form on unreachable server (d0ac0d5)
+
+### Bug Fixes
+
+* add delete-confirmation-popup for agents (d3706f9)
+* fix tab-sorting (9aeffe6)
+* remove clodex-logs from webcontents (eac29d7)
+
+### Bug Fixes
+
+* fix runtime-node issues on windows (4007ea2)
+* fix isolated-fs path resolution on windows (ed59ce6)
+
+### Bug Fixes
+
+* fix notification-placement (6fedc35)
+* fix attachment-display in toolcall outputs (2364db0)
+* fix schema-errors with direct anthropic-provider (b9c58c0)
+* allow sending 1-char messages (ca87e94)
+
+### Bug Fixes
+
+* include more detailed sandbox-explanation in system-prompt (227d2cf)
+
+### Bug Fixes
+
+* ensure dynamic import of main module to prevent crashes on windows (9a87fc5)
+* fix locked scroll-position on scroll via scrollbar-thumb (5b79c87)
+* align layouts in settings sections (ed2447e)
+* don't allow stacking update notifications (cd439ad)
+* fix auto-updating and add manual update button in about-page (4aad15e)
+
+### Other Changes
+
+* show notifications above chat-input instead of overlay (31cf81d)
+
+### Bug Fixes
+
+* hotkey behavior for downloads popover (80bedcf)
+* fix misinterpretation of files as binary (c9edd7f)
+* make plan-view readonly (cf6f487)
+
+### Features
+
+* add /preview to commands (35cfc09)
+
+### Bug Fixes
+
+* create dirs for agent runtime that may be missing (d3bd903)
+
+### Features
+
+* new file attachment pipeline (be78e29)
+
+### Bug Fixes
+
+* addressing review issues on #850 (0e98072)
+* fix performance-related bugs for #850 (711b685)
+* fix janks after edit-tool-streams (8ba90a6)
+* fix user-msg repositioning on send (40129c0)
+* fix stale 'tool-approval' messages after user-msg sent (d1b7e02)
+* performance and a11y fixes for pr-review on #850 (03451e5)
+* prevent unnecessary rerenders (e96dfef)
+* fix attachment-node positioning (d789c95)
+* move shiki-highlighting to a web-worker thread (59fe395)
+* fix further slash-command-id mismatches for /implement (8d6295f)
+* fix slash-command-id mismatch for /implement (83b0ca3)
+* remove legacy wsfile references and instructions (96e6b8c)
+* fix 'overwriteFile' reference in plan mode check (3d3043c)
+* fix tool-names for plan-toolparts (3f248e1)
+* more debug utilities and fixed unstable file context pipeline (e213326)
+* old call signatures in test cases (6bc8709)
+
+### Other Changes
+
+* collapse plan-section by default (b446a3a)
+* simplify read pipeline to always output content (3f560e5)
+* standardize and update env snapshot rendering (60714d8)
+* make file change env info more compact (e45c368)
+* re-structure system prompt and reintroduce ls tool (fb9c8c7)
+* convert dom elements into files in attachment folder (231db10)
+* convert text clips from extra attachments to files (82044a7)
+* standardize file reference and attachments format for both agents and users (417395b)
+
+### Bug Fixes
+
+* apply max-w- to chat-input (8752d87)
+* improve plan instructions on TODOs (14d583b)
+
+### Other Changes
+
+* update onboarding steps and feature images and explain the product (3e63d64)
+* rename 'commands' to 'skills' in types and functions (8f289de)
+* turn 'commands' into 'skills' with frontmatter properties (474b1ff)
+
+### Features
+
+* add skills and plugins to slash-items-popup (9dc08aa)
+* add hidden-commands and groups to slash suggestions (ffffc62)
+* add workspace-preview on @mention suggestions (f223ea7)
+* add 'restore checkpoint' to assistant messages (ae6a394)
+* add gitIgnore param to listFilesTool (3354d91)
+* add plan-mode via slash-command (3c21c2b)
+
+### Bug Fixes
+
+* fix truncation logic in suggestion popups (ce42296)
+* condense compounding context-compression-length (aa056e4)
+* fix preview-panel behaviour and esc handling in popups (77e4482)
+* reset attachments and selected elements before restoring message (41573c5)
+* remove hover effect on implement-message during isWorking (9f2b2a2)
+* properly parse mentions and attachments from expanded text-clips (49f387f)
+* move plans-explanation in system prompt, fix redundant '.clodex' bullet (39bc2d4)
+* align padding and fix search-inputs in internal pages (602cbae)
+* align chat-history-content in center when increasing width (e87f30b)
+* make compression-llm use wsfile paths (2b5f13b)
+* force skill-use more prominently (f859ec1)
+* tighten plan-instructions - make plans self-contained (efe66ab)
+* align create-plan error UI with other tool part UIs (881812a)
+* make plan-prompts more concise, add 'command'-wrapper for slash command msgs (7416366)
+* fix divider color in footer-status-card sections (45a3e11)
+* make checkbox derive border (c582809)
+* add file-tree preview for directories as well (d3573e5)
+* handle readFile on directories gracefully (7ec81ed)
+* add .plan to 'usage-limit-reched' event (d625eac)
+
+### Other Changes
+
+* move 'revert-edits'-confirm dialog into shareable component (97a0801)
+* add 'hidden' to commands and use flat markdown-structure w/ frontmatter (89d8686)
+
+### Bug Fixes
+
+* increase timeout for compression-llm retries to 30s (33fb877)
+
+### Bug Fixes
+
+* account for truncation marker length in text cap budget (4c5730d)
+* truncate user-message as well (d1aca4a)
+* lower fraction of messagesKept to 0.2, account for metadata overhead (f3bc2d8)
+* handle edge cases in history compression (297a91d)
+* make compression respect context size for kept messages, reduce tool output cap (c4ff9ee)
+* fix tool-error message (handle 'noSuchTool', etc.) (79df676)
+
+### Features
+
+* solid tab badge handling (766329b)
+
+### Bug Fixes
+
+* make tab badges show when closed or browser restarted (dfc02c4)
+* fix buggy web frame error handling (44bbc9e)
+* default maxOutputTokens is undefined now to prevent api errors (1649343)
+* fix unchecked array access on tool input (1a652e4)
+
+### Other Changes
+
+* simplify and shorten env-changes strings (2aa3449)
+* make tab ids simple counter numerics like in chrome (25ac595)
+
+### Bug Fixes
+
+* better escaping of inputs for context compression prompt (f21a5b5)
+* make context compression and title generation more reliable (ec0afd7)
+
+### Features
+
+* add file-tree-outline to mention suggestions (e47d9fd)
+* use stage-ui checkboxes in streamdown markdown (d965d1c)
+* remove external-file-link-icon from file-link (052a303)
+* add workspace:// protocol to pages app (96c2b7d)
+* add slash-components to tiptap rich-text dir (73d3d13)
+* add markdown-editor to components (200491f)
+
+### Bug Fixes
+
+* remove link-icon from file-attachments (102ac22)
+
+### Other Changes
+
+* make windows install include redistributables (041d855)
+
+### Features
+
+* add support for gpt 5.4 mini/ nano (c2ad158)
+
+### Bug Fixes
+
+* treat file-deletion with creation as modification (2512090)
+
+### Bug Fixes
+
+* add app-launched to bypass-list (ce0fdea)
+
+### Bug Fixes
+
+* fix license-dialog in about-page (c096a73)
+* prevent jumping around of cursor on input fields (06fc409)
+* graceful handling of token limit hits during tool calls (d162b0c)
+
+### Features
+
+* add custom ui for plugin-/ skill-reads (ae42973)
+
+### Bug Fixes
+
+* fix 'stuck' resizable panel for chat-history on max-w (2d09a29)
+* prevent user-question checkboxes from shrinking (039732f)
+* remove duplicate 'compacted' message (74bda1d)
+
+### Other Changes
+
+* remove "tool" suffixes from tool names (4ebd0a3)
+
+### Bug Fixes
+
+* don't show env-message when agent reverts its own edits (21d7c09)
+* name 'handle' to 'id' for tabs in message-structure (752dfc9)
+
+### Bug Fixes
+
+* make context-usage ring use dynamic context size (be816ce)
+
+### Bug Fixes
+
+* add missing asar-unpacking for 'sharp' (96e3b52)
+
+### Bug Fixes
+
+* add 'sharp' to dependencies (f7de61b)
+* fix '<div> cannot be a descendant of <p>' for file context menu (50494c3)
+* align downloads-ui with history-ui (f3d0e71)
+
+### Other Changes
+
+* replace tabHandle with shorter, unique tabIds (d1ef5b1)
+
+### Bug Fixes
+
+* move telemetry-filter to application-level (4fa167e)
+* prevent link-clicking default behaviour in chat-input (7896a57)
+
+### Bug Fixes
+
+* revert to base64 for file parts (fa852f0)
+
+### Bug Fixes
+
+* increase tab-handle recycle limit to 100 (8e4d4b1)
+
+### Bug Fixes
+
+* add explanation-string to sandbox-tool (1ecd95d)
+* use theme tokens for logo colors (2210c27)
+* fix logo-colors in sign-in and onboarding (037706f)
+
+### Bug Fixes
+
+* fix windows-focus bugs on omnibox (055ebd2)
+* add strict type checking and noUncheckedIndexedAccess (5d6624e)
+
+### Other Changes
+
+* enforce explicit aliases for pages- and ui-imports (2378337)
+
+### Bug Fixes
+
+* fix unchecked array-access in diff-history (73fb2dc)
+
+### Bug Fixes
+
+* make library-tools return proper error messages (3ee1a47)
+* add more padding to shell-cmd-text (1c9aac5)
+
+### Bug Fixes
+
+* fix stale z-index/ focus handling on omnibox (0d997ab)
+
+### Bug Fixes
+
+* fix error on app-start due to unstable arrays (29eb8f0)
+
+### Bug Fixes
+
+* fix olive surface-tinted color (294f525)
+* use release_pat to trigger ci on release-pr's (b0703a9)
+
+### Bug Fixes
+
+* restore release-script (635ab3b)
+* capture opt-outs from telemetry so we know what we don't know (a2d6e2b)
+* fix queue error when approval-message is present (1f9e434)
+* add deprecation-cli for 'npx clodex@latest' (2458bc0)
+* fix rerenders with unstable karton arrays (7482bd1)
+* make signin-link dynamic (5da4a04)
+
+### Bug Fixes
+
+* catch lsp-client errors on startup (0769679)
+
+### Bug Fixes
+
+* bump api-client and fix library-tool signature (8adc977)
+
+### Bug Fixes
+
+* add bg to 'open in file' button for workspace-md (394079d)
+* fix toolpart-ui for no-content (71d6e70)
+* change default-settings url to agent models (fe7a716)
+* move telemetry settings to 'user' (eff1858)
+* make scrollbars in settings-about subtle (1dc1930)
+* show workspace info in file-diff-section (42c5ddf)
+* only open new diff-review tabs when none is already present (e90cc02)
+
+### Bug Fixes
+
+* fix path resolution for shell on MacOS (6a41572)
+* only show file-diff env-msgs from other contributors (not the agent itself) (3c0d1d7)
+* make sure that broken tool input doesn't cause ai sdk failures (ed09a35)
+
+### Bug Fixes
+
+* fix windows build signing (8a58f5a)
+
+### Features
+
+* use cached asset urls for images to prevent errors with size-constraints in our api (bdfbc2f)
+
+### Bug Fixes
+
+* fix ui-import for pages app (84f2474)
+
+### Features
+
+* add workspace-provider for @mentions and agent-mentions (ba047f1)
+* add tab-message-format to agent msg formats (abe0f5d)
+* add basic telemetry to tool-execution (fd95f5f)
+
+### Bug Fixes
+
+* improve execute-shell-command tool part ui (e81270f)
+* use env snapshot for mounted-path providers in UI (8efd274)
+* fix unmounting workspaces of separate agents (6a50a56)
+* fix dynamic imports in sandbox runtime (0a15624)
+* explain mini-app-iteration with file-tools in system prompt (39f259c)
+* include system prompt section about mini-app vs cdp vs source code (7d37dde)
+* soften system prompt about mermaid and trade-offs (aecdce3)
+
+### Bug Fixes
+
+* add missing auto-mount of workspaces to ActiveAgentsGrid creation (7ab1990)
+* place env-messages **before** tool-approval parts to ensure ai-sdk conversions work (6cc5bfb)
+* disable 'approve'/'skip' buttons in bash execution on input-stream (2353638)
+* replace deprecated sonnet-4-5 with 4-6 (faf596f)
+
+### Features
+
+* add posthog events and rename telemetry boxes (4184b22)
+* refactor prompt structure to allow for aggressive caching (12e7ce9)
+* support CTRL_N and CTRL_P in user questions nav (189a768)
+* add support for sticky routing and usage limits info in messages (24c90be)
+* show git branch in workspace-popup when git is detected (9d96318)
+* show pricing info per model (8de9e78)
+
+### Bug Fixes
+
+* make waitlist use env var (4ca1d4b)
+* prevent issues when retriggering tab with hotkey (ccdca39)
+* parse frontmatter for skills reliably with gray-matter (31f215a)
+* fix tool-call truncation for string tools (5fb82c4)
+* update landing-page demo screenshot and content (51645f7)
+* show workspace.md in file system instead of settings (a79ef76)
+* fix connection issues for pages api (a742cea)
+* fix omnibox z-order issue with webcontents (a664b1f)
+* update suggestions and prompts to use unified, shorter use-cases (a85a4a6)
+* fix incorrect import-hook in settings (dbff745)
+* use subtle scrollbar on internal iframe (b78ac3f)
+* remove unfinished changes from website (f065906)
+* fix broken markdown regex to strip markdown content properly (979c460)
+* fix broken metions-label in queue section (48f8e19)
+* fix tinted bg on badges in queue section (0814dff)
+* make resource-changes in mini-app update the app-ui (fc8d041)
+* decrease text-size of questions in user-question tool response (ea7c15c)
+* use cache for mermaid to prevent layout shifts in chat-history (646860f)
+* include env-messages when sandbox restarts (518d045)
+* improve compression-context and prompt and increase threshold (8d7dd79)
+* update instructions in figma skill (3d43973)
+* remove overscroll-contain from mermaid diagrams (8cf436a)
+* remove 'error' from agent card when plan limit exceeded, add 'configure api key' cta (962bbdb)
+* change gpt 5.3 reasoning effort to 'medium' (d315559)
+* fixing figma token explanation (46d2078)
+* auto-focus input after early-agent-stop; stop agent on esc (7048c57)
+* auto-mount workspaces of last agent on startup (fa2f668)
+* fix chat-focus after early agen-stopping (96ed709)
+* fix tool-call-approving flow for immediate user messages w/o approval (d781c34)
+* align account-button icon in navbar (7731d56)
+* track diffs for mini-apps (enables undo and diff preview) (de102e5)
+* show beautified message for plan-limit-reached errors (4df28e2)
+
+### Other Changes
+
+* remove unused props (c0ca135)
+* remove unused type and schema defs (9598899)
+
+### Features
+
+* add proper math formula rendering (c94214d)
+* add figma-plugin (1a57ca0)
+* add support for bundled plugins w/ apps (147315c)
+* support internal apps per agent instance (b14d43a)
+* let agent access credentials via sandbox (a08bbc0)
+* add google-ai api key to credentials-list (540e6a7)
+* support 'API.onCDP' in sandbox (cbb32b7)
+* add credential-service with pseudonomized credentials (fdf824c)
+* allow disabling of models and restructure settings (f3259b4)
+* add custom-apps-parser for internal apps assets (a5f4808)
+* support extension-patterns for file-preview registry (6c402d2)
+* add file-previews to mention previews (a3b0563)
+* add tab- and files-providers and wire mentions-UI (248ea41)
+* add protocol handler for file-contents (sw-file://) (e8187b6)
+* add 'Open file'-context-menu to file-paths (4fced7a)
+* add execute-shell-cmd tool to agent (50de7c1)
+* add shell-service for platform-specific shell cmd execution (a844241)
+
+### Bug Fixes
+
+* tab loading state not properly shown (b1f2638)
+* remove formatting on text pasting into chat input (67fcfcc)
+* remove early return for no mounts in skill discovery (bb8cb38)
+* explain app-width-constraints and mount-composition in system prompt (e34feaa)
+* remove redundant heading from general agent settings (ec51361)
+* catch uncaught errors for non-existing lsps on mounts (3cd23cb)
+* add 'allowedOrigins' to credentials data type (ef4a2ac)
+* introduce 'link' variant of buttons (4a56b6b)
+* send attachment data in correct format (8ab5ff1)
+* fix omnibox-focus after webcontents-focus (e1909e5)
+* prevent faulty tool input state on aborts (877573d)
+* add 'always available' mounts to system prompt (302f200)
+* fix auto-tool expansion (7c8c912)
+* fixing truncation in workspace-md section in chat (0883aa9)
+* replace hardcoded color tokens with stage-ui theme and updated vscode pages (d00bf89)
+* fix 'open in' URL resolution on file tool parts (633bb4e)
+* fix 'Listing files...'-label in workspace-md agent preview (9d24dc5)
+* make file paths consistent (01d8dd1)
+* move clodex ui to foreground when notifications are active (acb1325)
+* fix 'thinking' duration loss with multiple thinking parts (5e15e8f)
+* remove unnecessary file-size limit in 'sw-file' handler (6fc58b8)
+* decode URIs in attachment-links (8647a7e)
+* immediately open file-picker in workspace-select without recents (f8f61cb)
+* fix filename-extraction on windows (4a5503c)
+* change wand-position for workspace-md generation (1edb0e1)
+* include $HOME in shell env vars on linux (cfdfb5a)
+* fix that onboarding-screen shows during app-load (40cc0a4)
+* spawn shell process with '-c' to preserve PATH (6fc972a)
+* fix streaming-interval for sandbox-output (dc398d2)
+* improve exploring-labels to include more details (7e31370)
+* fix single reasoning-part grouping into 'exploring' (ed425dd)
+
+### Other Changes
+
+* standardizing electron resolver schemes (63b84b6)
+* standardize path access through path.ts, move and rename data files (a9a433c)
+* update to new clodex api (95d3463)
+* make file-preview-registry reusable (86d0599)
+* only save env-snapshots domains when they actually changed (81d3b5a)
+* move truncation-detection to 'use-is-truncated' (1a23aca)
+
+### Features
+
+* allow suspending/archiving agents (f2589eb)
+* prepare components for mentions-feature (7e17f98)
+* stream sandbox-outputs and reset timeout on API.output (4ee7706)
+* add origin-grouped history entries (6a7e26d)
+
+### Bug Fixes
+
+* weird behavior when chatting normally with the agent (fe45694)
+* add 'Open file' to diff review page (1c0f132)
+* make file-icon use theme colors (0ece0b7)
+* remove weird keyboard tabbing control for web content tabs (d84f3a1)
+* enable message send button on chat switch if input contains text (175b3f4)
+* align UI of 'connect workspace'-button with workspace-badges (2090fca)
+* add timeout safeguards to lsp and relax instructions in system prompt (da082a4)
+* fix import for pages-app (4eedeec)
+* show git icon on workspace badge (526fc9e)
+
+### Other Changes
+
+* more explicit steering of clodex-conform behavior in OpenAI models (68a0b1e)
+* restructure rich-text attachment files (cefd75b)
+
+### Features
+
+* add user questioning tool (da08b19)
+* add env-messges for sandbox-restarts (e1ba1c8)
+* watch skills- and md-paths to sync with settings-info (94735d2)
+* include basic skills-overview in agent-settings (f98e420)
+* add workspace-information to workspace-badges (1fed92c)
+* support disabling skills per workspace (1979c2e)
+* persist and re-initialize mounted workspaces per agent (66d600b)
+
+### Bug Fixes
+
+* reset sandbox timer on API.output* (ad3a64c)
+* fix posthog-client disabling and add logs for posthog-errors (3a01176)
+* improve 'isWorking' indication in chat-history (15c7542)
+* align agents.md settings-section with workspace-select (29ba256)
+* increase error-logging verbosity for base-agent (760cc41)
+* don't dedupe workspace-skills by name (but show all) (d0ebbdc)
+* include detailed attachment-error messages for the agent (6f0e2c8)
+* use nucleo icon for branch icon (7aa8095)
+* include additional error-metadata for posthog errors (a511b6e)
+* make attachment-badges 'secondary' on inputs (8858526)
+* fix attachment-drop error on edited user-messages (05e72df)
+* enable create agent button only when applicable (3f7466f)
+* alphabetically sort skills in workspace-info card (7606663)
+* prevent creating new agent when another empty agent already exists (0ea34a9)
+* fix model-select compat with new combobox (6de86be)
+* fix auto-scroll to workspace-md on 'Show file'-click (0d046ef)
+* remove unused biome-ignore (e040ff6)
+* include agents/workspace-md content in karton state (948c4ac)
+* fix attachment-drop for huge on-device attachments (b17ade6)
+* align padding on active-agent toggle (82d8956)
+* set correct initial pre-release channel and make it adjustable in settings (05d7abb)
+* allow individual release channel instances to run in parallel (81e5c66)
+
+### Other Changes
+
+* clean up agent notifications mechanism (d232768)
+
+### Features
+
+* add button to show/hide sidebar (125f26d)
+* add a (hideable) active agents section to the sidebar (257d2c2)
+* support attachment-render-registry per mimetype (f4e902c)
+* add permission-sets to mounted workspaces (a17f680)
+* store attachments as files and mount into agent workspaces (5b21a2f)
+* add isolated fs access to sandbox (replaces API.writeFile) (794423b)
+* support multiple mounted paths per agent (28c610b)
+
+### Bug Fixes
+
+* reduce flicker on window tab change (6f6db5b)
+* make ide-default-logo inherit its bg color (9f5338c)
+* fix token-refresh for api clients in toolbox (3856b72)
+* add 'include_gitignored' param to grep and glob (ccb1164)
+* prevent invalid agent state and show nice errors for internal issues (ba31708)
+* let user control workspace-md generation (7f030a2)
+* add working recovery from render process crashes (7477bfe)
+* move away from deprecated model for validation (6cfd349)
+* accept all pending edits on agent-deletion (1cd20d9)
+* fix env-message error with 'reverted' changes (64f8cae)
+* auto-focus input on workspace change (198615b)
+
+### Other Changes
+
+* use optimistic updates for agent creation/switch/deletion (597354b)
+* move backend-wiring and state sync between pages- and main-app (a0f3449)
+
+### Features
+
+* scope workspaces to agent-instances (e9e2a79)
+* add chat undos with or without file change undo (8cbbd43)
+* new home page with most recently visited pages and local pages (edddf67)
+* add enviroment-updates as user msgs (0e44011)
+* add more accurate "most visited pages" algo (86e9992)
+* show locally running apps in omnibox (fc29ad6)
+* show locally running pages on the home page (7464db5)
+* include contributor-set in blamed-hunks (bc4af99)
+* add slide-indicator to demo-slide in onboarding (ea39840)
+* support error-state in workspace-md-section (81fb5ec)
+* add mvp account page (a642a22)
+* show sign in prompt when user is not authorized and makes request to clodex api (8b42cf2)
+* add immediate key validation for byok settings (22b3a8b)
+* add custom providers and byok support (97b5712)
+* use the last active agents selected model for a new agent instance (b2e6daa)
+* extend sandbox API to support multimodal llm-reading (ff2b414)
+* add opus-4-6, 5.2-codex and sonnet-4-6 (0633882)
+* add basic onboarding (api-keys disabled until supported) (4d234cd)
+* add scripted typing hook (a09c43a)
+* add api-key validation util (8dd5cc6)
+* allow configuration to include/ignore agents.md (b36325e)
+* support dynamic imports of esm.sh and node.js dependencies (c54b887)
+* add link aliases (7a0fc50)
+* re-use last selected model in new chats (8f5dcd6)
+
+### Bug Fixes
+
+* make combobox a modal by default to fix web content layer issues (48ddd01)
+* fix flickers on edit of previous user message (52275b2)
+* instruct agent to omit 'Domain.enable' for domains that don't have one (09f1b82)
+* increase max-h for exploring part to allow image previews (7946567)
+* only show revert-dialog when file changes happened (5f89afc)
+* allow rendering image-attachments as cards (04b5761)
+* improve result-rendering of sandbox-js (5a146ec)
+* provide output-attachments of sandbox for file-references (ffd59e8)
+* fix infinite rerender in agent-settings (1c07a4b)
+* open new agents with default workspacepath (e6e6f1d)
+* use lsp.closeFile for file closing (008ccbe)
+* add text-shimmer to toolpart chevrons when title shimmers (0370622)
+* fix file-locking for agent-changes (58276a4)
+* remove unused 'explanation's from tool parameters (10506a7)
+* prevent occasionally empty omnibox suggestions (6f88a72)
+* fix immediately reads by chokidar in diff-history service (35add7b)
+* fix use-optimistic reconciliation in chat-history (ebfec18)
+* sync karton-diffs on each file-edit (00f13a6)
+* wire diff-history with agent-instances and automatically hydrate state (1a71f36)
+* add line-removal contributions to FileDiffs (03a6ab3)
+* fix partial-accepts after preceding accepts for file edits (852b257)
+* hide noop changes for external files in diff summary (c032055)
+* add ide-picker on first file-opening (a421f54)
+* open paths in finder/ explorer when no ide configured (ecc8ad3)
+* make agent-access-paths persistent for file-opening (d1db1ab)
+* fix border color tokens in account page (b303506)
+* add settings-item to app menu (96aa9db)
+* stop workspace-md-agent on workspace-disconnect and show error state (1b8dedd)
+* use switch for agents.md-toggle (5771198)
+* wire api-keys in onboarding with preferences (9858162)
+* prevent accidental ommission of markdown formatted content when re-editing (c4630a7)
+* show auth prompt only when user configured to use clodex api for models (202400a)
+* fix workspace.md file name in agent settings (8fd25ec)
+* fix nested button warning (7c87bcc)
+* fix animation flicker in onboarding-text (2523361)
+* fix text-clip-attachment preservation in user messages (d178068)
+* instruct the agent to use esm.sh?target=node, and never block eventloop in sandbox (e119da9)
+* add 'scroll'-buttons to home.tsx for horizontal scroll (c87364b)
+* make info-text-color in toaster use standard 'foreground' (c0ef763)
+* only update omnibox etc. on main frame navigations (08db6ae)
+* reduce identity verbosity of agent when not being asked (99d02ee)
+* fix navigation on error pages (c61b6a1)
+* avoid overly explicit version definitions when importing deps in sandbox (253fd1a)
+* reduce tokens for application-info system prompt (7ae94fd)
+* add js-sandbox section to system prompt (c62c0fc)
+* fix scrollbar-cutoffs in internal pages (3471b1c)
+* fix scrolling-issue for project-md-section (3fbfb61)
+* fix using optimistic user msg values when msgs are queued (f07bdc5)
+* add max-h- to status-card-sections (8d34288)
+* add error-boundaries and error-tracing to renderer process (1df42ff)
+* add thorough error-tracing and sourcemap-publish during packaging (12aec29)
+* memoize chat-list, remove virtualization and add auto-loadMore (e9d2a15)
+* keep height-cache-entries after chat-switch (b81ded3)
+* hydrate shiki-cache on initial load to improve performance (89f34d9)
+* fix read-modify-write races for 'markChatAsViewed' (311defa)
+* fix build with env vars on windows (e9214dd)
+* fix type name of clodex ui tools (4e77c75)
+* keep favicon and title state consistent with actually shown page (406fb0e)
+* fix layout-shifts in chat-list by making streamdown static (50aeedf)
+* correct import path (b3fcf83)
+* more memory for build to prevent builttime crashes (a9f1822)
+
+### Other Changes
+
+* fix unnecessary re-renderings in agent panel footer (a8c5e03)
+* fix rendering performance of chat footer (02d4d86)
+* cleanup and improve render performance of sidebar top section (97426a8)
+* use base-ui combobox for agents instance dropdown (eb9497a)
+* move lsp service into toolbox folder (53a9d28)
+* create 'FileDiffSnapshot' type to prepare env messages (cc1d0e7)
+* make image-preview components reusable (0357add)
+* minimize lag on tab/window resizing (90cf473)
+* migrate auth to use supabase token directly (275305c)
+* move chat-suggestions to own location (64ae857)
+* rename project.md to workspace.md and refine system prompt for generation (e4d8274)
+* reduce application info context and improve sandbox script writing instructions (7627482)
+* refactor agent system prompt to be based on markdown snippets (b35570a)
+* cleaned up telemetry-event-types to refactor events (a51b9cc)
+
+### Bug Fixes
+
+* correct import path (b3fcf83)
+* more memory for build to prevent builttime crashes (a9f1822)
+
+### Features
+
+* add new agent error UI (3a9a48b)
+* add binary-file preview for diff-reviews (ab58d6b)
+* add fileWrite and attachmentRetrieval to sandbox API (d769cf5)
+* add more detailed tool-labels to cdp execution (790d48a)
+* add 'updateClodexMd' as tool to chat-agent (b05f397)
+* add support for asynchronous child agents as tools (4410bd5)
+* wire-up clodex-md-agent on workspace-connect and add section in status-card (dd6efa6)
+* add clodex-md-agent for clodex-md-initialization (ae21537)
+* add 'write-clodex-md' tool to toolbox (4322210)
+* replace 'console'-tool with general sandbox-tool (8395015)
+* revert streaming message if it's only a short one and user stops (63903ed)
+* persist agent chat state when creating agent (dac5585)
+* wire available tools into chat-agent (527b9e1)
+* persistence and title generation for agents (00a4769)
+* add agent-context section to agent settings (f68da7a)
+* initialize toolbox and new diff-history service (e31a4cd)
+* add toolbox-service with new tool definitions (af9ea80)
+* implement new diff-history-service (4d374d4)
+* add robust spec and db-utils for persistent diff-history (352ece8)
+* support attachment-badges in assistant messages and prevent unsupported files (7a51d05)
+* add sqlite persistency to agent-chats (00a6e96)
+* add interactive color swatches to inline assistant code (6337b8b)
+* add hook to detect scrollbar with for native scrollbars (8d6e363)
+* add caching for shiki highlighting-computations (336ef96)
+* add CTRL_N and CTRL_P navigation to omnibox (db8c865)
+* highlight full URL when focussing url input omnibox (2bc9482)
+* allow toggling dev toolbar with hotkeys (7df25c9)
+* improved detection of dominant colors (a434398)
+* add "dominant colors" util (14e81fb)
+* add color histogram (0595cb7)
+* add color picker to dev tools (1c6a680)
+* add color picker util and refactor web contents overlay (430fc03)
+* add customizable dev tool bar (c10eb14)
+* add tiptap richtext editor for displaying attachments in chat-input (a397543)
+* show suggestions on empty state (3494a51)
+* show recent search and opened pages in omnibox (d1399f4)
+* support file-links as attachments (2bc0ead)
+* add omnibox to tab url input (4b623a3)
+* make early-agent-cancellations repopulate chat input (1ba660e)
+* add ide-setting to agent settings (726f936)
+* add AGENTS.md support (10a678f)
+* add tool-part ui for clodex-md update (5b1da99)
+* add queueing-capability to agent chat (d0d0057)
+* support basic auth (2c370d5)
+* add fullscreen support (b0e8500)
+* persistent permission settings (fcc2b93)
+* add permission granting/rejection (0728cd6)
+* add proper 'waiting'-message to agent (1aa6266)
+* introduce and use derivable border- and hover-colors (d91ebb7)
+* add unsafe "continue" for pages with bad ssl certs (126ed0e)
+* add pretty error pages (186125f)
+* add media and spellcheck handling to context menu (0fa42f0)
+* change default page for startup and new tabs (942025c)
+* add custom default search engine setting (f14997e)
+* add auto-updating (c7cb714)
+* add about page (9e72c95)
+
+### Bug Fixes
+
+* repair context compression logic (db057c1)
+* fix error ui rendering (eea0962)
+* fix 'endedAt'-overwriting of part metadata (c35960e)
+* make image-previews have dynamic widths with max-w (7596e73)
+* fix sorting of chats in chats-list and add working-indicator (f9f2f65)
+* fix internal-app warning about unrouted components (3d082b6)
+* only show chat previews of chat-agent in chats-list (57766e3)
+* fix prose-mirror issues in tiptap-editor next to attachment nodes (6cfbf25)
+* fix attachment icons and data-lookup (b8ca0e3)
+* fix user-message flickers on send and use optimistic messages (9500ede)
+* fix chat-flickers on msg-send (257f69e)
+* remove auto-element-selection on inspirationpage-open (be41f06)
+* fix wrong logo in signed-out content (af8bc36)
+* fix group label positioning in select component (95d4c17)
+* fix status-labels in project-md-agent UI (1b9956c)
+* fix signup-typo and use orb-logo (b2849c0)
+* unify 'FileDiff'-type usage in frontend (f724234)
+* fix agent stops (initial and after tool-results) (1f7a677)
+* make clodex-ui interactive when omnibox is open (but don't focus webcontents) (52882e1)
+* auto-focus chat input when new chat is created (13c5cbe)
+* small typing fix (052d2ca)
+* properly run steps with our own wrapper logic (639cc4f)
+* fix buggy chat input behavior (6675c76)
+* prevent flicker of tab loading state in UI (84178c1)
+* fix image-attachments and attachment-padding (3826234)
+* auto-enable CSS cdp domain and add 'enabling'-guidelines to system prompt (25b6dfa)
+* add explicit streamdown components for paragraphs, quotes and images (1039ce9)
+* add explicit list elements to streamdown (b95c044)
+* add select-none on code-block line numbers (fc49f90)
+* add interaction state and cdp info to selected-elements (e2db8c9)
+* make workspace-connect CTA have a hover color (d5151f2)
+* make suggestions in history aware of status-card height (c519746)
+* fix state-syncing of experience-data for pages-karton (ab921cd)
+* add id to context-file section in agent settings (692f6fd)
+* fix icon colors in attachment-badges (d4a526e)
+* add AgentConfig type to config declaration (fb4c828)
+* add max-w to searchable-select (e3ff716)
+* removed scrollbars on tooltip-hover in internal pages (7d35cf2)
+* fix broken background color in diff-review internal page (f07bcab)
+* fix warning-icon color in error pages (833cfee)
+* fix wrong import paths for utility-hooks in internal page (fe1dc1e)
+* fix logical bug for single file hunk-accepts/rejects (3a15c22)
+* align toaster component with ui system (a18a18a)
+* enforce strict-mode in ts-compiler and fix typing issues (7c7b27a)
+* increase max-h cap on toolpart-ui (9432dde)
+* fix diff-accepts for external files (926462e)
+* make sure that history doesn't fail with thinking as last msg part (f86e30e)
+* catch crashing ui renderer and recover automatically (465c468)
+* pass 'isWorking' as prop for improved memoization (650006c)
+* add 'ghost'-style to toggle buttons (15bd06e)
+* add custom <hr/> component for streamdown (5086fb5)
+* use superjson based json columns for proper serialization (f75b2f2)
+* reduce bot detection rate (56a556f)
+* keep attachments in proper state on undo (21c8bff)
+* fix recursive archiving/ deletion of agents and subagents (22b6d70)
+* fix native hotkey forwarding on chat-input (705781d)
+* fix auth loop in experience-service (ca13178)
+* fix inconsistent 'not null' field for agentInstance table (1aec09a)
+* fix fetching finish tool (2b23108)
+* add diff previews to file modification tool parts (baf5a63)
+* fix badge-shrinking of attachment links in queued messages (453f7cf)
+* fix agent state and chat agent tool config (bcc1d9d)
+* add attachment badges to queued messages (cd73b9b)
+* use roboto-mono for mono fonts (code-blocks, etc.) (b6c94a9)
+* fix broken message-spacing in chat-history (559165b)
+* fix all kinds of type issues and make agents configurable (581672e)
+* add 'null' for getTool in toolbox to indicate missing dependencies (b9f5ad9)
+* fix suggestion-flickering in chat-input (b1d4f70)
+* let agent resume after tool-call-results (807623b)
+* fix scroll-blocking codeblocks in streamdown (5fe95b6)
+* fix diff-history service issues and add e2e tests (f7f4e00)
+* fix toolbox getTool returntypes (b3650b4)
+* fix omnibox-parsing of localhost-URLs (bd63556)
+* fix Meta+F search-bar trigger issue (83962fd)
+* make queue work properly again (cf8a23e)
+* align dominant hotkeys with 'reserved'-list from chrome (5c800da)
+* add native-event-handling guard to webcontents-event-lifecycle (2ed1764)
+* emphasize the use of color links for color embeddings (a07b45b)
+* fix race condition in pages-karton initialization (50289f5)
+* fix tabs component to match new design (5ff992f)
+* fix 'getAllEdits' function in diff service to return actual chat-id-summary (8acde3e)
+* fix CMD+L-focus on omnibox after chat-input-focus (2d0d2d8)
+* fix broken import links for internal settings page (c70d435)
+* fix chat grouping by date to respect user's timezone (5a531e8)
+* rm top-border-radius from chat panel child (6d7e20b)
+* replace copy-button with tooltip on inline colorswatch (f3765e3)
+* virtualize nodes in chat history to improve performance in chats with many messages (18ac996)
+* add max-height and attachment-margins to view-only chatinput (78a9b77)
+* fix dependency-loop in 'is-container-scrollable'-hook (7fa756f)
+* fix performance- and ui issue in file-write tool call UIs (13772d8)
+* fix import path aliases for pages app (6b984a5)
+* fix chevron-usage in collapsible (76b75c5)
+* fix unknown-tool-call error interruptions (agent can now proceed) (af6c880)
+* add text-clip-attachment content to user message in prompt (66b055d)
+* add view-only mode to user messages for better performance (4ab64d8)
+* prevent open popovers on tab switching (cc3fa07)
+* make writing to clipboard work again (1141d9a)
+* prevent visual bug in collapsed sidebar state (17fe7fd)
+* prevent visual cutoff of top-most panel in dev toolbar (0afd2eb)
+* allow escaping out of color picking of contet element selection (a73840a)
+* make sure that the background and cutout are always in sync (2e2ad2d)
+* force omnibox to close on tab change (003c6f5)
+* fix color of sign in prompt (9cee26b)
+* make element-selection focus again in webcontents (e99e585)
+* don't change main frame to error page on subframe cert fail (52cf56f)
+* web contents properly receive focus on tab change and window focus (a9716d3)
+* highlight correct item in omnibox and keep suggestions on closing (fb94ffe)
+* show correct url on error page (5e2de96)
+* move misplaced padding in chat-history (a099fcb)
+* remove not-existing 'search'-param from route-invocation (b43e2df)
+* add contentClassname to overlay scrollbar to allow styling (74f95db)
+* implicitly accept pending edits on workspace-change/ disconnect (5d4e34d)
+* fix programmatic-scroll-behaviour for reasoning-parts and chat history (3178e32)
+* fix faulty selector for inactive-tab border radius (a31abdd)
+* fix diff-history sync-issue after baseline-accept and manual file-deletion (8051d42)
+* fix broken sync between pages diff review and diff card in chat footer (97f433d)
+* improvie ui of queued items in status card (04783d3)
+* show relative file path in diff-preview (b10b088)
+* minimize collapsible animation duration in tool parts (0bf5700)
+* update typewriter to adjust dynamically to increased/ decreased generation speed (7c0680f)
+* remove manual webcontents bg setting (9399cbf)
+* make clodex-line-marker-removal from code blocks more reliable (4b71638)
+* fix that diff history ignored manual changes in deleted and recreated files (28e9334)
+* align file-modification tool-ui's (ac7a99a)
+* fix diff drifts in agent diff-history usage on file edits (5eff4b9)
+* add message-loading missing min-height (65622ec)
+* remove references to non existing agent tool (d981aad)
+* make webcontents-background white to match browser behaviour (8fc8218)
+* simplify selected-element preview-card (7a3462c)
+* fix chat-input blur on app-switch between desktop apps (50f888b)
+* add missing error header to multi-edit (9a68404)
+* make console-script-code highlighted during stream (1d1d9dd)
+* add max-h to thinking part when alone (3801f52)
+* fix inconsistent primary color usage (5ad9715)
+* stop agent from reusing other websites css tokens when getting inspiration (4426bbb)
+* make agent ignore lsp diagnostics related to formatting (7383635)
+* add hover-state to suggestions links (2d183fe)
+* fix hovering-behaviour of nested interactive elements (59125f4)
+* fix error message layout in chat (7e565a6)
+* fix code review page (abd2175)
+* add tw config for color-modifiers to support custom utilities (1eac058)
+* fix param route path for auth handler (e05fbdd)
+* prevent errors for destroyed objects on shutdown (dc4c995)
+* fix fetching of inspiration websites in homepage and add correct logo (3ba6ae9)
+* avoid opening other browsers (624a6ba)
+* fix clodex-md location and model selection (1542407)
+* dont send notifcation action functions over to clients (f1f4a8b)
+* add missing bufferutil (43edaab)
+* some adaptations for linux platform building (e86427a)
+* corrected paths for dmg building (c784eff)
+* update naming scheme of artifacts (6f239cc)
+* correctly bundle all native deps (3c83ead)
+
+### Other Changes
+
+* clean up context comnpression and helper types (4b5ac87)
+* remove auto-screenshots from elements (8a3240c)
+* make public api call handling based on agent state that we control (a403e5b)
+* relocate CLODEX.md to .clodex/PROJECT.md (1037fc3)
+* allow async onCreate hooks in base-agent (7ef373e)
+* add 'onCreated' hook to base-agent for auto-sending of user messages (9c00158)
+* break footer-status-card into section-components (4dfc0ff)
+* delete runtime-interface and use runtime-node directly (41aba67)
+* delete deprecated agent service make storybook use the new chat-agent (14b38cd)
+* remove unused agent-service folder (35081cc)
+* remove deprecated agent-service dependencies and rename diff-history (69456ef)
+* add onTeardown to base agent (b3782f7)
+* wire up new diff-history service with new agent (37c4191)
+* fix smaller bugs from auth callbacks and favicon db access (b60823d)
+* rm unused imports and variables (ebf22e8)
+* make ToolboxService expose system prompt data (0993977)
+* make hotkey bindings declarative with meta variants (e2d916e)
+* refactor rich text input in chats (9455225)
+* refactor agent architecture (c6660d4)
+* delete unused iframe functionality from previous version (52c66ff)
+* turn the settings icon in the chat-panel into a dropdown (2f452e4)
+* update karton-state to include pending file diffs (5a9e697)
+* add utilities for diff-functionality in diff-history-service (b72de97)
+* add db migration-utilities and schema for sqlite service-dbs (1e89790)
+* rename 'chat-bubble' to 'chat-message' (3d79242)
+* add react devtools to electron main UI (abc97dc)
+* create reusable hook for mask-effect on scrollable (196d43d)
+* use custom table component with clodex design (b56d8ef)
+* re-order agent settings for preferred IDE (07022d7)
+* add 'color-subtle-foreground' to standardize third text layer (e3a97b3)
+* use overlayscrollbars instead of native scrollbars where applicable (888479d)
+* create canonical brower-css which can be referenced (03f6922)
+* rm 'border-subtler' and add 'border-strong' (ec639ab)
+* align icon usage and shimmer in tool ui parts (4f37fc2)
+* show only filename in code edit tool headers (ae11aa7)
+* add auto-generation and sync of electron app colors (ea53df7)
+* make user messages editable via normal chat input (915dc6a)
+* split message-components into message-* files (1ddffd0)
+* support highlighted stream of code diffs (multi-edit and overwrite) (1712904)
+* simplify color tokens and use them throughout the app (ae72779)
+* refactor context menu building and search engine access (9acb5c8)
+* add nested layouts for internal pages (1cb302d)
+* make the start page internal (0f6a18d)
+* make auth work fully within our browser (ee1efdf)
+* add central preferences service and adapt telemetry to this (e645772)
+
+### Features
+
+* add hotkey text to zoom (ab2cb53)
+
+### Bug Fixes
+
+* make line-number-section sticky in code-diff component (f751fe4)
+
+### Features
+
+* add hotkey text to zoom (ab2cb53)
+
+### Bug Fixes
+
+* make line-number-section sticky in code-diff component (f751fe4)
+
+All notable changes to the browser app will be documented in this file.

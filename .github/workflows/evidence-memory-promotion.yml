@@ -1,0 +1,604 @@
+name: Evidence Memory promotion evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact 40-character commit SHA for the reviewed canary candidate
+        required: true
+        type: string
+      target_stage:
+        description: Next Evidence Memory rollout stage
+        required: true
+        default: canary-5
+        type: choice
+        options:
+          - canary-5
+          - canary-25
+          - canary-100
+      delivery_mode:
+        description: How the signed evidence will be delivered to release CI
+        required: true
+        default: repository-evidence-commit
+        type: choice
+        options:
+          - repository-evidence-commit
+          - external-ci-artifact
+      validity_hours:
+        description: Signed envelope validity window
+        required: true
+        default: "48"
+        type: choice
+        options:
+          - "24"
+          - "48"
+      trace_observations_gzip_base64:
+        description: Gzip+base64 content-free live dogfood observations JSONL
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evidence-memory-promotion-${{ inputs.source_commit }}-${{ inputs.target_stage }}
+  cancel-in-progress: false
+
+jobs:
+  evaluate_candidate:
+    name: Evaluate candidate without release secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      observation_count: ${{ steps.trace-input.outputs.observation_count }}
+    env:
+      CI: "true"
+      # Candidate-controlled code runs only in this secretless job.
+      OPENAI_API_KEY: ""
+      CLODEX_API_KEY: ""
+      NUCLEO_LICENSE_KEY: ""
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      EVALUATION_DIRECTORY: /tmp/clodex-evidence-memory-evaluation
+
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify clean candidate binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "source_commit must be a full lowercase 40-character SHA" >&2
+            exit 1
+          fi
+          actual_commit="$(git rev-parse HEAD)"
+          if [[ "$actual_commit" != "$SOURCE_COMMIT" ]]; then
+            echo "Checkout drift: expected $SOURCE_COMMIT, got $actual_commit" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "Candidate checkout is not clean" >&2
+            git status --short >&2
+            exit 1
+          fi
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install candidate evaluation dependencies
+        # No repository or environment secret is exposed to install hooks.
+        run: pnpm install --frozen-lockfile --filter 'clodex...'
+
+      - name: Decode bounded content-free dogfood observations
+        id: trace-input
+        shell: bash
+        env:
+          TRACE_OBSERVATIONS_GZIP_BASE64: ${{ inputs.trace_observations_gzip_base64 }}
+        run: |
+          set -euo pipefail
+          rm -rf "$EVALUATION_DIRECTORY"
+          mkdir -p apps/browser/test-results "$EVALUATION_DIRECTORY"
+          python3 - <<'PY'
+          import base64
+          import binascii
+          import gzip
+          import io
+          import os
+          from pathlib import Path
+
+          maximum_decoded_bytes = 5 * 1024 * 1024
+          encoded = os.environ.get("TRACE_OBSERVATIONS_GZIP_BASE64", "")
+          if not encoded or len(encoded) > 60_000:
+              raise SystemExit("compressed trace input must contain 1-60000 characters")
+          try:
+              compressed = base64.b64decode(encoded, validate=True)
+              with gzip.GzipFile(fileobj=io.BytesIO(compressed), mode="rb") as stream:
+                  decoded = stream.read(maximum_decoded_bytes + 1)
+          except (binascii.Error, gzip.BadGzipFile, EOFError, OSError) as error:
+              raise SystemExit(f"trace input is not valid gzip+base64: {error}") from error
+          if not decoded or len(decoded) > maximum_decoded_bytes:
+              raise SystemExit("decoded trace input must contain 1 byte to 5 MiB")
+          if b"\x00" in decoded:
+              raise SystemExit("decoded trace input contains a NUL byte")
+          output = Path("apps/browser/test-results/evidence-memory-promotion-observations.jsonl")
+          output.write_bytes(decoded)
+          output.chmod(0o600)
+          line_count = sum(1 for line in decoded.splitlines() if line.strip())
+          if line_count == 0:
+              raise SystemExit("decoded trace input has no observations")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"observation_count={line_count}\n")
+          PY
+
+      - name: Regenerate deterministic quality and trace receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --dir apps/browser eval:evidence-memory-quality
+          pnpm --dir apps/browser eval:evidence-memory-trace-replay -- \
+            --input test-results/evidence-memory-promotion-observations.jsonl
+
+      - name: Stage bounded evaluation receipts
+        shell: bash
+        env:
+          OBSERVATION_COUNT: ${{ steps.trace-input.outputs.observation_count }}
+          WORKFLOW_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          output = Path(os.environ["EVALUATION_DIRECTORY"])
+          receipts = {
+              "evidence-memory-quality.json": Path(
+                  "apps/browser/test-results/evidence-memory-quality.json"
+              ),
+              "evidence-memory-trace-replay.json": Path(
+                  "apps/browser/test-results/evidence-memory-trace-replay.json"
+              ),
+          }
+          receipt_hashes = {}
+          for name, source in receipts.items():
+              if source.is_symlink() or not source.is_file():
+                  raise SystemExit(f"evaluation receipt is not a regular file: {source}")
+              size = source.stat().st_size
+              if size < 2 or size > 1024 * 1024:
+                  raise SystemExit(f"evaluation receipt has invalid size: {source} ({size})")
+              raw = source.read_bytes()
+              json.loads(raw)
+              destination = output / name
+              shutil.copyfile(source, destination)
+              destination.chmod(0o600)
+              receipt_hashes[name] = hashlib.sha256(raw).hexdigest()
+
+          manifest = {
+              "format": "clodex-evidence-memory-secretless-evaluation",
+              "version": 1,
+              "workflowRevision": os.environ["WORKFLOW_REVISION"],
+              "sourceCommitSha": os.environ["SOURCE_COMMIT"],
+              "observationCount": int(os.environ["OBSERVATION_COUNT"]),
+              "receiptSha256": receipt_hashes,
+          }
+          manifest_path = output / "evaluation-manifest.json"
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          manifest_path.chmod(0o600)
+          PY
+
+      - name: Upload secretless evaluation receipts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-memory-evaluation-${{ inputs.source_commit }}
+          path: ${{ env.EVALUATION_DIRECTORY }}/
+          if-no-files-found: error
+          retention-days: 1
+
+  sign_and_verify:
+    name: Sign and verify with trusted workflow code
+    needs: evaluate_candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: evidence-memory-promotion
+    env:
+      CI: "true"
+      OPENAI_API_KEY: ""
+      CLODEX_API_KEY: ""
+      NUCLEO_LICENSE_KEY: ""
+      OUTPUT_DIRECTORY: /tmp/clodex-evidence-memory-promotion
+      EVALUATION_DIRECTORY: /tmp/clodex-evidence-memory-evaluation
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      TARGET_STAGE: ${{ inputs.target_stage }}
+      DELIVERY_MODE: ${{ inputs.delivery_mode }}
+      VALIDITY_HOURS: ${{ inputs.validity_hours }}
+      PROMOTION_KEY_ID: ${{ vars.CLODEX_EVIDENCE_MEMORY_PROMOTION_KEY_ID }}
+      PROMOTION_PUBLIC_KEY_SHA256: ${{ vars.CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY_SHA256 }}
+
+    steps:
+      - name: Check out trusted workflow revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify trusted signing boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Protected signing must run from refs/heads/main" >&2
+            exit 1
+          fi
+          if [[ ! "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "source_commit must be a full lowercase 40-character SHA" >&2
+            exit 1
+          fi
+          actual_commit="$(git rev-parse HEAD)"
+          if [[ "$actual_commit" != "$GITHUB_SHA" ]]; then
+            echo "Trusted workflow checkout drift: expected $GITHUB_SHA, got $actual_commit" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "Trusted workflow checkout is not clean" >&2
+            git status --short >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "$SOURCE_COMMIT"
+          git cat-file -e "$SOURCE_COMMIT^{commit}"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install trusted promotion dependencies
+        run: pnpm install --frozen-lockfile --filter 'clodex...'
+
+      - name: Download secretless evaluation receipts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: evidence-memory-evaluation-${{ inputs.source_commit }}
+          path: ${{ env.EVALUATION_DIRECTORY }}
+
+      - name: Verify evaluation receipt transport
+        shell: bash
+        env:
+          OBSERVATION_COUNT: ${{ needs.evaluate_candidate.outputs.observation_count }}
+          WORKFLOW_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          directory = Path(os.environ["EVALUATION_DIRECTORY"])
+          expected_names = {
+              "evaluation-manifest.json",
+              "evidence-memory-quality.json",
+              "evidence-memory-trace-replay.json",
+          }
+          actual_names = {entry.name for entry in directory.iterdir()}
+          if actual_names != expected_names:
+              raise SystemExit(
+                  f"evaluation artifact contains unexpected paths: {sorted(actual_names)}"
+              )
+          for entry in directory.iterdir():
+              if entry.is_symlink() or not entry.is_file():
+                  raise SystemExit(f"evaluation artifact path is not a regular file: {entry}")
+              if entry.stat().st_size < 2 or entry.stat().st_size > 1024 * 1024:
+                  raise SystemExit(f"evaluation artifact has invalid size: {entry}")
+
+          manifest = json.loads((directory / "evaluation-manifest.json").read_bytes())
+          if set(manifest) != {
+              "format",
+              "version",
+              "workflowRevision",
+              "sourceCommitSha",
+              "observationCount",
+              "receiptSha256",
+          }:
+              raise SystemExit("evaluation manifest contains unsupported fields")
+          if manifest["format"] != "clodex-evidence-memory-secretless-evaluation":
+              raise SystemExit("evaluation manifest format mismatch")
+          if manifest["version"] != 1:
+              raise SystemExit("evaluation manifest version mismatch")
+          if manifest["workflowRevision"] != os.environ["WORKFLOW_REVISION"]:
+              raise SystemExit("evaluation workflow revision mismatch")
+          if manifest["sourceCommitSha"] != os.environ["SOURCE_COMMIT"]:
+              raise SystemExit("evaluation source commit mismatch")
+          if manifest["observationCount"] != int(os.environ["OBSERVATION_COUNT"]):
+              raise SystemExit("evaluation observation count mismatch")
+
+          expected_receipts = {
+              "evidence-memory-quality.json",
+              "evidence-memory-trace-replay.json",
+          }
+          hashes = manifest["receiptSha256"]
+          if not isinstance(hashes, dict) or set(hashes) != expected_receipts:
+              raise SystemExit("evaluation receipt hash set mismatch")
+          for name in expected_receipts:
+              raw = (directory / name).read_bytes()
+              json.loads(raw)
+              actual = hashlib.sha256(raw).hexdigest()
+              if hashes[name] != actual:
+                  raise SystemExit(f"evaluation receipt hash mismatch: {name}")
+          PY
+
+      - name: Sign promotion envelope with trusted code only
+        shell: bash
+        env:
+          PROMOTION_PRIVATE_KEY_PEM: ${{ secrets.CLODEX_EVIDENCE_MEMORY_PROMOTION_PRIVATE_KEY }}
+          PROMOTION_PUBLIC_KEY_PEM: ${{ secrets.CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PROMOTION_PRIVATE_KEY_PEM" ]]; then
+            echo "The environment-scoped Evidence Memory private key is missing" >&2
+            exit 1
+          fi
+          if [[ -z "$PROMOTION_PUBLIC_KEY_PEM" ]]; then
+            echo "The trusted Evidence Memory public key is missing" >&2
+            exit 1
+          fi
+          if [[ -z "$PROMOTION_KEY_ID" || -z "$PROMOTION_PUBLIC_KEY_SHA256" ]]; then
+            echo "Evidence Memory key metadata variables are missing" >&2
+            exit 1
+          fi
+
+          private_key_file="$RUNNER_TEMP/evidence-memory-promotion-private.pem"
+          public_key_file="$RUNNER_TEMP/evidence-memory-promotion-public.pem"
+          cleanup_keys() {
+            rm -f -- "$private_key_file" "$public_key_file"
+          }
+          trap cleanup_keys EXIT
+          umask 077
+          printf '%s\n' "$PROMOTION_PRIVATE_KEY_PEM" > "$private_key_file"
+          printf '%s\n' "$PROMOTION_PUBLIC_KEY_PEM" > "$public_key_file"
+          unset PROMOTION_PRIVATE_KEY_PEM PROMOTION_PUBLIC_KEY_PEM
+
+          PRIVATE_KEY_PATH="$private_key_file" \
+          PUBLIC_KEY_PATH="$public_key_file" \
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { createHash, createPrivateKey, createPublicKey } = require('node:crypto');
+          const privateKey = createPrivateKey(
+            fs.readFileSync(process.env.PRIVATE_KEY_PATH, 'utf8'),
+          );
+          const trustedPublicKey = createPublicKey(
+            fs.readFileSync(process.env.PUBLIC_KEY_PATH, 'utf8'),
+          );
+          const signingPublicKey = createPublicKey(privateKey);
+          const trustedDer = trustedPublicKey.export({ type: 'spki', format: 'der' });
+          const signingDer = signingPublicKey.export({ type: 'spki', format: 'der' });
+          if (!trustedDer.equals(signingDer)) {
+            throw new Error('promotion private key does not match trusted public key');
+          }
+          const actualHash = createHash('sha256').update(trustedDer).digest('hex');
+          if (actualHash !== process.env.PROMOTION_PUBLIC_KEY_SHA256) {
+            throw new Error('trusted promotion public-key SHA-256 mismatch');
+          }
+          NODE
+
+          rm -rf "$OUTPUT_DIRECTORY"
+          mkdir -p "$OUTPUT_DIRECTORY"
+          pnpm --dir apps/browser collect:evidence-memory-promotion -- \
+            --quality "$EVALUATION_DIRECTORY/evidence-memory-quality.json" \
+            --trace "$EVALUATION_DIRECTORY/evidence-memory-trace-replay.json" \
+            --output "$OUTPUT_DIRECTORY/evidence-memory.json" \
+            --source-commit "$SOURCE_COMMIT" \
+            --delivery-mode "$DELIVERY_MODE" \
+            --target-stage "$TARGET_STAGE" \
+            --validity-hours "$VALIDITY_HOURS" \
+            --key-id "$PROMOTION_KEY_ID" \
+            --private-key "$private_key_file" \
+            --public-key "$public_key_file"
+
+          cleanup_keys
+          trap - EXIT
+
+      - name: Verify actual delivery binding
+        id: verify
+        shell: bash
+        env:
+          CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY: ${{ secrets.CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          verification_commit="$SOURCE_COMMIT"
+          candidate_worktree="$RUNNER_TEMP/evidence-memory-candidate"
+          if [[ "$DELIVERY_MODE" == "repository-evidence-commit" ]]; then
+            rm -rf "$candidate_worktree"
+            git -c core.hooksPath=/dev/null worktree add --detach \
+              "$candidate_worktree" "$SOURCE_COMMIT"
+            if [[ -n "$(git -C "$candidate_worktree" status --porcelain=v1 --untracked-files=all)" ]]; then
+              echo "Candidate worktree is not clean before evidence staging" >&2
+              exit 1
+            fi
+
+            release_directory="$candidate_worktree/.release-evidence"
+            if [[ -L "$release_directory" || ( -e "$release_directory" && ! -d "$release_directory" ) ]]; then
+              echo ".release-evidence must be a real directory" >&2
+              exit 1
+            fi
+            if git -C "$candidate_worktree" ls-files --stage -- .release-evidence \
+              | awk '$1 == "160000" { found=1 } END { exit found ? 0 : 1 }'; then
+              echo ".release-evidence must not be a submodule" >&2
+              exit 1
+            fi
+            mkdir -p "$release_directory"
+
+            for name in \
+              evidence-memory.json \
+              evidence-memory-quality.json \
+              evidence-memory-trace-replay.json; do
+              source_path="$OUTPUT_DIRECTORY/$name"
+              target_path="$release_directory/$name"
+              if [[ -L "$target_path" || ( -e "$target_path" && ! -f "$target_path" ) ]]; then
+                echo "Evidence destination must be a regular file: $target_path" >&2
+                exit 1
+              fi
+              rm -f -- "$target_path"
+              install -m 0600 "$source_path" "$target_path"
+            done
+
+            git -C "$candidate_worktree" add -- \
+              .release-evidence/evidence-memory.json \
+              .release-evidence/evidence-memory-quality.json \
+              .release-evidence/evidence-memory-trace-replay.json
+            git -C "$candidate_worktree" diff --cached --name-only \
+              | LC_ALL=C sort > "$RUNNER_TEMP/actual-paths.txt"
+            printf '%s\n' \
+              .release-evidence/evidence-memory-quality.json \
+              .release-evidence/evidence-memory-trace-replay.json \
+              .release-evidence/evidence-memory.json \
+              | LC_ALL=C sort > "$RUNNER_TEMP/expected-paths.txt"
+            diff -u "$RUNNER_TEMP/expected-paths.txt" "$RUNNER_TEMP/actual-paths.txt"
+            git -C "$candidate_worktree" \
+              -c user.name="Clodex Evidence Bot" \
+              -c user.email="evidence-bot@clodex.invalid" \
+              -c core.hooksPath=/dev/null \
+              commit --no-gpg-sign \
+              -m "chore(evidence): authorize Evidence Memory $TARGET_STAGE"
+            verification_commit="$(git -C "$candidate_worktree" rev-parse HEAD)"
+            git -C "$candidate_worktree" format-patch -1 --stdout \
+              > "$OUTPUT_DIRECTORY/evidence-memory-repository-commit.patch"
+          fi
+
+          pnpm --dir apps/browser exec tsx --tsconfig tsconfig.backend.json \
+            scripts/check-evidence-memory-rollout.ts \
+            --channel prerelease \
+            --require-evidence \
+            --evidence "$OUTPUT_DIRECTORY/evidence-memory.json" \
+            --quality "$OUTPUT_DIRECTORY/evidence-memory-quality.json" \
+            --trace "$OUTPUT_DIRECTORY/evidence-memory-trace-replay.json" \
+            --build-commit "$verification_commit" \
+            --json > "$OUTPUT_DIRECTORY/verification.json"
+          echo "verification_commit=$verification_commit" >> "$GITHUB_OUTPUT"
+
+          if [[ -d "$candidate_worktree" ]]; then
+            git -c core.hooksPath=/dev/null worktree remove --force "$candidate_worktree"
+          fi
+
+      - name: Write content-free candidate metadata
+        shell: bash
+        env:
+          OBSERVATION_COUNT: ${{ needs.evaluate_candidate.outputs.observation_count }}
+          VERIFICATION_COMMIT: ${{ steps.verify.outputs.verification_commit }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          metadata = {
+              "format": "clodex-evidence-memory-promotion-workflow",
+              "version": 2,
+              "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "trustedWorkflowCommitSha": os.environ["GITHUB_SHA"],
+              "sourceCommitSha": os.environ["SOURCE_COMMIT"],
+              "verificationCommitSha": os.environ["VERIFICATION_COMMIT"],
+              "targetStage": os.environ["TARGET_STAGE"],
+              "deliveryMode": os.environ["DELIVERY_MODE"],
+              "validityHours": int(os.environ["VALIDITY_HOURS"]),
+              "observationCount": int(os.environ["OBSERVATION_COUNT"]),
+              "keyId": os.environ["PROMOTION_KEY_ID"],
+              "publicKeySha256": os.environ["PROMOTION_PUBLIC_KEY_SHA256"],
+              "workflowRunUrl": os.environ["RUN_URL"],
+          }
+          output = Path(os.environ["OUTPUT_DIRECTORY"]) / "workflow-metadata.json"
+          output.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+          PY
+
+          cat > "$OUTPUT_DIRECTORY/README.txt" <<'EOF'
+          This bundle contains content-free Evidence Memory promotion evidence.
+
+          Candidate evaluation ran in a separate job without release secrets.
+          Signing ran on a fresh runner using only the trusted main workflow
+          revision recorded in workflow-metadata.json.
+
+          repository-evidence-commit:
+            Apply evidence-memory-repository-commit.patch to the exact source
+            commit, review that only the three .release-evidence files change,
+            then run check:evidence-memory-rollout before release.
+
+          external-ci-artifact:
+            Inject the three evidence-memory*.json files into the exact source
+            commit build without committing them.
+
+          The bundle never contains the Ed25519 private key.
+          EOF
+
+      - name: Build immutable evidence bundle
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_source="${SOURCE_COMMIT:0:12}"
+          bundle="$RUNNER_TEMP/evidence-memory-${short_source}-${TARGET_STAGE}.tar.gz"
+          checksum="$bundle.sha256"
+          tar --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -C "$OUTPUT_DIRECTORY" \
+            -czf "$bundle" .
+          (
+            cd "$(dirname "$bundle")"
+            sha256sum "$(basename "$bundle")"
+          ) > "$checksum"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+          cat "$checksum" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload signed evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-memory-${{ inputs.target_stage }}-${{ inputs.source_commit }}
+          path: |
+            ${{ env.OUTPUT_DIRECTORY }}/
+            ${{ steps.bundle.outputs.bundle }}
+            ${{ steps.bundle.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish promotion summary
+        shell: bash
+        run: |
+          {
+            echo "## Evidence Memory promotion candidate"
+            echo
+            echo "- Trusted workflow commit: \`$GITHUB_SHA\`"
+            echo "- Source commit: \`$SOURCE_COMMIT\`"
+            echo "- Target stage: \`$TARGET_STAGE\`"
+            echo "- Delivery: \`$DELIVERY_MODE\`"
+            echo "- Observations: \`${{ needs.evaluate_candidate.outputs.observation_count }}\`"
+            echo "- Key id: \`$PROMOTION_KEY_ID\`"
+            echo "- Public key SHA-256: \`$PROMOTION_PUBLIC_KEY_SHA256\`"
+            echo "- Verification commit: \`${{ steps.verify.outputs.verification_commit }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

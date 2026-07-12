@@ -1,0 +1,15 @@
+{
+  "extends": "../../packages/typescript-config/base.json",
+  "compilerOptions": {
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@clodex/stage-ui/*": ["./src/*"]
+    },
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist", ".turbo"]
+}

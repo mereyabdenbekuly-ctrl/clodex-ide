@@ -1,0 +1,23 @@
+# Gitleaks fingerprints below are reviewed false positives from the current
+# branch history. Keep exceptions fingerprint-specific so future findings in
+# the same files still fail scanning.
+
+# Local smoke-test shared secret.
+35d86f4904981355639564e604414deae883b561:apps/browser/scripts/mcp-host-smoke.ts:generic-api-key:55
+
+# Public Ed25519 test key.
+35d86f4904981355639564e604414deae883b561:apps/browser/src/shared/plugin-marketplace.test.ts:generic-api-key:9
+
+# localStorage key name, not a credential.
+35d86f4904981355639564e604414deae883b561:apps/browser/src/ui/screens/main/_components/global-dictation-orb.tsx:generic-api-key:34
+
+# Documentation prose describing key lifecycle policy.
+35d86f4904981355639564e604414deae883b561:docs/general-mcp-runtime-plan.md:generic-api-key:384
+
+# Removed localhost-only debug correlation tokens.
+5cc2656341aa4410d0e74ea35c11945ecc81dcc6:apps/browser/src/ui/screens/main/agent-chat/chat/_components/panel-footer.tsx:generic-api-key:1406
+5cc2656341aa4410d0e74ea35c11945ecc81dcc6:apps/browser/src/ui/screens/main/agent-chat/chat/_components/panel-footer.tsx:generic-api-key:1445
+
+# Keyboard shortcut field name and accelerator.
+90846b37293ddfc0685af62bf64dd3c0d9204276:apps/browser/src/shared/hotkeys.ts:generic-api-key:167
+

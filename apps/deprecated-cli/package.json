@@ -1,0 +1,24 @@
+{
+  "name": "clodex-cli",
+  "version": "0.12.0",
+  "description": "clodex is now a desktop app. This CLI is deprecated.",
+  "license": "AGPL-3.0-only",
+  "author": {
+    "name": "clodex Inc.",
+    "email": "support@clodex.io"
+  },
+  "type": "module",
+  "bin": {
+    "clodex": "dist/index.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "deprecated": "clodex CLI has been deprecated. Download the desktop app at https://clodex.io/download",
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

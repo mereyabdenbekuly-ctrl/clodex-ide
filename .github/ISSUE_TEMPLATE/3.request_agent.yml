@@ -1,0 +1,33 @@
+name: 🤖 Agent Request
+description: Request support for an existing coding agent in the Stagewise ecosystem
+title: 'agent: '
+labels: ['agent request']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a coding agent to integrate with stagewise! Please fill out this form so we can evaluate it quickly.
+  - type: input
+    attributes:
+      label: Agent name
+      description: The official name of the coding agent (e.g. Cursor, Windsurf, Cline).
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Repository or homepage URL
+      description: Provide a link to the agent’s GitHub repo, website, or documentation.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Additional notes for maintainers
+      description: |
+        Anything else we should know at a glance?  
+        (e.g. maturity, community adoption, performance considerations)
+  - type: checkboxes
+    attributes:
+      label: 👨‍👧‍👦 Contributing
+      description: We welcome all contributions. Would you be willing to help add or test this integration?
+      options:
+        - label: 🙋‍♂️ Yes, I’d be happy to contribute a PR!

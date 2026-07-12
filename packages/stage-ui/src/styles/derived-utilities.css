@@ -1,0 +1,179 @@
+/**
+ * Auto-derived color utilities
+ * These derive border, ring, text, and background colors from the element's
+ * background color (--cm-bg-color) which is automatically set by bg-* utilities
+ * via the color-modifiers plugin.
+ * 
+ * Falls back to semantic colors when no background is set.
+ * 
+ * Usage examples:
+ *   border border-derived-subtle  - subtle border derived from background
+ *   border border-derived         - regular border derived from background
+ *   ring ring-derived-strong      - strong ring derived from background
+ *   hover:bg-hover-derived        - hover state background
+ */
+
+:root {
+  --hover-text-derived-l: -0.09;
+  --hover-text-derived-c: -0.01;
+
+  --text-derived-lighter-subtle-l: 0.06;
+  --text-derived-lighter-subtle-c: 0.011;
+
+  --text-derived-lighter-l: 0.09;
+  --text-derived-lighter-c: 0.014;
+
+  --active-text-derived-l: -0.011;
+  --active-text-derived-c: -0.001;
+
+  --hover-derived-l: -0.03;
+  --hover-derived-c: -0.003;
+
+  --active-derived-l: -0.05;
+  --active-derived-c: -0.005;
+
+  --shortcut-solid-derived-l: 0.06;
+  --shortcut-solid-derived-c: 0.011;
+  --shortcut-solid-hover-derived-l: 0.03;
+  --shortcut-solid-hover-derived-c: 0.008;
+  --shortcut-solid-active-derived-l: 0.01;
+  --shortcut-solid-active-derived-c: 0.006;
+
+  --border-derived-subtle-l: -0.020;
+  --border-derived-subtle-c: -0.003;
+
+  --border-derived-l: -0.040;
+  --border-derived-c: -0.007;
+
+  --border-derived-strong-l: -0.060;
+  --border-derived-strong-c: -0.010;
+}
+
+:root.dark {
+    --hover-text-derived-l: 0.09;
+    --hover-text-derived-c: 0.01;
+
+    --active-text-derived-l: 0.007;
+    --active-text-derived-c: 0.001;
+
+    --hover-derived-l: 0.031;
+    --hover-derived-c: 0.001;
+
+    --active-derived-l: 0.07;
+    --active-derived-c: 0.001;
+
+    --shortcut-solid-derived-l: -0.06;
+    --shortcut-solid-derived-c: -0.011;
+    --shortcut-solid-hover-derived-l: -0.03;
+    --shortcut-solid-hover-derived-c: -0.008;
+    --shortcut-solid-active-derived-l: 0.01;
+    --shortcut-solid-active-derived-c: -0.006;
+
+    --border-derived-subtle-l: 0.07;
+    --border-derived-subtle-c: 0.012;
+
+    --border-derived-l: 0.085;
+    --border-derived-c: 0.015;
+
+    --border-derived-strong-l: 0.1;
+    --border-derived-strong-c: 0.018;
+
+}
+
+/* Border utilities */
+@utility border-derived-subtle {
+  border-color: oklch(from var(--cm-bg-color, var(--color-border)) calc(l + var(--border-derived-subtle-l)) calc(c + var(--border-derived-subtle-c)) h);
+}
+
+@utility border-derived {
+  border-color: oklch(from var(--cm-bg-color, var(--color-border)) calc(l + var(--border-derived-l)) calc(c + var(--border-derived-c)) h);
+}
+
+@utility border-derived-strong {
+  border-color: oklch(from var(--cm-bg-color, var(--color-border)) calc(l + var(--border-derived-strong-l)) calc(c + var(--border-derived-strong-c)) h);
+}
+
+@utility border-derived-lighter-subtle {
+  border-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l + 0.06) calc(c + 0.011) h);
+}
+
+@utility border-derived-lighter {
+  border-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l + 0.09) calc(c + 0.014) h);
+}
+
+/* Ring utilities */
+@utility ring-derived-subtle {
+  --tw-ring-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l + var(--border-derived-subtle-l)) calc(c + var(--border-derived-subtle-c)) h);
+}
+
+@utility ring-derived {
+  --tw-ring-color: oklch(from var(--cm-bg-color, var(--color-border)) calc(l + var(--border-derived-l)) calc(c + var(--border-derived-c)) h);
+}
+
+@utility ring-derived-strong {
+  --tw-ring-color: oklch(from var(--cm-bg-color, var(--color-border)) calc(l + var(--border-derived-strong-l)) calc(c + var(--border-derived-strong-c)) h);
+}
+
+@utility ring-derived-lighter-subtle {
+  --tw-ring-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l + 0.06) calc(c + 0.011) h);
+}
+
+@utility ring-derived-lighter {
+  --tw-ring-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l + 0.09) calc(c + 0.014) h);
+}
+
+/* Text utilities */
+@utility text-hover-derived {
+  color: oklch(from var(--cm-text-color, var(--color-foreground)) calc(l + var(--hover-text-derived-l)) calc(c + var(--hover-text-derived-c)) h);
+}
+
+@utility text-active-derived {
+  color: oklch(from var(--cm-text-color, var(--color-foreground)) calc(l + var(--active-text-derived-l)) calc(c + var(--active-text-derived-c)) h);
+}
+
+@utility text-derived-lighter-subtle {
+  color: oklch(from var(--cm-text-color, var(--color-foreground)) calc(l + var(--text-derived-lighter-subtle-l)) calc(c + var(--text-derived-lighter-subtle-c)) h);
+}
+
+@utility text-derived-lighter {
+  color: oklch(from var(--cm-text-color, var(--color-foreground)) calc(l + var(--text-derived-lighter-l)) calc(c + var(--text-derived-lighter-c)) h);
+}
+
+/* Background utilities */
+@utility bg-hover-derived {
+  background-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l + var(--hover-derived-l)) calc(c + var(--hover-derived-c)) h);
+}
+
+@utility bg-active-derived {
+  background-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l + var(--active-derived-l)) calc(c + var(--active-derived-c)) h);
+}
+
+@utility bg-derived-lighter-subtle {
+  background-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l + 0.06) calc(c + 0.011) h);
+}
+
+@utility bg-derived-lighter {
+  background-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l + 0.09) calc(c + 0.014) h);
+}
+
+@utility bg-derived-darker-subtle {
+  background-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l - 0.06) calc(c - 0.011) h);
+}
+
+@utility bg-derived-darker {
+  background-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l - 0.09) calc(c - 0.014) h);
+}
+
+/* stylelint-disable scss/at-rule-no-unknown -- Tailwind CSS v4 @utility directives. */
+@utility bg-shortcut-solid-derived {
+  background-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l + var(--shortcut-solid-derived-l)) calc(c + var(--shortcut-solid-derived-c)) h);
+}
+
+@utility bg-shortcut-solid-hover-derived {
+  background-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l + var(--shortcut-solid-hover-derived-l)) calc(c + var(--shortcut-solid-hover-derived-c)) h);
+}
+
+@utility bg-shortcut-solid-active-derived {
+  background-color: oklch(from var(--cm-bg-color, var(--color-border-subtle)) calc(l + var(--shortcut-solid-active-derived-l)) calc(c + var(--shortcut-solid-active-derived-c)) h);
+}
+/* stylelint-enable scss/at-rule-no-unknown */

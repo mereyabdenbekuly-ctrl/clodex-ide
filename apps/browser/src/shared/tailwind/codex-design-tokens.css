@@ -1,0 +1,348 @@
+/**
+ * Codex-inspired application design system.
+ *
+ * The source blueprint exposes CSS variables from the production UI, but its
+ * Electron/VS Code aliases cannot be copied verbatim into Clodex. This layer
+ * keeps the useful, stable values (neutral ramp, Codex blue, radii, shadows,
+ * typography and semantic surface roles) and maps them onto the existing
+ * stage-ui token contract.
+ */
+
+@theme default {
+  /* Primitive palette recovered from the Codex frontend blueprint. */
+  --color-codex-blue-50: #e5f3ff;
+  --color-codex-blue-100: #99ceff;
+  --color-codex-blue-200: #66b5ff;
+  --color-codex-blue-300: #339cff;
+  --color-codex-blue-400: #0285ff;
+  --color-codex-blue-500: #0077e6;
+  --color-codex-blue-600: #0069cc;
+  --color-codex-blue-700: #0054a3;
+  --color-codex-blue-800: #003d78;
+  --color-codex-blue-900: #00284d;
+
+  --color-base-50: #ffffff;
+  --color-base-100: #f9f9f9;
+  --color-base-150: #f3f3f3;
+  --color-base-200: #ededed;
+  --color-base-250: #d9d9d9;
+  --color-base-300: #c7c7c7;
+  --color-base-350: #afafaf;
+  --color-base-400: #8f8f8f;
+  --color-base-450: #777777;
+  --color-base-500: #5d5d5d;
+  --color-base-550: #4f4f4f;
+  --color-base-600: #414141;
+  --color-base-650: #383838;
+  --color-base-700: #303030;
+  --color-base-750: #282828;
+  --color-base-800: #212121;
+  --color-base-850: #1c1c1c;
+  --color-base-900: #181818;
+  --color-base-950: #0d0d0d;
+
+  /* Existing stage-ui roles now resolve to the Codex palette. */
+  --color-app-background: var(--color-base-100);
+  --color-background: var(--color-base-50);
+  --color-foreground: #1a1c1f;
+  --color-muted-foreground: var(--color-base-500);
+  --color-subtle-foreground: var(--color-base-400);
+  --color-sidebar-foreground: var(--color-base-500);
+  --color-surface-1: var(--color-base-100);
+  --color-surface-2: var(--color-base-150);
+  --color-surface-3: var(--color-base-200);
+  --color-surface-tinted: var(--color-codex-blue-50);
+  --color-border: rgb(13 13 13 / 8%);
+  --color-border-subtle: rgb(13 13 13 / 5%);
+  --color-primary-foreground: var(--color-codex-blue-600);
+  --color-primary-solid: var(--color-codex-blue-400);
+  --color-solid-foreground: #ffffff;
+
+  /* Codex semantic aliases. They are available as Tailwind colors too:
+   * bg-token-bg-primary, text-token-text-secondary, border-token-border...
+   */
+  --color-token-bg-primary: var(--color-app-background);
+  --color-token-bg-secondary: var(--color-surface-1);
+  --color-token-bg-tertiary: var(--color-surface-2);
+  --color-token-main-surface-primary: var(--color-background);
+  --color-token-dropdown-background: var(--color-background);
+  --color-token-input-background: var(--color-background);
+  --color-token-foreground: var(--color-foreground);
+  --color-token-text-primary: var(--color-foreground);
+  --color-token-text-secondary: var(--color-muted-foreground);
+  --color-token-text-tertiary: var(--color-subtle-foreground);
+  --color-token-description-foreground: var(--color-muted-foreground);
+  --color-token-border: var(--color-border);
+  --color-token-border-default: var(--color-border);
+  --color-token-border-light: var(--color-border-subtle);
+  --color-token-border-heavy: rgb(13 13 13 / 14%);
+  --color-token-list-hover-background: rgb(13 13 13 / 5%);
+  --color-token-focus-border: var(--color-codex-blue-300);
+  --color-token-primary: var(--color-codex-blue-400);
+  --color-token-button-background: var(--color-codex-blue-400);
+  --color-token-button-foreground: #ffffff;
+  --color-token-charts-green: var(--color-success-foreground);
+  --color-token-charts-red: var(--color-error-foreground);
+  --color-token-scrollbar-slider-background: rgb(13 13 13 / 14%);
+  --color-token-scrollbar-slider-hover-background: rgb(13 13 13 / 24%);
+  --color-token-scrollbar-slider-active-background: rgb(13 13 13 / 32%);
+
+  /* Typography and sizing from the blueprint. */
+  --codex-chat-font-size: 16px;
+  --codex-chat-code-font-size: 13px;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-heading-sm: 1.125rem;
+  --text-heading-md: 1.25rem;
+  --text-heading-lg: 1.5rem;
+
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.25rem;
+  --radius-4xl: 1.5rem;
+
+  --shadow-codex-hairline: 0 0 0 0.5px rgb(0 0 0 / 10%);
+  --shadow-codex-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --shadow-codex-md: 0 2px 4px -1px rgb(0 0 0 / 13%);
+  --shadow-codex-lg: 0 4px 8px -2px rgb(0 0 0 / 10%);
+  --shadow-codex-xl: 0 8px 16px -4px rgb(0 0 0 / 12%);
+  --shadow-codex-2xl: 0 16px 32px -8px rgb(0 0 0 / 19%);
+
+  --thread-content-max-width: 48rem;
+  --thread-content-top-inset: 2.5rem;
+  --spacing-token-sidebar: clamp(240px, 275px, min(520px, calc(100vw - 320px)));
+}
+
+:root {
+  --codex-shell-radius: 14px;
+  --codex-composer-radius: 22px;
+  --codex-panel-padding: clamp(16px, 2.4vw, 32px);
+  --codex-thread-inline-padding: clamp(16px, 3vw, 40px);
+  --codex-composer-shadow:
+    var(--shadow-codex-hairline),
+    var(--shadow-codex-lg),
+    0 18px 54px -28px rgb(0 0 0 / 32%);
+}
+
+:root.dark {
+  --color-app-background: var(--color-base-900);
+  --color-background: var(--color-base-800);
+  --color-foreground: rgb(255 255 255 / 90%);
+  --color-muted-foreground: rgb(255 255 255 / 70%);
+  --color-subtle-foreground: rgb(255 255 255 / 50%);
+  --color-sidebar-foreground: rgb(255 255 255 / 62%);
+  --color-surface-1: var(--color-base-750);
+  --color-surface-2: var(--color-base-700);
+  --color-surface-3: var(--color-base-600);
+  --color-surface-tinted: var(--color-codex-blue-900);
+  --color-border: rgb(255 255 255 / 8%);
+  --color-border-subtle: rgb(255 255 255 / 4%);
+  --color-primary-foreground: var(--color-codex-blue-300);
+  --color-primary-solid: var(--color-codex-blue-400);
+
+  --color-token-border-heavy: rgb(255 255 255 / 16%);
+  --color-token-list-hover-background: rgb(255 255 255 / 7%);
+  --color-token-scrollbar-slider-background: rgb(255 255 255 / 14%);
+  --color-token-scrollbar-slider-hover-background: rgb(255 255 255 / 24%);
+  --color-token-scrollbar-slider-active-background: rgb(255 255 255 / 32%);
+
+  --codex-composer-shadow:
+    0 0 0 0.5px rgb(255 255 255 / 10%),
+    0 8px 24px -8px rgb(0 0 0 / 55%),
+    0 24px 64px -30px rgb(0 0 0 / 80%);
+}
+
+@layer base {
+  body {
+    color: var(--color-token-text-primary);
+    font-size: 14px;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-codex-blue-400) 28%, transparent);
+  }
+}
+
+@layer components {
+  .codex-app-shell {
+    background:
+      radial-gradient(
+        circle at 48% -20%,
+        color-mix(in srgb, var(--color-codex-blue-400) 4%, transparent),
+        transparent 34%
+      ),
+      var(--color-app-background);
+  }
+
+  .codex-sidebar-surface {
+    background: color-mix(in srgb, var(--color-app-background) 94%, transparent);
+    border-color: var(--color-token-border-light);
+  }
+
+  .codex-main-surface {
+    background: var(--color-token-main-surface-primary);
+    border-color: var(--color-token-border-light);
+    box-shadow: var(--shadow-codex-hairline);
+  }
+
+  .codex-thread-header {
+    background: color-mix(
+      in srgb,
+      var(--color-token-main-surface-primary) 88%,
+      transparent
+    );
+    border-color: var(--color-token-border-light);
+    backdrop-filter: blur(18px) saturate(1.15);
+  }
+
+  .codex-composer {
+    background: color-mix(
+      in srgb,
+      var(--color-token-main-surface-primary) 96%,
+      transparent
+    );
+    border: 1px solid var(--color-token-border-default);
+    border-radius: var(--codex-composer-radius);
+    box-shadow: var(--codex-composer-shadow);
+    backdrop-filter: blur(20px) saturate(1.1);
+  }
+
+  .codex-composer:focus-within {
+    border-color: color-mix(
+      in srgb,
+      var(--color-token-focus-border) 58%,
+      var(--color-token-border-default)
+    );
+    box-shadow:
+      0 0 0 1px
+        color-mix(in srgb, var(--color-token-focus-border) 18%, transparent),
+      var(--codex-composer-shadow);
+  }
+
+  .codex-empty-hero {
+    animation: codex-empty-hero-enter 360ms cubic-bezier(0.2, 0.8, 0.2, 1)
+      both;
+  }
+
+  .codex-message-user {
+    background: color-mix(
+      in srgb,
+      var(--color-token-bg-tertiary) 72%,
+      var(--color-token-main-surface-primary)
+    );
+    border: 1px solid var(--color-token-border-light);
+    border-radius: 18px 18px 5px 18px;
+    box-shadow: var(--shadow-codex-sm);
+  }
+
+  .codex-message-user:hover {
+    background: color-mix(
+      in srgb,
+      var(--color-token-bg-tertiary) 86%,
+      var(--color-token-main-surface-primary)
+    );
+    border-color: var(--color-token-border-default);
+  }
+
+  .codex-message-assistant {
+    color: var(--color-token-text-primary);
+    font-size: var(--codex-chat-font-size);
+    line-height: 1.65;
+  }
+
+  .codex-tool-card {
+    background: color-mix(
+      in srgb,
+      var(--color-token-bg-secondary) 78%,
+      transparent
+    );
+    border-color: var(--color-token-border-light);
+    border-radius: 12px;
+    box-shadow: var(--shadow-codex-sm);
+  }
+
+  .codex-review-shell {
+    background:
+      radial-gradient(
+        circle at 55% -30%,
+        color-mix(in srgb, var(--color-codex-blue-400) 4%, transparent),
+        transparent 38%
+      ),
+      var(--color-token-main-surface-primary);
+  }
+
+  .codex-review-toolbar {
+    background: color-mix(
+      in srgb,
+      var(--color-token-main-surface-primary) 90%,
+      transparent
+    );
+    border-color: var(--color-token-border-light);
+    backdrop-filter: blur(18px) saturate(1.12);
+  }
+
+  .codex-review-sidebar {
+    background: color-mix(
+      in srgb,
+      var(--color-token-bg-secondary) 88%,
+      transparent
+    );
+    border-color: var(--color-token-border-light);
+  }
+
+  .codex-review-card {
+    background: var(--color-token-main-surface-primary);
+    border-color: var(--color-token-border-light);
+    border-radius: 14px;
+    box-shadow:
+      var(--shadow-codex-hairline),
+      var(--shadow-codex-sm);
+  }
+
+  .codex-review-card[data-targeted="true"] {
+    border-color: color-mix(
+      in srgb,
+      var(--color-codex-blue-400) 45%,
+      var(--color-token-border-default)
+    );
+    box-shadow:
+      0 0 0 1px
+        color-mix(in srgb, var(--color-codex-blue-400) 12%, transparent),
+      var(--shadow-codex-md);
+  }
+
+  .settings-page {
+    background:
+      radial-gradient(
+        circle at 50% -18%,
+        color-mix(in srgb, var(--color-codex-blue-400) 3.5%, transparent),
+        transparent 32%
+      ),
+      var(--color-token-main-surface-primary);
+  }
+}
+
+@keyframes codex-empty-hero-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .codex-empty-hero {
+    animation: none;
+  }
+}

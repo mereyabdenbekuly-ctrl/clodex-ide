@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "tsBuildInfoFile": "node_modules/.cache/tsbuildinfo/tsconfig.backend.tsbuildinfo",
+    "baseUrl": ".",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "paths": {
+      "@/*": ["./src/backend/*"],
+      "@shared/*": ["./src/shared/*"]
+    },
+    "types": ["node", "vite/client"],
+    "skipLibCheck": true,
+    "target": "ES2022",
+    "strict": true
+  },
+  "include": [
+    "src/backend",
+    "src/types",
+    "scripts/check-main-plan-readiness.ts",
+    "scripts/collect-cloud-task-release-evidence.ts",
+    "scripts/model-fabric-policy-publication.ts",
+    "scripts/run-agentic-app-runtime-evaluation.ts",
+    "scripts/runner-paired-replay-docker-dogfood.ts",
+    "forge.env.d.ts",
+    "src/shared"
+  ],
+  "exclude": ["node_modules", "dist", "coverage", "tmp", ".turbo"]
+}

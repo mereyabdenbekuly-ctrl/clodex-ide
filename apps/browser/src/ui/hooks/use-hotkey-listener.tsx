@@ -1,0 +1,101 @@
+import { useCallback, useMemo } from 'react';
+import { useEventListener } from './use-event-listener';
+import {
+  hotkeyDefinitions,
+  getCurrentPlatform,
+  isEventMatch,
+  HotkeyActions,
+} from '@shared/hotkeys';
+import { shouldNativeInputConsumeEvent } from '@shared/native-input-events';
+
+const commandCenterModalActiveAttribute = 'data-command-center-modal-active';
+const commandCenterModalRootSelector = '[data-command-center-modal-root]';
+const quickTaskModalActiveAttribute = 'data-quick-task-modal-active';
+
+function isEventFromCommandCenter(event: KeyboardEvent) {
+  return (
+    event.target instanceof Element &&
+    event.target.closest(commandCenterModalRootSelector) !== null
+  );
+}
+
+export function useHotKeyListener(
+  action: (event: KeyboardEvent) => unknown,
+  hotKeyAction: HotkeyActions,
+  enabled = true,
+) {
+  const platform = useMemo(() => getCurrentPlatform(), []);
+  const definition = hotkeyDefinitions[hotKeyAction];
+
+  const hotKeyListener = useCallback(
+    (ev: KeyboardEvent) => {
+      const isMatchingHotkey = isEventMatch(ev, definition, platform);
+
+      if (
+        hotKeyAction !== HotkeyActions.OPEN_COMMAND_CENTER &&
+        document.body.hasAttribute(commandCenterModalActiveAttribute)
+      ) {
+        if (
+          isMatchingHotkey &&
+          (hotKeyAction === HotkeyActions.OPEN_QUICK_TASK ||
+            !isEventFromCommandCenter(ev))
+        ) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          ev.stopImmediatePropagation();
+        }
+        if (hotKeyAction === HotkeyActions.OPEN_QUICK_TASK) return;
+        if (!isEventFromCommandCenter(ev)) return;
+      }
+
+      if (
+        hotKeyAction !== HotkeyActions.OPEN_QUICK_TASK &&
+        document.body.hasAttribute(quickTaskModalActiveAttribute)
+      ) {
+        if (isMatchingHotkey) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          ev.stopImmediatePropagation();
+        }
+        return;
+      }
+
+      if (!enabled) return;
+
+      // For non-dominant hotkeys, check if a native editable element should
+      // consume the event. Dominant hotkeys can opt into the same guard with
+      // preserveNativeInput.
+      // STOP_AGENT is selection-aware at the call site: Ctrl+C should still stop
+      // the agent from chat input when there is no selected text, but preserve
+      // native copy when there is a selection.
+      const shouldPreserveNativeInput =
+        !definition.captureDominantly || definition.preserveNativeInput;
+      if (
+        hotKeyAction !== HotkeyActions.STOP_AGENT &&
+        shouldPreserveNativeInput &&
+        shouldNativeInputConsumeEvent(ev)
+      )
+        return;
+
+      // The first matching hotkey action will be executed and abort further processing of other hotkey actions.
+      if (isMatchingHotkey) {
+        const handled = action(ev) !== false;
+        if (!handled) return;
+
+        ev.stopPropagation();
+        ev.stopImmediatePropagation();
+        ev.preventDefault();
+      }
+    },
+    [action, platform, definition, hotKeyAction, enabled],
+  );
+
+  // Use capture phase for dominant hotkeys to ensure they work even when
+  // focus is inside webcontents (e.g., BrowserView)
+  const options = useMemo(
+    () => (definition.captureDominantly ? { capture: true } : undefined),
+    [definition.captureDominantly],
+  );
+
+  useEventListener('keydown', hotKeyListener, options, window);
+}

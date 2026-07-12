@@ -1,0 +1,255 @@
+name: Cloud Task promotion evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact main commit being promoted
+        required: true
+        type: string
+      aggregate_gzip_base64:
+        description: Gzip+base64 content-free Cloud Task aggregate JSON
+        required: true
+        type: string
+      darwin_smoke_gzip_base64:
+        description: Gzip+base64 macOS suspend/resume smoke JSON
+        required: true
+        type: string
+      windows_smoke_gzip_base64:
+        description: Gzip+base64 Windows suspend/resume smoke JSON
+        required: true
+        type: string
+      linux_smoke_gzip_base64:
+        description: Gzip+base64 Linux suspend/resume smoke JSON
+        required: true
+        type: string
+      backend_conformance_passed:
+        description: Production backend conformance was reviewed and passed
+        required: true
+        default: false
+        type: boolean
+      content_free_telemetry_audit_passed:
+        description: Content-free telemetry audit was reviewed and passed
+        required: true
+        default: false
+        type: boolean
+      product_signoff:
+        description: Product release owner approved this candidate
+        required: true
+        default: false
+        type: boolean
+      security_signoff:
+        description: Security release owner approved this candidate
+        required: true
+        default: false
+        type: boolean
+      operations_signoff:
+        description: Operations release owner approved this candidate
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-task-promotion-${{ inputs.source_commit }}
+  cancel-in-progress: false
+
+jobs:
+  collect_and_verify:
+    name: Collect commit-bound Cloud Task evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: cloud-task-promotion
+    env:
+      CI: 'true'
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      INPUT_DIRECTORY: /tmp/clodex-cloud-task-inputs
+      OUTPUT_DIRECTORY: /tmp/clodex-cloud-task-promotion
+      AGGREGATE_GZIP_BASE64: ${{ inputs.aggregate_gzip_base64 }}
+      DARWIN_SMOKE_GZIP_BASE64: ${{ inputs.darwin_smoke_gzip_base64 }}
+      WINDOWS_SMOKE_GZIP_BASE64: ${{ inputs.windows_smoke_gzip_base64 }}
+      LINUX_SMOKE_GZIP_BASE64: ${{ inputs.linux_smoke_gzip_base64 }}
+      BACKEND_CONFORMANCE_PASSED: ${{ inputs.backend_conformance_passed }}
+      CONTENT_FREE_TELEMETRY_AUDIT_PASSED: ${{ inputs.content_free_telemetry_audit_passed }}
+      PRODUCT_SIGNOFF: ${{ inputs.product_signoff }}
+      SECURITY_SIGNOFF: ${{ inputs.security_signoff }}
+      OPERATIONS_SIGNOFF: ${{ inputs.operations_signoff }}
+
+    steps:
+      - name: Check out trusted main workflow revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify trusted source and explicit attestations
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Cloud Task promotion must run from refs/heads/main" >&2
+            exit 1
+          fi
+          if [[ ! "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "source_commit must be a full lowercase SHA" >&2
+            exit 1
+          fi
+          if [[ "$SOURCE_COMMIT" != "$GITHUB_SHA" ]]; then
+            echo "Cloud Task evidence must bind to the trusted main workflow commit" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "Trusted workflow checkout is not clean" >&2
+            exit 1
+          fi
+          for variable in \
+            BACKEND_CONFORMANCE_PASSED \
+            CONTENT_FREE_TELEMETRY_AUDIT_PASSED \
+            PRODUCT_SIGNOFF \
+            SECURITY_SIGNOFF \
+            OPERATIONS_SIGNOFF; do
+            if [[ "${!variable}" != "true" ]]; then
+              echo "Required attestation is false: $variable" >&2
+              exit 1
+            fi
+          done
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install trusted evidence tooling
+        run: pnpm install --frozen-lockfile --filter 'clodex...'
+
+      - name: Decode bounded content-free inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$INPUT_DIRECTORY" "$OUTPUT_DIRECTORY"
+          mkdir -p "$INPUT_DIRECTORY" "$OUTPUT_DIRECTORY"
+          python3 - <<'PY'
+          import base64
+          import binascii
+          import gzip
+          import io
+          import json
+          import os
+          from pathlib import Path
+
+          inputs = {
+              "aggregate.json": "AGGREGATE_GZIP_BASE64",
+              "darwin.json": "DARWIN_SMOKE_GZIP_BASE64",
+              "windows.json": "WINDOWS_SMOKE_GZIP_BASE64",
+              "linux.json": "LINUX_SMOKE_GZIP_BASE64",
+          }
+          output = Path(os.environ["INPUT_DIRECTORY"])
+          for name, environment_name in inputs.items():
+              encoded = os.environ.get(environment_name, "")
+              if not encoded or len(encoded) > 60000:
+                  raise SystemExit(f"{environment_name} must contain 1-60000 characters")
+              try:
+                  compressed = base64.b64decode(encoded, validate=True)
+                  with gzip.GzipFile(fileobj=io.BytesIO(compressed), mode="rb") as stream:
+                      decoded = stream.read(2 * 1024 * 1024 + 1)
+              except (binascii.Error, gzip.BadGzipFile, EOFError, OSError) as error:
+                  raise SystemExit(f"{environment_name} is not valid gzip+base64: {error}") from error
+              if not decoded or len(decoded) > 2 * 1024 * 1024 or b"\x00" in decoded:
+                  raise SystemExit(f"{environment_name} decoded size/content is invalid")
+              json.loads(decoded)
+              target = output / name
+              target.write_bytes(decoded)
+              target.chmod(0o600)
+          PY
+
+      - name: Collect and verify release evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --dir apps/browser collect:cloud-task-release-evidence -- \
+            --aggregate "$INPUT_DIRECTORY/aggregate.json" \
+            --source-commit "$SOURCE_COMMIT" \
+            --smoke "$INPUT_DIRECTORY/darwin.json" \
+            --smoke "$INPUT_DIRECTORY/windows.json" \
+            --smoke "$INPUT_DIRECTORY/linux.json" \
+            --backend-conformance-passed \
+            --content-free-telemetry-audit-passed \
+            --product-signoff \
+            --security-signoff \
+            --operations-signoff \
+            --output "$OUTPUT_DIRECTORY/cloud-tasks.json"
+
+          pnpm --dir apps/browser check:main-plan-readiness -- \
+            --channel prerelease \
+            --require-clean \
+            --require-promotion session-teleporter \
+            --cloud-task-evidence "$OUTPUT_DIRECTORY/cloud-tasks.json" \
+            --out "$OUTPUT_DIRECTORY/main-plan-readiness.json"
+
+      - name: Write immutable workflow metadata
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          output = Path(os.environ["OUTPUT_DIRECTORY"])
+          evidence = output / "cloud-tasks.json"
+          metadata = {
+              "format": "clodex-cloud-task-promotion-workflow",
+              "version": 1,
+              "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "trustedWorkflowCommitSha": os.environ["GITHUB_SHA"],
+              "sourceCommitSha": os.environ["SOURCE_COMMIT"],
+              "evidenceSha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+              "workflowRunUrl": os.environ["RUN_URL"],
+              "actor": os.environ["GITHUB_ACTOR"],
+          }
+          target = output / "workflow-metadata.json"
+          target.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+          target.chmod(0o600)
+          PY
+
+      - name: Build checksummed bundle
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/cloud-task-${SOURCE_COMMIT:0:12}.tar.gz"
+          checksum="$bundle.sha256"
+          tar --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -C "$OUTPUT_DIRECTORY" \
+            -czf "$bundle" .
+          (cd "$(dirname "$bundle")" && sha256sum "$(basename "$bundle")") > "$checksum"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Cloud Task promotion evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cloud-task-promotion-${{ inputs.source_commit }}
+          path: |
+            ${{ env.OUTPUT_DIRECTORY }}/
+            ${{ steps.bundle.outputs.bundle }}
+            ${{ steps.bundle.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 30

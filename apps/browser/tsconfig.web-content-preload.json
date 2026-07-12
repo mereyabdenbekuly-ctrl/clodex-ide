@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "composite": true,
+    "tsBuildInfoFile": "node_modules/.cache/tsbuildinfo/tsconfig.web-content-preload.tsbuildinfo",
+    "baseUrl": ".",
+    "module": "es2022",
+    "lib": ["es2022", "dom"],
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": ["./src/web-content-preload/*"],
+      "@shared/*": ["./src/shared/*"]
+    },
+    "types": ["vite/client", "node"],
+    "skipLibCheck": true
+  },
+  "include": ["src/web-content-preload", "forge.env.d.ts", "src/shared"],
+  "exclude": ["**/*.stories.tsx", "**/*.stories.ts"]
+}

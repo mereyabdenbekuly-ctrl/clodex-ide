@@ -1,0 +1,55 @@
+import { cva, type VariantProps } from 'class-variance-authority';
+import { cn } from '../lib/utils';
+
+export const buttonVariants = cva(
+  'app-no-drag group/button relative box-border block flex not-disabled:cursor-pointer flex-row items-center justify-center disabled:opacity-50',
+  {
+    variants: {
+      variant: {
+        primary:
+          'border border-derived bg-primary-solid font-normal text-solid-foreground not-disabled:hover:bg-hover-derived not-disabled:focus-visible:bg-hover-derived not-disabled:active:bg-active-derived',
+        secondary:
+          'border border-derived bg-surface-1 font-normal text-foreground not-disabled:hover:bg-hover-derived not-disabled:focus-visible:bg-hover-derived not-disabled:active:bg-active-derived',
+        destructive:
+          'border border-derived bg-error-solid font-normal text-solid-foreground not-disabled:hover:bg-hover-derived not-disabled:focus-visible:bg-hover-derived not-disabled:active:bg-active-derived',
+        warning:
+          'border border-derived bg-warning-solid font-normal text-solid-foreground not-disabled:hover:bg-hover-derived not-disabled:focus-visible:bg-hover-derived not-disabled:active:bg-active-derived',
+        success:
+          'border border-derived bg-success-solid font-normal text-solid-foreground not-disabled:hover:bg-hover-derived not-disabled:focus-visible:bg-hover-derived not-disabled:active:bg-active-derived',
+        ghost:
+          'bg-transparent font-normal text-muted-foreground not-disabled:hover:text-foreground not-disabled:focus-visible:text-foreground not-disabled:active:text-foreground/l-4_c-3',
+        link: 'text-primary-foreground hover:text-hover-derived active:text-active-derived',
+      },
+      size: {
+        xs: 'h-6 gap-1 rounded-md px-2.5 py-1 text-xs',
+        sm: 'h-8 gap-1.5 rounded-md px-3 py-1 text-sm',
+        md: 'h-10 gap-2 rounded-md px-4 py-2 text-sm',
+        lg: 'h-12 gap-2 rounded-md px-6 py-3 text-base',
+        'icon-2xs': 'size-4 rounded-full text-2xs',
+        'icon-xs': 'size-6 rounded-full text-xs',
+        'icon-sm': 'size-8 rounded-full text-sm',
+        'icon-md': 'size-10 rounded-full text-sm',
+      },
+    },
+  },
+);
+
+export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> &
+  VariantProps<typeof buttonVariants> & {
+    ref?: React.Ref<HTMLButtonElement>;
+  };
+
+export function Button({
+  ref,
+  variant = 'primary',
+  size = 'sm',
+  ...props
+}: ButtonProps) {
+  return (
+    <button
+      ref={ref}
+      {...props}
+      className={cn(buttonVariants({ variant, size }), props.className)}
+    />
+  );
+}

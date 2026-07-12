@@ -1,0 +1,479 @@
+/**
+ * OSC parser for PTY shell integration.
+ *
+ * Detects cwd updates via OSC 7 and command boundaries via VS Code-style
+ * OSC 133 escape sequences:
+ *   133;A — Prompt start
+ *   133;B — Prompt end (user pressed enter, command about to run)
+ *   133;C — Command output start
+ *   133;D;{exitCode} — Command finished
+ *
+ * Also detects OSC 7 cwd updates emitted by the shell integration so the
+ * single session cwd source of truth stays current for UI and smart approval.
+ *
+ * Trust boundary: command output is external content. A program can print OSC
+ * 7 / OSC 133 bytes that look like shell-integration metadata, but that must
+ * not update the shell cwd: child commands do not change the parent shell's
+ * cwd. The parser therefore strips OSC 7 from command output and only accepts
+ * OSC 133 command-end markers carrying the per-session boundary token. That
+ * prevents command output from forging `133;D` to escape the command-output
+ * region before printing a fake cwd. Cwd events emitted outside the trusted
+ * command-output region are prompt metadata from the parent shell, reporting
+ * the latest cwd after builtins such as `cd` have run.
+ *
+ * Falls back to sentinel-based detection when shell integration is absent.
+ */
+
+import { EventEmitter } from 'node:events';
+
+// ─── OSC regexes ──────────────────────────────────────────────────
+// Matches both BEL (\x07) and ST (\x1b\\) terminators.
+const OSC_RE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC/BEL control chars are the OSC protocol
+  /\x1b\](?:133;([ABCD])(?:;(-?\d+)(?:;([A-Za-z0-9_-]+))?)?|7;file:\/\/[^/\x07\x1b]*(\/[^\x07\x1b]*))(?:\x07|\x1b\\)/g;
+
+// ─── Sentinel format ──────────────────────────────────────────────
+// __STAGE_DONE_<id>_<exitCode>__
+const SENTINEL_RE = /__STAGE_DONE_([a-zA-Z0-9_-]+)_(-?\d+)__/;
+
+// ─── Strip all OSC 133 / OSC 7 sequences from text ────────────────
+const OSC_STRIP_RE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC/BEL control chars are OSC protocol terminators
+  /\x1b\](?:133;[ABCD](?:;-?\d+(?:;[A-Za-z0-9_-]+)?)?|7;[^\x07\x1b]*)(?:\x07|\x1b\\)/g;
+
+// ─── Types ────────────────────────────────────────────────────────
+
+export type ParserMode = 'osc' | 'sentinel' | 'detecting';
+
+export interface CommandDoneEvent {
+  /** Command output (between 133;C and 133;D), OSC sequences stripped. */
+  output: string;
+  /** Exit code from 133;D;{code} or sentinel. `null` if not parseable. */
+  exitCode: number | null;
+}
+
+export type CwdTrustResult = 'trusted' | 'untrusted' | 'unknown';
+export type CwdTrustValidator = (cwd: string) => CwdTrustResult;
+
+export interface OscParserEvents {
+  /** Prompt is being shown (133;A) */
+  promptStart: [];
+  /** User pressed enter — command about to run (133;B) */
+  promptEnd: [];
+  /** Command output has started (133;C) */
+  commandStart: [];
+  /** Command finished (133;D) */
+  commandDone: [event: CommandDoneEvent];
+  /** Raw output data that is not part of OSC sequences */
+  output: [data: string];
+  /** Sentinel detected — provides id and exit code */
+  sentinelDone: [id: string, exitCode: number];
+  /** Shell integration detected (first OSC 133 sequence seen) */
+  integrationDetected: [];
+  /** Current working directory reported by OSC 7. */
+  cwd: [path: string];
+}
+
+/**
+ * Typed EventEmitter for parser events.
+ */
+declare interface OscParserEmitter {
+  on<K extends keyof OscParserEvents>(
+    event: K,
+    listener: (...args: OscParserEvents[K]) => void,
+  ): this;
+  once<K extends keyof OscParserEvents>(
+    event: K,
+    listener: (...args: OscParserEvents[K]) => void,
+  ): this;
+  emit<K extends keyof OscParserEvents>(
+    event: K,
+    ...args: OscParserEvents[K]
+  ): boolean;
+  removeAllListeners(event?: keyof OscParserEvents): this;
+}
+
+// ─── Parser ───────────────────────────────────────────────────────
+
+export class OscParser extends (EventEmitter as new () => OscParserEmitter) {
+  private mode: ParserMode = 'detecting';
+
+  constructor(
+    public readonly boundaryToken?: string,
+    private readonly isTrustedCwd?: CwdTrustValidator,
+  ) {
+    super();
+  }
+
+  /** Buffer for partial escape sequences split across data chunks */
+  private escBuffer = '';
+
+  /** Buffer for partial sentinel markers split across data chunks */
+  private sentinelBuffer = '';
+
+  /** Accumulated output between 133;C and 133;D */
+  private commandOutputBuf = '';
+  private _inCommandOutput = false;
+
+  /**
+   * Trusted-token command-end marker seen while command output is active.
+   * When cwd validation is available, the marker is held until the next
+   * prompt-time OSC 7. Trusted cwd accepts it; untrusted cwd rejects it;
+   * unknown cwd keeps it pending until the next marker so completion still
+   * works on platforms where parent-process cwd cannot be read.
+   */
+  private pendingCommandDone: { codeStr: string | undefined } | null = null;
+
+  /** Whether at least one OSC 133 sequence has been seen */
+  private oscDetected = false;
+
+  get currentMode(): ParserMode {
+    return this.mode;
+  }
+
+  /**
+   * True when the parser has seen 133;C but not yet 133;D — i.e. the
+   * PTY is currently emitting real command output (not prompt text,
+   * not command echo, not prompt redraws).
+   *
+   * Used by the session manager to gate UI streaming so only actual
+   * command output reaches the user, not prompt/echo artifacts.
+   */
+  get inCommandOutput(): boolean {
+    return this._inCommandOutput;
+  }
+
+  /**
+   * Force the parser into a specific mode.
+   * Used when the SessionManager decides to switch to sentinel mode
+   * after the detection grace period expires.
+   */
+  setMode(mode: ParserMode): void {
+    this.mode = mode;
+  }
+
+  /**
+   * Feed raw PTY data into the parser.
+   * Call this from the PTY `onData` handler.
+   */
+  write(data: string): void {
+    // Prepend any buffered partial escape sequence
+    const input = this.escBuffer + data;
+    this.escBuffer = '';
+
+    // Check for a trailing partial OSC sequence that might be split
+    // across chunks. Buffer a final ESC or OSC introducer so split OSC 133
+    // markers and long OSC 7 cwd payloads are reassembled on the next write.
+    const lastEsc = input.lastIndexOf('\x1b');
+    let processable: string;
+    if (lastEsc >= 0) {
+      const tail = input.slice(lastEsc);
+      if (
+        (tail === '\x1b' || tail.startsWith('\x1b]')) &&
+        tail.length <= 65_536 &&
+        !this.isCompleteSequence(tail)
+      ) {
+        processable = input.slice(0, lastEsc);
+        this.escBuffer = tail;
+      } else {
+        processable = input;
+      }
+    } else {
+      processable = input;
+    }
+
+    if (processable.length === 0) return;
+
+    if (this.mode === 'osc' || this.mode === 'detecting') {
+      this.processOsc(processable);
+    }
+
+    if (this.mode === 'sentinel') {
+      // Strip the shell-integration markers (OSC 133/7) before emitting so the
+      // `output` event has the same shape in both modes — in OSC mode
+      // handleTextOutput() strips exactly those markers too. Only 133/7 are
+      // removed here: they are integration metadata the parser consumes.
+      // Other OSCs (title, hyperlink, color) are intentionally left intact so
+      // the headless xterm grid renders the same state as the real terminal.
+      // This is NOT the sanitization boundary for surfaced output: the text
+      // the agent sees is sanitized independently — stripAnsi() removes ALL
+      // OSC for the on-disk log, recentOutput, and the raw-pattern fallback,
+      // and grid serialization only reflects sequences xterm already consumed.
+      // So no raw OSC reaches captured output regardless of what is stripped
+      // here. processSentinel still receives the RAW bytes below so sentinel
+      // detection is unaffected.
+      this.emit('output', stripOscSequences(processable));
+      this.processSentinel(processable);
+    }
+
+    // In detecting mode, also check for sentinels
+    if (this.mode === 'detecting') {
+      this.processSentinel(processable);
+    }
+  }
+
+  /**
+   * Check if a string fragment contains a complete OSC sequence
+   * (i.e. it's not a truncated partial).
+   */
+  private isCompleteSequence(s: string): boolean {
+    // Quick check: does it contain a BEL or ST terminator after the OSC introducer?
+    if (s.includes('\x07')) return true;
+    const st = s.indexOf('\x1b\\');
+    return st > s.indexOf('\x1b]');
+  }
+
+  private processOsc(data: string): void {
+    let lastIndex = 0;
+    OSC_RE.lastIndex = 0;
+
+    let match: RegExpExecArray | null;
+    // biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop pattern
+    while ((match = OSC_RE.exec(data)) !== null) {
+      const beforeMatch = data.slice(lastIndex, match.index);
+      const marker = match[1]; // A, B, C, or D for OSC 133
+      const codeStr = match[2]; // exit code for OSC 133;D
+      const boundaryToken = match[3]; // optional trust token for OSC 133;D
+      const cwdPath = match[4]; // path payload for OSC 7
+
+      // Emit non-sequence text as output. If text arrives after a pending
+      // command-end marker but before trusted prompt cwd metadata, the marker
+      // was command output spoofing; keep collecting visible output.
+      if (beforeMatch.length > 0) {
+        this.pendingCommandDone = null;
+        this.handleTextOutput(beforeMatch);
+      }
+
+      if (cwdPath !== undefined) {
+        // OSC 7 printed while a command is producing output is untrusted
+        // command content, not parent-shell state. Strip it from visible output
+        // but do not emit a cwd event. Only prompt-integration OSC 7, emitted
+        // after the shell has regained control, may update SessionManager.cwd.
+        const cwd = decodeFileUriPath(cwdPath);
+        if (this.pendingCommandDone) {
+          if (cwd) {
+            const trust = this.getCwdTrust(cwd);
+            if (trust === 'trusted') {
+              this.emit('cwd', cwd);
+              const { codeStr } = this.pendingCommandDone;
+              this.pendingCommandDone = null;
+              this.finishCommand(codeStr);
+            } else if (trust === 'untrusted') {
+              this.pendingCommandDone = null;
+            }
+          }
+        } else if (!this._inCommandOutput) {
+          if (cwd) this.emit('cwd', cwd);
+        }
+        lastIndex = match.index + match[0].length;
+        continue;
+      }
+
+      if (this._inCommandOutput) {
+        // While a command is producing output, OSC bytes are command output
+        // unless they are the shell integration's authenticated command-end
+        // marker. This prevents output from forging 133;D, clearing the
+        // command-output flag, and then spoofing OSC 7 cwd metadata.
+        if (marker === 'D' && this.isTrustedBoundary(boundaryToken)) {
+          if (this.isTrustedCwd) {
+            this.pendingCommandDone = { codeStr };
+          } else {
+            this.finishCommand(codeStr);
+          }
+          lastIndex = match.index + match[0].length;
+          continue;
+        }
+
+        if (this.pendingCommandDone) {
+          const { codeStr } = this.pendingCommandDone;
+          this.pendingCommandDone = null;
+          this.finishCommand(codeStr);
+        } else {
+          lastIndex = match.index + match[0].length;
+          continue;
+        }
+      }
+
+      if (!this.oscDetected) {
+        this.oscDetected = true;
+        this.mode = 'osc';
+        this.emit('integrationDetected');
+      }
+
+      switch (marker) {
+        case 'A':
+          this.emit('promptStart');
+          break;
+        case 'B':
+          this.emit('promptEnd');
+          break;
+        case 'C':
+          this._inCommandOutput = true;
+          this.commandOutputBuf = '';
+          this.emit('commandStart');
+          break;
+        case 'D': {
+          if (this.isTrustedBoundary(boundaryToken)) {
+            this.finishCommand(codeStr);
+          }
+          break;
+        }
+      }
+
+      lastIndex = match.index + match[0].length;
+    }
+
+    // Remaining text after last match
+    const remaining = data.slice(lastIndex);
+    if (remaining.length > 0) {
+      this.pendingCommandDone = null;
+      this.handleTextOutput(remaining);
+    }
+  }
+
+  private handleTextOutput(text: string): void {
+    const stripped = stripOscSequences(text);
+    if (stripped.length === 0) return;
+    if (this._inCommandOutput) {
+      this.commandOutputBuf += stripped;
+    }
+    this.emit('output', stripped);
+  }
+
+  private isTrustedBoundary(boundaryToken: string | undefined): boolean {
+    return this.boundaryToken === undefined
+      ? true
+      : boundaryToken === this.boundaryToken;
+  }
+
+  private getCwdTrust(cwd: string): CwdTrustResult {
+    return this.isTrustedCwd?.(cwd) ?? 'trusted';
+  }
+
+  private finishCommand(codeStr: string | undefined): void {
+    const exitCode = codeStr != null ? Number.parseInt(codeStr, 10) : null;
+    const output = this.commandOutputBuf;
+    this._inCommandOutput = false;
+    this.commandOutputBuf = '';
+    this.emit('commandDone', {
+      output: stripOsc133(output),
+      exitCode: exitCode != null && !Number.isNaN(exitCode) ? exitCode : null,
+    });
+  }
+
+  private processSentinel(data: string): void {
+    const combined = this.sentinelBuffer + data;
+    this.sentinelBuffer = '';
+
+    const match = SENTINEL_RE.exec(combined);
+    if (match) {
+      const id = match[1]!;
+      const exitCode = Number.parseInt(match[2]!, 10);
+      this.emit('sentinelDone', id, Number.isNaN(exitCode) ? 0 : exitCode);
+      return;
+    }
+
+    // Buffer a trailing partial that could be the start of a sentinel.
+    // The sentinel prefix is "__STAGE_DONE_" (14 chars). Keep up to
+    // that many trailing characters for the next chunk.
+    const markerPrefix = '__STAGE_DONE_';
+    const idx = combined.lastIndexOf('_');
+    if (idx >= 0) {
+      const tail = combined.slice(Math.max(0, idx - markerPrefix.length));
+      if (
+        markerPrefix.startsWith(tail.slice(tail.lastIndexOf('__'))) ||
+        tail.includes('__STAGE_DONE_')
+      ) {
+        this.sentinelBuffer = tail;
+      }
+    }
+  }
+
+  /**
+   * Reset internal state. Call when reusing the parser for a new session.
+   */
+  reset(): void {
+    this.escBuffer = '';
+    this.sentinelBuffer = '';
+    this.commandOutputBuf = '';
+    this._inCommandOutput = false;
+    this.pendingCommandDone = null;
+    this.removeAllListeners();
+  }
+}
+
+// ─── Utilities ────────────────────────────────────────────────────
+
+/**
+ * Strip shell-integration OSC sequences from text.
+ */
+export function stripOsc133(text: string): string {
+  return stripOscSequences(text);
+}
+
+/**
+ * Remove the shell-integration OSC markers (OSC 133 command/prompt markers and
+ * OSC 7 cwd reports) from text.
+ *
+ * This intentionally does NOT strip other OSC sequences (title, hyperlink,
+ * color, clipboard): those are valid terminal output that the headless xterm
+ * grid renders faithfully. Surfaced text is sanitized separately — stripAnsi()
+ * in the session manager removes ALL OSC for the log/recentOutput/raw-pattern
+ * paths, and grid serialization only re-emits sequences xterm has consumed.
+ */
+function stripOscSequences(text: string): string {
+  return text.replace(OSC_STRIP_RE, '');
+}
+
+function decodeFileUriPath(pathname: string | undefined): string | null {
+  if (!pathname) return null;
+  let decoded = pathname;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    // Some shells emit raw paths instead of percent-encoded file URLs.
+  }
+
+  if (process.platform === 'win32') {
+    // PowerShell emits Windows drive paths as file://localhost/C:/path.
+    // Only convert those drive-letter paths to native separators; OSC 7 can
+    // also carry POSIX-style paths in tests or non-file-system contexts, and
+    // those must not become \tmp\project on Windows.
+    const drivePath = decoded.match(/^\/?([A-Za-z]:(?:\/.*)?)$/);
+    if (drivePath) return drivePath[1]!.replace(/\//g, '\\');
+  }
+
+  return decoded;
+}
+
+/**
+ * Generate a sentinel command wrapper for use when shell integration
+ * is not available.
+ *
+ * @param id - unique identifier for this command invocation
+ * @param command - the original command to execute
+ * @param isPowerShell - if true, emit PowerShell-compatible syntax
+ * @returns the wrapped command string to write to the PTY
+ */
+export function wrapWithSentinel(
+  id: string,
+  command: string,
+  isPowerShell?: boolean,
+): string {
+  if (isPowerShell) {
+    // PowerShell: use try/catch and $LASTEXITCODE for the exit code
+    return `try { ${command} } catch { }; Write-Host "__STAGE_DONE_${id}_$($LASTEXITCODE ?? 0)__"\r`;
+  }
+  // POSIX shells (bash, zsh, sh)
+  // NOTE: the newline must be an escaped \n (two chars) so printf expands it
+  // at runtime. A literal LF here would break the single-quoted format string
+  // mid-line and trigger PS2 continuation prompts (e.g. `quote>`) over the PTY.
+  return `eval ${shellEscape(command)}; printf '__STAGE_DONE_${id}_%d__\\n' $?\r`;
+}
+
+/**
+ * Simple shell escaping — wraps in single quotes with proper escaping.
+ */
+export function shellEscape(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}

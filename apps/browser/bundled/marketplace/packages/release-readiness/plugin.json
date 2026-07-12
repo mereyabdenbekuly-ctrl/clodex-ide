@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "release-readiness",
+  "version": "1.0.0",
+  "displayName": "Release Readiness",
+  "description": "A review playbook for validating changes before release.",
+  "publisher": "Clodex Labs",
+  "compatibility": {
+    "minAppVersion": "1.16.0"
+  },
+  "permissions": ["skills"],
+  "requiredCredentials": []
+}

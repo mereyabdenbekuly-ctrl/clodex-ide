@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "allowJs": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "noImplicitAny": true,
+    "sourceMap": true,
+    "baseUrl": ".",
+    "outDir": "dist",
+    "resolveJsonModule": true,
+    "paths": {
+      "@shared/*": ["./src/shared/*"]
+    },
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.ui.json" },
+    { "path": "./tsconfig.pages.json" },
+    { "path": "./tsconfig.backend.json" },
+    { "path": "./tsconfig.storybook.json" },
+    { "path": "./tsconfig.visual.json" },
+    { "path": "./tsconfig.web-content-preload.json" }
+  ]
+}

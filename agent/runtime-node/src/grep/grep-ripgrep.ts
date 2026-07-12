@@ -1,0 +1,327 @@
+import { type ChildProcess, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import type { Readable } from 'node:stream';
+import { createInterface } from 'node:readline';
+import path, { relative } from 'node:path';
+import type {
+  FileSystemOperations,
+  GrepMatch,
+  GrepResult,
+  GrepOptions,
+} from '../types.js';
+import { getRipgrepPath } from '../vscode-ripgrep/get-path.js';
+
+/**
+ * Options for executing ripgrep, matching the grep function's options
+ */
+export interface RipgrepGrepOptions {
+  recursive?: boolean;
+  maxDepth?: number;
+  filePattern?: string;
+  absoluteSearchPath?: string;
+  caseSensitive?: boolean;
+  maxMatches?: number;
+  excludePatterns?: string[];
+  respectGitignore?: boolean;
+  searchBinaryFiles?: boolean;
+  absoluteSearchResults?: boolean;
+}
+
+/**
+ * Builds ripgrep command-line arguments from options.
+ *
+ * @param pattern - Search pattern (regex)
+ * @param searchPath - Path to search in
+ * @param options - Search options
+ * @returns Array of command-line arguments
+ */
+function buildRipgrepGrepArgs(
+  pattern: string,
+  searchPath: string,
+  options?: RipgrepGrepOptions,
+): string[] {
+  const args: string[] = [];
+  // Always use JSON output for structured parsing
+  args.push('--json');
+  // Ignore user config files for deterministic behavior
+  args.push('--no-config');
+  // Ignore global gitignore
+  args.push('--no-ignore-global');
+  // Case sensitivity
+  if (options?.caseSensitive) args.push('--case-sensitive');
+  else args.push('-i'); // case-insensitive
+  // Max matches per file
+  if (options?.maxMatches !== undefined)
+    args.push('--max-count', String(options.maxMatches));
+  // Max depth for recursion
+  if (options?.maxDepth !== undefined)
+    args.push('--max-depth', String(options.maxDepth));
+  // File pattern filter
+  if (options?.filePattern) args.push('-g', options.filePattern);
+  // Exclude patterns
+  if (options?.excludePatterns && options.excludePatterns.length > 0)
+    for (const excludePattern of options.excludePatterns)
+      args.push('--glob', `!${excludePattern}`);
+  // Gitignore handling
+  if (options?.respectGitignore === false) args.push('--no-ignore');
+  // Binary file handling
+  if (options?.searchBinaryFiles) args.push('--text'); // Force text mode, search binary files
+  // Search pattern (must come after all options)
+  args.push('-e', pattern);
+  // Search path
+  args.push(searchPath);
+  return args;
+}
+
+/**
+ * Ripgrep JSON output message types
+ */
+interface RipgrepBegin {
+  type: 'begin';
+  data: {
+    path: { text: string };
+  };
+}
+
+interface RipgrepMatch {
+  type: 'match';
+  data: {
+    path: { text: string };
+    lines: { text: string };
+    line_number: number;
+    absolute_offset: number;
+    submatches: Array<{
+      match: { text: string };
+      start: number;
+      end: number;
+    }>;
+  };
+}
+
+interface RipgrepContext {
+  type: 'context';
+  data: {
+    path: { text: string };
+    lines: { text: string };
+    line_number: number;
+    absolute_offset: number;
+  };
+}
+
+interface RipgrepEnd {
+  type: 'end';
+  data: {
+    path: { text: string };
+    binary_offset: number | null;
+    stats: {
+      elapsed: { human: string; nanos: number };
+      searches: number;
+      searches_with_match: number;
+    };
+  };
+}
+
+interface RipgrepSummary {
+  type: 'summary';
+  data: {
+    elapsed_total: { human: string; nanos: number };
+    stats: {
+      elapsed: { human: string; nanos: number };
+      searches: number;
+      searches_with_match: number;
+    };
+  };
+}
+
+type RipgrepMessage =
+  | RipgrepBegin
+  | RipgrepMatch
+  | RipgrepContext
+  | RipgrepEnd
+  | RipgrepSummary;
+
+/**
+ * Maximum size for a single JSON line to prevent memory issues
+ * (10MB like VS Code does)
+ */
+const MAX_LINE_SIZE = 10 * 1024 * 1024; // 10MB
+
+/**
+ * Parses ripgrep's JSON output stream and converts it to GrepResult format.
+ *
+ * Ripgrep outputs one JSON object per line with different message types:
+ * - 'begin': Indicates start of results for a file
+ * - 'match': Contains actual match data
+ * - 'end': Indicates end of results for a file
+ * - 'summary': Final summary statistics
+ *
+ * @param stdout - Readable stream from ripgrep process stdout
+ * @param workingDirectory - Base directory for calculating relative paths
+ * @returns Promise resolving to GrepResult
+ */
+async function parseRipgrepGrepOutput(
+  stdout: Readable,
+  workingDirectory: string,
+  onError?: (error: Error) => void,
+  options?: { maxMatches?: number; childProcess?: ChildProcess },
+): Promise<GrepResult> {
+  const matches: GrepMatch[] = [];
+  const filesSearched = new Set<string>();
+  let limitReached = false;
+
+  const contextBuffer: Map<
+    string,
+    Array<{ lineNum: number; text: string }>
+  > = new Map();
+
+  return new Promise((resolve) => {
+    const rl = createInterface({
+      input: stdout,
+      crlfDelay: Number.POSITIVE_INFINITY,
+    });
+
+    rl.on('line', (line: string) => {
+      if (limitReached) return;
+
+      if (line.length > MAX_LINE_SIZE) {
+        onError?.(
+          new Error(
+            `Skipping overly large ripgrep output line (${line.length} bytes)`,
+          ),
+        );
+        return;
+      }
+
+      try {
+        const message = JSON.parse(line) as RipgrepMessage;
+
+        if (message.type === 'context') {
+          const contextData = message.data;
+          const filePath = contextData.path.text;
+          if (!contextBuffer.has(filePath)) contextBuffer.set(filePath, []);
+
+          contextBuffer.get(filePath)?.push({
+            lineNum: contextData.line_number,
+            text: contextData.lines.text,
+          });
+        } else if (message.type === 'match') {
+          const matchData = message.data;
+          filesSearched.add(matchData.path.text);
+
+          const preview = matchData.lines.text;
+          for (const submatch of matchData.submatches) {
+            matches.push({
+              relativePath: relative(workingDirectory, matchData.path.text),
+              absolutePath: path.join(workingDirectory, matchData.path.text),
+              line: matchData.line_number,
+              column: submatch.start + 1,
+              match: submatch.match.text,
+              preview,
+            });
+          }
+
+          if (options?.maxMatches && matches.length >= options.maxMatches) {
+            limitReached = true;
+            rl.close();
+            options.childProcess?.kill();
+            return;
+          }
+        } else if (message.type === 'begin') {
+          filesSearched.add(message.data.path.text);
+          contextBuffer.set(message.data.path.text, []);
+        }
+      } catch (error) {
+        onError?.(new Error(`Failed to parse ripgrep JSON output: ${error}`));
+      }
+    });
+
+    rl.on('close', () => {
+      const message = `Found ${matches.length} matches in ${filesSearched.size} files`;
+
+      resolve({
+        success: true,
+        message,
+        matches,
+        totalMatches: matches.length,
+        filesSearched: filesSearched.size,
+      });
+    });
+
+    rl.on('error', (error) => {
+      onError?.(new Error(`Error reading ripgrep output: ${error}`));
+      resolve({
+        success: false,
+        message: `Failed to parse ripgrep output: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    });
+  });
+}
+
+/**
+ * Executes grep using ripgrep binary for improved performance.
+ *
+ * This function attempts to use the platform-specific ripgrep binary for
+ * searching. If ripgrep is not available or fails, it returns null to
+ * allow fallback to the Node.js implementation.
+ *
+ * @param fileSystem - File system provider for path resolution
+ * @param searchPath - Path to search (file or directory)
+ * @param pattern - Search pattern (regex)
+ * @param rgBinaryBasePath - Base directory where ripgrep binary is installed
+ * @param options - Search options
+ * @returns GrepResult if successful, null if ripgrep unavailable/failed
+ */
+export async function grepWithRipgrep(
+  fileSystem: FileSystemOperations,
+  pattern: string,
+  rgBinaryBasePath: string,
+  options?: GrepOptions,
+  onError?: (error: Error) => void,
+): Promise<GrepResult | null> {
+  try {
+    const rgPath = getRipgrepPath(rgBinaryBasePath);
+
+    // Check if ripgrep executable exists
+    if (!rgPath || !existsSync(rgPath)) return null;
+
+    // Use absoluteSearchPath if provided, otherwise use current working directory
+    const searchPath =
+      options?.absoluteSearchPath ?? fileSystem.getCurrentWorkingDirectory();
+
+    // Build ripgrep arguments
+    const args = buildRipgrepGrepArgs(pattern, searchPath, options);
+
+    // Spawn ripgrep process
+    const process = spawn(rgPath, args, {
+      stdio: ['ignore', 'pipe', 'pipe'], // stdin ignored, stdout/stderr piped
+      windowsHide: true, // Don't show console window on Windows
+      cwd: fileSystem.getCurrentWorkingDirectory(), // Use current working directory for relative path calculation
+    });
+
+    // Check if the process spawned successfully
+    if (!process.stdout) return null;
+
+    // Handle process errors
+    process.on('error', (error) => {
+      onError?.(new Error(`Ripgrep process error: ${error}`));
+    });
+
+    const result = await parseRipgrepGrepOutput(
+      process.stdout,
+      searchPath,
+      onError,
+      { maxMatches: options?.maxMatches, childProcess: process },
+    );
+
+    return result;
+  } catch (error) {
+    // Any error during ripgrep execution - log and return null for fallback
+    onError?.(
+      new Error(
+        `Ripgrep execution failed, falling back to Node.js implementation: ${error}`,
+      ),
+    );
+    return null;
+  }
+}

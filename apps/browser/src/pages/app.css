@@ -1,0 +1,13 @@
+/**
+ * Tailwind CSS entry point for the TanStack SPA pages.
+ * Imports the shared browser base configuration and adds pages-specific @source directives.
+ */
+
+@import "../shared/tailwind/browser-base.css";
+
+/* Source paths for Tailwind to scan for class usage */
+@source "../../node_modules/@clodex/stage-ui";
+@source "../../node_modules/streamdown/dist/index.js";
+@source "../../node_modules/@streamdown/math/dist/*.js";
+@source "../ui";
+@source ".";

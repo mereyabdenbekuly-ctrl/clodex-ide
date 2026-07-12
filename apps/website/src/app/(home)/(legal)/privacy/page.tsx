@@ -1,0 +1,45 @@
+import type { Metadata } from 'next';
+import { getLegalPage } from '@/lib/source';
+import { notFound } from 'next/navigation';
+import { compileMDX } from 'next-mdx-remote/rsc';
+
+export const metadata: Metadata = {
+  title: 'Privacy Policy · clodex',
+  description:
+    'Read the clodex Privacy Policy and learn how we collect, use, and protect your data.',
+  openGraph: {
+    title: 'Privacy Policy · clodex',
+    description:
+      'Read the clodex Privacy Policy and learn how we collect, use, and protect your data.',
+    type: 'website',
+  },
+  twitter: {
+    title: 'Privacy Policy · clodex',
+    description:
+      'Read the clodex Privacy Policy and learn how we collect, use, and protect your data.',
+    creator: '@clodex_io',
+  },
+  category: 'legal',
+  alternates: {
+    canonical: 'https://clodex.io/privacy',
+  },
+  robots: { index: true, follow: true },
+};
+
+export default async function PrivacyPolicyPage() {
+  const page = getLegalPage('privacy');
+  if (!page) notFound();
+
+  const { content } = await compileMDX({
+    source: page.source,
+    options: {
+      mdxOptions: { development: process.env.NODE_ENV !== 'production' },
+    },
+  });
+
+  return (
+    <div className="prose dark:prose-invert mx-auto mt-12 w-full max-w-7xl px-4">
+      {content}
+    </div>
+  );
+}
