@@ -5,6 +5,7 @@
     "noEmit": true,
     "paths": {
       "@/*": ["../src/ui/*"],
+      "@assets/*": ["../assets/pages/*"],
       "@shared/*": ["../src/shared/*"],
       "@sb/*": ["./*"],
       "tmp/*": ["../tmp/*"]

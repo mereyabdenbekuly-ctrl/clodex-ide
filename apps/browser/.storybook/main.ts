@@ -62,6 +62,10 @@ const config: StorybookConfig = {
           },
           // Standard @ alias (must come last)
           // @ui must come before @ since it's more specific
+          {
+            find: '@assets',
+            replacement: path.resolve(__dirname, '../assets/pages'),
+          },
           { find: '@ui', replacement: path.resolve(__dirname, '../src/ui') },
           { find: '@', replacement: path.resolve(__dirname, '../src/ui') },
           {

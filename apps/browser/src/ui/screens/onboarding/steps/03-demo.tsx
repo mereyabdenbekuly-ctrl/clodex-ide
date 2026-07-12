@@ -1,15 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  WorkspacesDark,
-  WorkspacesLight,
-  DesignPreviewDark,
-  DesignPreviewLight,
-  PluginsDark,
-  PluginsLight,
-  MentionsDark,
-  MentionsLight,
-  CommandsAndSkillsDark,
-  CommandsAndSkillsLight,
+  AgentOs,
+  Automations,
+  McpRuntime,
+  PluginLibrary,
+  Workspace,
 } from '@ui/assets/feature-images';
 import { useTrack } from '@ui/hooks/use-track';
 import { cn } from '@ui/utils';
@@ -18,50 +13,44 @@ interface Slide {
   heading: string;
   previewHeading: string;
   subtitle: string;
-  light: string;
-  dark: string;
+  image: string;
 }
 
 const slides: Slide[] = [
   {
-    heading: 'Connect multiple workspaces',
-    previewHeading: 'Workspaces',
+    heading: 'Keep the whole task in one workspace',
+    previewHeading: 'Workspace',
     subtitle:
-      'With workspaces, you can let the agent work across multiple folders at once.',
-    light: WorkspacesLight,
-    dark: WorkspacesDark,
+      'Connect code, terminals, browser tabs and task history in one persistent environment.',
+    image: Workspace,
   },
   {
-    heading: 'Use slash commands and skills',
-    previewHeading: 'Commands & Skills',
+    heading: 'Govern execution with Agent OS',
+    previewHeading: 'Agent OS',
     subtitle:
-      'Slash commands let you use features and plugins — and load skills proactively.',
-    light: CommandsAndSkillsLight,
-    dark: CommandsAndSkillsDark,
+      'Review capabilities, goals and execution boundaries before agents take action.',
+    image: AgentOs,
   },
   {
-    heading: 'Mention files, tabs and web elements',
-    previewHeading: 'Mentions',
+    heading: 'Automate recurring engineering work',
+    previewHeading: 'Automations',
     subtitle:
-      'Reference local files and browser tabs — and select web elements from any website.',
-    light: MentionsLight,
-    dark: MentionsDark,
+      'Turn repeatable workflows into governed automations with clear triggers and controls.',
+    image: Automations,
   },
   {
-    heading: 'Use design previews',
-    previewHeading: 'Design Previews',
+    heading: 'Connect tools through MCP',
+    previewHeading: 'MCP Runtime',
     subtitle:
-      'Design previews let you iterate on designs before you modify real code.',
-    light: DesignPreviewLight,
-    dark: DesignPreviewDark,
+      'Attach local and remote MCP servers without giving every tool unrestricted access.',
+    image: McpRuntime,
   },
   {
-    heading: 'Use plugins to integrate your stack',
-    previewHeading: 'Plugins',
+    heading: 'Extend Clodex with plugins and skills',
+    previewHeading: 'Extensions',
     subtitle:
-      'Use plugins like Figma, GitHub and more to integrate clodex into your stack.',
-    light: PluginsLight,
-    dark: PluginsDark,
+      'Install integrations for your stack and keep their permissions visible and controlled.',
+    image: PluginLibrary,
   },
 ];
 
@@ -150,14 +139,9 @@ export function StepDemo() {
         <p className="pt-1 text-muted-foreground text-sm">{slide.subtitle}</p>
         <div className="flex w-1/2 flex-col gap-2 pt-4">
           <img
-            src={slide.light}
+            src={slide.image}
             alt={slide.heading}
-            className="block h-auto w-full rounded-md border border-border-subtle dark:hidden"
-          />
-          <img
-            src={slide.dark}
-            alt={slide.heading}
-            className="hidden h-auto w-full rounded-md border border-border-subtle dark:block"
+            className="block h-auto w-full rounded-md border border-border-subtle"
           />
           <SlideIndicators
             slides={slides}
