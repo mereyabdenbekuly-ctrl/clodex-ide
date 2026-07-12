@@ -199,14 +199,6 @@ function clodexRuntimeGroupForProvider(
   }
 }
 
-function clodexKeyGroupMatchesRuntimeGroup(
-  key: ClodexIdeKey,
-  runtimeGroup: string | undefined,
-): boolean {
-  if (!runtimeGroup) return false;
-  return normalizeToken(key.group ?? '') === normalizeToken(runtimeGroup);
-}
-
 function clodexKeyMatchesModelLimit(
   key: ClodexIdeKey,
   provider: ModelProvider,

@@ -70,7 +70,6 @@ const DEPENDENCY_FINGERPRINT_INPUT_NAMES = new Set([
 const DEPENDENCY_SCAN_IGNORES = new Set([
   '.git',
   '.clodex',
-  '.stagewise',
   '.next',
   '.turbo',
   'build',
@@ -1184,8 +1183,7 @@ function isAllowedArchivePath(value: string): boolean {
       segment === '.' ||
       segment === '..' ||
       segment === '.git' ||
-      segment === '.clodex' ||
-      segment === '.stagewise',
+      segment === '.clodex',
   );
 }
 

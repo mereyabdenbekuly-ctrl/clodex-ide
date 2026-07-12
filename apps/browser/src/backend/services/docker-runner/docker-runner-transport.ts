@@ -544,7 +544,7 @@ function workspacePreparationScript(input: {
     'mkdir -p "$stage" "$HOME"',
     'if command -v sha256sum >/dev/null 2>&1; then actual_archive_hash="$(sha256sum "$archive" | awk \'{print $1}\')"; elif command -v shasum >/dev/null 2>&1; then actual_archive_hash="$(shasum -a 256 "$archive" | awk \'{print $1}\')"; else exit 72; fi',
     `test "$actual_archive_hash" = ${archiveHash}`,
-    'tar -tzf "$archive" | while IFS= read -r entry; do case "$entry" in ".clodex/tracked.patch"|workspace/*) ;; *) exit 74 ;; esac; case "/$entry/" in *"/../"*|*"/./"*|*"/workspace/.git/"*|*"/workspace/.clodex/"*|*"/workspace/.stagewise/"*) exit 74 ;; esac; done',
+    'tar -tzf "$archive" | while IFS= read -r entry; do case "$entry" in ".clodex/tracked.patch"|workspace/*) ;; *) exit 74 ;; esac; case "/$entry/" in *"/../"*|*"/./"*|*"/workspace/.git/"*|*"/workspace/.clodex/"*) exit 74 ;; esac; done',
     'git clone --no-checkout /tmp/clodex-repository.bundle /workspace >/dev/null 2>&1',
     `git -C /workspace checkout --detach ${revision} >/dev/null 2>&1`,
     'tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$stage"',
@@ -714,8 +714,7 @@ function isSafeArtifactPath(relativePath: string): boolean {
       !containsControlCharacter(normalized) &&
       !segments.some((segment) => !segment || segment === '..') &&
       segments[0] !== '.git' &&
-      segments[0] !== '.clodex' &&
-      segments[0] !== '.stagewise',
+      segments[0] !== '.clodex',
   );
 }
 

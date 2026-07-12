@@ -33,7 +33,9 @@ describe('createBrowserDataProtection', () => {
       key: randomBytes(32).toString('base64'),
     });
 
-    const protection = await createBrowserDataProtection(logger);
+    const protection = await createBrowserDataProtection(logger, {
+      platform: 'linux',
+    });
     const protectedValue = protection.protectString('secret', 'test/context');
 
     expect(protection.unprotectString(protectedValue, 'test/context')).toBe(
@@ -45,7 +47,9 @@ describe('createBrowserDataProtection', () => {
   it('generates and persists a new key with strict encryption', async () => {
     mocks.readPersistedData.mockResolvedValue(null);
 
-    const protection = await createBrowserDataProtection(logger);
+    const protection = await createBrowserDataProtection(logger, {
+      platform: 'linux',
+    });
 
     expect(mocks.writePersistedData).toHaveBeenCalledOnce();
     expect(mocks.writePersistedData.mock.calls[0]?.[0]).toBe(
@@ -64,6 +68,45 @@ describe('createBrowserDataProtection', () => {
     expect(protection.unprotectString(value, 'test/context')).toBe('secret');
   });
 
+  it('reuses a direct macOS Keychain key when safeStorage has no key file', async () => {
+    const keychainKey = randomBytes(32);
+    mocks.readPersistedData.mockResolvedValue(null);
+
+    const protection = await createBrowserDataProtection(logger, {
+      platform: 'darwin',
+      bundleId: 'xyz.clodex.agentic-ide.test',
+      readMacOSKeychainKey: vi.fn().mockResolvedValue(keychainKey),
+    });
+
+    const protectedValue = protection.protectString('secret', 'test/context');
+    expect(protection.unprotectString(protectedValue, 'test/context')).toBe(
+      'secret',
+    );
+    expect(mocks.writePersistedData).not.toHaveBeenCalled();
+  });
+
+  it('creates a direct macOS Keychain key without probing safeStorage', async () => {
+    const keychainKey = randomBytes(32);
+    mocks.readPersistedData.mockResolvedValue(null);
+    const createMacOSKeychainKey = vi.fn().mockResolvedValue(keychainKey);
+
+    const protection = await createBrowserDataProtection(logger, {
+      platform: 'darwin',
+      bundleId: 'xyz.clodex.agentic-ide.test',
+      readMacOSKeychainKey: vi.fn().mockResolvedValue(null),
+      createMacOSKeychainKey,
+    });
+
+    expect(createMacOSKeychainKey).toHaveBeenCalledWith(
+      'xyz.clodex.agentic-ide.test',
+    );
+    expect(mocks.writePersistedData).not.toHaveBeenCalled();
+    const protectedValue = protection.protectString('secret', 'test/context');
+    expect(protection.unprotectString(protectedValue, 'test/context')).toBe(
+      'secret',
+    );
+  });
+
   it('fails closed for malformed key material', async () => {
     mocks.readPersistedData.mockResolvedValue({
       version: 1,
@@ -75,11 +118,13 @@ describe('createBrowserDataProtection', () => {
     );
   });
 
-  it('propagates safeStorage read failures', async () => {
+  it('propagates safeStorage read failures for an existing protected key', async () => {
     const error = new Error('OS-backed encryption is unavailable');
     mocks.readPersistedData.mockRejectedValue(error);
 
-    await expect(createBrowserDataProtection(logger)).rejects.toBe(error);
+    await expect(
+      createBrowserDataProtection(logger, { platform: 'darwin' }),
+    ).rejects.toBe(error);
     expect(mocks.writePersistedData).not.toHaveBeenCalled();
   });
 });

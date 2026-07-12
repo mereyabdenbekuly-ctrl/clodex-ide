@@ -334,7 +334,6 @@ async function discoverInstalledDependencyMetadata(
         ![
           '.git',
           '.clodex',
-          '.stagewise',
           '.next',
           '.turbo',
           'build',
@@ -365,7 +364,6 @@ async function readIgnorePolicy(workspacePath: string): Promise<string> {
     'clodex-workspace-ignore-v1',
     '.git',
     '.clodex',
-    '.stagewise',
     'node_modules',
     ...files,
   ].join('\0');
@@ -486,8 +484,7 @@ function assertMaterializationPath(
       .split('/')
       .some((segment) => !segment || segment === '.' || segment === '..') ||
     topLevel === '.git' ||
-    topLevel === '.clodex' ||
-    topLevel === '.stagewise'
+    topLevel === '.clodex'
   ) {
     throw new Error(
       `Workspace materialization rejected protected ${kind} path: ${relativePath}`,

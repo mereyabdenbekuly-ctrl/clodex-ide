@@ -1,5 +1,5 @@
-import Image from "next/image";
-import Link from "next/link";
+import Image from 'next/image';
+import Link from 'next/link';
 import {
   AppWindow,
   ArrowRight,
@@ -44,14 +44,14 @@ import {
   Waypoints,
   Workflow,
   Zap,
-} from "lucide-react";
-import { buttonVariants } from "@clodex/stage-ui/components/button";
-import { cn } from "@clodex/stage-ui/lib/utils";
-import { ScrollReveal } from "@/components/landing/scroll-reveal";
-import { DownloadButtons } from "./download-buttons";
-import { landingCopy, type LandingLocale } from "./landing-copy";
+} from 'lucide-react';
+import { buttonVariants } from '@clodex/stage-ui/components/button';
+import { cn } from '@clodex/stage-ui/lib/utils';
+import { ScrollReveal } from '@/components/landing/scroll-reveal';
+import { DownloadButtons } from './download-buttons';
+import { landingCopy, type LandingLocale } from './landing-copy';
 
-type Status = "shipped" | "preview" | "labs" | "building";
+type Status = 'shipped' | 'preview' | 'labs' | 'building';
 
 const workflowIcons = [Goal, Brain, Code2, Terminal, GitPullRequest];
 const securityIcons = [Eye, ShieldCheck, FileLock2, Blocks, Link2, HardDrive];
@@ -78,39 +78,39 @@ function SectionHeading({
   eyebrow,
   title,
   description,
-  align = "left",
+  align = 'left',
   inverse = false,
 }: {
   eyebrow: string;
   title: string;
   description: string;
-  align?: "left" | "center";
+  align?: 'left' | 'center';
   inverse?: boolean;
 }) {
   return (
     <div
-      className={cn("max-w-3xl", align === "center" && "mx-auto text-center")}
+      className={cn('max-w-3xl', align === 'center' && 'mx-auto text-center')}
     >
       <p
         className={cn(
-          "mb-4 font-medium font-mono text-xs uppercase tracking-[0.18em]",
-          inverse ? "text-cyan-300" : "text-primary-foreground",
+          'mb-4 font-medium font-mono text-xs uppercase tracking-[0.18em]',
+          inverse ? 'text-cyan-300' : 'text-primary-foreground',
         )}
       >
         {eyebrow}
       </p>
       <h2
         className={cn(
-          "text-balance font-medium text-3xl tracking-[-0.045em] sm:text-4xl md:text-5xl",
-          inverse && "text-white",
+          'text-balance font-medium text-3xl tracking-[-0.045em] sm:text-4xl md:text-5xl',
+          inverse && 'text-white',
         )}
       >
         {title}
       </h2>
       <p
         className={cn(
-          "mt-5 text-balance text-base leading-7 md:text-lg",
-          inverse ? "text-white/58" : "text-muted-foreground",
+          'mt-5 text-balance text-base leading-7 md:text-lg',
+          inverse ? 'text-white/58' : 'text-muted-foreground',
         )}
       >
         {description}
@@ -132,23 +132,23 @@ function StatusBadge({
   return (
     <span
       className={cn(
-        "inline-flex rounded-full border px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.14em]",
-        status === "shipped" &&
+        'inline-flex rounded-full border px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.14em]',
+        status === 'shipped' &&
           (inverse
-            ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-300"
-            : "border-emerald-500/20 bg-emerald-500/8 text-emerald-600 dark:text-emerald-400"),
-        status === "preview" &&
+            ? 'border-emerald-300/20 bg-emerald-300/10 text-emerald-300'
+            : 'border-emerald-500/20 bg-emerald-500/8 text-emerald-600 dark:text-emerald-400'),
+        status === 'preview' &&
           (inverse
-            ? "border-cyan-300/20 bg-cyan-300/10 text-cyan-300"
-            : "border-primary-500/20 bg-primary-500/8 text-primary-foreground"),
-        status === "labs" &&
+            ? 'border-cyan-300/20 bg-cyan-300/10 text-cyan-300'
+            : 'border-primary-500/20 bg-primary-500/8 text-primary-foreground'),
+        status === 'labs' &&
           (inverse
-            ? "border-violet-300/20 bg-violet-300/10 text-violet-300"
-            : "border-violet-500/20 bg-violet-500/8 text-violet-600 dark:text-violet-400"),
-        status === "building" &&
+            ? 'border-violet-300/20 bg-violet-300/10 text-violet-300'
+            : 'border-violet-500/20 bg-violet-500/8 text-violet-600 dark:text-violet-400'),
+        status === 'building' &&
           (inverse
-            ? "border-amber-300/20 bg-amber-300/10 text-amber-300"
-            : "border-amber-500/20 bg-amber-500/8 text-amber-600 dark:text-amber-400"),
+            ? 'border-amber-300/20 bg-amber-300/10 text-amber-300'
+            : 'border-amber-500/20 bg-amber-500/8 text-amber-600 dark:text-amber-400'),
       )}
     >
       {label}
@@ -170,7 +170,7 @@ function ProductScreenshot({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-2xl border border-white/10 bg-[#111317] p-1.5 shadow-[0_45px_140px_-55px_rgba(0,0,0,0.95)]",
+        'relative overflow-hidden rounded-2xl border border-white/10 bg-[#111317] p-1.5 shadow-[0_45px_140px_-55px_rgba(0,0,0,0.95)]',
         className,
       )}
     >
@@ -227,8 +227,8 @@ export function LandingHero({ locale }: { locale: LandingLocale }) {
                 target="_blank"
                 rel="noreferrer"
                 className={cn(
-                  buttonVariants({ size: "lg", variant: "secondary" }),
-                  "w-full sm:w-auto",
+                  buttonVariants({ size: 'lg', variant: 'secondary' }),
+                  'w-full sm:w-auto',
                 )}
               >
                 <Github className="size-4" />
@@ -237,8 +237,8 @@ export function LandingHero({ locale }: { locale: LandingLocale }) {
               <Link
                 href="#product"
                 className={cn(
-                  buttonVariants({ size: "lg", variant: "ghost" }),
-                  "w-full sm:w-auto",
+                  buttonVariants({ size: 'lg', variant: 'ghost' }),
+                  'w-full sm:w-auto',
                 )}
               >
                 {copy.explore}
@@ -303,11 +303,11 @@ export function ProductProof({ locale }: { locale: LandingLocale }) {
           <div
             key={title}
             className={cn(
-              "py-7 sm:py-9",
-              index % 2 === 1 && "border-white/8 border-l pl-5 sm:pl-8",
-              index > 1 && "border-white/8 border-t md:border-t-0",
-              index === 2 && "md:border-white/8 md:border-l md:pl-8",
-              index === 3 && "md:pl-8",
+              'py-7 sm:py-9',
+              index % 2 === 1 && 'border-white/8 border-l pl-5 sm:pl-8',
+              index > 1 && 'border-white/8 border-t md:border-t-0',
+              index === 2 && 'md:border-white/8 md:border-l md:pl-8',
+              index === 3 && 'md:pl-8',
             )}
           >
             <p className="font-medium text-base tracking-tight sm:text-lg">
@@ -388,8 +388,8 @@ export function WorkflowSection({ locale }: { locale: LandingLocale }) {
               <ScrollReveal key={title} delay={index * 40}>
                 <div
                   className={cn(
-                    "group grid gap-5 p-6 transition-colors hover:bg-surface-1/60 sm:grid-cols-[72px_1fr_auto] sm:items-center sm:p-8",
-                    index > 0 && "border-border-subtle border-t",
+                    'group grid gap-5 p-6 transition-colors hover:bg-surface-1/60 sm:grid-cols-[72px_1fr_auto] sm:items-center sm:p-8',
+                    index > 0 && 'border-border-subtle border-t',
                   )}
                 >
                   <div className="flex items-center gap-4 sm:block">
@@ -484,10 +484,10 @@ export function RemoteSection({ locale }: { locale: LandingLocale }) {
                     <p
                       key={line}
                       className={cn(
-                        line.startsWith("✓") && "text-emerald-300",
-                        line.startsWith("artifact") && "text-cyan-300",
-                        line.startsWith("$") && "text-white/65",
-                        index === 0 && "animate-pulse",
+                        line.startsWith('✓') && 'text-emerald-300',
+                        line.startsWith('artifact') && 'text-cyan-300',
+                        line.startsWith('$') && 'text-white/65',
+                        index === 0 && 'animate-pulse',
                       )}
                     >
                       {line}
@@ -502,7 +502,7 @@ export function RemoteSection({ locale }: { locale: LandingLocale }) {
             {copy.features.map(([title, text], index) => {
               const Icon = icons[index]!;
               const status: Status =
-                index === 4 ? "preview" : index === 5 ? "labs" : "shipped";
+                index === 4 ? 'preview' : index === 5 ? 'labs' : 'shipped';
               return (
                 <ScrollReveal key={title} delay={index * 55}>
                   <article className="h-full rounded-2xl border border-white/10 bg-white/[0.035] p-5">
@@ -652,17 +652,17 @@ export function CapabilitySection({ locale }: { locale: LandingLocale }) {
                     <Bot className="size-8 text-primary-foreground" />
                   </div>
                   {[
-                    ["left-0 top-0", copy.agentLabels[0], Code2],
-                    ["right-0 top-3", copy.agentLabels[1], Globe2],
-                    ["bottom-0 left-3", copy.agentLabels[2], CheckCircle2],
-                    ["bottom-3 right-0", copy.agentLabels[3], Eye],
+                    ['left-0 top-0', copy.agentLabels[0], Code2],
+                    ['right-0 top-3', copy.agentLabels[1], Globe2],
+                    ['bottom-0 left-3', copy.agentLabels[2], CheckCircle2],
+                    ['bottom-3 right-0', copy.agentLabels[3], Eye],
                   ].map(([position, label, Icon]) => {
                     const AgentIcon = Icon as typeof Code2;
                     return (
                       <div
                         key={label as string}
                         className={cn(
-                          "absolute z-10 flex w-32 items-center gap-2 rounded-xl border border-border-subtle bg-background p-3 shadow-lg",
+                          'absolute z-10 flex w-32 items-center gap-2 rounded-xl border border-border-subtle bg-background p-3 shadow-lg',
                           position as string,
                         )}
                       >
@@ -760,9 +760,9 @@ export function PlatformSection({ locale }: { locale: LandingLocale }) {
         </div>
         <div className="mt-5 grid gap-5 lg:grid-cols-3">
           {[
-            ["/product/current/agent-os.png", "Agent OS"],
-            ["/product/current/mcp-runtime.png", "MCP Runtime"],
-            ["/product/current/automations.png", "Automations"],
+            ['/product/current/agent-os.png', 'Agent OS'],
+            ['/product/current/mcp-runtime.png', 'MCP Runtime'],
+            ['/product/current/automations.png', 'Automations'],
           ].map(([src, title], index) => (
             <ScrollReveal key={title} delay={index * 70}>
               <ProductScreenshot
@@ -888,7 +888,7 @@ export function SecuritySection({ locale }: { locale: LandingLocale }) {
                   {copy.eyebrow}
                 </p>
                 <h2 className="text-balance font-medium text-3xl tracking-[-0.045em] sm:text-4xl md:text-5xl">
-                  {copy.title.split("\n").map((line) => (
+                  {copy.title.split('\n').map((line) => (
                     <span key={line} className="block">
                       {line}
                     </span>
@@ -900,8 +900,8 @@ export function SecuritySection({ locale }: { locale: LandingLocale }) {
                 <a
                   href="mailto:security@clodex.io"
                   className={cn(
-                    buttonVariants({ size: "lg", variant: "primary" }),
-                    "mt-8",
+                    buttonVariants({ size: 'lg', variant: 'primary' }),
+                    'mt-8',
                   )}
                 >
                   {copy.cta}
@@ -937,12 +937,12 @@ export function SecuritySection({ locale }: { locale: LandingLocale }) {
 export function ModelsSection({ locale }: { locale: LandingLocale }) {
   const copy = landingCopy[locale].models;
   const providers = [
-    ["openai.svg", "OpenAI"],
-    ["claude.svg", "Anthropic"],
-    ["gemini.svg", "Gemini"],
-    ["deepseek.svg", "DeepSeek"],
-    ["qwen.svg", "Qwen"],
-    ["mistral.svg", "Mistral"],
+    ['openai.svg', 'OpenAI'],
+    ['claude.svg', 'Anthropic'],
+    ['gemini.svg', 'Gemini'],
+    ['deepseek.svg', 'DeepSeek'],
+    ['qwen.svg', 'Qwen'],
+    ['mistral.svg', 'Mistral'],
   ];
   return (
     <section className="pb-24 md:pb-36">
@@ -1070,8 +1070,8 @@ export function FinalCta({ locale }: { locale: LandingLocale }) {
               <a
                 href="mailto:sales@clodex.io"
                 className={cn(
-                  buttonVariants({ size: "lg", variant: "secondary" }),
-                  "w-full sm:w-auto",
+                  buttonVariants({ size: 'lg', variant: 'secondary' }),
+                  'w-full sm:w-auto',
                 )}
               >
                 {copy.sales}
@@ -1089,12 +1089,12 @@ export function SurfacesSection({ locale }: { locale: LandingLocale }) {
   const copy = landingCopy[locale].surfaces;
   const icons = [Zap, Workflow, Brain, Radio, Network, AppWindow];
   const statuses: Status[] = [
-    "shipped",
-    "shipped",
-    "shipped",
-    "preview",
-    "preview",
-    "preview",
+    'shipped',
+    'shipped',
+    'shipped',
+    'preview',
+    'preview',
+    'preview',
   ];
 
   return (

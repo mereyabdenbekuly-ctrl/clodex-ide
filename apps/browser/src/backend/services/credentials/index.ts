@@ -1,11 +1,11 @@
-import { z } from "zod";
-import { randomBytes } from "node:crypto";
-import { DisposableService } from "../disposable";
-import type { Logger } from "../logger";
+import { z } from 'zod';
+import { randomBytes } from 'node:crypto';
+import { DisposableService } from '../disposable';
+import type { Logger } from '../logger';
 import {
   readPersistedData,
   writePersistedData,
-} from "../../utils/persisted-data";
+} from '../../utils/persisted-data';
 import {
   credentialTypeRegistry,
   extractSecretFieldNames,
@@ -13,11 +13,11 @@ import {
   type CredentialInputData,
   type ResolvedCredential,
   type SecretEntry,
-} from "@shared/credential-types";
+} from '@shared/credential-types';
 
-const STORAGE_NAME = "credentials" as const;
-const MCP_CUSTOM_STORAGE_NAME = "mcp-custom-credentials" as const;
-const PROVIDER_API_KEYS_STORAGE_NAME = "provider-api-keys" as const;
+const STORAGE_NAME = 'credentials' as const;
+const MCP_CUSTOM_STORAGE_NAME = 'mcp-custom-credentials' as const;
+const PROVIDER_API_KEYS_STORAGE_NAME = 'provider-api-keys' as const;
 const STORAGE_OPTIONS = {
   encrypt: true,
   requireEncryption: true,
@@ -76,7 +76,7 @@ const mcpCustomCredentialsStoreSchema = z.record(
               .string()
               .min(1)
               .max(16_384)
-              .refine((value) => !value.includes("\0")),
+              .refine((value) => !value.includes('\0')),
             allowedOrigins: z.array(z.string().url().max(4_096)).max(32),
           })
           .strict(),
@@ -108,7 +108,7 @@ export interface McpCustomCredentialDescriptor {
  * Generates a 6-character hex nonce for placeholder uniqueness.
  */
 function generateNonce(): string {
-  return randomBytes(3).toString("hex");
+  return randomBytes(3).toString('hex');
 }
 
 /**
@@ -146,7 +146,7 @@ export class CredentialsService extends DisposableService {
   }
 
   private async initialize(): Promise<void> {
-    this.logger.debug("[CredentialsService] Initializing...");
+    this.logger.debug('[CredentialsService] Initializing...');
     [this.store, this.mcpCustomStore, this.providerApiKeysStore] =
       await Promise.all([
         readPersistedData(
@@ -228,7 +228,7 @@ export class CredentialsService extends DisposableService {
       .trim()
       .min(1)
       .max(32_768)
-      .refine((value) => !value.includes("\0"))
+      .refine((value) => !value.includes('\0'))
       .parse(apiKey);
     this.providerApiKeysStore[parsedReference] = { apiKey: parsedApiKey };
     await this.saveProviderApiKeys();
@@ -279,8 +279,8 @@ export class CredentialsService extends DisposableService {
     data: CredentialInputData<T>,
   ): Promise<void> {
     this.assertNotDisposed();
-    if (typeId === "clodex-auth") {
-      throw new Error("clodex-auth credential is managed automatically");
+    if (typeId === 'clodex-auth') {
+      throw new Error('clodex-auth credential is managed automatically');
     }
     const typeDef = credentialTypeRegistry[typeId];
     if (!typeDef) throw new Error(`Unknown credential type: ${typeId}`);
@@ -298,8 +298,8 @@ export class CredentialsService extends DisposableService {
    */
   public async delete(typeId: CredentialTypeId): Promise<void> {
     this.assertNotDisposed();
-    if (typeId === "clodex-auth") {
-      throw new Error("clodex-auth credential is managed automatically");
+    if (typeId === 'clodex-auth') {
+      throw new Error('clodex-auth credential is managed automatically');
     }
     if (!(typeId in this.store)) return;
 
@@ -350,7 +350,7 @@ export class CredentialsService extends DisposableService {
       .string()
       .min(1)
       .max(16_384)
-      .refine((value) => !value.includes("\0"))
+      .refine((value) => !value.includes('\0'))
       .parse(input.secret);
     const allowedOrigins = input.allowedOrigins.map(normalizeMcpAllowedOrigin);
     const existing = this.mcpCustomStore[credentialId];
@@ -415,7 +415,7 @@ export class CredentialsService extends DisposableService {
   ): Promise<ResolvedCredential | null> {
     this.assertNotDisposed();
 
-    if (typeId === "clodex-auth") {
+    if (typeId === 'clodex-auth') {
       return this.resolveClodexAuth();
     }
 
@@ -511,7 +511,7 @@ export class CredentialsService extends DisposableService {
     const token = this.accessTokenProvider?.();
     if (!token) return null;
 
-    const typeDef = credentialTypeRegistry["clodex-auth"];
+    const typeDef = credentialTypeRegistry['clodex-auth'];
     const nonce = generateNonce();
     const placeholder = `{{CRED:clodex-auth:accessToken:${nonce}}}`;
     const secretMap = new Map<string, SecretEntry>();
@@ -532,25 +532,25 @@ export class CredentialsService extends DisposableService {
       this.mcpCustomSaveQueue.catch(() => undefined),
       this.providerApiKeysSaveQueue.catch(() => undefined),
     ]);
-    this.logger.debug("[CredentialsService] Teardown complete");
+    this.logger.debug('[CredentialsService] Teardown complete');
   }
 }
 
 function normalizeMcpAllowedOrigin(value: string): string {
   const url = new URL(value.trim());
   const isLoopback =
-    url.hostname === "localhost" ||
-    url.hostname === "127.0.0.1" ||
-    url.hostname === "[::1]" ||
-    url.hostname === "::1";
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback)) {
+    url.hostname === 'localhost' ||
+    url.hostname === '127.0.0.1' ||
+    url.hostname === '[::1]' ||
+    url.hostname === '::1';
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopback)) {
     throw new Error(
-      "Custom MCP credential origins must use HTTPS unless they target loopback",
+      'Custom MCP credential origins must use HTTPS unless they target loopback',
     );
   }
   if (url.username || url.password) {
     throw new Error(
-      "Custom MCP credential origins may not contain credentials",
+      'Custom MCP credential origins may not contain credentials',
     );
   }
   return url.origin;

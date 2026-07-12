@@ -7,6 +7,7 @@
     "build:packages": "turbo run build --filter='./packages/*'",
     "build:toolbar": "turbo run build --filter='./toolbar/*'",
     "build:plugins": "turbo run build --filter='./plugins/*'",
+    "brand:generate": "node scripts/generate-brand-assets.cjs",
     "clean": "git clean -xdf node_modules",
     "clean:workspaces": "turbo clean",
     "clean:browser-data": "pnpm -F clodex clean-data",

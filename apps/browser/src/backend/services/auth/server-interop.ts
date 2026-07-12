@@ -1,10 +1,8 @@
-import { createApiClient } from '@clodex/api-client';
 import { createHash, randomBytes } from 'node:crypto';
 import { shell } from 'electron';
 import { createAuthClient } from 'better-auth/client';
 import { emailOTPClient } from 'better-auth/client/plugins';
 import { electronClient } from '@better-auth/electron/client';
-import type { Logger } from '../logger';
 import { AUTH_CALLBACK_SCHEME } from './callback-scheme';
 import type { SocialAuthProvider } from '@shared/karton-contracts/ui/shared-types';
 
@@ -178,15 +176,4 @@ export function createBetterAuthClient(
       }),
     ],
   });
-}
-
-/**
- * Interop layer for backend API calls that require authentication.
- */
-export class AuthServerInterop {
-  private logger: Logger;
-
-  public constructor(logger: Logger) {
-    this.logger = logger;
-  }
 }

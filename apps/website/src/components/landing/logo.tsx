@@ -19,65 +19,29 @@ export interface LogoProps extends HTMLAttributes<HTMLDivElement> {
 export const Logo: FC<LogoProps> = ({
   color = 'default',
   loading = false,
-  loadingSpeed = 'slow',
+  loadingSpeed: _loadingSpeed = 'slow',
+  className,
   ...props
 }) => {
-  const colorStyle: Record<LogoColor, string> = {
-    default: 'fill-clodex-700 stroke-none',
-    black: 'fill-zinc-950 stroke-none',
-    white: 'fill-white stroke-none',
-    zinc: 'fill-zinc-500/50 stroke-none',
-    current: 'fill-current stroke-none',
-    gradient: 'fill-white stroke-black/30 stroke-1',
+  const toneClass: Record<LogoColor, string> = {
+    default: '',
+    black: 'brightness-0',
+    white: 'brightness-0 invert',
+    zinc: 'grayscale opacity-55',
+    current: '',
+    gradient: '',
   };
+
   return (
-    <div
-      className={`relative ${
-        color === 'gradient'
-          ? 'rounded-full bg-[image:var(--gradient)] bg-cover bg-no-repeat'
-          : ''
-      } ${props.className || ''} ${
-        loading ? 'drop-shadow-xl' : ''
-      } aspect-square overflow-visible`}
-    >
-      <svg
-        className={`absolute overflow-visible ${
-          color === 'gradient'
-            ? 'top-[25%] left-[25%] h-[50%] w-[50%]'
-            : 'top-0 left-0 h-full w-full'
+    <div className={`relative aspect-square ${className ?? ''}`} {...props}>
+      <img
+        src="/clodex-mark.png"
+        alt=""
+        aria-hidden="true"
+        className={`size-full object-contain ${toneClass[color]} ${
+          loading ? 'animate-pulse drop-shadow-xl' : ''
         }`}
-        viewBox="0 0 2048 2048"
-      >
-        <title>clodex</title>
-        <ellipse
-          className={`${colorStyle[color]} ${loading ? 'animate-pulse' : ''}`}
-          id="path3"
-          ry="624"
-          rx="624"
-          cy="1024"
-          cx="1024"
-        />
-      </svg>
-      <svg
-        className={`absolute overflow-visible ${
-          color === 'gradient'
-            ? 'top-[25%] left-[25%] h-[50%] w-[50%]'
-            : 'top-0 left-0 h-full w-full'
-        }`}
-        viewBox="0 0 2048 2048"
-      >
-        <path
-          id="path4"
-          className={`origin-center ${colorStyle[color]} ${
-            loading
-              ? loadingSpeed === 'fast'
-                ? 'animate-spin-fast'
-                : 'animate-spin-slow'
-              : ''
-          }`}
-          d="M 1024 0 A 1024 1024 0 0 0 0 1024 A 1024 1024 0 0 0 1024 2048 L 1736 2048 L 1848 2048 C 1958.7998 2048 2048 1958.7998 2048 1848 L 2048 1736 L 2048 1024 A 1024 1024 0 0 0 1024 0 z M 1024.9414 200 A 824 824 0 0 1 1848.9414 1024 A 824 824 0 0 1 1024.9414 1848 A 824 824 0 0 1 200.94141 1024 A 824 824 0 0 1 1024.9414 200 z "
-        />
-      </svg>
+      />
     </div>
   );
 };

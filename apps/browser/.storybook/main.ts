@@ -1,31 +1,31 @@
-import type { StorybookConfig } from "@storybook/react-vite";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import type { StorybookConfig } from '@storybook/react-vite';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const config: StorybookConfig = {
   stories: [
-    "../src/ui/**/*.mdx",
-    "../src/ui/**/*.stories.@(js|jsx|mjs|ts|tsx)",
-    "../../../packages/stage-ui/src/**/*.stories.@(js|jsx|mjs|ts|tsx)",
+    '../src/ui/**/*.mdx',
+    '../src/ui/**/*.stories.@(js|jsx|mjs|ts|tsx)',
+    '../../../packages/stage-ui/src/**/*.stories.@(js|jsx|mjs|ts|tsx)',
   ],
   addons: [
-    "@storybook/addon-docs",
-    "@storybook/addon-onboarding",
-    "@vueless/storybook-dark-mode",
+    '@storybook/addon-docs',
+    '@storybook/addon-onboarding',
+    '@vueless/storybook-dark-mode',
   ],
   framework: {
-    name: "@storybook/react-vite",
+    name: '@storybook/react-vite',
     options: {},
   },
   async viteFinal(config) {
-    const { default: tailwindcss } = await import("@tailwindcss/vite");
-    const { mergeConfig } = await import("vite");
+    const { default: tailwindcss } = await import('@tailwindcss/vite');
+    const { mergeConfig } = await import('vite');
     return mergeConfig(config, {
       plugins: [tailwindcss()],
       worker: {
-        format: "es",
+        format: 'es',
       },
       resolve: {
         alias: [
@@ -33,58 +33,58 @@ const config: StorybookConfig = {
           // Catch absolute imports with @ prefix
           {
             find: /^@(ui)?\/hooks\/use-karton$/,
-            replacement: path.resolve(__dirname, "./mocks/mock-hooks.tsx"),
+            replacement: path.resolve(__dirname, './mocks/mock-hooks.tsx'),
           },
           {
             find: /^@(ui)?\/hooks\/use-chat-state$/,
-            replacement: path.resolve(__dirname, "./mocks/mock-hooks.tsx"),
+            replacement: path.resolve(__dirname, './mocks/mock-hooks.tsx'),
           },
           {
             find: /^@(ui)?\/hooks\/use-context-chip-hover$/,
-            replacement: path.resolve(__dirname, "./mocks/mock-hooks.tsx"),
+            replacement: path.resolve(__dirname, './mocks/mock-hooks.tsx'),
           },
           {
             find: /^@(ui)?\/hooks\/use-open-chat$/,
-            replacement: path.resolve(__dirname, "./mocks/mock-hooks.tsx"),
+            replacement: path.resolve(__dirname, './mocks/mock-hooks.tsx'),
           },
           // Catch relative imports (safety net)
           {
             find: /^\.\/use-karton$/,
-            replacement: path.resolve(__dirname, "./mocks/mock-hooks.tsx"),
+            replacement: path.resolve(__dirname, './mocks/mock-hooks.tsx'),
           },
           {
             find: /src\/hooks\/use-karton$/,
-            replacement: path.resolve(__dirname, "./mocks/mock-hooks.tsx"),
+            replacement: path.resolve(__dirname, './mocks/mock-hooks.tsx'),
           },
           {
             find: /hooks\/use-karton$/,
-            replacement: path.resolve(__dirname, "./mocks/mock-hooks.tsx"),
+            replacement: path.resolve(__dirname, './mocks/mock-hooks.tsx'),
           },
           // Standard @ alias (must come last)
           // @ui must come before @ since it's more specific
-          { find: "@ui", replacement: path.resolve(__dirname, "../src/ui") },
-          { find: "@", replacement: path.resolve(__dirname, "../src/ui") },
+          { find: '@ui', replacement: path.resolve(__dirname, '../src/ui') },
+          { find: '@', replacement: path.resolve(__dirname, '../src/ui') },
           {
-            find: "@shared",
-            replacement: path.resolve(__dirname, "../src/shared"),
+            find: '@shared',
+            replacement: path.resolve(__dirname, '../src/shared'),
           },
-          { find: "@sb", replacement: path.resolve(__dirname, ".") },
+          { find: '@sb', replacement: path.resolve(__dirname, '.') },
         ],
       },
       define: {
-        "process.env.POSTHOG_API_KEY": JSON.stringify(undefined),
-        "process.env.POSTHOG_HOST": JSON.stringify("https://eu.i.posthog.com"),
+        'process.env.POSTHOG_API_KEY': JSON.stringify(undefined),
+        'process.env.POSTHOG_HOST': JSON.stringify('https://eu.i.posthog.com'),
         // Mock build constants for Storybook (normally injected from build-constants.ts)
-        __APP_RELEASE_CHANNEL__: JSON.stringify("dev"),
-        __APP_BASE_NAME__: JSON.stringify("clodex-dev"),
-        __APP_NAME__: JSON.stringify("Clodex Agentic IDE (Storybook)"),
-        __APP_BUNDLE_ID__: JSON.stringify("xyz.clodex.agentic-ide.dev"),
-        __APP_VERSION__: JSON.stringify("0.0.0-storybook"),
-        __APP_AUTHOR__: JSON.stringify("Clodex Labs"),
-        __APP_PLATFORM__: JSON.stringify("darwin"),
-        __APP_ARCH__: JSON.stringify("x64"),
-        __APP_COPYRIGHT__: JSON.stringify("Copyright © 2026 Clodex Labs"),
-        __APP_HOMEPAGE__: JSON.stringify("https://ide.clodex.xyz"),
+        __APP_RELEASE_CHANNEL__: JSON.stringify('dev'),
+        __APP_BASE_NAME__: JSON.stringify('clodex-dev'),
+        __APP_NAME__: JSON.stringify('Clodex Agentic IDE (Storybook)'),
+        __APP_BUNDLE_ID__: JSON.stringify('xyz.clodex.agentic-ide.dev'),
+        __APP_VERSION__: JSON.stringify('0.0.0-storybook'),
+        __APP_AUTHOR__: JSON.stringify('Clodex Labs'),
+        __APP_PLATFORM__: JSON.stringify('darwin'),
+        __APP_ARCH__: JSON.stringify('x64'),
+        __APP_COPYRIGHT__: JSON.stringify('Copyright © 2026 Clodex Labs'),
+        __APP_HOMEPAGE__: JSON.stringify('https://ide.clodex.xyz'),
       },
     });
   },

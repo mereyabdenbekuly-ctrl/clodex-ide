@@ -1,7 +1,7 @@
 import unhandled from 'electron-unhandled';
 unhandled();
 
-import { app, protocol } from 'electron';
+import { app, dialog, protocol } from 'electron';
 import started from 'electron-squirrel-startup';
 import path from 'node:path';
 import {
@@ -140,23 +140,35 @@ if (!singleInstanceLock) {
 // `ready` can fire while the ESM entry bundle is still being evaluated.
 // `whenReady()` also resolves for late subscribers, so packaged builds cannot
 // miss startup entirely before this handler is registered.
-void app.whenReady().then(async () => {
-  // Don't load native modules during Squirrel install/uninstall events.
-  // The process is about to quit — loading them would crash on Windows
-  // machines without system-wide VC++ redistributable.
-  if (started) return;
+void app
+  .whenReady()
+  .then(async () => {
+    // Don't load native modules during Squirrel install/uninstall events.
+    // The process is about to quit — loading them would crash on Windows
+    // machines without system-wide VC++ redistributable.
+    if (started) return;
 
-  if (isSmokeTest) {
-    // Validate the full import tree is intact, then exit.
-    await import('./main');
-    console.log('[smoke-test] App ready — all modules loaded successfully.');
-    app.exit(0);
-    return;
-  }
+    if (isSmokeTest) {
+      // Validate the full import tree is intact, then exit.
+      await import('./main');
+      console.log('[smoke-test] App ready — all modules loaded successfully.');
+      app.exit(0);
+      return;
+    }
 
-  const { main } = await import('./main');
-  main({ launchOptions: { verbose: true } });
-});
+    const { main } = await import('./main');
+    await main({ launchOptions: { verbose: true } });
+  })
+  .catch((error: unknown) => {
+    const message =
+      error instanceof Error ? error.message : 'Unknown startup failure';
+    console.error('[Clodex] Startup failed', error);
+    dialog.showErrorBox(
+      'Clodex could not start',
+      `${message}\n\nIf this persists, verify that macOS Keychain is unlocked and restart Clodex.`,
+    );
+    app.exit(1);
+  });
 
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits

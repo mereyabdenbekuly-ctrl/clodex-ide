@@ -1,15 +1,15 @@
-"use client";
-import Link from "next/link";
-import { Suspense, useState, useEffect } from "react";
-import { IconDownload4FillDuo18 } from "nucleo-ui-fill-duo-18";
-import { Button, buttonVariants } from "@clodex/stage-ui/components/button";
-import { cn } from "@clodex/stage-ui/lib/utils";
-import { Navbar } from "../(home)/navbar";
-import { Footer } from "../(home)/_components/footer";
+'use client';
+import Link from 'next/link';
+import { Suspense, useState, useEffect } from 'react';
+import { IconDownload4FillDuo18 } from 'nucleo-ui-fill-duo-18';
+import { Button, buttonVariants } from '@clodex/stage-ui/components/button';
+import { cn } from '@clodex/stage-ui/lib/utils';
+import { Navbar } from '../(home)/navbar';
+import { Footer } from '../(home)/_components/footer';
 
 export default function DownloadPage() {
-  const [userOS, setUserOS] = useState<string>("your OS");
-  const [downloadUrl, setDownloadUrl] = useState<string>("#");
+  const [userOS, setUserOS] = useState<string>('your OS');
+  const [downloadUrl, setDownloadUrl] = useState<string>('#');
   const [isMobile, setIsMobile] = useState(false);
   const [isOsSupported, setIsOsSupported] = useState(true);
 
@@ -25,18 +25,18 @@ export default function DownloadPage() {
       );
     setIsMobile(mobileCheck);
 
-    if (platform.includes("mac") || userAgent.includes("mac")) {
-      setUserOS("macOS");
+    if (platform.includes('mac') || userAgent.includes('mac')) {
+      setUserOS('macOS');
       setDownloadUrl(
-        "https://ide.clodex.xyz/downloads/clodex-agentic-ide-nightly-1.16.0-macos-arm64.dmg",
+        'https://ide.clodex.xyz/downloads/clodex-1.16.0-arm64.dmg',
       );
-    } else if (platform.includes("win") || userAgent.includes("win")) {
-      setUserOS("Windows");
-      setDownloadUrl("https://dl.clodex.io/download/clodex/release/win/x64");
-    } else if (platform.includes("linux") || userAgent.includes("linux")) {
-      setUserOS("Linux");
+    } else if (platform.includes('win') || userAgent.includes('win')) {
+      setUserOS('Windows');
+      setDownloadUrl('https://dl.clodex.io/download/clodex/release/win/x64');
+    } else if (platform.includes('linux') || userAgent.includes('linux')) {
+      setUserOS('Linux');
       setDownloadUrl(
-        "https://dl.clodex.io/download/clodex/release/linux/deb/x86_64",
+        'https://dl.clodex.io/download/clodex/release/linux/deb/x86_64',
       );
     } else {
       setIsOsSupported(false);
@@ -70,7 +70,7 @@ export default function DownloadPage() {
                 target="_blank"
                 rel="noopener noreferrer"
                 className={cn(
-                  buttonVariants({ size: "lg", variant: "primary" }),
+                  buttonVariants({ size: 'lg', variant: 'primary' }),
                 )}
               >
                 Download for {userOS}

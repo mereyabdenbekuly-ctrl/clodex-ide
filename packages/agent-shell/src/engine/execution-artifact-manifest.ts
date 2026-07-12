@@ -230,8 +230,7 @@ function assertArtifactRelativePath(relativePath: string): void {
     relativePath.includes('\0') ||
     segments.some((segment) => !segment || segment === '..') ||
     segments[0] === '.git' ||
-    segments[0] === '.clodex' ||
-    segments[0] === '.stagewise'
+    segments[0] === '.clodex'
   ) {
     throw new Error(`Unsafe artifact manifest path: ${relativePath}`);
   }

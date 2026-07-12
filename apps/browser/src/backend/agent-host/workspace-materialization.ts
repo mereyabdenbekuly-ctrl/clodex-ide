@@ -177,7 +177,7 @@ function containsControlCharacter(value: string): boolean {
 }
 
 function isProtectedTopLevelPath(value: string): boolean {
-  return value === '.git' || value === '.clodex' || value === '.stagewise';
+  return value === '.git' || value === '.clodex';
 }
 
 function normalizeMode(mode: number): number {

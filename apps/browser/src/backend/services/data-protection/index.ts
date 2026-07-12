@@ -9,6 +9,10 @@ import {
   readPersistedData,
   writePersistedData,
 } from '../../utils/persisted-data';
+import {
+  createMacOSKeychainDataProtectionKey,
+  readMacOSKeychainDataProtectionKey,
+} from './macos-keychain';
 
 const STORAGE_NAME = 'data-protection-key' as const;
 const STORAGE_OPTIONS = {
@@ -27,6 +31,13 @@ const storedKeySchema = z
 
 type StoredKey = Exclude<z.infer<typeof storedKeySchema>, null>;
 
+export interface BrowserDataProtectionOptions {
+  platform?: NodeJS.Platform;
+  bundleId?: string;
+  readMacOSKeychainKey?: (bundleId: string) => Promise<Buffer | null>;
+  createMacOSKeychainKey?: (bundleId: string) => Promise<Buffer>;
+}
+
 /**
  * Loads the agent-persistence data key from Electron safeStorage, generating
  * it on first use. The raw AES key is never written to disk: persisted-data
@@ -35,8 +46,20 @@ type StoredKey = Exclude<z.infer<typeof storedKeySchema>, null>;
  */
 export async function createBrowserDataProtection(
   logger: Logger,
+  options: BrowserDataProtectionOptions = {},
 ): Promise<DataProtection> {
   logger.debug('[DataProtection] Loading protected data key...');
+
+  const platform = options.platform ?? process.platform;
+  const bundleId =
+    options.bundleId ??
+    (typeof __APP_BUNDLE_ID__ === 'string'
+      ? __APP_BUNDLE_ID__
+      : 'xyz.clodex.agentic-ide');
+  const readMacOSKeychainKey =
+    options.readMacOSKeychainKey ?? readMacOSKeychainDataProtectionKey;
+  const createMacOSKeychainKey =
+    options.createMacOSKeychainKey ?? createMacOSKeychainDataProtectionKey;
 
   let stored = await readPersistedData(
     STORAGE_NAME,
@@ -46,6 +69,18 @@ export async function createBrowserDataProtection(
   );
 
   if (stored === null) {
+    if (platform === 'darwin') {
+      const keychainKey = await readMacOSKeychainKey(bundleId);
+      if (keychainKey) {
+        logger.debug('[DataProtection] Data key unlocked from macOS Keychain');
+        return new AeadDataProtection(keychainKey);
+      }
+
+      const createdKeychainKey = await createMacOSKeychainKey(bundleId);
+      logger.debug('[DataProtection] Data key created in macOS Keychain');
+      return new AeadDataProtection(createdKeychainKey);
+    }
+
     stored = {
       version: 1,
       key: randomBytes(KEY_LENGTH).toString('base64'),

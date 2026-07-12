@@ -46,7 +46,6 @@ const SECRET_DIRECTORY_NAMES = new Set([
   '.gnupg',
   '.kube',
   '.ssh',
-  '.stagewise',
 ]);
 const SECRET_FILE_NAMES = new Set([
   '.netrc',

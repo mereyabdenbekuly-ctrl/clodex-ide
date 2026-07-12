@@ -694,7 +694,7 @@ function workspacePreparationCommand(input: {
     'cat > "$archive"',
     'if command -v sha256sum >/dev/null 2>&1; then actual_archive_hash="$(sha256sum "$archive" | awk \'{print $1}\')"; elif command -v shasum >/dev/null 2>&1; then actual_archive_hash="$(shasum -a 256 "$archive" | awk \'{print $1}\')"; else printf \'CLODEX_ERROR=sha256-unavailable\\n\' >&2; exit 72; fi',
     `if [ "$actual_archive_hash" != ${archiveHash} ]; then printf 'CLODEX_ERROR=archive-hash-mismatch\\n' >&2; exit 73; fi`,
-    'tar -tzf "$archive" | while IFS= read -r entry; do case "$entry" in ".clodex/tracked.patch"|workspace/*) ;; *) printf \'CLODEX_ERROR=unsafe-archive-entry\\n\' >&2; exit 74 ;; esac; case "/$entry/" in *"/../"*|*"/./"*|*"/workspace/.git/"*|*"/workspace/.clodex/"*|*"/workspace/.stagewise/"*) printf \'CLODEX_ERROR=unsafe-archive-entry\\n\' >&2; exit 74 ;; esac; done',
+    'tar -tzf "$archive" | while IFS= read -r entry; do case "$entry" in ".clodex/tracked.patch"|workspace/*) ;; *) printf \'CLODEX_ERROR=unsafe-archive-entry\\n\' >&2; exit 74 ;; esac; case "/$entry/" in *"/../"*|*"/./"*|*"/workspace/.git/"*|*"/workspace/.clodex/"*) printf \'CLODEX_ERROR=unsafe-archive-entry\\n\' >&2; exit 74 ;; esac; done',
     persistent
       ? 'if [ -e "$workspace" ]; then quarantine="$cache_root/quarantine/' +
         persistentWorkspaceName +
@@ -1040,7 +1040,7 @@ function buildArtifactCaptureHelperScript(): string {
     'decode_base64() { if printf "" | base64 --decode >/dev/null 2>&1; then base64 --decode; elif printf "" | base64 -d >/dev/null 2>&1; then base64 -d; else base64 -D; fi; }',
     'read_meta() { IFS="|" read -r state_count state_path_bytes state_truncated state_omitted < "$1"; case "$state_count:$state_path_bytes:$state_truncated:$state_omitted" in *[!0-9:]*|::*|*:) exit 65 ;; esac; }',
     'write_meta() { printf \'%s|%s|%s|%s\\n\' "$state_count" "$state_path_bytes" "$state_truncated" "$state_omitted" > "$1.tmp"; mv "$1.tmp" "$1"; }',
-    'safe_path() { candidate="$1"; [ -n "$candidate" ] || return 1; candidate_bytes="$(printf \'%s\' "$candidate" | wc -c | tr -d \' \t\\n\')"; case "$candidate_bytes" in ""|*[!0-9]*) return 1 ;; esac; [ "$candidate_bytes" -le 4096 ] || return 1; cleaned="$(printf \'%s\' "$candidate" | LC_ALL=C tr -d \'[:cntrl:]\')"; [ "$cleaned" = "$candidate" ] || return 1; case "$candidate" in /*|*/|*//*|..|../*|*/../*|*/..|.git|.git/*|.clodex|.clodex/*|.stagewise|.stagewise/*) return 1 ;; esac; return 0; }',
+    'safe_path() { candidate="$1"; [ -n "$candidate" ] || return 1; candidate_bytes="$(printf \'%s\' "$candidate" | wc -c | tr -d \' \t\\n\')"; case "$candidate_bytes" in ""|*[!0-9]*) return 1 ;; esac; [ "$candidate_bytes" -le 4096 ] || return 1; cleaned="$(printf \'%s\' "$candidate" | LC_ALL=C tr -d \'[:cntrl:]\')"; [ "$cleaned" = "$candidate" ] || return 1; case "$candidate" in /*|*/|*//*|..|../*|*/../*|*/..|.git|.git/*|.clodex|.clodex/*) return 1 ;; esac; return 0; }',
     'append_paths() {',
     '  prefix="$1"; tracked="$2"; shift 2',
     '  entries="$capture_dir/$prefix.entries"; meta="$capture_dir/$prefix.meta"',
@@ -1481,8 +1481,7 @@ function isSafeArtifactPath(relativePath: string): boolean {
       !containsControlCharacter(normalized) &&
       !segments.some((segment) => !segment || segment === '..') &&
       segments[0] !== '.git' &&
-      segments[0] !== '.clodex' &&
-      segments[0] !== '.stagewise',
+      segments[0] !== '.clodex',
   );
 }
 

@@ -1,16 +1,16 @@
-"use client";
+'use client';
 
-import { Button, buttonVariants } from "@clodex/stage-ui/components/button";
-import { cn } from "@clodex/stage-ui/lib/utils";
-import { Github, HeartHandshake, MenuIcon, XIcon } from "lucide-react";
-import Image from "next/image";
-import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
-import { useSession } from "@/lib/auth-client";
-import { IconDownload4FillDuo18 } from "nucleo-ui-fill-duo-18";
+import { Button, buttonVariants } from '@clodex/stage-ui/components/button';
+import { cn } from '@clodex/stage-ui/lib/utils';
+import { Github, HeartHandshake, MenuIcon, XIcon } from 'lucide-react';
+import Image from 'next/image';
+import Link from 'next/link';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { useSession } from '@/lib/auth-client';
+import { IconDownload4FillDuo18 } from 'nucleo-ui-fill-duo-18';
 
-type Locale = "ru" | "en";
+type Locale = 'ru' | 'en';
 
 function NavDownloadButton({ locale }: { locale: Locale }) {
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
@@ -21,22 +21,22 @@ function NavDownloadButton({ locale }: { locale: Locale }) {
         navigator as Navigator & {
           userAgentData?: { platform?: string };
         }
-      ).userAgentData?.platform?.toLowerCase() ?? "";
+      ).userAgentData?.platform?.toLowerCase() ?? '';
     const ua = navigator.userAgent.toLowerCase();
     if (
       /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(ua)
     ) {
       return;
     }
-    if (platform.includes("mac") || ua.includes("mac")) {
+    if (platform.includes('mac') || ua.includes('mac')) {
       setDownloadUrl(
-        "https://ide.clodex.xyz/downloads/clodex-agentic-ide-nightly-1.16.0-macos-arm64.dmg",
+        'https://ide.clodex.xyz/downloads/clodex-1.16.0-arm64.dmg',
       );
-    } else if (platform.includes("win") || ua.includes("win")) {
-      setDownloadUrl("https://dl.clodex.io/download/clodex/release/win/x64");
-    } else if (platform.includes("linux") || ua.includes("linux")) {
+    } else if (platform.includes('win') || ua.includes('win')) {
+      setDownloadUrl('https://dl.clodex.io/download/clodex/release/win/x64');
+    } else if (platform.includes('linux') || ua.includes('linux')) {
       setDownloadUrl(
-        "https://dl.clodex.io/download/clodex/release/linux/deb/x86_64",
+        'https://dl.clodex.io/download/clodex/release/linux/deb/x86_64',
       );
     }
   }, []);
@@ -45,9 +45,9 @@ function NavDownloadButton({ locale }: { locale: Locale }) {
   return (
     <a
       href={downloadUrl}
-      className={cn(buttonVariants({ size: "sm", variant: "primary" }))}
+      className={cn(buttonVariants({ size: 'sm', variant: 'primary' }))}
     >
-      {locale === "ru" ? "Скачать" : "Download"}
+      {locale === 'ru' ? 'Скачать' : 'Download'}
       <IconDownload4FillDuo18 className="size-4" />
     </a>
   );
@@ -59,17 +59,17 @@ function NavbarAuthLink({ locale }: { locale: Locale }) {
     <Link
       href="https://console.clodex.io"
       className={cn(
-        buttonVariants({ size: "sm", variant: "ghost" }),
-        "hidden sm:inline-flex",
+        buttonVariants({ size: 'sm', variant: 'ghost' }),
+        'hidden sm:inline-flex',
       )}
     >
       {session?.user
-        ? locale === "ru"
-          ? "Аккаунт"
-          : "Account"
-        : locale === "ru"
-          ? "Войти"
-          : "Sign in"}
+        ? locale === 'ru'
+          ? 'Аккаунт'
+          : 'Account'
+        : locale === 'ru'
+          ? 'Войти'
+          : 'Sign in'}
     </Link>
   );
 }
@@ -79,12 +79,12 @@ function NavbarSupportLink({ locale }: { locale: Locale }) {
     <Link
       href={`/?lang=${locale}#support`}
       className={cn(
-        buttonVariants({ size: "sm", variant: "secondary" }),
-        "hidden xl:inline-flex",
+        buttonVariants({ size: 'sm', variant: 'secondary' }),
+        'hidden xl:inline-flex',
       )}
     >
       <HeartHandshake className="size-4" />
-      {locale === "ru" ? "Поддержать" : "Support"}
+      {locale === 'ru' ? 'Поддержать' : 'Support'}
     </Link>
   );
 }
@@ -96,8 +96,8 @@ function NavbarGitHubLink() {
       target="_blank"
       rel="noreferrer"
       className={cn(
-        buttonVariants({ size: "sm", variant: "ghost" }),
-        "hidden lg:inline-flex",
+        buttonVariants({ size: 'sm', variant: 'ghost' }),
+        'hidden lg:inline-flex',
       )}
     >
       <Github className="size-4" />
@@ -110,16 +110,16 @@ export function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const locale: Locale = searchParams.get("lang") === "ru" ? "ru" : "en";
+  const locale: Locale = searchParams.get('lang') === 'ru' ? 'ru' : 'en';
   const homePrefix = `/?lang=${locale}`;
   const languageHref = (language: Locale) =>
-    pathname === "/" ? `/?lang=${language}` : `${pathname}?lang=${language}`;
+    pathname === '/' ? `/?lang=${language}` : `${pathname}?lang=${language}`;
   const navItems = [
-    [locale === "ru" ? "Возможности" : "Capabilities", "#product"],
-    [locale === "ru" ? "Удалённые машины" : "Remote machines", "#remote"],
-    [locale === "ru" ? "Платформа" : "Platform", "#platform"],
-    [locale === "ru" ? "Безопасность" : "Security", "#security"],
-    [locale === "ru" ? "Автор" : "Builder", "#builder"],
+    [locale === 'ru' ? 'Возможности' : 'Capabilities', '#product'],
+    [locale === 'ru' ? 'Удалённые машины' : 'Remote machines', '#remote'],
+    [locale === 'ru' ? 'Платформа' : 'Platform', '#platform'],
+    [locale === 'ru' ? 'Безопасность' : 'Security', '#security'],
+    [locale === 'ru' ? 'Автор' : 'Builder', '#builder'],
   ] as const;
 
   return (
@@ -156,8 +156,8 @@ export function Navbar() {
                   key={anchor}
                   href={`${homePrefix}${anchor}`}
                   className={cn(
-                    buttonVariants({ variant: "ghost", size: "sm" }),
-                    "pointer-events-auto text-muted-foreground hover:text-foreground",
+                    buttonVariants({ variant: 'ghost', size: 'sm' }),
+                    'pointer-events-auto text-muted-foreground hover:text-foreground',
                   )}
                 >
                   {label}
@@ -168,15 +168,15 @@ export function Navbar() {
 
           <div className="relative z-20 flex items-center gap-2">
             <div className="hidden items-center rounded-lg border border-border-subtle bg-background/70 p-0.5 sm:flex">
-              {(["ru", "en"] as const).map((language) => (
+              {(['ru', 'en'] as const).map((language) => (
                 <Link
                   key={language}
                   href={languageHref(language)}
                   className={cn(
-                    "rounded-md px-2.5 py-1.5 font-mono text-[10px] uppercase transition-colors",
+                    'rounded-md px-2.5 py-1.5 font-mono text-[10px] uppercase transition-colors',
                     locale === language
-                      ? "bg-[#111318] text-white"
-                      : "text-muted-foreground hover:text-foreground",
+                      ? 'bg-[#111318] text-white'
+                      : 'text-muted-foreground hover:text-foreground',
                   )}
                 >
                   {language}
@@ -194,12 +194,12 @@ export function Navbar() {
               className="2xl:hidden"
               aria-label={
                 isOpen
-                  ? locale === "ru"
-                    ? "Закрыть меню"
-                    : "Close menu"
-                  : locale === "ru"
-                    ? "Открыть меню"
-                    : "Open menu"
+                  ? locale === 'ru'
+                    ? 'Закрыть меню'
+                    : 'Close menu'
+                  : locale === 'ru'
+                    ? 'Открыть меню'
+                    : 'Open menu'
               }
               aria-expanded={isOpen}
             >
@@ -215,16 +215,16 @@ export function Navbar() {
         {isOpen && (
           <div className="border-border-subtle border-t pt-3 pb-4 2xl:hidden">
             <div className="mb-2 flex items-center gap-1 sm:hidden">
-              {(["ru", "en"] as const).map((language) => (
+              {(['ru', 'en'] as const).map((language) => (
                 <Link
                   key={language}
                   href={languageHref(language)}
                   onClick={() => setIsOpen(false)}
                   className={cn(
-                    "rounded-lg px-3 py-2 font-mono text-xs uppercase",
+                    'rounded-lg px-3 py-2 font-mono text-xs uppercase',
                     locale === language
-                      ? "bg-[#111318] text-white"
-                      : "text-muted-foreground",
+                      ? 'bg-[#111318] text-white'
+                      : 'text-muted-foreground',
                   )}
                 >
                   {language}
@@ -238,8 +238,8 @@ export function Navbar() {
                   href={`${homePrefix}${anchor}`}
                   onClick={() => setIsOpen(false)}
                   className={cn(
-                    buttonVariants({ variant: "ghost", size: "md" }),
-                    "justify-start",
+                    buttonVariants({ variant: 'ghost', size: 'md' }),
+                    'justify-start',
                   )}
                 >
                   {label}
@@ -251,8 +251,8 @@ export function Navbar() {
                 rel="noreferrer"
                 onClick={() => setIsOpen(false)}
                 className={cn(
-                  buttonVariants({ variant: "ghost", size: "md" }),
-                  "justify-start",
+                  buttonVariants({ variant: 'ghost', size: 'md' }),
+                  'justify-start',
                 )}
               >
                 <Github className="size-4" />
@@ -262,12 +262,12 @@ export function Navbar() {
                 href={`${homePrefix}#support`}
                 onClick={() => setIsOpen(false)}
                 className={cn(
-                  buttonVariants({ variant: "secondary", size: "md" }),
-                  "mt-2 justify-start",
+                  buttonVariants({ variant: 'secondary', size: 'md' }),
+                  'mt-2 justify-start',
                 )}
               >
                 <HeartHandshake className="size-4" />
-                {locale === "ru" ? "Поддержать проект" : "Support the project"}
+                {locale === 'ru' ? 'Поддержать проект' : 'Support the project'}
               </Link>
             </nav>
           </div>

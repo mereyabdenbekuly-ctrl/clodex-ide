@@ -1,17 +1,17 @@
-"use client";
+'use client';
 
-import { useState, useEffect } from "react";
-import Link from "next/link";
-import { Button, buttonVariants } from "@clodex/stage-ui/components/button";
-import { cn } from "@clodex/stage-ui/lib/utils";
-import { IconDownload4FillDuo18 } from "nucleo-ui-fill-duo-18";
-import { ScrollReveal } from "@/components/landing/scroll-reveal";
-import { Logo } from "@/components/landing/logo";
-import { AnimatedGradientBackground } from "@/components/landing/animated-gradient-background";
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { Button, buttonVariants } from '@clodex/stage-ui/components/button';
+import { cn } from '@clodex/stage-ui/lib/utils';
+import { IconDownload4FillDuo18 } from 'nucleo-ui-fill-duo-18';
+import { ScrollReveal } from '@/components/landing/scroll-reveal';
+import { Logo } from '@/components/landing/logo';
+import { AnimatedGradientBackground } from '@/components/landing/animated-gradient-background';
 
 export default function Welcome() {
-  const [userOS, setUserOS] = useState<string>("your OS");
-  const [downloadUrl, setDownloadUrl] = useState<string>("#");
+  const [userOS, setUserOS] = useState<string>('your OS');
+  const [downloadUrl, setDownloadUrl] = useState<string>('#');
   const [isMobile, setIsMobile] = useState(false);
   const [isOsSupported, setIsOsSupported] = useState(true);
 
@@ -24,18 +24,18 @@ export default function Welcome() {
       );
     setIsMobile(mobileCheck);
 
-    if (userAgent.includes("mac")) {
-      setUserOS("macOS");
+    if (userAgent.includes('mac')) {
+      setUserOS('macOS');
       setDownloadUrl(
-        "https://ide.clodex.xyz/downloads/clodex-agentic-ide-nightly-1.16.0-macos-arm64.dmg",
+        'https://ide.clodex.xyz/downloads/clodex-1.16.0-arm64.dmg',
       );
-    } else if (userAgent.includes("win")) {
-      setUserOS("Windows");
-      setDownloadUrl("https://dl.clodex.io/download/clodex/release/win/x64");
-    } else if (userAgent.includes("linux")) {
-      setUserOS("Linux");
+    } else if (userAgent.includes('win')) {
+      setUserOS('Windows');
+      setDownloadUrl('https://dl.clodex.io/download/clodex/release/win/x64');
+    } else if (userAgent.includes('linux')) {
+      setUserOS('Linux');
       setDownloadUrl(
-        "https://dl.clodex.io/download/clodex/release/linux/deb/x86_64",
+        'https://dl.clodex.io/download/clodex/release/linux/deb/x86_64',
       );
     } else {
       setIsOsSupported(false);
@@ -84,7 +84,7 @@ export default function Welcome() {
                     target="_blank"
                     rel="noopener noreferrer"
                     className={cn(
-                      buttonVariants({ variant: "primary", size: "lg" }),
+                      buttonVariants({ variant: 'primary', size: 'lg' }),
                     )}
                   >
                     Download for {userOS}
@@ -115,10 +115,10 @@ export default function Welcome() {
                 onClick={() => {
                   window.parent.postMessage(
                     {
-                      command: "openDiscord",
-                      url: "https://discord.gg/gkdGsDYaKA",
+                      command: 'openDiscord',
+                      url: 'https://discord.gg/gkdGsDYaKA',
                     },
-                    "*",
+                    '*',
                   );
                 }}
                 className="inline-flex cursor-pointer items-center gap-2 border-none bg-transparent font-medium text-primary-foreground transition-colors hover:text-hover-derived"

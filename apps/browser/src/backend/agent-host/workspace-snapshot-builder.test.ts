@@ -216,7 +216,6 @@ describe('local WorkspaceSnapshot builder', () => {
 
   it.each([
     '.clodex',
-    '.stagewise',
   ])('rejects untracked protected paths under %s', async (protectedDirectory) => {
     const root = await createRepository();
     await mkdir(path.join(root, protectedDirectory), { recursive: true });

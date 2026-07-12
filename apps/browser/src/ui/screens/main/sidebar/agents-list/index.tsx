@@ -1648,7 +1648,7 @@ export function AgentsList() {
     }),
   );
 
-  const workspaceDndSensors = useSensors(
+  const _workspaceDndSensors = useSensors(
     useSensor(PinnedPointerSensor, {
       activationConstraint: { distance: 6 },
     }),
@@ -1872,7 +1872,7 @@ export function AgentsList() {
     string | null
   >(null);
 
-  const activeWorkspaceDragRepo = useMemo(
+  const _activeWorkspaceDragRepo = useMemo(
     () =>
       activeWorkspaceDragKey
         ? (workspaceGroups.find(
@@ -1882,11 +1882,14 @@ export function AgentsList() {
     [activeWorkspaceDragKey, workspaceGroups],
   );
 
-  const handleWorkspaceDragStart = useCallback(({ active }: DragStartEvent) => {
-    setActiveWorkspaceDragKey(String(active.id));
-  }, []);
+  const _handleWorkspaceDragStart = useCallback(
+    ({ active }: DragStartEvent) => {
+      setActiveWorkspaceDragKey(String(active.id));
+    },
+    [],
+  );
 
-  const handleWorkspaceDragEnd = useCallback(
+  const _handleWorkspaceDragEnd = useCallback(
     ({ active, over }: DragEndEvent) => {
       setActiveWorkspaceDragKey(null);
       if (!over || active.id === over.id) return;
@@ -1901,7 +1904,7 @@ export function AgentsList() {
     [handleReorderWorkspaceGroups, workspaceGroups],
   );
 
-  const handleWorkspaceDragCancel = useCallback(() => {
+  const _handleWorkspaceDragCancel = useCallback(() => {
     setActiveWorkspaceDragKey(null);
   }, []);
 
@@ -2020,7 +2023,7 @@ export function AgentsList() {
     workspaceGroups,
   ]);
 
-  const findWorkspaceGroupKeysForAgent = useCallback(
+  const _findWorkspaceGroupKeysForAgent = useCallback(
     (agentId: string): string[] => {
       if (visibleNoWorkspaceAgents.some((agent) => agent.id === agentId)) {
         return [NO_WORKSPACE_GROUP_KEY];
@@ -2335,7 +2338,7 @@ export function AgentsList() {
     ],
   );
 
-  const renderNoWorkspaceSection = useCallback(() => {
+  const _renderNoWorkspaceSection = useCallback(() => {
     if (visibleNoWorkspaceAgents.length === 0) return null;
 
     const containsOpenAgent = visibleNoWorkspaceAgents.some(
@@ -2450,7 +2453,7 @@ export function AgentsList() {
     ],
   );
 
-  const renderWorkspaceGroup = useCallback(
+  const _renderWorkspaceGroup = useCallback(
     (repo: WorkspaceRepoGroup, sortable = false) => {
       const hasContent =
         repo.directAgents.length > 0 ||
@@ -2810,24 +2813,22 @@ export function AgentsList() {
           </DndContext>
         )}
 
-        {agentListGroupingMode === 'workspace' ? (
-          <>{projectSessionGroupsWithOrphans.map(renderProjectGroup)}</>
-        ) : (
-          groupedItems.map((item) => {
-            if (item.type === 'header') {
-              return (
-                <div
-                  key={`h-${item.label}`}
-                  className="shrink-0 px-1.5 pt-3 pb-1 font-normal text-sidebar-foreground text-xs"
-                >
-                  {item.label}
-                </div>
-              );
-            }
+        {agentListGroupingMode === 'workspace'
+          ? projectSessionGroupsWithOrphans.map(renderProjectGroup)
+          : groupedItems.map((item) => {
+              if (item.type === 'header') {
+                return (
+                  <div
+                    key={`h-${item.label}`}
+                    className="shrink-0 px-1.5 pt-3 pb-1 font-normal text-sidebar-foreground text-xs"
+                  >
+                    {item.label}
+                  </div>
+                );
+              }
 
-            return renderAgentCard(item.agent, item.agent.id);
-          })
-        )}
+              return renderAgentCard(item.agent, item.agent.id);
+            })}
         {showCreateSkeleton && <AgentCardSkeleton />}
 
         {/* "Show more" button */}
