@@ -79,7 +79,10 @@ export type ConnectedCodingPlanId = z.infer<typeof connectedCodingPlanIdSchema>;
 export const providerConfigSchema = z.object({
   /** Which endpoint to route requests to */
   mode: providerEndpointModeSchema.default('clodex'),
-  /** Base64-encoded safeStorage-encrypted API key (encrypted on backend, opaque to UI) */
+  /**
+   * One-release compatibility field for providers not yet migrated to the
+   * credential store. OpenAI and Anthropic use providerProfiles.apiKeyReference.
+   */
   encryptedApiKey: z.string().optional(),
   /** ID of a custom endpoint to use (only when mode is 'custom') */
   customProviderId: z.string().optional(),

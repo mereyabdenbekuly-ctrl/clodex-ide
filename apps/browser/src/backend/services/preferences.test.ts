@@ -273,6 +273,69 @@ describe('PreferencesService provider profile migration', () => {
     expect(service.get().defaultProviderProfileId).toBe('official-openai');
   });
 
+  it.each([
+    'openai',
+    'anthropic',
+  ] as const)('connects and disconnects official %s through the encrypted credential store', async (provider) => {
+    const service = await createServiceWithPreferences();
+    const stored = new Map<string, string>();
+    const credentials = {
+      setProviderApiKey: vi.fn(async (reference: string, value: string) => {
+        stored.set(reference, value);
+      }),
+      getProviderApiKey: vi.fn((reference: string) => stored.get(reference)),
+      hasProviderApiKey: vi.fn((reference: string) => stored.has(reference)),
+      deleteProviderApiKey: vi.fn(async (reference: string) => {
+        stored.delete(reference);
+      }),
+    };
+    await service.migrateProviderProfiles(credentials as any);
+    const secret = `release-${provider}-credential`;
+    validationMock.validateApiKeys.mockResolvedValueOnce({
+      anthropic: provider === 'anthropic' ? { success: true } : null,
+      openai: provider === 'openai' ? { success: true } : null,
+      google: null,
+      moonshotai: null,
+      alibaba: null,
+      deepseek: null,
+      'z-ai': null,
+      minimax: null,
+      'xiaomi-mimo': null,
+      mistral: null,
+    });
+
+    await expect(service.connectProvider(provider, secret)).resolves.toEqual({
+      success: true,
+    });
+
+    const reference = `provider.official-${provider}`;
+    expect(credentials.setProviderApiKey).toHaveBeenCalledWith(
+      reference,
+      secret,
+    );
+    expect(service.get().providerConfigs[provider]).toMatchObject({
+      mode: 'official',
+      encryptedApiKey: undefined,
+    });
+    expect(service.get().providerProfiles).toContainEqual(
+      expect.objectContaining({
+        id: `official-${provider}`,
+        providerType: provider,
+        apiKeyReference: reference,
+        enabled: true,
+      }),
+    );
+    expect(JSON.stringify(service.get())).not.toContain(secret);
+    expect(JSON.stringify(logger.debug.mock.calls)).not.toContain(secret);
+
+    await service.disconnectProvider(provider);
+    expect(credentials.deleteProviderApiKey).toHaveBeenCalledWith(reference);
+    expect(service.get().providerProfiles).not.toContainEqual(
+      expect.objectContaining({ id: `official-${provider}` }),
+    );
+    expect(stored.has(reference)).toBe(false);
+  });
+
   it('does not create a Clodex profile for a fresh unconfigured user', async () => {
     const service = await createServiceWithPreferences();
     const credentials = {

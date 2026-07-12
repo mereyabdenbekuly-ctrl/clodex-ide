@@ -22,6 +22,10 @@ import type {
   ModelProvider,
   TelemetryLevel,
 } from '@shared/karton-contracts/ui/shared-types';
+import {
+  isProviderApiKeyConnected,
+  supportsProviderAuthMethod,
+} from '@shared/provider-auth';
 
 type AuthMode = 'clodex' | 'api-keys' | 'local';
 type CompletionAuthMode = 'clodex' | 'api-keys' | 'local';
@@ -35,7 +39,7 @@ type ProviderKey =
   | 'deepseek'
   | 'z-ai';
 
-const API_KEY_PROVIDERS: ProviderKey[] = [
+const PROVIDERS: ProviderKey[] = [
   'anthropic',
   'openai',
   'google',
@@ -44,6 +48,9 @@ const API_KEY_PROVIDERS: ProviderKey[] = [
   'deepseek',
   'z-ai',
 ];
+const API_KEY_PROVIDERS = PROVIDERS.filter((provider) =>
+  supportsProviderAuthMethod(provider, 'api-key'),
+);
 
 type ConnectResult = { success: true } | { success: false; error: string };
 
@@ -137,11 +144,10 @@ export function StepAuth({
   });
 
   const hasConnectedApiKey = useMemo(() => {
-    const cfgs = preferences.providerConfigs ?? {};
-    return API_KEY_PROVIDERS.some(
-      (p) => cfgs[p]?.mode === 'official' && !!cfgs[p]?.encryptedApiKey,
+    return API_KEY_PROVIDERS.some((provider) =>
+      isProviderApiKeyConnected(preferences, provider),
     );
-  }, [preferences.providerConfigs]);
+  }, [preferences.providerConfigs, preferences.providerProfiles]);
 
   const isValid =
     phase === 'authentication-validated' ||
@@ -367,9 +373,7 @@ export function StepAuth({
               label="Anthropic"
               placeholder="sk-ant-api01..."
               autoFocus
-              config={
-                preferences.providerConfigs?.anthropic ?? { mode: 'clodex' }
-              }
+              isConnected={isProviderApiKeyConnected(preferences, 'anthropic')}
               onConnect={handleConnectSingleKey}
               onDisconnect={handleDisconnectApiKey}
               apiKeyUrl={API_KEY_URLS.anthropic}
@@ -384,7 +388,7 @@ export function StepAuth({
               provider="openai"
               label="OpenAI"
               placeholder="sk-proj-LW..."
-              config={preferences.providerConfigs?.openai ?? { mode: 'clodex' }}
+              isConnected={isProviderApiKeyConnected(preferences, 'openai')}
               onConnect={handleConnectSingleKey}
               onDisconnect={handleDisconnectApiKey}
               apiKeyUrl={API_KEY_URLS.openai}
@@ -399,7 +403,7 @@ export function StepAuth({
               provider="google"
               label="Google"
               placeholder="AIykSyLeD..."
-              config={preferences.providerConfigs?.google ?? { mode: 'clodex' }}
+              isConnected={isProviderApiKeyConnected(preferences, 'google')}
               onConnect={handleConnectSingleKey}
               onDisconnect={handleDisconnectApiKey}
               apiKeyUrl={API_KEY_URLS.google}
@@ -416,11 +420,10 @@ export function StepAuth({
                   provider="moonshotai"
                   label="Moonshot AI"
                   placeholder="sk-..."
-                  config={
-                    preferences.providerConfigs?.moonshotai ?? {
-                      mode: 'clodex',
-                    }
-                  }
+                  isConnected={isProviderApiKeyConnected(
+                    preferences,
+                    'moonshotai',
+                  )}
                   onConnect={handleConnectSingleKey}
                   onDisconnect={handleDisconnectApiKey}
                   apiKeyUrl={API_KEY_URLS.moonshotai}
@@ -435,11 +438,10 @@ export function StepAuth({
                   provider="alibaba"
                   label="Alibaba Cloud"
                   placeholder="sk-..."
-                  config={
-                    preferences.providerConfigs?.alibaba ?? {
-                      mode: 'clodex',
-                    }
-                  }
+                  isConnected={isProviderApiKeyConnected(
+                    preferences,
+                    'alibaba',
+                  )}
                   onConnect={handleConnectSingleKey}
                   onDisconnect={handleDisconnectApiKey}
                   apiKeyUrl={API_KEY_URLS.alibaba}
@@ -454,11 +456,10 @@ export function StepAuth({
                   provider="deepseek"
                   label="DeepSeek"
                   placeholder="sk-..."
-                  config={
-                    preferences.providerConfigs?.deepseek ?? {
-                      mode: 'clodex',
-                    }
-                  }
+                  isConnected={isProviderApiKeyConnected(
+                    preferences,
+                    'deepseek',
+                  )}
                   onConnect={handleConnectSingleKey}
                   onDisconnect={handleDisconnectApiKey}
                   apiKeyUrl={API_KEY_URLS.deepseek}
@@ -473,11 +474,7 @@ export function StepAuth({
                   provider="z-ai"
                   label="Z.ai"
                   placeholder="sk-..."
-                  config={
-                    preferences.providerConfigs?.['z-ai'] ?? {
-                      mode: 'clodex',
-                    }
-                  }
+                  isConnected={isProviderApiKeyConnected(preferences, 'z-ai')}
                   onConnect={handleConnectSingleKey}
                   onDisconnect={handleDisconnectApiKey}
                   apiKeyUrl={API_KEY_URLS['z-ai']}
@@ -550,7 +547,7 @@ function ApiKeyRow({
   label,
   placeholder,
   autoFocus,
-  config,
+  isConnected,
   onConnect,
   onDisconnect,
   apiKeyUrl,
@@ -561,17 +558,13 @@ function ApiKeyRow({
   label: string;
   placeholder: string;
   autoFocus?: boolean;
-  config: {
-    mode: 'clodex' | 'official' | 'custom';
-    encryptedApiKey?: string | null;
-  };
+  isConnected: boolean;
   onConnect: (provider: ProviderKey, apiKey: string) => Promise<ConnectResult>;
   onDisconnect: (provider: ProviderKey) => Promise<void>;
   apiKeyUrl: string;
   onGetApiKey: (url: string) => void;
   onFocusProvider?: (provider: ProviderKey) => void;
 }) {
-  const isConnected = !!config.encryptedApiKey && config.mode === 'official';
   const [localInput, setLocalInput] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);

@@ -50,22 +50,27 @@ describe('CredentialsService custom MCP credentials', () => {
   });
 
   it('stores provider API keys outside preferences-compatible state', async () => {
-    const service = await CredentialsService.create(makeLogger());
-    await service.setProviderApiKey('provider.openai-main', 'sk-secret');
+    const logger = makeLogger();
+    const service = await CredentialsService.create(logger);
+    const secret = 'release-provider-secret';
+    await service.setProviderApiKey('provider.openai-main', secret);
 
     expect(service.hasProviderApiKey('provider.openai-main')).toBe(true);
-    expect(service.getProviderApiKey('provider.openai-main')).toBe('sk-secret');
+    expect(service.getProviderApiKey('provider.openai-main')).toBe(secret);
     expect(writePersistedData).toHaveBeenCalledWith(
       'provider-api-keys',
       expect.anything(),
       {
-        'provider.openai-main': { apiKey: 'sk-secret' },
+        'provider.openai-main': { apiKey: secret },
       },
       expect.objectContaining({
         encrypt: true,
         requireEncryption: true,
       }),
     );
+    expect(
+      JSON.stringify((logger.debug as ReturnType<typeof vi.fn>).mock.calls),
+    ).not.toContain(secret);
 
     await service.deleteProviderApiKey('provider.openai-main');
     expect(service.getProviderApiKey('provider.openai-main')).toBeNull();

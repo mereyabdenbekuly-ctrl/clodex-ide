@@ -1156,8 +1156,9 @@ export class PreferencesService extends DisposableService {
   }
 
   /**
-   * Set an API key for a provider, encrypted via Electron's safeStorage.
-   * The key is encrypted, base64-encoded, and stored in preferences.
+   * Store an API key securely. OpenAI and Anthropic use the dedicated
+   * encrypted credential store referenced by provider profiles; providers on
+   * the one-release compatibility path use a safeStorage-encrypted preference.
    */
   public async setProviderApiKey(
     provider: ModelProvider,

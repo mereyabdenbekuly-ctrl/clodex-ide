@@ -21,6 +21,10 @@ import {
   PROVIDER_DISPLAY_INFO,
   PROVIDER_OFFICIAL_URLS,
 } from '@shared/karton-contracts/ui/shared-types';
+import {
+  getProviderConnectionOptions,
+  isProviderApiKeyConnected,
+} from '@shared/provider-auth';
 import type {
   BuiltInModel,
   SelectableBuiltInModel,
@@ -157,6 +161,10 @@ function ProviderConfigCard({ provider }: { provider: ModelProvider }) {
   const officialUrl = PROVIDER_OFFICIAL_URLS[provider];
   const customEndpoints =
     preferences?.customEndpoints ?? EMPTY_CUSTOM_ENDPOINTS;
+  const connectionOptions = getProviderConnectionOptions(
+    provider,
+    displayInfo.name,
+  );
 
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [isSavingKey, setIsSavingKey] = useState(false);
@@ -164,7 +172,7 @@ function ProviderConfigCard({ provider }: { provider: ModelProvider }) {
   const [validated, setValidated] = useState<
     null | { success: true } | { success: false; error: string }
   >(null);
-  const hasKey = !!config.encryptedApiKey;
+  const hasKey = isProviderApiKeyConnected(preferences, provider);
 
   useEffect(() => {
     if (validated?.success) {
@@ -252,20 +260,12 @@ function ProviderConfigCard({ provider }: { provider: ModelProvider }) {
       </div>
 
       <RadioGroup value={config.mode} onValueChange={handleModeChange}>
-        <RadioLabel>
-          <Radio value="clodex" />
-          <span>Use my Clodex account</span>
-        </RadioLabel>
-
-        <RadioLabel>
-          <Radio value="official" />
-          <span>Use own API key with {displayInfo.name} API</span>
-        </RadioLabel>
-
-        <RadioLabel>
-          <Radio value="custom" />
-          <span>Use custom provider</span>
-        </RadioLabel>
+        {connectionOptions.map((option) => (
+          <RadioLabel key={option.value}>
+            <Radio value={option.value} />
+            <span>{option.label}</span>
+          </RadioLabel>
+        ))}
       </RadioGroup>
 
       {/* Official mode: API key fields */}
