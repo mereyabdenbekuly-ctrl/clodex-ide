@@ -4,10 +4,4 @@ import McpRuntime from './mcp-runtime.webp';
 import PluginLibrary from './plugin-library.webp';
 import Workspace from './workspace.webp';
 
-export {
-  AgentOs,
-  Automations,
-  McpRuntime,
-  PluginLibrary,
-  Workspace,
-};
+export { AgentOs, Automations, McpRuntime, PluginLibrary, Workspace };

@@ -161,7 +161,8 @@ function createFetchMock(options?: {
           patch: '@@ -1 +1 @@\n-old\n+new',
           blob_url:
             'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/blob/head/src/review.ts',
-          raw_url: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/raw/head/src/review.ts',
+          raw_url:
+            'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/raw/head/src/review.ts',
         },
       ]);
     }
@@ -226,7 +227,7 @@ function reviewInput(
   overrides?: Partial<HostedPullRequestSubmitReviewInput>,
 ): HostedPullRequestSubmitReviewInput {
   return {
-    repository: { owner: 'mereyabdenbekuly-ctrl', name: 'clodex' },
+    repository: { owner: 'mereyabdenbekuly-ctrl', name: 'clodex-ide' },
     number: 42,
     commitId: 'head-sha',
     event: 'COMMENT',
@@ -247,7 +248,7 @@ function mergeInput(
   overrides?: Partial<HostedPullRequestMergeInput>,
 ): HostedPullRequestMergeInput {
   return {
-    repository: { owner: 'mereyabdenbekuly-ctrl', name: 'clodex' },
+    repository: { owner: 'mereyabdenbekuly-ctrl', name: 'clodex-ide' },
     number: 42,
     expectedHeadSha: 'head-sha',
     expectedBaseSha: 'base-sha',
@@ -267,7 +268,11 @@ describe('parseGitHubPullRequestUrl', () => {
       parseGitHubPullRequestUrl(
         'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/pull/42/files',
       ),
-    ).toEqual({ owner: 'mereyabdenbekuly-ctrl', repo: 'clodex', number: 42 });
+    ).toEqual({
+      owner: 'mereyabdenbekuly-ctrl',
+      repo: 'clodex-ide',
+      number: 42,
+    });
   });
 
   it('rejects non-GitHub and malformed URLs', () => {
@@ -338,7 +343,9 @@ describe('HostedPullRequestService', () => {
     fetchImpl.mockImplementation(async (input: string | URL | Request) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith('/pulls') && url.searchParams.has('head')) {
-        expect(url.pathname).toBe('/repos/mereyabdenbekuly-ctrl/clodex-ide/pulls');
+        expect(url.pathname).toBe(
+          '/repos/mereyabdenbekuly-ctrl/clodex-ide/pulls',
+        );
         expect(url.searchParams.get('head')).toBe('octocat:feature/review');
         return githubResponse([{ number: 42, state: 'open' }]);
       }
@@ -359,7 +366,9 @@ describe('HostedPullRequestService', () => {
     expect(result.status).toBe('ready');
     if (result.status !== 'ready') return;
     expect(result.pullRequest.detectedFromWorkspace).toBe('/repo');
-    expect(result.pullRequest.repository.fullName).toBe('mereyabdenbekuly-ctrl/clodex-ide');
+    expect(result.pullRequest.repository.fullName).toBe(
+      'mereyabdenbekuly-ctrl/clodex-ide',
+    );
   });
 
   it('returns an authentication state for an inaccessible private PR', async () => {
