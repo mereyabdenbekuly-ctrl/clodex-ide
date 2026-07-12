@@ -642,6 +642,25 @@ async function main() {
     );
   }
 
+  const repositoryPackageJson = JSON.parse(
+    readFileSync(path.join(repositoryDirectory, 'package.json'), 'utf8'),
+  );
+  const packageManagerMatch = /^pnpm@(.+)$/.exec(
+    repositoryPackageJson.packageManager ?? '',
+  );
+  if (!packageManagerMatch) {
+    throw new Error('Root package.json must pin pnpm via packageManager');
+  }
+  const pinnedPnpmVersion = packageManagerMatch[1];
+  const actualPnpmVersion = run('pnpm', ['--version'], {
+    cwd: repositoryDirectory,
+  }).stdout.trim();
+  if (actualPnpmVersion !== pinnedPnpmVersion) {
+    throw new Error(
+      `Packaging package-manager mismatch: expected pnpm ${pinnedPnpmVersion}, got ${actualPnpmVersion}`,
+    );
+  }
+
   const packageJsonPath = path.join(browserDirectory, 'package.json');
   const packageJsonSource = readFileSync(packageJsonPath, 'utf8');
   const packageJson = JSON.parse(packageJsonSource);
@@ -699,10 +718,15 @@ async function main() {
             `${JSON.stringify({ ...packageJson, version }, null, 2)}\n`,
           );
         }
-        run('pnpm', ['make', `--arch=${options.arch}`], {
-          env: buildEnvironment,
-          inherit: true,
-        });
+        run(
+          'pnpm',
+          ['--dir', 'apps/browser', 'make', `--arch=${options.arch}`],
+          {
+            cwd: repositoryDirectory,
+            env: buildEnvironment,
+            inherit: true,
+          },
+        );
       } finally {
         if (packageVersionOverride) {
           writeFileSync(packageJsonPath, packageJsonSource);
@@ -945,7 +969,7 @@ async function main() {
         arch: options.arch,
         channel: options.channel,
         nodeVersion: actualNodeVersion,
-        pnpmVersion: run('pnpm', ['--version']).stdout.trim(),
+        pnpmVersion: actualPnpmVersion,
         updateServerConfigured,
         version,
       },
