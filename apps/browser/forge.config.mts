@@ -483,6 +483,7 @@ const config: ForgeConfig = {
             optionsForFile: (_filePath) => {
               return {
                 entitlements: 'etc/macos/entitlements.plist',
+                hardenedRuntime: true,
               };
             },
             identity: process.env.APPLE_SIGNING_IDENTITY!,

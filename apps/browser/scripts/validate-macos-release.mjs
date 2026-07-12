@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto';
 import {
+  closeSync,
   createReadStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   readlinkSync,
   rmSync,
@@ -20,6 +23,34 @@ import { fileURLToPath } from 'node:url';
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const browserDirectory = path.resolve(scriptDirectory, '..');
 const repositoryDirectory = path.resolve(browserDirectory, '../..');
+const electronFuseSentinel = Buffer.from(
+  'dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX',
+  'ascii',
+);
+const fuseStateNames = new Map([
+  [0x30, 'disabled'],
+  [0x31, 'enabled'],
+  [0x72, 'removed'],
+  [0x90, 'inherit'],
+]);
+const fuseNames = [
+  'RunAsNode',
+  'EnableCookieEncryption',
+  'EnableNodeOptionsEnvironmentVariable',
+  'EnableNodeCliInspectArguments',
+  'EnableEmbeddedAsarIntegrityValidation',
+  'OnlyLoadAppFromAsar',
+  'LoadBrowserProcessSpecificV8Snapshot',
+  'GrantFileProtocolExtraPrivileges',
+];
+const requiredFuseStates = new Map([
+  ['RunAsNode', 'disabled'],
+  ['EnableCookieEncryption', 'enabled'],
+  ['EnableNodeOptionsEnvironmentVariable', 'disabled'],
+  ['EnableNodeCliInspectArguments', 'disabled'],
+  ['EnableEmbeddedAsarIntegrityValidation', 'enabled'],
+  ['OnlyLoadAppFromAsar', 'enabled'],
+]);
 
 const channelConfig = {
   dev: {
@@ -142,10 +173,53 @@ function readPlistValue(plistPath, key) {
   ]).stdout.trim();
 }
 
+function readPlistJson(plistPath, key) {
+  const args = key
+    ? ['-extract', key, 'json', '-o', '-', plistPath]
+    : ['-convert', 'json', '-o', '-', plistPath];
+  return JSON.parse(run('/usr/bin/plutil', args).stdout);
+}
+
 async function sha256(filePath) {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(filePath)) hash.update(chunk);
   return hash.digest('hex');
+}
+
+function readAsarHeaderString(asarPath) {
+  const descriptor = openSync(asarPath, 'r');
+  let header;
+  try {
+    const sizeBuffer = Buffer.alloc(8);
+    if (readSync(descriptor, sizeBuffer, 0, sizeBuffer.length, 0) !== 8) {
+      throw new Error('Packaged ASAR is too small to contain a valid header');
+    }
+
+    const headerSize = sizeBuffer.readUInt32LE(4);
+    if (headerSize < 8 || headerSize > statSync(asarPath).size - 8) {
+      throw new Error(
+        `Packaged ASAR has an invalid header size: ${headerSize}`,
+      );
+    }
+
+    header = Buffer.alloc(headerSize);
+    if (readSync(descriptor, header, 0, headerSize, 8) !== headerSize) {
+      throw new Error('Packaged ASAR header could not be read completely');
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+
+  const headerStringLength = header.readInt32LE(4);
+  const headerStringOffset = 8;
+  const headerStringEnd = headerStringOffset + headerStringLength;
+  if (headerStringLength < 0 || headerStringEnd > header.length) {
+    throw new Error(
+      `Packaged ASAR has an invalid header string length: ${headerStringLength}`,
+    );
+  }
+
+  return header.subarray(headerStringOffset, headerStringEnd).toString('utf8');
 }
 
 function inspectSignature(appPath) {
@@ -163,13 +237,172 @@ function inspectSignature(appPath) {
   const value = (name) =>
     output.match(new RegExp(`^${name}=(.+)$`, 'm'))?.[1]?.trim() ?? null;
 
+  const codeDirectory =
+    output.match(/^CodeDirectory\s+(.+)$/m)?.[1]?.trim() ??
+    value('CodeDirectory');
   return {
+    codeDirectory,
+    hardenedRuntime: /\bruntime\b/.test(codeDirectory ?? ''),
     identifier: value('Identifier'),
     isAdhoc:
       value('Signature') === 'adhoc' ||
       (value('CodeDirectory')?.includes('(adhoc)') ?? false),
     signature: value('Signature'),
     teamIdentifier: value('TeamIdentifier'),
+  };
+}
+
+function assertSignatureSecurity(signature, allowAdhoc, label) {
+  if (allowAdhoc && signature.isAdhoc) return;
+  if (signature.isAdhoc) {
+    throw new Error(`${label} has an ad-hoc signature`);
+  }
+  if (!signature.hardenedRuntime) {
+    throw new Error(`${label} is not signed with hardened runtime`);
+  }
+  if (!signature.teamIdentifier || signature.teamIdentifier === 'not set') {
+    throw new Error(`${label} does not have a signing team identifier`);
+  }
+}
+
+function inspectElectronFuses(appPath) {
+  const fuseBinaryPath = path.join(
+    appPath,
+    'Contents',
+    'Frameworks',
+    'Electron Framework.framework',
+    'Electron Framework',
+  );
+  if (!existsSync(fuseBinaryPath)) {
+    throw new Error(`Electron fuse binary not found: ${fuseBinaryPath}`);
+  }
+  const executable = readFileSync(fuseBinaryPath);
+  const wires = [];
+  let searchOffset = 0;
+
+  while (searchOffset < executable.length) {
+    const sentinelOffset = executable.indexOf(
+      electronFuseSentinel,
+      searchOffset,
+    );
+    if (sentinelOffset === -1) break;
+
+    const wireOffset = sentinelOffset + electronFuseSentinel.length;
+    const version = executable[wireOffset];
+    const length = executable[wireOffset + 1];
+    if (version === undefined || length === undefined) {
+      throw new Error('Electron fuse wire is truncated');
+    }
+
+    const states = {};
+    for (let index = 0; index < length; index += 1) {
+      const rawState = executable[wireOffset + 2 + index];
+      const name = fuseNames[index] ?? `UnknownFuse${index}`;
+      const state = fuseStateNames.get(rawState);
+      if (!state) {
+        throw new Error(
+          `Electron fuse ${name} has an unknown state byte: ${rawState}`,
+        );
+      }
+      states[name] = state;
+    }
+
+    for (const [name, expectedState] of requiredFuseStates) {
+      if (states[name] !== expectedState) {
+        throw new Error(
+          `Electron fuse ${name} is ${states[name] ?? 'missing'} (expected ${expectedState})`,
+        );
+      }
+    }
+
+    wires.push({ length, states, version });
+    searchOffset = sentinelOffset + electronFuseSentinel.length;
+  }
+
+  if (wires.length === 0) {
+    throw new Error('Electron fuse sentinel was not found in the executable');
+  }
+
+  return {
+    binaryPath: path.relative(appPath, fuseBinaryPath),
+    required: Object.fromEntries(requiredFuseStates),
+    wires,
+  };
+}
+
+async function inspectAsarIntegrity(appPath, infoPlistPath) {
+  const resourcesPath = path.join(appPath, 'Contents', 'Resources');
+  const asarPath = path.join(resourcesPath, 'app.asar');
+  const unpackedAppPath = path.join(resourcesPath, 'app');
+  if (!existsSync(asarPath) || !statSync(asarPath).isFile()) {
+    throw new Error(`Packaged ASAR not found: ${asarPath}`);
+  }
+  if (existsSync(unpackedAppPath)) {
+    throw new Error(
+      `Unpacked application source is present: ${unpackedAppPath}`,
+    );
+  }
+
+  const integrity = readPlistJson(infoPlistPath, 'ElectronAsarIntegrity');
+  const entry = integrity['Resources/app.asar'];
+  if (!entry || entry.algorithm !== 'SHA256') {
+    throw new Error(
+      'Info.plist does not contain SHA256 ElectronAsarIntegrity for Resources/app.asar',
+    );
+  }
+  if (!/^[a-f0-9]{64}$/i.test(entry.hash ?? '')) {
+    throw new Error('ElectronAsarIntegrity contains an invalid SHA256 hash');
+  }
+
+  const headerString = readAsarHeaderString(asarPath);
+  const headerHash = createHash('sha256').update(headerString).digest('hex');
+  if (headerHash.toLowerCase() !== entry.hash.toLowerCase()) {
+    throw new Error(
+      `ASAR header integrity hash mismatch: ${headerHash} (expected ${entry.hash})`,
+    );
+  }
+
+  return {
+    algorithm: entry.algorithm,
+    bytes: statSync(asarPath).size,
+    fileSha256: await sha256(asarPath),
+    headerHash,
+    unpackedSourceAbsent: true,
+  };
+}
+
+function inspectSignedEntitlements(appPath, temporaryRoot) {
+  const extractedPath = path.join(temporaryRoot, 'signed-entitlements.plist');
+  const result = run('/usr/bin/codesign', [
+    '--display',
+    '--entitlements',
+    ':-',
+    appPath,
+  ]);
+  if (!result.stdout.trim()) {
+    throw new Error('Signed application does not expose entitlements');
+  }
+  writeFileSync(extractedPath, result.stdout);
+
+  const configuredPath = path.join(
+    browserDirectory,
+    'etc',
+    'macos',
+    'entitlements.plist',
+  );
+  const configured = readPlistJson(configuredPath);
+  const signed = readPlistJson(extractedPath);
+  for (const [name, expectedValue] of Object.entries(configured)) {
+    if (signed[name] !== expectedValue) {
+      throw new Error(
+        `Signed entitlement ${name} is ${String(signed[name])} (expected ${String(expectedValue)})`,
+      );
+    }
+  }
+
+  return {
+    configuredKeys: Object.keys(configured).sort(),
+    signedKeys: Object.keys(signed).sort(),
   };
 }
 
@@ -278,7 +511,17 @@ async function runSmokeTest(executablePath, profilePath, logPath) {
   child.stdout.on('data', (chunk) => output.push(chunk));
   child.stderr.on('data', (chunk) => output.push(chunk));
 
-  const exit = await waitForProcess(child, 120_000);
+  let exit;
+  try {
+    exit = await waitForProcess(child, 120_000);
+  } catch (error) {
+    const text = Buffer.concat(output).toString('utf8');
+    writeFileSync(logPath, text);
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}; output saved to ${logPath}`,
+      { cause: error },
+    );
+  }
   const text = Buffer.concat(output).toString('utf8');
   writeFileSync(logPath, text);
   const marker = '[smoke-test] App ready — all modules loaded successfully.';
@@ -470,9 +713,15 @@ async function main() {
 
     printStep('Verifying packaged application metadata and signature');
     const infoPlistPath = path.join(appPath, 'Contents', 'Info.plist');
+    const packagedExecutablePath = path.join(
+      appPath,
+      'Contents',
+      'MacOS',
+      config.baseName,
+    );
     const metadata = {
       architecture: run('/usr/bin/file', [
-        path.join(appPath, 'Contents', 'MacOS', config.baseName),
+        packagedExecutablePath,
       ]).stdout.trim(),
       bundleIdentifier: readPlistValue(infoPlistPath, 'CFBundleIdentifier'),
       displayName: readPlistValue(infoPlistPath, 'CFBundleDisplayName'),
@@ -501,9 +750,19 @@ async function main() {
     }
 
     const packageSignature = inspectSignature(appPath);
-    if (!options.allowAdhoc && packageSignature.isAdhoc) {
-      throw new Error('Distributable build has an ad-hoc signature');
-    }
+    assertSignatureSecurity(
+      packageSignature,
+      options.allowAdhoc,
+      'Packaged application',
+    );
+
+    printStep('Verifying ASAR integrity, Electron fuses, and entitlements');
+    const asarIntegrity = await inspectAsarIntegrity(appPath, infoPlistPath);
+    const fuses = inspectElectronFuses(appPath);
+    const entitlements =
+      options.allowAdhoc && packageSignature.isAdhoc
+        ? { skipped: 'ad-hoc-local-build' }
+        : inspectSignedEntitlements(appPath, temporaryRoot);
 
     printStep('Verifying DMG checksum and ZIP integrity');
     run('/usr/bin/hdiutil', ['verify', dmgPath], { inherit: true });
@@ -560,6 +819,11 @@ async function main() {
         config.displayName,
       );
       mountedSignature = inspectSignature(mountedAppPath);
+      assertSignatureSecurity(
+        mountedSignature,
+        options.allowAdhoc,
+        'Mounted application',
+      );
       gatekeeper = assessGatekeeper(mountedAppPath);
       mountedStapler = validateStapler(mountedAppPath);
       if (!options.allowAdhoc && !gatekeeper.passed) {
@@ -584,6 +848,11 @@ async function main() {
     }
 
     const copiedSignature = inspectSignature(copiedAppPath);
+    assertSignatureSecurity(
+      copiedSignature,
+      options.allowAdhoc,
+      'Copied application',
+    );
     const copiedGatekeeper = assessGatekeeper(copiedAppPath);
     const copiedStapler = validateStapler(copiedAppPath);
     if (!options.allowAdhoc && !copiedGatekeeper.passed) {
@@ -677,6 +946,12 @@ async function main() {
         dmgVerified: true,
         smoke,
         zipVerified: true,
+      },
+      security: {
+        asarIntegrity,
+        entitlements,
+        fuses,
+        hardenedRuntimeRequired: !options.allowAdhoc,
       },
       artifacts,
     };
