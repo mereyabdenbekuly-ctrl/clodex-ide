@@ -1,0 +1,39 @@
+import type { MessagePortProxy } from '@clodex/karton/client';
+
+// We simply use global variable shere in order to avoid any unnecessary overhead. We're in an isolated context anyway.
+export declare global {
+  interface Window {
+    __CTX_SELECTION_UPDATE__:
+      | ((
+          element: Element,
+          type: 'hover' | 'selected',
+          active: boolean,
+        ) => void)
+      | undefined;
+    __CTX_EXTRACT_INFO__:
+      | ((element: Element, backendNodeId: number) => TrackedElement)
+      | undefined;
+    /**
+     * PagesAPI karton connection - only available on clodex://internal origin
+     * This is exposed via contextBridge and is only available when the page
+     * origin is "clodex://internal". The origin check is performed securely
+     * in the isolated world (preload script) and cannot be spoofed.
+     */
+    clodexPagesApi?:
+      | {
+          portProxy: MessagePortProxy;
+        }
+      | undefined;
+    /**
+     * Turnstile captcha proxy — only available on Clodex console origins
+     * (clodex.xyz / localhost:4000).
+     * Exposed via contextBridge; requests are relayed through the main
+     * process to the renderer UI where the Turnstile challenge succeeds.
+     */
+    __clodex_captcha?:
+      | {
+          requestTurnstileToken: () => Promise<string | null>;
+        }
+      | undefined;
+  }
+}

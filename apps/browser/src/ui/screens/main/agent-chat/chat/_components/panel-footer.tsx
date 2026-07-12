@@ -1,0 +1,1974 @@
+import posthog from 'posthog-js';
+import { StatusCard } from './footer-status-card';
+import type { SelectedElement } from '@shared/selected-elements';
+import { useMessageEditState } from '@ui/hooks/use-message-edit-state';
+import { MessageAttachmentsProvider } from '@ui/hooks/use-message-elements';
+import { useFileAttachments } from '@ui/hooks/use-file-attachments';
+import { useIsTruncated } from '@ui/hooks/use-is-truncated';
+import { useDragDrop } from '@ui/hooks/use-drag-drop';
+import { useElementSelectionWatcher } from '@ui/hooks/use-element-selection-watcher';
+import { cn, generateId, collectUserMessageMetadata } from '@ui/utils';
+import { HotkeyActions } from '@shared/hotkeys';
+import { COMMAND_CENTER_FOCUS_REQUESTED_EVENT } from '../../../_lib/command-center-focus-event';
+import { useCommandCenter } from '../../../command-center';
+import {
+  useCallback,
+  useMemo,
+  useState,
+  useEffect,
+  useRef,
+  memo,
+  type RefObject,
+} from 'react';
+import {
+  useKartonState,
+  useKartonProcedure,
+  useKartonConnected,
+  useKartonReconnectState,
+} from '@ui/hooks/use-karton';
+import { useHotKeyListener } from '@ui/hooks/use-hotkey-listener';
+import { useEventListener } from '@ui/hooks/use-event-listener';
+import { useTrack } from '@ui/hooks/use-track';
+import {
+  ChatInput,
+  ChatInputActions,
+  type ChatInputHandle,
+} from './chat-input';
+import {
+  WorkspaceSelect,
+  applyMountedWorkspaceActionDefault,
+  createDefaultWorkspaceActionConfig,
+  executeWorkspaceGitAction,
+  type WorkspaceActionConfig,
+} from './workspace-select';
+import { hydrateWorkspaceActionConfigWithDefaults } from './workspace-action-config-utils';
+import { applyWorkspaceGitActionPreferences } from './workspace-action-preferences';
+import {
+  getBranchSelectItems,
+  getBranchSelectItemsFromGit,
+  getCurrentBranchValue,
+  getDefaultBranchValue,
+  getDefaultSourceBranchValue,
+  getWorktreeSelectItems,
+  getWorktreeSelectItemsFromGit,
+} from './worktree-utils';
+import type { AttachmentType } from '@ui/screens/main/agent-chat/chat/_components/rich-text/attachments';
+import type { MentionContext } from '@ui/screens/main/agent-chat/chat/_components/rich-text/mentions';
+import type { FileMentionItem } from '@ui/screens/main/agent-chat/chat/_components/rich-text/mentions/types';
+import type { AttachmentMetadata } from '@shared/karton-contracts/ui/agent/metadata';
+import {
+  attachmentToAttachmentAttributes,
+  selectedElementToAttachmentAttributes,
+} from '@ui/utils/attachment-conversions';
+import { normalizePath } from '@shared/path-utils';
+import { selectedElementToSwDomElement } from '@shared/selected-elements/swdomelement';
+import type { AgentMessage } from '@shared/karton-contracts/ui/agent';
+import { EMPTY_MOUNTS, type MountEntry } from '@shared/karton-contracts/ui';
+import { useOpenAgent } from '@ui/hooks/use-open-chat';
+import { useContentCollapsed } from '../../../_components/content-collapsed-context';
+import { getAvailableModel } from '@shared/available-models';
+import { useChatDraft } from '@ui/hooks/use-chat-draft';
+import { useGlobalDictation } from '@ui/hooks/use-global-dictation';
+import { useSwarmMode } from '@ui/hooks/use-swarm-mode';
+import type { Content } from '@tiptap/core';
+import {
+  markdownToTipTapContent,
+  enrichTipTapContent,
+} from '@ui/utils/tiptap-content-utils';
+import { getCurrentDraftAnswers } from './footer-status-card/user-question-section';
+import { getWorkspaceDisplayLabel } from '@ui/utils/workspace-display';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@clodex/stage-ui/components/tooltip';
+import {
+  CHAT_INPUT_FOCUS_REQUESTED_EVENT,
+  CHAT_INPUT_INSERT_TEXT_REQUESTED_EVENT,
+  CHAT_INPUT_PREFILL_REQUESTED_EVENT,
+  type ChatInputInsertTextRequestedEvent,
+  type ChatInputPrefillRequestedEvent,
+} from '../_lib/chat-input-events';
+import { resolveFeatureGate } from '@shared/feature-gates';
+
+// Stable empty arrays to avoid new-reference re-renders
+const EMPTY_HISTORY: AgentMessage[] = [];
+const EMPTY_QUEUE: (AgentMessage & { role: 'user' })[] = [];
+const EMPTY_WORKSPACE_ACTION_CONFIGS: ReadonlyMap<
+  string,
+  WorkspaceActionConfig
+> = new Map();
+
+function formatWorkspaceGitRef(git: MountEntry['git']): string | null {
+  return git?.branch ?? git?.headSha?.slice(0, 7) ?? null;
+}
+
+function formatWorkspaceActionError(message: string): string {
+  const trimmed = message.trim();
+  const withoutCliPrefix = trimmed.replace(
+    /^([^:\n]+:\s*)?clodex:\s*error:\s*/i,
+    '',
+  );
+
+  return withoutCliPrefix.trim() || trimmed;
+}
+
+function WorkspaceActionErrorMessage({ message }: { message: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const { isTruncated, tooltipOpen, setTooltipOpen } = useIsTruncated(ref);
+  const displayMessage = formatWorkspaceActionError(message);
+
+  return (
+    <Tooltip open={isTruncated && tooltipOpen} onOpenChange={setTooltipOpen}>
+      <TooltipTrigger>
+        <div
+          ref={ref}
+          role="alert"
+          className={cn(
+            'line-clamp-3 whitespace-pre-wrap break-words px-1 text-error-foreground text-xs',
+            isTruncated && 'app-no-drag',
+          )}
+        >
+          {displayMessage}
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="start">
+        <div className="scrollbar-subtle max-h-48 max-w-80 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed">
+          {displayMessage}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function isNoopWorkspaceAction(
+  mount: MountEntry,
+  config: WorkspaceActionConfig,
+  options?: { currentBranch?: string | null },
+): boolean {
+  switch (config.selectedAction) {
+    case 'switch-branch':
+      return (
+        typeof options?.currentBranch === 'string' &&
+        config.switchBranchTarget === options.currentBranch
+      );
+    case 'switch-worktree':
+      return config.switchWorktreeTarget === mount.path;
+    case 'create-worktree':
+    case 'create-branch':
+      return false;
+  }
+}
+
+function getPendingWorkspacePreparationKind(
+  mounts: readonly MountEntry[],
+  configs: ReadonlyMap<string, WorkspaceActionConfig>,
+): 'worktree' | 'branch' | null {
+  let preparationKind: 'worktree' | 'branch' | null = null;
+
+  for (const mount of mounts) {
+    const config = configs.get(mount.prefix);
+    if (!config || isNoopWorkspaceAction(mount, config)) continue;
+    if (preparationKind === 'worktree') break;
+
+    switch (config.selectedAction) {
+      case 'create-worktree':
+      case 'switch-worktree':
+        preparationKind = 'worktree';
+        break;
+      case 'create-branch':
+      case 'switch-branch':
+        preparationKind = 'branch';
+        break;
+    }
+  }
+
+  return preparationKind;
+}
+
+export const ChatPanelFooter = memo(function ChatPanelFooter() {
+  const chatInputRef = useRef<ChatInputHandle>(null);
+  const { registerDraftGetter } = useChatDraft();
+  const dictation = useGlobalDictation();
+
+  // Register the draft getter so other components can access the current input
+  useEffect(() => {
+    const unregister = registerDraftGetter(() => {
+      return chatInputRef.current?.getJsonContent() ?? '';
+    });
+    return unregister;
+  }, [registerDraftGetter]);
+
+  const [openAgent] = useOpenAgent();
+  const { isOpen: isCommandCenterOpen } = useCommandCenter();
+  const { collapsed: contentCollapsed } = useContentCollapsed();
+
+  const isWorking = useKartonState((s) =>
+    openAgent ? s.agents.instances[openAgent]?.state.isWorking || false : false,
+  );
+  const collaborationPresetsEnabled = useKartonState(
+    (s) =>
+      resolveFeatureGate(
+        'collaboration-presets',
+        s.preferences.featureGates.overrides,
+        s.appInfo.releaseChannel,
+      ).enabled,
+  );
+  const isWorkingRef = useRef(isWorking);
+  isWorkingRef.current = isWorking;
+
+  // History & inputState are NEVER used during rendering — only inside
+  // callbacks via refs.  We use a silent-subscription pattern: the
+  // selector writes to a ref as a side-effect but always returns `null`,
+  // so useSyncExternalStore never sees a changed snapshot and never
+  // triggers a re-render.  This eliminates the entire footer re-render
+  // cascade that previously fired on every streaming chunk.
+  const historyRef = useRef<AgentMessage[]>(EMPTY_HISTORY);
+  useKartonState((s) => {
+    historyRef.current = openAgent
+      ? (s.agents.instances[openAgent]?.state.history ?? EMPTY_HISTORY)
+      : EMPTY_HISTORY;
+    return null;
+  });
+
+  const mountsRef = useRef<MountEntry[]>(EMPTY_MOUNTS);
+  useKartonState((s) => {
+    mountsRef.current = openAgent
+      ? (s.toolbox[openAgent]?.workspace?.mounts ?? EMPTY_MOUNTS)
+      : EMPTY_MOUNTS;
+    return null;
+  });
+
+  const chatInputStateRef = useRef<string | null>(null);
+  useKartonState((s) => {
+    chatInputStateRef.current = openAgent
+      ? (s.agents.instances[openAgent]?.state.inputState ?? null)
+      : null;
+    return null;
+  });
+
+  const setChatInputState = useKartonProcedure(
+    (p) => p.agents.updateInputState,
+  );
+  const togglePanelKeyboardFocus = useKartonProcedure(
+    (p) => p.browser.layout.togglePanelKeyboardFocus,
+  );
+
+  const [localInputState, setLocalInputState] = useState<Content | null>(() => {
+    const initial = chatInputStateRef.current;
+    return initial && initial.length > 0 ? JSON.parse(initial) : null;
+  });
+
+  // Re-sync local input state when the active agent changes
+  const prevOpenAgentRef = useRef(openAgent);
+  useEffect(() => {
+    if (openAgent === prevOpenAgentRef.current) return;
+    prevOpenAgentRef.current = openAgent;
+    const serverState = chatInputStateRef.current;
+    const parsed =
+      serverState && serverState.length > 0 ? JSON.parse(serverState) : null;
+    localInputStateRef.current = parsed;
+    setLocalInputState(parsed);
+  }, [openAgent]);
+
+  const [canSendMessage, setCanSendMessage] = useState(false);
+
+  const updateChatInputState = useCallback(
+    (newInputState: Content) => {
+      // Write directly to ref — avoids a setState on every keystroke which
+      // would re-render the entire footer (Select, WorkspaceBadge, etc.).
+      // The state variable is only updated for rare events (submit, error
+      // restore, agent switch) where ChatInput needs an external reset.
+      localInputStateRef.current = newInputState;
+      setCanSendMessage(
+        (chatInputRef.current?.getTextContent()?.trim().length ?? 0) > 0,
+      );
+      if (openAgent) {
+        void setChatInputState(openAgent, JSON.stringify(newInputState));
+      }
+    },
+    [openAgent, setChatInputState],
+  );
+
+  // File attachments via shared hook
+  const {
+    attachments: fileAttachments,
+    addFileAttachment,
+    removeAttachment: removeFileAttachment,
+    clearAttachments: clearFileAttachments,
+    setAttachments: setFileAttachments,
+  } = useFileAttachments({
+    chatInputRef: chatInputRef as RefObject<ChatInputHandle>,
+    agentId: openAgent,
+  });
+
+  const { activeEditMessageId, setMainDropHandler } = useMessageEditState();
+
+  // Mirror the panel-focus procedure into a ref so the agent-switch effect
+  // below can call it without listing it as a dependency. The procedure
+  // comes from useKartonProcedure with an inline selector, so its identity
+  // is not stable across renders. Depending on it directly would make the
+  // effect run on every render and continuously reclaim UI keyboard focus,
+  // locking focus onto the chat input and making nothing else interactive.
+  const togglePanelKeyboardFocusRef = useRef(togglePanelKeyboardFocus);
+  togglePanelKeyboardFocusRef.current = togglePanelKeyboardFocus;
+
+  // Focus the chat input whenever the active agent changes, regardless of
+  // whether a browser tab or terminal is currently showing.
+  //
+  // ChatInput has key={openAgent} so it fully re-mounts on switch — the
+  // initial render with restored content doesn't fire onChange, leaving
+  // canSendMessage stale. Recalculate after the new mount.
+  //
+  // Browser-tab case: the active tab's webContents holds native OS keyboard
+  // focus, so a bare DOM .focus() on the chat input would not receive
+  // keystrokes (document.hasFocus() === false — typing goes to the page).
+  // togglePanelKeyboardFocus('clodex-ui') reclaims native focus to the UI
+  // view first. On macOS/Linux this does NOT change z-order (see
+  // focus-handling.md, Invariant #2), so the web content stays
+  // mouse-interactive. The terminal case is handled separately by gating the
+  // terminal's own auto-focus (see per-terminal-content.tsx).
+  //
+  // Runs exactly once per agent switch (deps: [openAgent] only).
+  useEffect(() => {
+    if (!openAgent) return;
+    let cancelled = false;
+    const frame = requestAnimationFrame(async () => {
+      try {
+        await togglePanelKeyboardFocusRef.current('clodex-ui');
+      } catch {
+        // Still focus the chat input if the panel-focus handoff fails.
+      }
+      if (cancelled) return;
+      chatInputRef.current?.focus();
+      const textLength =
+        chatInputRef.current?.getTextContent()?.trim().length ?? 0;
+      setCanSendMessage(textLength > 0);
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [openAgent]);
+
+  const activeTabUrl = useKartonState((s) => {
+    const tabId = s.contentTabs.activeTabId;
+    return tabId ? (s.contentTabs.tabs[tabId]?.url ?? null) : null;
+  });
+
+  // Element selection state from Karton
+  const selectionModeActive = useKartonState(
+    (s) => s.browsing.contextSelectionMode,
+  );
+
+  const activeTabData = useKartonState((s) => {
+    const tabId = s.contentTabs.activeTabId;
+    if (!tabId) return null;
+    return s.contentTabs.tabs[tabId] ?? null;
+  });
+
+  const hasVisibleBrowsingTab = useMemo(() => {
+    if (!activeTabData) return false;
+    if (contentCollapsed) return false;
+    const ownedByOtherAgent =
+      activeTabData.agentInstanceId != null &&
+      activeTabData.agentInstanceId !== openAgent;
+    return (
+      activeTabData.type !== 'terminal' &&
+      !activeTabData.url?.startsWith('clodex://internal/') &&
+      !ownedByOtherAgent
+    );
+  }, [activeTabData, openAgent, contentCollapsed]);
+
+  const elementSelectionActive = useMemo(() => {
+    if (activeEditMessageId) return false;
+    return selectionModeActive;
+  }, [selectionModeActive, activeEditMessageId]);
+
+  // Karton procedures
+  const sendUserMessage = useKartonProcedure((p) => p.agents.sendUserMessage);
+  const stopAgent = useKartonProcedure((p) => p.agents.stop);
+  const createWorkspaceGitWorktree = useKartonProcedure(
+    (p) => p.toolbox.createWorkspaceGitWorktree,
+  );
+  const createWorkspaceGitBranch = useKartonProcedure(
+    (p) => p.toolbox.createWorkspaceGitBranch,
+  );
+  const switchWorkspaceGitBranch = useKartonProcedure(
+    (p) => p.toolbox.switchWorkspaceGitBranch,
+  );
+  const listWorkspaceGitBranches = useKartonProcedure(
+    (p) => p.toolbox.listWorkspaceGitBranches,
+  );
+  const listWorkspaceGitWorktrees = useKartonProcedure(
+    (p) => p.toolbox.listWorkspaceGitWorktrees,
+  );
+  const workspaceGitActionPreferences = useKartonState(
+    (s) => s.preferences.agent.workspaceGitActionPreferences,
+  );
+  const mountWorkspace = useKartonProcedure((p) => p.toolbox.mountWorkspace);
+  const unmountWorkspace = useKartonProcedure(
+    (p) => p.toolbox.unmountWorkspace,
+  );
+  const revertToUserMessage = useKartonProcedure(
+    (p) => p.agents.revertToUserMessage,
+  );
+  const setContextSelectionActive = useKartonProcedure(
+    (p) => p.browser.contextSelection.setActive,
+  );
+  const clearSelectedElementsProc = useKartonProcedure(
+    (p) => p.browser.contextSelection.clearElements,
+  );
+  const removeSelectedElementProc = useKartonProcedure(
+    (p) => p.browser.contextSelection.removeElement,
+  );
+  const storeAttachment = useKartonProcedure((p) => p.agents.storeAttachment);
+  const captureAndStoreElementScreenshot = useKartonProcedure(
+    (p) => p.browser.contextSelection.captureAndStoreElementScreenshot,
+  );
+
+  const searchMentionFiles = useKartonProcedure(
+    (p) => p.toolbox.searchMentionFiles,
+  );
+  const mentionTabs = useKartonState((s) => s.contentTabs.tabs);
+  const mentionActiveTabId = useKartonState((s) => s.contentTabs.activeTabId);
+  const mentionMounts = useKartonState((s) =>
+    openAgent
+      ? (s.toolbox[openAgent]?.workspace?.mounts ?? EMPTY_MOUNTS)
+      : EMPTY_MOUNTS,
+  );
+  const slashCommands = useKartonState((s) => s.skills);
+  const {
+    swarmModeActive,
+    swarmModeVariant,
+    setSwarmModeActive,
+    toggleSwarmMode,
+    toggleBattleMode,
+  } = useSwarmMode();
+  // Stable ref so the mention command handler (configured once by TipTap)
+  // always sees the latest setFileAttachments without re-creating the context.
+  const setFileAttachmentsRef = useRef(setFileAttachments);
+  setFileAttachmentsRef.current = setFileAttachments;
+
+  const onFileMentionSelected = useCallback((item: FileMentionItem) => {
+    const attachment: AttachmentMetadata = {
+      // mountedPath is the agent-facing path (e.g. "w1/src/button.tsx")
+      path: item.meta.mountedPath,
+      // No originalFileName for workspace paths — basename is derived from path
+    };
+    setFileAttachmentsRef.current((prev) => {
+      // Deduplicate by path
+      if (prev.some((a) => a.path === attachment.path)) return prev;
+      return [...prev, attachment];
+    });
+  }, []);
+
+  // Stabilize mentionContext: these values change frequently (every stream
+  // chunk, tab switch) but are only read when the user opens the mention
+  // popup.  Store in refs so the context object identity stays stable.
+  const mentionTabsRef = useRef(mentionTabs);
+  mentionTabsRef.current = mentionTabs;
+  const mentionActiveTabIdRef = useRef(mentionActiveTabId);
+  mentionActiveTabIdRef.current = mentionActiveTabId;
+  const mentionMountsRef = useRef(mentionMounts);
+  mentionMountsRef.current = mentionMounts;
+  const searchMentionFilesRef = useRef(searchMentionFiles);
+  searchMentionFilesRef.current = searchMentionFiles;
+
+  const mentionContext = useMemo<MentionContext>(
+    () => ({
+      agentInstanceId: openAgent,
+      searchFiles: (...args: Parameters<typeof searchMentionFiles>) =>
+        searchMentionFilesRef.current(...args),
+      get tabs() {
+        return mentionTabsRef.current;
+      },
+      get activeTabId() {
+        return mentionActiveTabIdRef.current;
+      },
+      get mounts() {
+        return mentionMountsRef.current;
+      },
+      onFileMentionSelected,
+    }),
+    [openAgent, onFileMentionSelected],
+  );
+
+  const isConnected = useKartonConnected();
+  const reconnectState = useKartonReconnectState();
+
+  const clearAll = useCallback(() => {
+    clearFileAttachments();
+    clearSelectedElementsProc();
+  }, [clearFileAttachments, clearSelectedElementsProc]);
+
+  const track = useTrack();
+
+  // Live ref for the set of selected elements so telemetry on stop can
+  // read the latest value without adding the list to the callback deps.
+  const selectedElementsStateRef = useRef<readonly unknown[]>([]);
+  const selectedElementsState = useKartonState(
+    (s) => s.browsing.selectedElements,
+  );
+  selectedElementsStateRef.current = selectedElementsState ?? [];
+
+  // Drive element-selection telemetry off the Karton state itself so every
+  // transition is captured — including ESC-driven cancels in selector-canvas,
+  // sidebar auto-close, and any other site that flips the state directly.
+  // Wrapping the setters would miss those paths.
+  const prevSelectionModeActiveRef = useRef(selectionModeActive);
+  useEffect(() => {
+    const prev = prevSelectionModeActiveRef.current;
+    prevSelectionModeActiveRef.current = selectionModeActive;
+    if (prev === selectionModeActive) return;
+    if (selectionModeActive) {
+      track('element-selection-started');
+    } else {
+      track('element-selection-stopped', {
+        element_selected: selectedElementsStateRef.current.length > 0,
+      });
+    }
+  }, [selectionModeActive, track]);
+
+  // Element selector helper functions
+  const startContextSelector = useCallback(() => {
+    setContextSelectionActive(true);
+  }, [setContextSelectionActive]);
+
+  const stopContextSelector = useCallback(() => {
+    setContextSelectionActive(false);
+  }, [setContextSelectionActive]);
+
+  // Deactivate element selection when the browsing tab disappears
+  // (e.g. user switches to terminal or internal page). Without this,
+  // selectionModeActive stays true while the toggle button is hidden,
+  // leaving no way to exit selection mode from the chat input.
+  const prevHasVisibleBrowsingTabRef = useRef(hasVisibleBrowsingTab);
+  useEffect(() => {
+    const prev = prevHasVisibleBrowsingTabRef.current;
+    prevHasVisibleBrowsingTabRef.current = hasVisibleBrowsingTab;
+    if (prev && !hasVisibleBrowsingTab && selectionModeActive) {
+      stopContextSelector();
+    }
+  }, [hasVisibleBrowsingTab, selectionModeActive, stopContextSelector]);
+
+  // Pending early-abort revert: deferred until isWorking becomes false
+  // so the stream is fully done and won't re-add the assistant message.
+  const [pendingRevert, setPendingRevert] = useState<{
+    messageId: string;
+    message: AgentMessage;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!isWorking && pendingRevert) {
+      const { messageId, message } = pendingRevert;
+      setPendingRevert(null);
+
+      // Revert chat history (remove user msg + partial response)
+      if (openAgent) revertToUserMessage(openAgent, messageId, false);
+
+      // Restore input content: parse markdown then inject full attachment
+      // data from metadata so nodes are identical to fresh composition
+      const textPart = message.parts.find((p) => p.type === 'text');
+      const text = textPart?.type === 'text' ? textPart.text : '';
+      if (text) {
+        const parsed = markdownToTipTapContent(text);
+        const tiptapContent = enrichTipTapContent(parsed, {
+          attachments: message.metadata?.attachments,
+        });
+        // Must update both ref AND state so ChatInput (memo'd) re-renders
+        // with the restored content.  updateChatInputState only writes to
+        // the ref (perf optimisation for keystrokes).
+        updateChatInputState(tiptapContent);
+        setLocalInputState(tiptapContent);
+        requestAnimationFrame(() => {
+          chatInputRef.current?.focus();
+        });
+      }
+
+      // Restore attachments state (used by handleSubmit for the message)
+      if (message.metadata?.attachments?.length) {
+        setFileAttachments(message.metadata.attachments);
+      }
+    }
+  }, [
+    isWorking,
+    pendingRevert,
+    revertToUserMessage,
+    openAgent,
+    updateChatInputState,
+    setFileAttachments,
+  ]);
+
+  // Restore checkpoint: find the next user message after the target assistant
+  // message, revert history to that point, and populate the chat input.
+  const executeCheckpointRestore = useCallback(
+    (detail: { assistantMessageId: string; undoToolCalls: boolean }) => {
+      const { assistantMessageId, undoToolCalls } = detail;
+      const currentHistory = historyRef.current ?? [];
+
+      // Find the assistant message's index
+      const assistantIndex = currentHistory.findIndex(
+        (m) => m.id === assistantMessageId,
+      );
+      if (assistantIndex === -1) return;
+
+      // Find the next user message after the assistant message
+      let nextUserMessage: AgentMessage | undefined;
+      for (let i = assistantIndex + 1; i < currentHistory.length; i++) {
+        if (currentHistory[i]?.role === 'user') {
+          nextUserMessage = currentHistory[i];
+          break;
+        }
+      }
+      if (!nextUserMessage) return;
+
+      // Revert history — removes nextUserMessage and everything after it
+      if (openAgent)
+        revertToUserMessage(openAgent, nextUserMessage.id, undoToolCalls);
+
+      // Reset current draft state before restoring
+      setFileAttachments([]);
+
+      // Restore the user message's content into the chat input
+      const textPart = nextUserMessage.parts.find((p) => p.type === 'text');
+      const text = textPart?.type === 'text' ? textPart.text : '';
+      const parsed = markdownToTipTapContent(text);
+      const tiptapContent = enrichTipTapContent(parsed, {
+        attachments: nextUserMessage.metadata?.attachments,
+      });
+      // Must update both ref AND state so ChatInput (memo'd) re-renders
+      // with the restored content.  updateChatInputState only writes to
+      // the ref (perf optimisation for keystrokes).
+      updateChatInputState(tiptapContent);
+      setLocalInputState(tiptapContent);
+      requestAnimationFrame(() => {
+        chatInputRef.current?.focus();
+      });
+
+      // Restore file attachments if present
+      if (nextUserMessage.metadata?.attachments?.length) {
+        setFileAttachments(nextUserMessage.metadata.attachments);
+      }
+    },
+    [openAgent, revertToUserMessage, updateChatInputState, setFileAttachments],
+  );
+
+  // Pending checkpoint restore: deferred until isWorking becomes false
+  // so the stream is fully done and won't race with the revert.
+  const [pendingCheckpointRestore, setPendingCheckpointRestore] = useState<{
+    assistantMessageId: string;
+    undoToolCalls: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!isWorking && pendingCheckpointRestore) {
+      setPendingCheckpointRestore(null);
+      executeCheckpointRestore(pendingCheckpointRestore);
+    }
+  }, [isWorking, pendingCheckpointRestore, executeCheckpointRestore]);
+
+  // Handle "Restore checkpoint" from assistant message menu
+  useEffect(() => {
+    const handler = (e: WindowEventMap['chat-restore-checkpoint']) => {
+      const detail = e.detail;
+      if (isWorkingRef.current && openAgent) {
+        // Agent is streaming — stop first, defer restore until idle
+        setPendingCheckpointRestore(detail);
+        void stopAgent(openAgent);
+      } else {
+        // Agent idle — restore immediately
+        executeCheckpointRestore(detail);
+      }
+    };
+
+    window.addEventListener('chat-restore-checkpoint', handler);
+    return () => window.removeEventListener('chat-restore-checkpoint', handler);
+  }, [openAgent, stopAgent, executeCheckpointRestore]);
+
+  const isEarlyAbortEligible = useCallback(() => {
+    const currentHistory = historyRef.current ?? [];
+    let lastUserMsgIndex = -1;
+    for (let i = currentHistory.length - 1; i >= 0; i--) {
+      if (currentHistory[i]?.role === 'user') {
+        lastUserMsgIndex = i;
+        break;
+      }
+    }
+    if (lastUserMsgIndex === -1) return false;
+    const assistantParts = currentHistory
+      .slice(lastUserMsgIndex + 1)
+      .flatMap((m) => m?.parts ?? []);
+    const hasToolCall = assistantParts.some(
+      (p) => p.type.startsWith('tool-') || p.type === 'dynamic-tool',
+    );
+    const textLength = assistantParts
+      .filter((p) => p.type === 'text')
+      .reduce((sum, p) => sum + (p.type === 'text' ? p.text.length : 0), 0);
+    return !hasToolCall && textLength < 200;
+  }, []);
+
+  const abortAgent = useCallback(async () => {
+    const inputIsEmpty =
+      (chatInputRef.current?.getTextContent()?.trim().length ?? 0) === 0;
+
+    if (inputIsEmpty && isEarlyAbortEligible()) {
+      const currentHistory = historyRef.current ?? [];
+      for (let i = currentHistory.length - 1; i >= 0; i--) {
+        if (currentHistory[i]?.role === 'user') {
+          const userMessage = currentHistory[i]!;
+          setPendingRevert({
+            messageId: userMessage.id,
+            message: userMessage,
+          });
+          break;
+        }
+      }
+    }
+
+    // Stop the agent (revert will fire once isWorking becomes false)
+    if (openAgent) await stopAgent(openAgent);
+  }, [stopAgent, openAgent, isEarlyAbortEligible]);
+
+  // Stable abort callback for ChatInputActions — avoids memo-busting when
+  // abortAgent's reference changes (e.g. openAgent switches).
+  const abortAgentRef = useRef(abortAgent);
+  abortAgentRef.current = abortAgent;
+  const stableAbortAgent = useCallback(() => abortAgentRef.current(), []);
+
+  const shouldPreserveNativeCopy = useCallback((event: KeyboardEvent) => {
+    if (event.key.toLowerCase() !== 'c' || !event.ctrlKey) return false;
+
+    const target = event.target;
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement
+    ) {
+      return target.selectionStart !== target.selectionEnd;
+    }
+
+    if (target instanceof HTMLElement && target.isContentEditable) {
+      const selection = window.getSelection();
+      return !!selection && !selection.isCollapsed;
+    }
+
+    const selection = window.getSelection();
+    return !!selection && !selection.isCollapsed;
+  }, []);
+
+  const handleEscape = useCallback(() => {
+    if (isWorkingRef.current && pendingQuestionIdRef.current === null) {
+      abortAgentRef.current();
+      return;
+    }
+    if (elementSelectionActive) stopContextSelector();
+    else setChatInputActive(false);
+  }, [elementSelectionActive, stopContextSelector]);
+
+  const isVerboseMode = useKartonState(
+    (s) => s.appInfo.releaseChannel === 'dev',
+  );
+
+  const enableInputField = useMemo(() => {
+    // Only disable input if agent is not connected or reconnecting
+    // Input is now always enabled when connected (allows typing while agent works)
+    if (!isConnected || reconnectState.isReconnecting) return false;
+    return true;
+  }, [isConnected, reconnectState.isReconnecting]);
+
+  // canSendMessage is driven by setCanSendMessage in updateChatInputState
+  // and gated by enableInputField. No dep on localInputState to stay stable.
+  const effectiveCanSendMessage = canSendMessage && enableInputField;
+
+  const hasOpenedInternalPage =
+    activeTabUrl?.startsWith('clodex://internal/') ?? false;
+
+  // Refs for values read at call time inside handleSubmit.
+  // This keeps handleSubmit's dependency array stable (no localInputState,
+  // fileAttachments, canSendMessage) which in turn
+  // keeps the onSubmit prop passed to ChatInputActions referentially stable
+  // across keystrokes and streaming updates.
+  // localInputStateRef is the source of truth — updated on every keystroke
+  // in updateChatInputState (without triggering re-renders).  The state
+  // variable `localInputState` is only set for rare events that need to
+  // push content back into ChatInput (submit clear, error restore).
+  const localInputStateRef = useRef(localInputState);
+
+  const fileAttachmentsRef = useRef(fileAttachments);
+  fileAttachmentsRef.current = fileAttachments;
+
+  const canSendMessageRef = useRef(effectiveCanSendMessage);
+  canSendMessageRef.current = effectiveCanSendMessage;
+
+  const pendingQuestionId = useKartonState((s) =>
+    openAgent ? (s.toolbox[openAgent]?.pendingUserQuestion?.id ?? null) : null,
+  );
+  const hasPendingQuestion = pendingQuestionId !== null;
+  const pendingQuestionIdRef = useRef(pendingQuestionId);
+  pendingQuestionIdRef.current = pendingQuestionId;
+  const interruptQuestionWithMessage = useKartonProcedure(
+    (p) => p.agents.interruptQuestionWithMessage,
+  );
+
+  const executePendingWorkspaceActions = useCallback(async () => {
+    if (!openAgent || historyRef.current.length > 0)
+      return { ok: true as const };
+
+    let configs = new Map(workspaceActionConfigsRef.current);
+    for (const mount of mountsRef.current) {
+      if (!mount.git) continue;
+
+      const existingConfig = configs.get(mount.prefix);
+      if (!existingConfig) continue;
+
+      if (isNoopWorkspaceAction(mount, existingConfig)) {
+        configs.delete(mount.prefix);
+        const nextConfigs =
+          configs.size === 0
+            ? EMPTY_WORKSPACE_ACTION_CONFIGS
+            : new Map(configs);
+        workspaceActionConfigsRef.current = nextConfigs;
+        setWorkspaceActionConfigs(nextConfigs);
+        configs = new Map(nextConfigs);
+        continue;
+      }
+
+      try {
+        const fallbackGitRef = formatWorkspaceGitRef(mount.git);
+        const [branchesResult, worktreesResult] = await Promise.all([
+          listWorkspaceGitBranches(openAgent, mount.prefix),
+          listWorkspaceGitWorktrees(openAgent, mount.prefix),
+        ]);
+        const sourceBranchItems = getBranchSelectItemsFromGit(
+          branchesResult,
+          fallbackGitRef,
+          'source',
+        );
+        const checkoutBranchItems = getBranchSelectItemsFromGit(
+          branchesResult,
+          fallbackGitRef,
+          'checkout-target',
+        );
+        const worktreeItems = getWorktreeSelectItemsFromGit(worktreesResult);
+        const defaults = applyWorkspaceGitActionPreferences(
+          createDefaultWorkspaceActionConfig(
+            sourceBranchItems,
+            worktreeItems,
+            checkoutBranchItems,
+            getDefaultSourceBranchValue(branchesResult, fallbackGitRef),
+            getCurrentBranchValue(branchesResult, fallbackGitRef),
+          ),
+          sourceBranchItems,
+          worktreeItems,
+          workspaceGitActionPreferences.general,
+          workspaceGitActionPreferences.repositories[mount.git.repositoryId],
+        );
+        const previousCurrentBranchDefault = getCurrentBranchValue(
+          null,
+          fallbackGitRef,
+        );
+        const config = hydrateWorkspaceActionConfigWithDefaults(
+          existingConfig,
+          defaults,
+          {
+            sourceBranch: previousCurrentBranchDefault,
+            checkoutBranch: previousCurrentBranchDefault,
+            defaultBranch: getDefaultBranchValue(null, fallbackGitRef),
+            worktree: getWorktreeSelectItems()[0]?.value ?? 'main',
+          },
+        );
+
+        if (
+          isNoopWorkspaceAction(mount, config, {
+            currentBranch: branchesResult?.current ?? null,
+          })
+        ) {
+          configs.delete(mount.prefix);
+          const nextConfigs =
+            configs.size === 0
+              ? EMPTY_WORKSPACE_ACTION_CONFIGS
+              : new Map(configs);
+          workspaceActionConfigsRef.current = nextConfigs;
+          setWorkspaceActionConfigs(nextConfigs);
+          configs = new Map(nextConfigs);
+          continue;
+        }
+
+        const result = await executeWorkspaceGitAction({
+          agentInstanceId: openAgent,
+          mount,
+          config,
+          executor: {
+            createWorkspaceGitWorktree,
+            createWorkspaceGitBranch,
+            switchWorkspaceGitBranch,
+            mountWorkspace,
+            unmountWorkspace,
+          },
+        });
+
+        if (!result.ok) {
+          return {
+            ok: false as const,
+            message: `${getWorkspaceDisplayLabel(mount)}: ${result.message}`,
+          };
+        }
+
+        configs.delete(mount.prefix);
+        const nextConfigs =
+          configs.size === 0
+            ? EMPTY_WORKSPACE_ACTION_CONFIGS
+            : new Map(configs);
+        workspaceActionConfigsRef.current = nextConfigs;
+        setWorkspaceActionConfigs(nextConfigs);
+        configs = new Map(nextConfigs);
+      } catch (error) {
+        return {
+          ok: false as const,
+          message: `${getWorkspaceDisplayLabel(mount)}: ${
+            error instanceof Error
+              ? error.message
+              : 'Failed to execute workspace action.'
+          }`,
+        };
+      }
+    }
+
+    return { ok: true as const };
+  }, [
+    createWorkspaceGitBranch,
+    createWorkspaceGitWorktree,
+    listWorkspaceGitBranches,
+    listWorkspaceGitWorktrees,
+    mountWorkspace,
+    openAgent,
+    switchWorkspaceGitBranch,
+    unmountWorkspace,
+    workspaceGitActionPreferences,
+  ]);
+
+  const handleSubmit = useCallback(async () => {
+    if (!canSendMessageRef.current) return;
+
+    // Read frequently-changing values from refs at call time
+    const currentLocalInputState = localInputStateRef.current;
+    const currentFileAttachments = fileAttachmentsRef.current;
+
+    // Snapshot pending question ID — used for the atomic interrupt call below.
+    const currentPendingQuestionId = pendingQuestionIdRef.current;
+    const markdownText = chatInputRef.current!.getTextContent();
+    const routeToSwarm =
+      !!openAgent && !currentPendingQuestionId && swarmModeActive;
+
+    // Collect metadata for mentions.
+    const metadata = collectUserMessageMetadata(currentLocalInputState);
+
+    // File mentions are converted to FileAttachment entries at selection time
+    // (via onFileMentionSelected). Strip them from the mentions array so the
+    // backend doesn't see duplicate context.
+    const filteredMentions = metadata.mentions?.filter(
+      (m) => m.providerType !== 'file',
+    );
+
+    // Include all file attachments (validation is handled by prompt builder)
+    // Note: We no longer store tipTapContent - the text part contains markdown
+    // with attachment links (e.g., [](path:att/abc123)) generated by editor.getText()
+    const message: AgentMessage & { role: 'user' } = {
+      id: generateId(),
+      parts: [{ type: 'text' as const, text: markdownText }],
+      role: 'user',
+      metadata: {
+        ...metadata,
+        swarmMode: routeToSwarm,
+        swarmModeVariant: routeToSwarm
+          ? (swarmModeVariant ?? 'standard')
+          : undefined,
+        attachments: currentFileAttachments,
+        mentions:
+          filteredMentions && filteredMentions.length > 0
+            ? filteredMentions
+            : undefined,
+      },
+    };
+
+    if (routeToSwarm) {
+      const previousContent = currentLocalInputState;
+      const previousFileAttachments = currentFileAttachments;
+      let didDispatchSwarmOptimisticMessage = false;
+
+      clearAll();
+      stopContextSelector();
+
+      chatInputRef.current?.clear();
+      const emptyDoc: Content = {
+        type: 'doc',
+        content: [{ type: 'paragraph' }],
+      };
+      localInputStateRef.current = emptyDoc;
+      setLocalInputState(emptyDoc);
+      setCanSendMessage(false);
+      void setChatInputState(openAgent, JSON.stringify(emptyDoc));
+      window.dispatchEvent(
+        new CustomEvent('chat-message-sent', { detail: { message } }),
+      );
+      didDispatchSwarmOptimisticMessage = true;
+
+      try {
+        const workspaceActionResult = await executePendingWorkspaceActions();
+        if (!workspaceActionResult.ok) {
+          localInputStateRef.current = previousContent;
+          setLocalInputState(previousContent);
+          setFileAttachments(previousFileAttachments);
+          setCanSendMessage(true);
+          void setChatInputState(openAgent, JSON.stringify(previousContent));
+          window.dispatchEvent(
+            new CustomEvent('chat-message-failed', {
+              detail: { clientId: message.id },
+            }),
+          );
+          didDispatchSwarmOptimisticMessage = false;
+          setWorkspaceActionError(workspaceActionResult.message);
+          setTimeout(() => {
+            chatInputRef.current?.focus();
+          }, 0);
+          return;
+        }
+
+        setWorkspaceActionError(null);
+        console.info('[SwarmRun] Routing submit through sendUserMessage guard');
+        await sendUserMessage(openAgent, message);
+        return;
+      } catch (error) {
+        localInputStateRef.current = previousContent;
+        setLocalInputState(previousContent);
+        setFileAttachments(previousFileAttachments);
+        setCanSendMessage(markdownText.trim().length > 0);
+        void setChatInputState(openAgent, JSON.stringify(previousContent));
+        console.error('Failed to run swarm:', error);
+        if (didDispatchSwarmOptimisticMessage) {
+          window.dispatchEvent(
+            new CustomEvent('chat-message-failed', {
+              detail: { clientId: message.id },
+            }),
+          );
+        }
+        posthog.captureException(
+          error instanceof Error ? error : new Error(String(error)),
+          { source: 'renderer', operation: 'sendSwarmMessage' },
+        );
+        return;
+      } finally {
+        setSwarmModeActive(false);
+        setCanSendMessage(false);
+        setTimeout(() => {
+          chatInputRef.current?.focus();
+        }, 0);
+      }
+    }
+
+    // Save for restore on error
+    const previousContent = currentLocalInputState;
+    const previousFileAttachments = currentFileAttachments;
+
+    clearAll();
+    stopContextSelector();
+
+    // Clear input IMMEDIATELY (before network call)
+    chatInputRef.current?.clear();
+    const emptyDoc: Content = {
+      type: 'doc',
+      content: [{ type: 'paragraph' }],
+    };
+    localInputStateRef.current = emptyDoc;
+    setLocalInputState(emptyDoc);
+    setCanSendMessage(false);
+    if (openAgent) void setChatInputState(openAgent, JSON.stringify(emptyDoc));
+
+    // Dispatch event with message data for optimistic rendering
+    // Only dispatch when agent is NOT working - if working, the backend
+    // will queue the message instead of adding to history immediately
+    const didDispatchOptimisticMessage = !isWorkingRef.current && !routeToSwarm;
+    if (didDispatchOptimisticMessage)
+      window.dispatchEvent(
+        new CustomEvent('chat-message-sent', { detail: { message } }),
+      );
+
+    const workspacePreparationKind =
+      openAgent && historyRef.current.length === 0
+        ? getPendingWorkspacePreparationKind(
+            mountsRef.current,
+            workspaceActionConfigsRef.current,
+          )
+        : null;
+    if (didDispatchOptimisticMessage && workspacePreparationKind) {
+      window.dispatchEvent(
+        new CustomEvent('chat-workspace-preparation-started', {
+          detail: {
+            clientId: message.id,
+            kind: workspacePreparationKind,
+          },
+        }),
+      );
+    }
+
+    const finishWorkspacePreparation = () => {
+      if (!didDispatchOptimisticMessage || !workspacePreparationKind) return;
+      window.dispatchEvent(
+        new CustomEvent('chat-workspace-preparation-finished', {
+          detail: { clientId: message.id },
+        }),
+      );
+    };
+
+    try {
+      const workspaceActionResult = await executePendingWorkspaceActions();
+      finishWorkspacePreparation();
+      if (!workspaceActionResult.ok) {
+        // Restore input on workspace preparation failure.
+        localInputStateRef.current = previousContent;
+        setLocalInputState(previousContent);
+        setFileAttachments(previousFileAttachments);
+        setCanSendMessage(true);
+        if (openAgent)
+          void setChatInputState(openAgent, JSON.stringify(previousContent));
+        if (didDispatchOptimisticMessage) {
+          window.dispatchEvent(
+            new CustomEvent('chat-message-failed', {
+              detail: { clientId: message.id },
+            }),
+          );
+        }
+        setWorkspaceActionError(workspaceActionResult.message);
+        setTimeout(() => {
+          chatInputRef.current?.focus();
+        }, 0);
+        return;
+      }
+      setWorkspaceActionError(null);
+
+      if (openAgent) {
+        if (currentPendingQuestionId) {
+          // Atomic: queue message + resolve question in a single backend call.
+          // Include the current form draft so partial answers are preserved.
+          await interruptQuestionWithMessage(
+            openAgent,
+            currentPendingQuestionId,
+            message,
+            getCurrentDraftAnswers(),
+          );
+        } else {
+          await sendUserMessage(openAgent, message);
+        }
+      }
+
+      // Keep input focused after sending - refocus in next tick
+      setTimeout(() => {
+        chatInputRef.current?.focus();
+      }, 0);
+    } catch (error) {
+      finishWorkspacePreparation();
+      // Restore input on failure
+      localInputStateRef.current = previousContent;
+      setLocalInputState(previousContent);
+      setFileAttachments(previousFileAttachments);
+      setCanSendMessage(markdownText.trim().length > 0);
+      if (openAgent)
+        void setChatInputState(openAgent, JSON.stringify(previousContent));
+      // Remove the optimistic message on failure
+      if (didDispatchOptimisticMessage) {
+        window.dispatchEvent(
+          new CustomEvent('chat-message-failed', {
+            detail: { clientId: message.id },
+          }),
+        );
+      }
+      console.error('Failed to send message:', error);
+      posthog.captureException(
+        error instanceof Error ? error : new Error(String(error)),
+        { source: 'renderer', operation: 'sendChatMessage' },
+      );
+    }
+  }, [
+    sendUserMessage,
+    openAgent,
+    setChatInputState,
+    clearAll,
+    stopContextSelector,
+    interruptQuestionWithMessage,
+    executePendingWorkspaceActions,
+    setFileAttachments,
+    swarmModeActive,
+    swarmModeVariant,
+  ]);
+
+  // Quantize to nearest 1 000 tokens so the value only changes when
+  // crossing a 1K boundary — prevents ChatInput memo-busting on every
+  // streaming chunk.
+  const usedTokens = useKartonState((s) => {
+    const raw = openAgent
+      ? (s.agents.instances[openAgent]?.state.usedTokens ?? 0)
+      : 0;
+    return Math.round(raw / 1000) * 1000;
+  });
+  const activeModelId = useKartonState((s) =>
+    openAgent ? s.agents.instances[openAgent]?.state.activeModelId : null,
+  );
+  const customModels = useKartonState((s) => s.preferences.customModels);
+  const maxTokens = useMemo(() => {
+    if (!activeModelId) return 200000;
+    const builtIn = getAvailableModel(activeModelId);
+    if (builtIn) return builtIn.modelContextRaw;
+    const custom = customModels.find((m) => m.modelId === activeModelId);
+    if (custom) return custom.contextWindowSize;
+    return 200000;
+  }, [activeModelId, customModels]);
+
+  const contextUsed = useMemo(() => {
+    const used = usedTokens ?? 0;
+    const max = maxTokens ?? 1;
+    return Math.min(100, Math.round((used / max) * 100));
+  }, [usedTokens, maxTokens]);
+
+  const queuedMessages = useKartonState((s) =>
+    openAgent
+      ? (s.agents.instances[openAgent]?.state.queuedMessages ?? EMPTY_QUEUE)
+      : EMPTY_QUEUE,
+  );
+  const flushQueue = useKartonProcedure((p) => p.agents.flushQueue);
+  const handleFlushQueue = useCallback(() => {
+    if (openAgent) void flushQueue(openAgent);
+  }, [flushQueue, openAgent]);
+
+  const [chatInputActive, setChatInputActive] = useState<boolean>(false);
+  // Mirror `chatInputActive` into a ref so synchronous handlers
+  // (`omnibox-focus-requested`, `search-bar-focus-requested`, `onInputBlur`)
+  // can read the up-to-date value within the same event-loop turn instead of
+  // a stale `useCallback` closure value. Without this, programmatic blurs
+  // triggered by the omnibox/search-bar focus chain re-arm
+  // `wasActiveBeforeAppBlurRef` against the very listener that just cleared
+  // it, causing the chat input to steal focus on the next window 'focus'.
+  const chatInputActiveRef = useRef(chatInputActive);
+  chatInputActiveRef.current = chatInputActive;
+  // Natural/programmatic focus transfers already blur TipTap. Calling
+  // `editor.commands.blur()` again while another UI input is taking focus can
+  // race with that input's native focus, so the next inactive effect may skip
+  // the redundant blur. Explicit deactivation paths still blur normally.
+  const skipNextInactiveBlurRef = useRef(false);
+  // Track if input was focused before app lost focus (for restoring on app regain)
+  const wasActiveBeforeAppBlurRef = useRef(false);
+
+  useEffect(() => {
+    if (isCommandCenterOpen) return;
+
+    if (chatInputActive) {
+      // Wait for the next tick to ensure the input is mounted. Guard against
+      // stale scheduled focus calls: external focus handoffs (omnibox/search)
+      // can deactivate the chat before this timeout runs.
+      const timeoutId = setTimeout(() => {
+        if (!chatInputActiveRef.current) return;
+        chatInputRef.current?.focus();
+      }, 0);
+      return () => clearTimeout(timeoutId);
+    }
+
+    // Don't automatically deactivate element selection here
+    // Element selection can be controlled by other components (inline edit mode)
+    // It will be deactivated explicitly when needed (Escape key, send message, agent working, panel closed)
+    if (skipNextInactiveBlurRef.current) {
+      skipNextInactiveBlurRef.current = false;
+      return;
+    }
+    chatInputRef.current?.blur();
+  }, [chatInputActive, isCommandCenterOpen]);
+
+  const onInputFocus = useCallback(() => {
+    // Cancel any active message edits when main chat input is focused
+    window.dispatchEvent(new Event('cancel-all-message-edits'));
+    if (!chatInputActive) setChatInputActive(true);
+    // Clear the app blur flag since we're now focused
+    wasActiveBeforeAppBlurRef.current = false;
+  }, [chatInputActive]);
+
+  const onInputBlur = useCallback((ev: FocusEvent) => {
+    const target = ev.relatedTarget as HTMLElement;
+    // We should only allow chat blur if the user clicked outside the chat box or the context selector element tree. Otherwise, we should keep the input active by refocusing it.
+    if (target?.closest('#chat-file-attachment-menu-content')) {
+      return;
+    }
+    // Let focus move naturally into status card inputs (e.g. user question form)
+    if (target?.closest('[data-status-card]')) {
+      return;
+    }
+    if (
+      !target ||
+      (!target.closest('#chat-input-container-box') &&
+        !target.closest('#element-selector-element-canvas'))
+    ) {
+      // If relatedTarget is null, the app might be losing focus (e.g., CMD+tab)
+      // Track this so we can restore focus when the app regains focus.
+      // Read from the ref (not the closure) so synchronous resets dispatched
+      // earlier in the same event-loop turn (e.g. by
+      // `omnibox-focus-requested`) are honoured before the programmatic blur
+      // they trigger reaches us.
+      const wasChatInputActive = chatInputActiveRef.current;
+      if (!target && wasChatInputActive)
+        wasActiveBeforeAppBlurRef.current = true;
+      if (target && wasChatInputActive) skipNextInactiveBlurRef.current = true;
+
+      setChatInputActive(false);
+    } else if (chatInputActiveRef.current) {
+      chatInputRef.current?.focus();
+    }
+  }, []);
+
+  // Restore focus when the app regains focus (e.g., after CMD+tab back)
+  useEventListener(
+    'focus',
+    () => {
+      if (!wasActiveBeforeAppBlurRef.current) return;
+      wasActiveBeforeAppBlurRef.current = false;
+      setChatInputActive(true);
+      chatInputRef.current?.focus();
+    },
+    {},
+    window,
+  );
+
+  const deactivateChatInputForExternalFocus = useCallback(() => {
+    wasActiveBeforeAppBlurRef.current = false;
+    // Synchronously mark the input as inactive so focus chains that blur
+    // contenteditable elements cannot re-arm app-blur focus restoration before
+    // the `setChatInputActive(false)` state update commits.
+    const wasChatInputActive = chatInputActiveRef.current;
+    chatInputActiveRef.current = false;
+    skipNextInactiveBlurRef.current = wasChatInputActive;
+    setChatInputActive(false);
+    // Also stop context selection to prevent its ESC handler from consuming the first ESC
+    stopContextSelector();
+  }, [stopContextSelector]);
+
+  // Clear focus restoration flag when omnibox takes focus (prevents chat from reclaiming focus)
+  useEventListener(
+    'omnibox-focus-requested',
+    deactivateChatInputForExternalFocus,
+  );
+
+  // Clear focus restoration flag when search bar takes focus (prevents chat from reclaiming focus)
+  useEventListener(
+    'search-bar-focus-requested',
+    deactivateChatInputForExternalFocus,
+  );
+
+  useEventListener(
+    'sidebar-agent-search-focus-requested',
+    deactivateChatInputForExternalFocus,
+  );
+
+  useEffect(() => {
+    if (!isCommandCenterOpen) return;
+    deactivateChatInputForExternalFocus();
+  }, [deactivateChatInputForExternalFocus, isCommandCenterOpen]);
+
+  useEventListener(
+    COMMAND_CENTER_FOCUS_REQUESTED_EVENT,
+    deactivateChatInputForExternalFocus,
+  );
+
+  // Cmd+I: toggle context element selection. Always focuses chat input,
+  // never unfocuses. Only works when a browsing tab is visible.
+  useHotKeyListener(
+    useCallback(async () => {
+      if (!hasVisibleBrowsingTab) return;
+      if (elementSelectionActive) {
+        stopContextSelector();
+      } else {
+        startContextSelector();
+      }
+      if (!chatInputActive) {
+        setChatInputActive(true);
+        await togglePanelKeyboardFocus('clodex-ui');
+      }
+    }, [
+      hasVisibleBrowsingTab,
+      elementSelectionActive,
+      chatInputActive,
+      startContextSelector,
+      stopContextSelector,
+      setChatInputActive,
+      togglePanelKeyboardFocus,
+    ]),
+    HotkeyActions.TOGGLE_CONTEXT_SELECTOR,
+  );
+
+  // Cmd+L: focus chat input. One-way command; Escape/external focus
+  // paths handle deactivation.
+  useHotKeyListener(
+    useCallback(async () => {
+      chatInputActiveRef.current = true;
+      if (!chatInputActive) setChatInputActive(true);
+      try {
+        await togglePanelKeyboardFocus('clodex-ui');
+      } catch {
+        // Still focus the chat input if the panel-focus handoff fails.
+      }
+      if (!chatInputActiveRef.current) return;
+      chatInputRef.current?.focus();
+    }, [chatInputActive, setChatInputActive, togglePanelKeyboardFocus]),
+    HotkeyActions.FOCUS_CHAT_INPUT,
+  );
+
+  useHotKeyListener(
+    useCallback(
+      (event: KeyboardEvent) => {
+        if (shouldPreserveNativeCopy(event)) return false;
+        void abortAgentRef.current();
+      },
+      [shouldPreserveNativeCopy],
+    ),
+    HotkeyActions.STOP_AGENT,
+    isWorking && !hasPendingQuestion,
+  );
+
+  useEventListener(
+    'keydown',
+    (e: KeyboardEvent) => {
+      if (e.code === 'Escape' && chatInputActive) {
+        if (e.defaultPrevented) return; // ChatInput's onEscape already handled it
+        if (isWorking && !hasPendingQuestion) {
+          abortAgentRef.current();
+          return;
+        }
+        if (elementSelectionActive) stopContextSelector();
+        else setChatInputActive(false);
+      }
+    },
+    {},
+  );
+
+  useEffect(() => {
+    if (chatInputActive)
+      window.dispatchEvent(new Event('sidebar-chat-panel-focused'));
+  }, [chatInputActive]);
+
+  useEventListener('sidebar-chat-panel-closed', () => {
+    setChatInputActive(false);
+    stopContextSelector();
+  });
+
+  useEventListener('sidebar-chat-panel-opened', () => {
+    setChatInputActive(true);
+  });
+
+  const handleToggleElementSelection = useCallback(async () => {
+    if (elementSelectionActive) stopContextSelector();
+    else {
+      setChatInputActive(true);
+      startContextSelector();
+      // Ensure keyboard focus is on clodex-ui so ESC key works
+      await togglePanelKeyboardFocus('clodex-ui');
+    }
+  }, [
+    elementSelectionActive,
+    startContextSelector,
+    stopContextSelector,
+    togglePanelKeyboardFocus,
+  ]);
+
+  /**
+   * Add a file attachment and insert a mention into the editor
+   */
+  const handleAddFileAttachment = useCallback(
+    (file: File) => {
+      addFileAttachment(file);
+    },
+    [addFileAttachment],
+  );
+
+  /**
+   * Handle files pasted into the editor.
+   *
+   * `insertPos` is captured synchronously inside the TipTap paste handler
+   * (before any async blob-store work) so the resulting badge is inserted
+   * at the caret position rather than wherever the selection happens to be
+   * when the IPC roundtrip resolves. Do NOT add a `focus('end')` call here:
+   * the editor already holds focus during paste, and `focus('end')` would
+   * reset the caret and undo this fix.
+   */
+  const handlePasteFiles = useCallback(
+    (files: File[], insertPos?: number) => {
+      files.forEach((file) => {
+        addFileAttachment(file, insertPos);
+      });
+    },
+    [addFileAttachment],
+  );
+
+  /**
+   * Handle attachment removal when badge is deleted from editor
+   */
+  const handleAttachmentRemoved = useCallback(
+    (id: string, type: AttachmentType, attrs?: Record<string, unknown>) => {
+      if (type === 'attachment') {
+        removeFileAttachment(id); // id is the path
+      } else if (type === 'element') {
+        removeSelectedElementProc(id);
+        // Also remove the file attachment that was stored for this element
+        const blobPath = attrs?.blobPath as string | undefined;
+        if (blobPath) removeFileAttachment(blobPath);
+      }
+    },
+    [removeFileAttachment, removeSelectedElementProc],
+  );
+
+  const handleWorkspaceFileDrop = useCallback(
+    (attachment: AttachmentMetadata) => {
+      const colonIndex = attachment.path.indexOf(':');
+      const slashIndex = attachment.path.indexOf('/');
+      const mountPrefix =
+        colonIndex > 0 ? attachment.path.slice(0, colonIndex) : null;
+      const absolutePath =
+        colonIndex > 0 ? attachment.path.slice(colonIndex + 1) : null;
+      const currentMounts = mountsRef.current;
+      const mount =
+        mountPrefix && absolutePath
+          ? currentMounts.find(
+              (item) =>
+                item.prefix === mountPrefix &&
+                normalizePath(absolutePath).startsWith(
+                  `${normalizePath(item.path)}/`,
+                ),
+            )
+          : null;
+      const normalizedAttachment =
+        mount && absolutePath
+          ? {
+              path: `${mount.prefix}/${normalizePath(absolutePath).slice(
+                normalizePath(mount.path).length + 1,
+              )}`,
+            }
+          : slashIndex > 0 && colonIndex === -1
+            ? attachment
+            : null;
+
+      if (!normalizedAttachment) return;
+
+      setFileAttachments((prev) => {
+        if (prev.some((item) => item.path === normalizedAttachment.path)) {
+          return prev;
+        }
+        return [...prev, normalizedAttachment];
+      });
+      chatInputRef.current?.insertAttachment(
+        attachmentToAttachmentAttributes(normalizedAttachment),
+      );
+    },
+    [setFileAttachments],
+  );
+
+  // Drag and drop via shared hook
+  const { isDragOver, handlers: dragHandlers } = useDragDrop({
+    onFileDrop: addFileAttachment,
+    onWorkspaceFileDrop: handleWorkspaceFileDrop,
+    onDropComplete: () => {
+      chatInputRef.current?.focus();
+    },
+  });
+
+  // Register main drop handler for forwarded events
+  useEffect(() => {
+    // Register the useDragDrop handler so forwarded events get the same processing
+    setMainDropHandler(dragHandlers.onDrop);
+  }, [setMainDropHandler, dragHandlers.onDrop]);
+
+  // Handle textclip-expand: replace the attachment node with inline text and
+  // remove the file attachment.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { attachmentId, content } = (e as CustomEvent).detail as {
+        attachmentId: string;
+        content: string;
+      };
+      chatInputRef.current?.replaceAttachmentWithText(attachmentId, content);
+      removeFileAttachment(attachmentId);
+    };
+    window.addEventListener('textclip-expand', handler);
+    return () => window.removeEventListener('textclip-expand', handler);
+  }, [chatInputRef, removeFileAttachment]);
+
+  // Watch for selected elements via shared hook.
+  // When a new element is selected we:
+  // 1. Insert an elementAttachment node in the editor (for UI display)
+  // 2. Serialize to `.swdomelement` JSON and store as a file attachment so the
+  //    backend can read it from `att/` just like any other attachment file.
+  useElementSelectionWatcher({
+    isActive: elementSelectionActive,
+    onNewElement: useCallback(
+      (element: SelectedElement) => {
+        const attrs = selectedElementToAttachmentAttributes(element);
+        // Defer insertion to avoid flushSync inside a React lifecycle
+        // (the watcher callback fires during a state update).
+        queueMicrotask(() => {
+          chatInputRef.current?.insertAttachment(attrs);
+        });
+
+        // Fire-and-forget: serialize the element to a .swdomelement file and
+        // store it in the blob directory. We store directly via the
+        // storeAttachment procedure and update the attachments state
+        // manually — we must NOT use addFileAttachment here because it would
+        // insert a second (regular) attachment node into the editor.
+        const tabId = element.tabId;
+        const url = tabId
+          ? ((
+              document.querySelector<HTMLElement>(
+                `[data-tab-id="${tabId}"]`,
+              ) as any
+            )?.dataset?.url ?? undefined)
+          : undefined;
+        const swdom = selectedElementToSwDomElement(element, {
+          tabId,
+          url,
+        });
+        const tagName = (
+          element.nodeType ||
+          element.tagName ||
+          'element'
+        ).toLowerCase();
+        const domId = element.attributes?.id
+          ? `_${element.attributes.id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20)}`
+          : '';
+        const fileName = `${tagName}${domId}.swdomelement`;
+        const screenshotFileName = `${tagName}${domId}.screenshot.webp`;
+
+        if (openAgent) {
+          // Capture screenshot in parallel with building the swdom JSON.
+          // The screenshot is stored as a separate WebP blob; its blob key
+          // is written into the .swdomelement JSON so the backend can
+          // locate the image when constructing multimodal prompts.
+          const screenshotPromise =
+            element.boundingClientRect && tabId
+              ? captureAndStoreElementScreenshot(
+                  openAgent,
+                  tabId,
+                  {
+                    top: element.boundingClientRect.top,
+                    left: element.boundingClientRect.left,
+                    width: element.boundingClientRect.width,
+                    height: element.boundingClientRect.height,
+                  },
+                  element.isMainFrame ?? true,
+                  element.frameId,
+                  screenshotFileName,
+                ).catch((err: unknown) => {
+                  console.warn(
+                    '[panel-footer] Screenshot capture failed (non-fatal):',
+                    err,
+                  );
+                  return null;
+                })
+              : Promise.resolve(null);
+
+          screenshotPromise
+            .then((screenshotBlobKey) => {
+              // Set screenshot blob key on the swdom before serializing
+              if (screenshotBlobKey) {
+                swdom.screenshot = screenshotBlobKey;
+                // Update the TipTap node so the badge can show the thumbnail
+                chatInputRef.current?.updateAttachmentAttrs(attrs.id, {
+                  screenshotBlobKey,
+                });
+              }
+              const json = JSON.stringify(swdom);
+              const base64 = btoa(
+                new TextEncoder()
+                  .encode(json)
+                  .reduce((s, b) => s + String.fromCharCode(b), ''),
+              );
+              return storeAttachment(openAgent, fileName, base64);
+            })
+            .then((blobKey: string) => {
+              const blobPath = `att/${blobKey}`;
+              setFileAttachments((prev) => [
+                ...prev,
+                { path: blobPath, originalFileName: fileName },
+              ]);
+              // Update the TipTap node with the blob path so renderText
+              // can emit the correct `[](path:att/<blobKey>)` link.
+              chatInputRef.current?.updateAttachmentAttrs(attrs.id, {
+                blobPath,
+              });
+            })
+            .catch((err: unknown) => {
+              console.error(
+                '[panel-footer] Failed to store .swdomelement blob:',
+                err,
+              );
+            });
+        }
+      },
+      [
+        chatInputRef,
+        openAgent,
+        storeAttachment,
+        captureAndStoreElementScreenshot,
+        setFileAttachments,
+      ],
+    ),
+  });
+
+  const allowUserInput = useKartonState((s) =>
+    openAgent
+      ? (s.agents.instances[openAgent]?.allowUserInput ?? false)
+      : false,
+  );
+
+  // The workspace strip below the chat-input is now always rendered: it owns
+  // the only "Connect new workspace" affordance, so empty-chat suggestions
+  // never need to surface that fallback. Bool selector keeps the
+  // subscription cheap.
+  const historyIsEmpty = useKartonState((s) =>
+    openAgent
+      ? (s.agents.instances[openAgent]?.state.history?.length ?? 0) === 0
+      : true,
+  );
+
+  const [workspaceActionError, setWorkspaceActionError] = useState<
+    string | null
+  >(null);
+
+  const [workspaceActionConfigs, setWorkspaceActionConfigs] = useState<
+    ReadonlyMap<string, WorkspaceActionConfig>
+  >(EMPTY_WORKSPACE_ACTION_CONFIGS);
+  const workspaceActionConfigsRef = useRef(workspaceActionConfigs);
+  workspaceActionConfigsRef.current = workspaceActionConfigs;
+
+  const workspaceActionMountsKey = useKartonState((s) =>
+    openAgent
+      ? (s.toolbox[openAgent]?.workspace?.mounts ?? EMPTY_MOUNTS)
+          .map(
+            (mount) =>
+              `${mount.prefix}|${mount.path}|${mount.git ? formatWorkspaceGitRef(mount.git) : ''}`,
+          )
+          .join('\n')
+      : '',
+  );
+
+  useEffect(() => {
+    setWorkspaceActionError(null);
+
+    if (!historyIsEmpty) {
+      if (workspaceActionConfigsRef.current.size > 0) {
+        setWorkspaceActionConfigs(EMPTY_WORKSPACE_ACTION_CONFIGS);
+      }
+      return;
+    }
+
+    const mounts = mountsRef.current;
+    setWorkspaceActionConfigs((prev) => {
+      let changed = false;
+      const next = new Map<string, WorkspaceActionConfig>();
+
+      for (const mount of mounts) {
+        if (!mount.git) continue;
+
+        const existing = prev.get(mount.prefix);
+        if (existing) {
+          next.set(mount.prefix, existing);
+          continue;
+        }
+
+        const gitRef = formatWorkspaceGitRef(mount.git);
+        const sourceBranchItems = getBranchSelectItems(gitRef);
+        const worktreeItems = getWorktreeSelectItems();
+        const baseConfig = applyMountedWorkspaceActionDefault(
+          applyWorkspaceGitActionPreferences(
+            createDefaultWorkspaceActionConfig(
+              sourceBranchItems,
+              worktreeItems,
+            ),
+            sourceBranchItems,
+            worktreeItems,
+            workspaceGitActionPreferences.general,
+            workspaceGitActionPreferences.repositories[mount.git.repositoryId],
+          ),
+          mount,
+        );
+        next.set(mount.prefix, baseConfig);
+        changed = true;
+      }
+
+      if (next.size !== prev.size) changed = true;
+      return changed ? next : prev;
+    });
+  }, [historyIsEmpty, workspaceActionMountsKey, workspaceGitActionPreferences]);
+
+  const handleWorkspaceActionConfigChange = useCallback(
+    (mount: MountEntry, config: WorkspaceActionConfig) => {
+      setWorkspaceActionError(null);
+      setWorkspaceActionConfigs((prev) => {
+        const next = new Map(prev);
+        next.set(mount.prefix, config);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleModelChange = useCallback(() => {
+    chatInputRef.current?.focus();
+  }, []);
+
+  const focusChatInputAfterWorkspaceChange = useCallback(() => {
+    chatInputActiveRef.current = true;
+    setChatInputActive(true);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        chatInputRef.current?.focus();
+      });
+    });
+  }, []);
+
+  useEventListener(
+    CHAT_INPUT_FOCUS_REQUESTED_EVENT,
+    focusChatInputAfterWorkspaceChange,
+  );
+
+  const prefillChatInput = useCallback(
+    (event: ChatInputPrefillRequestedEvent) => {
+      chatInputActiveRef.current = true;
+      setChatInputActive(true);
+      chatInputRef.current?.setText(event.detail.text);
+      requestAnimationFrame(() => chatInputRef.current?.focus());
+    },
+    [],
+  );
+
+  useEventListener(CHAT_INPUT_PREFILL_REQUESTED_EVENT, prefillChatInput);
+
+  const insertChatInputText = useCallback(
+    (event: ChatInputInsertTextRequestedEvent) => {
+      chatInputActiveRef.current = true;
+      setChatInputActive(true);
+      void Promise.resolve(togglePanelKeyboardFocusRef.current('clodex-ui'))
+        .catch(() => {
+          // The editor can still accept text if native focus handoff is
+          // temporarily unavailable.
+        })
+        .then(() => {
+          chatInputRef.current?.insertText(event.detail.text);
+          chatInputRef.current?.focus();
+        });
+    },
+    [],
+  );
+
+  useEventListener(CHAT_INPUT_INSERT_TEXT_REQUESTED_EVENT, insertChatInputText);
+
+  const handleWorkspaceChange = focusChatInputAfterWorkspaceChange;
+
+  if (!allowUserInput) return null;
+
+  return (
+    <footer className="z-20 flex shrink-0 flex-col items-stretch gap-1 px-3 pb-3">
+      <MessageAttachmentsProvider elements={[]} attachments={fileAttachments}>
+        <div
+          className={cn(
+            'codex-composer relative flex flex-row items-stretch gap-2 p-3 transition-[background-color,border-color,box-shadow]',
+            isDragOver && 'bg-hover-derived!',
+          )}
+          id="chat-input-container-box"
+          data-tutorial="chat-input"
+          data-chat-active={chatInputActive}
+          onKeyDown={(e) => {
+            // Shift-Tab from chat input → jump to last question in status card form
+            if (
+              e.key === 'Tab' &&
+              e.shiftKey &&
+              !(e.target as HTMLElement).closest('[data-status-card]')
+            ) {
+              const card = e.currentTarget.querySelector('[data-status-card]');
+              const questions = card?.querySelectorAll('[data-question]');
+              const last = questions?.[questions.length - 1];
+              if (last) {
+                e.preventDefault();
+                const focusable =
+                  last.querySelector<HTMLElement>('button[data-checked]') ??
+                  last.querySelector<HTMLElement>(
+                    'input:not([tabindex="-1"]), button, [role="radio"], [role="checkbox"]',
+                  );
+                focusable?.focus();
+              }
+            }
+          }}
+          onDragEnter={dragHandlers.onDragEnter}
+          onDragLeave={dragHandlers.onDragLeave}
+          onDragOver={dragHandlers.onDragOver}
+          // Reset drag state, let event bubble to ChatPanel.
+          onDrop={dragHandlers.onDropBubble}
+        >
+          <ChatInput
+            key={openAgent}
+            ref={chatInputRef as RefObject<ChatInputHandle>}
+            value={localInputState}
+            onChange={updateChatInputState}
+            onSubmit={handleSubmit}
+            disabled={!enableInputField}
+            placeholder={
+              hasPendingQuestion ? 'Write a message instead' : undefined
+            }
+            attachmentCount={fileAttachments.length}
+            showCollaborationModeSelect={collaborationPresetsEnabled}
+            collaborationModeDisabled={isWorking || hasPendingQuestion}
+            showModelSelect
+            onModelChange={handleModelChange}
+            showContextUsageRing={
+              !!usedTokens && (isVerboseMode || contextUsed > 80)
+            }
+            contextUsedPercentage={contextUsed}
+            contextUsedKb={usedTokens ? usedTokens / 1000 : 0}
+            contextMaxKb={maxTokens ? maxTokens / 1000 : 0}
+            hasQueuedMessages={(queuedMessages?.length ?? 0) > 0}
+            onFlushQueue={handleFlushQueue}
+            onFocus={onInputFocus}
+            onBlur={onInputBlur}
+            onEscape={handleEscape}
+            onPasteFiles={handlePasteFiles}
+            onAttachmentRemoved={handleAttachmentRemoved}
+            mentionContext={mentionContext}
+            slashCommands={slashCommands}
+          />
+          <ChatInputActions
+            isAgentWorking={isWorking}
+            hasPendingQuestion={hasPendingQuestion}
+            onStop={stableAbortAgent}
+            showElementSelectorButton={hasVisibleBrowsingTab}
+            elementSelectionActive={elementSelectionActive}
+            onToggleElementSelection={handleToggleElementSelection}
+            elementSelectorDisabled={hasOpenedInternalPage}
+            showImageUploadButton
+            onAddFileAttachment={handleAddFileAttachment}
+            swarmModeActive={swarmModeActive}
+            battleModeActive={swarmModeVariant === 'battle'}
+            onToggleSwarmMode={toggleSwarmMode}
+            onToggleBattleMode={toggleBattleMode}
+            swarmModeDisabled={isWorking || hasPendingQuestion}
+            dictationState={dictation.visible ? dictation.state : undefined}
+            dictationDisabled={!dictation.available}
+            onToggleDictation={dictation.visible ? dictation.toggle : undefined}
+            canSendMessage={effectiveCanSendMessage}
+            onSubmit={handleSubmit}
+          />
+          <StatusCard />
+        </div>
+      </MessageAttachmentsProvider>
+      {workspaceActionError && (
+        <WorkspaceActionErrorMessage message={workspaceActionError} />
+      )}
+      <WorkspaceSelect
+        onWorkspaceChange={handleWorkspaceChange}
+        chatIsEmpty={historyIsEmpty}
+        workspaceActionConfigs={workspaceActionConfigs}
+        onWorkspaceActionConfigChange={handleWorkspaceActionConfigChange}
+      />
+    </footer>
+  );
+});

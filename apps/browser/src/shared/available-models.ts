@@ -1,0 +1,1816 @@
+import type {
+  ModelSettings,
+  ModelThinkingOverride,
+} from '@shared/karton-contracts/ui/shared-types';
+
+const anthropicHeaders = {
+  'anthropic-beta':
+    'fine-grained-tool-streaming-2025-05-14, interleaved-thinking-2025-05-14',
+};
+
+const openaiHeaders = {};
+
+const googleHeaders = {};
+
+export const PRICING_REFERENCE = {
+  inputPerMillion: 1.0,
+  outputPerMillion: 5.0,
+};
+
+import type { ModalityConstraint } from '@shared/karton-contracts/ui/shared-types';
+
+type InputConstraints = {
+  image?: ModalityConstraint;
+  file?: ModalityConstraint;
+  video?: ModalityConstraint;
+  audio?: ModalityConstraint;
+};
+
+const ANTHROPIC_INPUT_CONSTRAINTS: InputConstraints = {
+  image: {
+    mimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+    maxBytes: 5_242_880, // 5 MB per image
+    maxWidthPx: 8000,
+    maxHeightPx: 8000,
+    maxTotalPixels: 1_200_000, // Anthropic enforces a 1.2 MP per-image limit
+  },
+  file: {
+    mimeTypes: ['application/pdf'],
+    maxBytes: 32_000_000, // 32 MB request limit
+  },
+};
+
+// Patch-based tokenization (32×32 px patches) for all supported OpenAI models.
+// Two constraints apply simultaneously:
+//   1. Neither dimension may exceed 2048 px.
+//   2. Total pixels may not exceed patch_budget × 32².
+//
+// Supported OpenAI models (GPT-4o, GPT-4.1, o-series excl. o4-mini): 1,536 patches
+//   → 1,536 × 1,024 = 1,572,864 px ≈ 1.54 MP
+const OPENAI_INPUT_CONSTRAINTS: InputConstraints = {
+  image: {
+    mimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+    maxBytes: 5_242_880, // 5 MB effective limit (20 MB API cap)
+    maxWidthPx: 2048,
+    maxHeightPx: 2048,
+    maxTotalPixels: 1_572_864, // 1,536 patches × 32²
+  },
+  file: {
+    mimeTypes: ['application/pdf'],
+    maxBytes: 20_971_520, // 20 MB
+  },
+};
+
+// GPT-5.4 and later: 2,500 patches
+//   → 2,500 × 1,024 = 2,560,000 px ≈ 2.5 MP
+//   Same 2048 max-dimension rule applies.
+const GPT54_INPUT_CONSTRAINTS: InputConstraints = {
+  ...OPENAI_INPUT_CONSTRAINTS,
+  image: {
+    mimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+    maxBytes: 5_242_880,
+    maxWidthPx: 2048,
+    maxHeightPx: 2048,
+    maxTotalPixels: 2_560_000, // 2,500 patches × 32²
+  },
+};
+
+const GOOGLE_INPUT_CONSTRAINTS: InputConstraints = {
+  image: {
+    mimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+    maxBytes: 104_857_600, // 100 MB inline
+    maxWidthPx: 4096,
+    maxHeightPx: 4096,
+    maxTotalPixels: 2_500_000, // 2.5 MP
+  },
+  file: {
+    mimeTypes: ['application/pdf'],
+    maxBytes: 104_857_600, // 100 MB inline
+  },
+  video: {
+    mimeTypes: ['video/mp4', 'video/webm', 'video/quicktime'],
+    maxBytes: 104_857_600, // 100 MB inline
+  },
+};
+
+const GEMINI35_INPUT_CONSTRAINTS: InputConstraints = {
+  ...GOOGLE_INPUT_CONSTRAINTS,
+  audio: {
+    mimeTypes: [
+      'audio/aac',
+      'audio/aiff',
+      'audio/flac',
+      'audio/mp3',
+      'audio/mpeg',
+      'audio/ogg',
+      'audio/wav',
+      'audio/webm',
+    ],
+    maxBytes: 20_971_520, // 20 MB inline request limit
+  },
+};
+
+const MINIMAX_M3_INPUT_CONSTRAINTS: InputConstraints = {
+  image: {
+    mimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+    maxBytes: 10_485_760, // 10 MB per image
+  },
+  video: {
+    mimeTypes: [
+      'video/mp4',
+      'video/quicktime',
+      'video/x-msvideo',
+      'video/x-matroska',
+    ],
+    maxBytes: 52_428_800, // 50 MB inline video input
+  },
+};
+
+const MIMO_V25_INPUT_CONSTRAINTS: InputConstraints = {
+  image: {
+    mimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+    maxBytes: 10_485_760, // 10 MB per image
+  },
+  video: {
+    mimeTypes: ['video/mp4', 'video/webm', 'video/quicktime'],
+    maxBytes: 52_428_800, // 50 MB inline video input
+  },
+  audio: {
+    mimeTypes: [
+      'audio/aac',
+      'audio/flac',
+      'audio/mp3',
+      'audio/mpeg',
+      'audio/ogg',
+      'audio/wav',
+      'audio/webm',
+    ],
+    maxBytes: 20_971_520, // 20 MB inline audio input
+  },
+};
+
+export const availableModels = [
+  // Anthropic Models
+  {
+    officialProvider: 'anthropic',
+    modelId: 'claude-fable-5',
+    modelDisplayName: 'Fable 5',
+    modelDescription:
+      "Anthropic's next-generation frontier model for complex reasoning, long-horizon coding, and agentic workflows.",
+    modelContext: '1M context',
+    modelContextRaw: 1000000,
+    headers: anthropicHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      anthropic: {
+        thinking: { type: 'adaptive' },
+        effort: 'medium',
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 10.0,
+      outputPerMillion: 50.0,
+      relativeMultiplier: 10.0,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: ANTHROPIC_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'anthropic',
+    modelId: 'claude-opus-4.8',
+    modelDisplayName: 'Opus 4.8',
+    modelDescription:
+      "Anthropic's most capable model, excels at complex reasoning and architectural decisions.",
+    modelContext: '1M context',
+    modelContextRaw: 1000000,
+    headers: anthropicHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      anthropic: {
+        thinking: { type: 'adaptive' },
+        effort: 'medium',
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 5.0,
+      outputPerMillion: 25.0,
+      relativeMultiplier: 5.3,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: ANTHROPIC_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'anthropic',
+    modelId: 'claude-opus-4.7',
+    modelDisplayName: 'Opus 4.7',
+    modelDescription:
+      'Previous-generation Opus model. Still highly capable for complex reasoning tasks.',
+    modelContext: '1M context',
+    modelContextRaw: 1000000,
+    headers: anthropicHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      anthropic: {
+        thinking: { type: 'adaptive' },
+        effort: 'medium',
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 5.0,
+      outputPerMillion: 25.0,
+      relativeMultiplier: 5.3,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: ANTHROPIC_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'anthropic',
+    modelId: 'claude-opus-4.6',
+    modelDisplayName: 'Opus 4.6',
+    modelDescription:
+      'Previous-generation Opus model. Still highly capable for complex reasoning tasks.',
+    modelContext: '200k context',
+    modelContextRaw: 200000,
+    headers: anthropicHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      anthropic: {
+        thinking: { type: 'adaptive' },
+        effort: 'medium',
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 5.0,
+      outputPerMillion: 25.0,
+      relativeMultiplier: 5.3,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: ANTHROPIC_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'openai',
+    modelId: 'gpt-5.5',
+    modelDisplayName: 'GPT-5.5',
+    modelDescription:
+      "OpenAI's smartest and most intuitive model yet, excelling at agentic coding, computer use, and long-horizon knowledge work.",
+    modelContext: '1M context',
+    modelContextRaw: 1000000,
+    headers: openaiHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      openai: {
+        reasoningEffort: 'medium',
+        reasoningSummary: 'auto',
+        parallelToolCalls: true,
+        strictJsonSchema: true,
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 5.0,
+      outputPerMillion: 30.0,
+      relativeMultiplier: 5.9,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GPT54_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'openai',
+    modelId: 'gpt-5.4',
+    modelDisplayName: 'GPT-5.4',
+    modelDescription:
+      "OpenAI's previous-generation frontier model. Strong reasoning and multimodal capabilities.",
+    modelContext: '1.1m context',
+    modelContextRaw: 1100000,
+    headers: openaiHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      openai: {
+        reasoningEffort: 'medium',
+        reasoningSummary: 'auto',
+        parallelToolCalls: true,
+        strictJsonSchema: true,
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 2.5,
+      outputPerMillion: 15.0,
+      relativeMultiplier: 3.1,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GPT54_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'google',
+    modelId: 'gemini-3.1-pro-preview',
+    modelDisplayName: 'Gemini 3.1 Pro (Preview)',
+    modelDescription:
+      "Google's latest model with strong reasoning and multimodal capabilities. Preview version (may be unstable).",
+    modelContext: '1M context',
+    modelContextRaw: 1000000,
+    headers: googleHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      google: {
+        thinkingConfig: { includeThoughts: true, thinkingLevel: 'high' },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 2.0,
+      outputPerMillion: 12.0,
+      relativeMultiplier: 2.5,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: true,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GOOGLE_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'openai',
+    modelId: 'gpt-5.3-codex',
+    modelDisplayName: 'GPT-5.3 Codex',
+    modelDescription:
+      "OpenAI's most powerful coding model, designed for large-scale projects and complex refactoring.",
+    modelContext: '128k context',
+    modelContextRaw: 128000,
+    headers: openaiHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'high' } },
+      openai: {
+        reasoningEffort: 'high',
+        reasoningSummary: 'auto',
+        parallelToolCalls: true,
+        strictJsonSchema: true,
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 1.75,
+      outputPerMillion: 14.0,
+      relativeMultiplier: 2.9,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: OPENAI_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'anthropic',
+    modelId: 'claude-sonnet-5',
+    modelDisplayName: 'Sonnet 5',
+    modelDescription:
+      "Anthropic's next-generation mid-size model, combining strong reasoning with efficient performance for daily coding tasks.",
+    modelContext: '200k context',
+    modelContextRaw: 200000,
+    headers: anthropicHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      anthropic: { thinking: { type: 'adaptive' }, effort: 'medium' },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 3.0,
+      outputPerMillion: 15.0,
+      relativeMultiplier: 3.2,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: ANTHROPIC_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'anthropic',
+    modelId: 'claude-sonnet-4.6',
+
+    modelDisplayName: 'Sonnet 4.6',
+    modelDescription:
+      'Previous-generation balanced model, still great for daily coding tasks.',
+    modelContext: '200k context',
+    modelContextRaw: 200000,
+    headers: anthropicHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      anthropic: { thinking: { type: 'adaptive' }, effort: 'medium' },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 3.0,
+      outputPerMillion: 15.0,
+      relativeMultiplier: 3.2,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: ANTHROPIC_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'moonshotai',
+    modelId: 'kimi-k2.7-code',
+    modelDisplayName: 'Kimi K2.7 Code',
+    modelDescription:
+      "Kimi's code-specialized model for agentic coding tasks and long-context software work.",
+    modelContext: '256k context',
+    modelContextRaw: 262144,
+    headers: {},
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      moonshotai: {
+        thinking: { type: 'adaptive' },
+        effort: 'medium',
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.75,
+      outputPerMillion: 3.5,
+      relativeMultiplier: 0.8,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GOOGLE_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'moonshotai',
+    modelId: 'kimi-k2.6',
+    modelDisplayName: 'Kimi K2.6',
+    modelDescription:
+      "Kimi's latest flagship with stronger long-horizon coding, improved instruction compliance, and native multimodal input (text, image, video).",
+    modelContext: '256k context',
+    modelContextRaw: 262144,
+    headers: {},
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      moonshotai: {
+        thinking: { type: 'adaptive' },
+        effort: 'medium',
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.95,
+      outputPerMillion: 4.0,
+      relativeMultiplier: 0.85,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: true,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GOOGLE_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'moonshotai',
+    modelId: 'kimi-k2.5',
+    modelDisplayName: 'Kimi K2.5',
+    modelDescription:
+      "Kimi's most versatile model to date, featuring a native multimodal architecture for dialogue and agent tasks.",
+    modelContext: '250k context',
+    modelContextRaw: 250000,
+    headers: {},
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      moonshotai: {
+        thinking: { type: 'adaptive' },
+        effort: 'medium',
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.45,
+      outputPerMillion: 2.2,
+      relativeMultiplier: 0.5,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: true,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GOOGLE_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'openai',
+    modelId: 'gpt-5.3-chat',
+    modelDisplayName: 'GPT-5.3 Instant',
+    modelDescription: "OpenAI's latest chatting model for daily use.",
+    modelContext: '200k context',
+    modelContextRaw: 200000,
+    headers: openaiHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      openai: {
+        reasoningEffort: 'medium',
+        reasoningSummary: 'auto',
+        parallelToolCalls: true,
+        strictJsonSchema: true,
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 1.1,
+      outputPerMillion: 14.0,
+      relativeMultiplier: 2.8,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: OPENAI_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'openai',
+    modelId: 'gpt-5.4-mini',
+    modelDisplayName: 'GPT-5.4 mini',
+    modelDescription:
+      "OpenAI's strongest mini model for coding, computer use, and subagents.",
+    modelContext: '400k context',
+    modelContextRaw: 400000,
+    headers: openaiHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      openai: {
+        reasoningEffort: 'medium',
+        reasoningSummary: 'auto',
+        parallelToolCalls: true,
+        strictJsonSchema: true,
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.75,
+      outputPerMillion: 4.5,
+      relativeMultiplier: 0.9,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GPT54_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'google',
+    modelId: 'gemini-3.5-flash',
+    modelDisplayName: 'Gemini 3.5 Flash',
+    modelDescription:
+      "Google's most intelligent model for sustained frontier performance on agentic and coding tasks.",
+    modelContext: '1m context',
+    modelContextRaw: 1_048_576,
+    headers: googleHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      google: {
+        thinkingConfig: { includeThoughts: true, thinkingLevel: 'medium' },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 1.5,
+      outputPerMillion: 9.0,
+      relativeMultiplier: 1.75,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: true,
+        image: true,
+        video: true,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GEMINI35_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'google',
+    modelId: 'gemini-3-flash-preview',
+    modelDisplayName: 'Gemini 3 Flash',
+    modelDescription:
+      "Google's most intelligent model built for speed, combining frontier intelligence with superior search and grounding.",
+    modelContext: '1m context',
+    modelContextRaw: 1000000,
+    headers: googleHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      google: {
+        thinkingConfig: { includeThoughts: true, thinkingLevel: 'medium' },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.5,
+      outputPerMillion: 3.0,
+      relativeMultiplier: 0.6,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GOOGLE_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'anthropic',
+    modelId: 'claude-haiku-4.5',
+    modelDisplayName: 'Haiku 4.5',
+    modelDescription:
+      'Fast and cost-effective, ideal for quick iterations and simple edits.',
+    modelContext: '200k context',
+    modelContextRaw: 200000,
+    headers: anthropicHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      anthropic: { thinking: { type: 'enabled', budgetTokens: 10000 } },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 1.0,
+      outputPerMillion: 5.0,
+      relativeMultiplier: 1.0,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: ANTHROPIC_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'google',
+    modelId: 'gemini-3.1-flash-lite',
+    modelDisplayName: 'Gemini 3.1 Flash Lite',
+    modelDescription:
+      "Google's workhorse model for high-speed and high-volume use, with improvements across translation, data extraction, and code completion.",
+    modelContext: '1m context',
+    modelContextRaw: 1000000,
+    headers: googleHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      google: {
+        thinkingConfig: { includeThoughts: true, thinkingLevel: 'medium' },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.25,
+      outputPerMillion: 1.5,
+      relativeMultiplier: 0.3,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GOOGLE_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'openai',
+    modelId: 'gpt-5.4-nano',
+    modelDisplayName: 'GPT-5.4 nano',
+    modelDescription:
+      "OpenAI's cheapest GPT-5.4-class model for simple high-volume tasks.",
+    modelContext: '400k context',
+    modelContextRaw: 400000,
+    headers: openaiHeaders,
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      openai: {
+        reasoningEffort: 'medium',
+        reasoningSummary: 'auto',
+        parallelToolCalls: true,
+        strictJsonSchema: true,
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.2,
+      outputPerMillion: 1.25,
+      relativeMultiplier: 0.25,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GPT54_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'alibaba',
+    modelId: 'qwen3-32b',
+    modelDisplayName: 'Qwen 3-32B',
+    modelDescription:
+      'Qwen3-32B is a world-class model with comparable quality to DeepSeek R1 while outperforming GPT-4.1 and Claude Sonnet 3.7.',
+    modelContext: '128k context',
+    modelContextRaw: 128000,
+    headers: {},
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      anthropic: { thinking: { type: 'enabled', budgetTokens: 10000 } },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.08,
+      outputPerMillion: 0.24,
+      relativeMultiplier: 0.05,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GOOGLE_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'alibaba',
+    modelId: 'qwen3-coder-30b-a3b-instruct',
+    modelDisplayName: 'Qwen 3-Coder 30B-A3B',
+    modelDescription:
+      'Efficient coding specialist balancing performance with cost-effectiveness for daily development tasks while maintaining strong tool integration capabilities.',
+    modelContext: '260k context',
+    modelContextRaw: 260000,
+    headers: {},
+    providerOptions: {
+      clodex: { reasoning: { enabled: true, effort: 'medium' } },
+      anthropic: { thinking: { type: 'enabled', budgetTokens: 10000 } },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.07,
+      outputPerMillion: 0.27,
+      relativeMultiplier: 0.06,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: GOOGLE_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'deepseek',
+    modelId: 'deepseek-v4-pro',
+    modelDisplayName: 'DeepSeek V4 Pro',
+    modelDescription:
+      "DeepSeek's flagship 1.6T-parameter Mixture-of-Experts model with 49B activated. Strong reasoning and coding at a low price point.",
+    modelContext: '1M context',
+    modelContextRaw: 1_048_576,
+    headers: {},
+    providerOptions: {
+      clodex: {
+        reasoning: { enabled: true, effort: 'medium' },
+        // Skip OpenRouter upstreams that don't accept `tools`/`tool_choice`
+        // (SiliconFlow, GMICloud). Without this, requests silently route to
+        // endpoints that reject tool definitions.
+        provider: { require_parameters: true },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.435,
+      outputPerMillion: 0.87,
+      relativeMultiplier: 0.22,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'deepseek',
+    modelId: 'deepseek-v4-flash',
+    modelDisplayName: 'DeepSeek V4 Flash',
+    modelDescription:
+      "DeepSeek's efficiency-optimized 284B-parameter MoE with 13B activated. Fast and cheap for high-volume workflows.",
+    modelContext: '1M context',
+    modelContextRaw: 1_048_576,
+    headers: {},
+    providerOptions: {
+      clodex: {
+        reasoning: { enabled: true, effort: 'medium' },
+        // Defensive: all current V4 Flash upstreams support tools, but this
+        // guards against future upstream additions that don't.
+        provider: { require_parameters: true },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.14,
+      outputPerMillion: 0.28,
+      relativeMultiplier: 0.07,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'z-ai',
+    modelId: 'glm-5.2',
+    modelDisplayName: 'GLM 5.2',
+    modelDescription:
+      "Z.ai's latest flagship with a 1M-token context window for large codebases, long-horizon coding, and agentic workflows.",
+    modelContext: '1M context',
+    modelContextRaw: 1_048_576,
+    headers: {},
+    providerOptions: {
+      clodex: {
+        // Z.ai maps `xhigh` to GLM 5.2's native `max`; the clodex
+        // gateway rejects literal `max` in `reasoning.effort`.
+        reasoning: { enabled: true, effort: 'xhigh' },
+        provider: { require_parameters: true },
+      },
+      openai: {
+        // Z.ai maps OpenAI-compatible `xhigh` to GLM 5.2's native `max`.
+        // The AI SDK Chat Completions provider rejects literal `max`.
+        reasoningEffort: 'xhigh',
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 1.4,
+      outputPerMillion: 4.4,
+      relativeMultiplier: 0.97,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'z-ai',
+    modelId: 'glm-5.1',
+    modelDisplayName: 'GLM 5.1',
+    modelDescription:
+      "Z.ai's newest flagship. Major leap in long-horizon coding and agentic workflows.",
+    modelContext: '200k context',
+    modelContextRaw: 202_752,
+    headers: {},
+    providerOptions: {
+      clodex: {
+        reasoning: { enabled: true, effort: 'medium' },
+        // Only ~6 of 15 GLM 5.1 upstreams support tools. Filter to those.
+        provider: { require_parameters: true },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 1.4,
+      outputPerMillion: 4.4,
+      relativeMultiplier: 0.97,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'z-ai',
+    modelId: 'glm-5v-turbo',
+    modelDisplayName: 'GLM 5V-Turbo',
+    modelDescription:
+      "Z.ai's native multimodal agent model. Handles image, video, and text input for vision-based coding and agent tasks.",
+    modelContext: '200k context',
+    modelContextRaw: 202_752,
+    headers: {},
+    providerOptions: {
+      clodex: {
+        reasoning: { enabled: true, effort: 'medium' },
+        // Only Z.AI serves GLM 5V-Turbo today. No-op for now, but guards
+        // against future upstream additions that lack tool support.
+        provider: { require_parameters: true },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 1.2,
+      outputPerMillion: 4.0,
+      relativeMultiplier: 0.87,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: true,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      // Reused from Google's constraint set as a sane multimodal default
+      // for image + video limits. Z.AI upstream limits may differ; refine
+      // if we observe rejections on larger inline payloads.
+      // `file` is omitted so the constraints stay consistent with
+      // `inputModalities.file = false` (no PDF ingestion).
+      inputConstraints: {
+        ...GOOGLE_INPUT_CONSTRAINTS,
+        file: undefined,
+      },
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'minimax',
+    modelId: 'minimax-m3',
+    modelDisplayName: 'MiniMax M3',
+    modelDescription:
+      'Frontier multimodal coding model with strong agentic reasoning, tool use, and long-context performance.',
+    modelContext: '1M context',
+    modelContextRaw: 1_000_000,
+    headers: {},
+    providerOptions: {
+      clodex: {
+        reasoning: { enabled: true, effort: 'medium' },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.3,
+      outputPerMillion: 1.2,
+      relativeMultiplier: 0.25,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: true,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: MINIMAX_M3_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'minimax',
+    modelId: 'minimax-m2.7',
+    modelDisplayName: 'MiniMax M2.7',
+    modelDescription:
+      'Next-gen MiniMax model with enhanced agentic and multi-agent capabilities.',
+    modelContext: '200k context',
+    modelContextRaw: 204_800,
+    headers: {},
+    providerOptions: {
+      clodex: {
+        reasoning: { enabled: true, effort: 'medium' },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.3,
+      outputPerMillion: 1.2,
+      relativeMultiplier: 0.25,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'minimax',
+    modelId: 'MiniMax-M2',
+    modelDisplayName: 'MiniMax M2',
+    modelDescription:
+      "MiniMax's flagship model tuned for coding and agentic reasoning.",
+    modelContext: '200k context',
+    modelContextRaw: 204_800,
+    headers: {},
+    providerOptions: {
+      clodex: {
+        reasoning: { enabled: true, effort: 'medium' },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.255,
+      outputPerMillion: 1.0,
+      relativeMultiplier: 0.25,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'xiaomi-mimo',
+    modelId: 'mimo-v2.5-pro',
+    modelDisplayName: 'MiMo-V2.5-Pro',
+    modelDescription:
+      "Xiaomi's flagship 1T-parameter MoE model (42B active) with 1M-token context, purpose-built for agentic coding and long-horizon software engineering.",
+    modelContext: '1M context',
+    modelContextRaw: 1_048_576,
+    headers: {},
+    providerOptions: {
+      clodex: {
+        reasoning: { enabled: true, effort: 'medium' },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.435,
+      outputPerMillion: 0.87,
+      relativeMultiplier: 0.22,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'xiaomi-mimo',
+    modelId: 'mimo-v2.5',
+    modelDisplayName: 'MiMo-V2.5',
+    modelDescription:
+      "Xiaomi's native omnimodal model — processes text, image, video, and audio in a unified architecture with strong agentic capabilities and 1M-token context.",
+    modelContext: '1M context',
+    modelContextRaw: 1_048_576,
+    headers: {},
+    providerOptions: {
+      clodex: {
+        reasoning: { enabled: true, effort: 'medium' },
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.14,
+      outputPerMillion: 0.28,
+      relativeMultiplier: 0.07,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: true,
+        image: true,
+        video: true,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      inputConstraints: MIMO_V25_INPUT_CONSTRAINTS,
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'mistral',
+    modelId: 'mistral-large-2512',
+    modelDisplayName: 'Mistral Large 3',
+    modelDescription:
+      "Mistral's most capable model. Sparse MoE (675B total, 41B active) with 256K context, multimodal input, and strong coding and agentic performance.",
+    modelContext: '256K context',
+    modelContextRaw: 262_144,
+    headers: {},
+    providerOptions: {},
+    thinkingEnabled: false,
+    pricing: {
+      inputPerMillion: 0.5,
+      outputPerMillion: 1.5,
+      relativeMultiplier: 0.3,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'mistral',
+    modelId: 'mistral-medium-3-5',
+    modelDisplayName: 'Mistral Medium 3.5',
+    modelDescription:
+      "Mistral's hybrid model unifying instruct, reasoning, and coding. Dense 128B with 256K context, text and image input, designed for agentic workflows and complex coding.",
+    modelContext: '256K context',
+    modelContextRaw: 262_144,
+    headers: {},
+    providerOptions: {
+      clodex: {
+        reasoning: { enabled: true, effort: 'medium' },
+        // Only route to OpenRouter upstreams that support the `reasoning`
+        // parameter, preventing silent drops on non-reasoning upstreams.
+        provider: { require_parameters: true },
+      },
+      openai: {
+        reasoningEffort: 'medium',
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 1.5,
+      outputPerMillion: 7.5,
+      relativeMultiplier: 1.5,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: true,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'mistral',
+    modelId: 'mistral-small-2603',
+    modelDisplayName: 'Mistral Small 4',
+    modelDescription:
+      "Mistral's latest small model unifying reasoning, instruct, and coding. 256K context with text and image input at a low price point.",
+    modelContext: '256K context',
+    modelContextRaw: 262_144,
+    headers: {},
+    providerOptions: {
+      clodex: {
+        reasoning: { enabled: true, effort: 'medium' },
+        // Only route to OpenRouter upstreams that support the `reasoning`
+        // parameter, preventing silent drops on non-reasoning upstreams.
+        provider: { require_parameters: true },
+      },
+      openai: {
+        reasoningEffort: 'medium',
+      },
+    },
+    thinkingEnabled: true,
+    pricing: {
+      inputPerMillion: 0.15,
+      outputPerMillion: 0.6,
+      relativeMultiplier: 0.12,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: true,
+        video: false,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      toolCalling: true,
+    },
+  },
+  {
+    officialProvider: 'mistral',
+    modelId: 'codestral-2508',
+    modelDisplayName: 'Codestral',
+    modelDescription:
+      "Mistral's specialized coding model. Low-latency, high-frequency code generation and FIM with 256K context.",
+    modelContext: '256K context',
+    modelContextRaw: 262_144,
+    headers: {},
+    providerOptions: {},
+    thinkingEnabled: false,
+    pricing: {
+      inputPerMillion: 0.3,
+      outputPerMillion: 0.9,
+      relativeMultiplier: 0.18,
+    },
+    capabilities: {
+      inputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      outputModalities: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        file: false,
+      },
+      toolCalling: true,
+    },
+  },
+] as const satisfies ModelSettings[];
+
+export type BuiltInModel = (typeof availableModels)[number];
+export type BuiltInModelId = BuiltInModel['modelId'];
+
+export const availableModelAliases = [
+  {
+    modelId: 'default',
+    targetModelId: 'deepseek-v4-pro',
+    modelDisplayName: 'Default',
+    modelDescription:
+      'Recommended balanced model for everyday agent work, powered by DeepSeek V4 Pro.',
+    thinkingPreset: { enabled: true, value: 'medium' },
+  },
+  {
+    modelId: 'quick',
+    targetModelId: 'gemini-3.5-flash',
+    modelDisplayName: 'Quick',
+    modelDescription:
+      'Recommended fast model for quick iterations and lightweight changes, powered by Gemini 3.5 Flash.',
+    thinkingPreset: { enabled: true, value: 'low' },
+  },
+  {
+    modelId: 'smart',
+    targetModelId: 'glm-5.2',
+    modelDisplayName: 'Smart',
+    modelDescription:
+      'Recommended high-reasoning model for complex coding and planning, powered by GLM 5.2.',
+    thinkingPreset: { enabled: true, value: 'xhigh' },
+  },
+] as const satisfies readonly {
+  modelId: string;
+  targetModelId: BuiltInModelId;
+  modelDisplayName: string;
+  modelDescription: string;
+  thinkingPreset: ModelThinkingOverride;
+}[];
+
+export type ModelAlias = (typeof availableModelAliases)[number];
+export type ModelAliasId = ModelAlias['modelId'];
+export type ModelId = BuiltInModelId | ModelAliasId | (string & {});
+
+type SelectableBuiltInConcreteModel = BuiltInModel & {
+  kind: 'model';
+  targetModelId: BuiltInModelId;
+  targetModel: BuiltInModel;
+};
+
+type SelectableBuiltInAliasModel = Omit<
+  BuiltInModel,
+  'modelId' | 'modelDisplayName' | 'modelDescription'
+> & {
+  kind: 'alias';
+  modelId: ModelAliasId;
+  modelDisplayName: string;
+  modelDescription: string;
+  targetModelId: BuiltInModelId;
+  targetModel: BuiltInModel;
+  alias: ModelAlias;
+};
+
+export type SelectableBuiltInModel =
+  | SelectableBuiltInConcreteModel
+  | SelectableBuiltInAliasModel;
+
+export function getModelAlias(modelId: string): ModelAlias | undefined {
+  return availableModelAliases.find((alias) => alias.modelId === modelId);
+}
+
+export function resolveModelAlias(modelId: string): string {
+  return getModelAlias(modelId)?.targetModelId ?? modelId;
+}
+
+export function getAvailableModel(modelId: string): BuiltInModel | undefined {
+  const resolvedModelId = resolveModelAlias(modelId);
+  return availableModels.find((model) => model.modelId === resolvedModelId);
+}
+
+export function getSelectableBuiltInModels({
+  disabledModelIds,
+  allowedModelIds,
+}: {
+  disabledModelIds?: Iterable<string>;
+  allowedModelIds?: Iterable<string>;
+} = {}): SelectableBuiltInModel[] {
+  const disabled = new Set(disabledModelIds);
+  const allowed = allowedModelIds
+    ? new Set(
+        Array.from(allowedModelIds).flatMap((modelId) => [
+          modelId,
+          modelId.split('/').pop() ?? modelId,
+        ]),
+      )
+    : null;
+  const isAllowed = (model: BuiltInModel) => {
+    if (!allowed) return true;
+    if (allowed.has(model.modelId)) return true;
+    if (
+      model.officialProvider &&
+      allowed.has(`${model.officialProvider}/${model.modelId}`)
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  const aliases = availableModelAliases.flatMap((alias) => {
+    const targetModel = getAvailableModel(alias.targetModelId);
+    if (!targetModel) return [];
+    // Aliases are always available in the selector regardless of whether
+    // their target model is disabled. "Disabling" a model only hides it
+    // from the selector — it does not block backend routing.
+    if (disabled.has(alias.modelId)) {
+      return [];
+    }
+    if (!isAllowed(targetModel)) {
+      return [];
+    }
+
+    return [
+      {
+        ...targetModel,
+        kind: 'alias' as const,
+        modelId: alias.modelId,
+        modelDisplayName: alias.modelDisplayName,
+        modelDescription: alias.modelDescription,
+        targetModelId: alias.targetModelId,
+        targetModel,
+        alias,
+      },
+    ];
+  });
+
+  const concreteModels = availableModels
+    .filter((model) => !disabled.has(model.modelId) && isAllowed(model))
+    .map((model) => ({
+      ...model,
+      kind: 'model' as const,
+      targetModelId: model.modelId,
+      targetModel: model,
+    }));
+
+  return [...aliases, ...concreteModels];
+}
+
+/**
+ * Look up a model's capabilities by ID.
+ * Falls back to text-only when the model is unknown (e.g. custom model
+ * without capabilities defined).
+ */
+export function getModelCapabilities(
+  modelId: ModelId,
+): ModelSettings['capabilities'] {
+  const model = getAvailableModel(modelId);
+  if (model) return model.capabilities;
+
+  return {
+    inputModalities: {
+      text: true,
+      audio: false,
+      image: false,
+      video: false,
+      file: false,
+    },
+    outputModalities: {
+      text: true,
+      audio: false,
+      image: false,
+      video: false,
+      file: false,
+    },
+    inputConstraints: undefined,
+    toolCalling: true,
+  };
+}
+
+/**
+ * Find model IDs that accept a given MIME type as inline input,
+ * optionally excluding one model (typically the current one).
+ */
+export function findModelsAcceptingMime(
+  mime: string,
+  excludeModelId?: string,
+): string[] {
+  const lowerMime = mime.toLowerCase();
+  return availableModels
+    .filter((m) => {
+      if (m.modelId === excludeModelId) return false;
+      // `inputConstraints` is optional on the zod schema (text-only
+      // models omit it). The `as const satisfies` narrowing removes the
+      // key from the union for those entries — cast to the schema shape.
+      const c = (m.capabilities as { inputConstraints?: InputConstraints })
+        .inputConstraints;
+      if (!c) return false;
+      for (const constraint of [c.image, c.file, c.video, c.audio])
+        if (constraint?.mimeTypes.includes(lowerMime)) return true;
+
+      return false;
+    })
+    .map((m) => m.modelId);
+}

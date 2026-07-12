@@ -1,0 +1,509 @@
+import type { WebContents } from 'electron';
+import type { Logger } from '../../logger';
+
+/**
+ * Error state tracked by the TabErrorHandler
+ */
+export interface TabErrorState {
+  /** Original URL that failed (preserved across cascading errors) */
+  originalFailedUrl: string | null;
+  /** Current error code */
+  errorCode: number | null;
+  /** Error description message */
+  errorMessage: string | null;
+  /** Whether the error page is currently displayed */
+  isErrorPageDisplayed: boolean;
+  /** History index before the error occurred (for skip behavior) */
+  historyIndexBeforeError: number | null;
+}
+
+/**
+ * Callbacks for TabErrorHandler to communicate state changes
+ */
+export interface TabErrorHandlerCallbacks {
+  /** Called when error state changes */
+  onErrorStateUpdate: (state: TabErrorState) => void;
+  /** Called to update the display URL (shown in address bar) */
+  onDisplayUrlUpdate: (url: string) => void;
+  /** Called when loading state should change */
+  onLoadingStateUpdate: (isLoading: boolean) => void;
+}
+
+export const ERROR_PAGE_PATH = '/error/page-load-failed';
+
+/**
+ * TabErrorHandler manages error states for a browser tab.
+ *
+ * Responsibilities:
+ * - Hook into did-fail-load and certificate-error events
+ * - Navigate to error pages for main frame errors
+ * - Track subframe errors (without navigating them — matching Chrome behavior)
+ * - Silently block subframe certificate errors (matching Chrome behavior)
+ * - Track original failed URL for reload behavior
+ * - Provide navigation offsets to skip error pages during back/forward
+ */
+export class TabErrorHandler {
+  private readonly tabId: string;
+  private readonly webContents: WebContents;
+  private readonly logger: Logger;
+  private readonly callbacks: TabErrorHandlerCallbacks;
+
+  /** Current error state */
+  private errorState: TabErrorState = {
+    originalFailedUrl: null,
+    errorCode: null,
+    errorMessage: null,
+    isErrorPageDisplayed: false,
+    historyIndexBeforeError: null,
+  };
+
+  /** Whether we're in the process of navigating to an error page */
+  private isNavigatingToErrorPage = false;
+
+  /**
+   * Origins with temporarily trusted certificates (per-tab whitelist).
+   * Format: "protocol://host:port" (e.g., "https://example.com:443")
+   * Cleared when the tab is closed.
+   */
+  private trustedCertificateOrigins: Set<string> = new Set();
+
+  /** Listener references for cleanup */
+  private boundHandleDidFailLoad: (
+    event: Electron.Event,
+    errorCode: number,
+    errorDescription: string,
+    validatedUrl: string,
+    isMainFrame: boolean,
+    frameProcessId: number,
+    frameRoutingId: number,
+  ) => void;
+  private boundHandleCertificateError: (
+    event: Electron.Event,
+    url: string,
+    error: string,
+    certificate: Electron.Certificate,
+    callback: (isTrusted: boolean) => void,
+    isMainFrame: boolean,
+  ) => void;
+  private boundHandleDidNavigate: (event: Electron.Event, url: string) => void;
+  private boundHandleDidStartNavigation: (
+    event: Electron.Event,
+    url: string,
+    isInPlace: boolean,
+    isMainFrame: boolean,
+  ) => void;
+
+  constructor(
+    tabId: string,
+    webContents: WebContents,
+    logger: Logger,
+    callbacks: TabErrorHandlerCallbacks,
+  ) {
+    this.tabId = tabId;
+    this.webContents = webContents;
+    this.logger = logger;
+    this.callbacks = callbacks;
+
+    // Bind event handlers
+    this.boundHandleDidFailLoad = this.handleDidFailLoad.bind(this);
+    this.boundHandleCertificateError = this.handleCertificateError.bind(this);
+    this.boundHandleDidNavigate = this.handleDidNavigate.bind(this);
+    this.boundHandleDidStartNavigation =
+      this.handleDidStartNavigation.bind(this);
+
+    this.setupEventListeners();
+  }
+
+  /**
+   * Set up WebContents event listeners
+   */
+  private setupEventListeners(): void {
+    const wc = this.webContents;
+
+    // Handle load failures
+    wc.on('did-fail-load', this.boundHandleDidFailLoad);
+
+    // Handle certificate errors
+    wc.on('certificate-error', this.boundHandleCertificateError);
+
+    // Clear error state on successful navigation away from error page
+    wc.on('did-navigate', this.boundHandleDidNavigate);
+
+    // Handle navigation start - opportunity to prepare for new navigation
+    wc.on('did-start-navigation', this.boundHandleDidStartNavigation);
+  }
+
+  /**
+   * Handle did-fail-load event
+   */
+  private handleDidFailLoad(
+    _event: Electron.Event,
+    errorCode: number,
+    errorDescription: string,
+    validatedUrl: string,
+    isMainFrame: boolean,
+    _frameProcessId: number,
+    _frameRoutingId: number,
+  ): void {
+    // Ignore abort errors (user stopped navigation, navigation replaced, etc.)
+    if (errorCode === -3) {
+      return;
+    }
+
+    // Ignore errors while navigating to error page to prevent loops
+    if (this.isNavigatingToErrorPage) {
+      return;
+    }
+
+    // Ignore errors on error page itself
+    if (validatedUrl.includes(ERROR_PAGE_PATH)) {
+      return;
+    }
+
+    this.logger.debug(
+      `[TabErrorHandler] did-fail-load: code=${errorCode}, url=${validatedUrl}, isMainFrame=${isMainFrame}`,
+    );
+
+    if (isMainFrame) {
+      this.handleMainFrameError(errorCode, errorDescription, validatedUrl);
+    }
+  }
+
+  /**
+   * Handle certificate-error event
+   */
+  private handleCertificateError(
+    _event: Electron.Event,
+    url: string,
+    error: string,
+    _certificate: Electron.Certificate,
+    callback: (isTrusted: boolean) => void,
+    isMainFrame: boolean,
+  ): void {
+    // Check if the origin is in the trusted list (user bypassed the warning)
+    const origin = this.getOriginFromUrl(url);
+    if (origin && this.trustedCertificateOrigins.has(origin)) {
+      this.logger.debug(
+        `[TabErrorHandler] certificate-error: origin ${origin} is trusted, allowing`,
+      );
+      callback(true);
+      return;
+    }
+
+    // Reject untrusted certificates
+    callback(false);
+
+    // Ignore if already navigating to error page
+    if (this.isNavigatingToErrorPage) {
+      return;
+    }
+
+    this.logger.debug(
+      `[TabErrorHandler] certificate-error: error=${error}, url=${url}, isMainFrame=${isMainFrame}`,
+    );
+
+    // Handle certificate errors as safety-relevant errors
+    // Use error code -200 (CERT_COMMON_NAME_INVALID) as a generic cert error code
+    const errorCode = -200;
+    const errorMessage = `Certificate error: ${error}`;
+
+    if (isMainFrame) {
+      this.handleMainFrameError(errorCode, errorMessage, url);
+    } else {
+      // Subframe certificate errors are silently blocked (callback(false) above)
+      // Following Chrome's behavior: sub-frame cert errors should NOT navigate
+      // the main frame to an error page - the iframe content is simply not loaded
+      this.logger.debug(
+        `[TabErrorHandler] Subframe certificate error silently blocked: ${url}`,
+      );
+    }
+  }
+
+  /**
+   * Extract origin from URL (protocol://host:port)
+   */
+  private getOriginFromUrl(url: string): string | null {
+    try {
+      const parsed = new URL(url);
+      return parsed.origin;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Handle main frame error - navigate full page to error page
+   */
+  private handleMainFrameError(
+    errorCode: number,
+    errorDescription: string,
+    failedUrl: string,
+  ): void {
+    // Track original URL only on first error (preserve across cascading errors)
+    if (!this.errorState.originalFailedUrl) {
+      this.errorState.originalFailedUrl = failedUrl;
+    }
+
+    this.errorState.errorCode = errorCode;
+    this.errorState.errorMessage = errorDescription;
+
+    // Track history index before error for skip behavior
+    const navHistory = this.webContents.navigationHistory;
+    this.errorState.historyIndexBeforeError = navHistory.getActiveIndex();
+
+    // Update display URL to show failed URL (not error page URL)
+    this.callbacks.onDisplayUrlUpdate(this.errorState.originalFailedUrl);
+
+    // Navigate to error page
+    this.navigateToErrorPage(errorCode, errorDescription, failedUrl);
+  }
+
+  /**
+   * Navigate to error page using location.replace() to avoid adding history entry
+   */
+  private async navigateToErrorPage(
+    errorCode: number,
+    errorMessage: string,
+    errorUrl: string,
+  ): Promise<void> {
+    const errorPageUrl = this.buildErrorPageUrl(
+      errorCode,
+      errorMessage,
+      errorUrl,
+    );
+
+    this.isNavigatingToErrorPage = true;
+    this.errorState.isErrorPageDisplayed = true;
+
+    // Update loading state
+    this.callbacks.onLoadingStateUpdate(false);
+
+    try {
+      // Use location.replace to avoid adding new history entry
+      await this.webContents.executeJavaScript(`
+        (function() {
+          try {
+            window.location.replace('${errorPageUrl.replace(/'/g, "\\'")}');
+          } catch (e) {
+            // Fallback to direct navigation if executeJavaScript fails
+            window.location.href = '${errorPageUrl.replace(/'/g, "\\'")}';
+          }
+        })();
+      `);
+
+      this.logger.debug(
+        `[TabErrorHandler] Navigated to error page for ${errorUrl}, code=${errorCode}`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `[TabErrorHandler] Failed to navigate to error page: ${err}`,
+      );
+      // Fallback: direct loadURL (will add history entry, but at least shows error)
+      try {
+        await this.webContents.loadURL(errorPageUrl);
+      } catch (loadErr) {
+        this.logger.error(
+          `[TabErrorHandler] Fallback loadURL also failed: ${loadErr}`,
+        );
+      }
+    } finally {
+      this.isNavigatingToErrorPage = false;
+    }
+
+    // Notify state update
+    this.callbacks.onErrorStateUpdate({ ...this.errorState });
+  }
+
+  /**
+   * Build error page URL with query parameters
+   */
+  private buildErrorPageUrl(
+    errorCode: number,
+    errorMessage: string,
+    errorUrl: string,
+  ): string {
+    const params = new URLSearchParams();
+    params.set('errorUrl', errorUrl);
+    params.set('errorCode', errorCode.toString());
+    params.set('errorMessage', errorMessage);
+    params.set('tabId', this.tabId);
+
+    return `clodex://internal${ERROR_PAGE_PATH}?${params.toString()}`;
+  }
+
+  /**
+   * Handle did-navigate event - clear error state if navigating away from error page
+   */
+  private handleDidNavigate(_event: Electron.Event, url: string): void {
+    if (this.errorState.isErrorPageDisplayed) {
+      // If navigating away from error page, clear error state
+      if (!url.includes(ERROR_PAGE_PATH)) {
+        this.clearErrorState();
+      }
+    }
+  }
+
+  /**
+   * Handle did-start-navigation - prepare for new navigation from error page
+   */
+  private handleDidStartNavigation(
+    _event: Electron.Event,
+    url: string,
+    _isInPlace: boolean,
+    isMainFrame: boolean,
+  ): void {
+    if (!isMainFrame) return;
+
+    // If starting navigation from error page to a non-error page
+    if (
+      this.errorState.isErrorPageDisplayed &&
+      !url.includes(ERROR_PAGE_PATH)
+    ) {
+      // The new navigation will replace the error page in history
+      // We'll clean up when did-navigate fires
+      this.logger.debug(
+        `[TabErrorHandler] Starting navigation away from error page to ${url}`,
+      );
+    }
+  }
+
+  /**
+   * Get the URL to reload (original failed URL if on error page)
+   */
+  public getReloadUrl(): string | null {
+    if (
+      this.errorState.isErrorPageDisplayed &&
+      this.errorState.originalFailedUrl
+    ) {
+      return this.errorState.originalFailedUrl;
+    }
+    return null;
+  }
+
+  /**
+   * Check if we should intercept reload
+   */
+  public shouldInterceptReload(): boolean {
+    return (
+      this.errorState.isErrorPageDisplayed &&
+      this.errorState.originalFailedUrl !== null
+    );
+  }
+
+  /**
+   * Get navigation offset to skip error pages during back/forward
+   *
+   * @param direction - 'back' or 'forward'
+   * @returns Offset to use with goToOffset, or null if no skip needed
+   */
+  public getNavigationOffset(direction: 'back' | 'forward'): number | null {
+    if (!this.errorState.isErrorPageDisplayed) {
+      return null; // No skip needed, use standard navigation
+    }
+
+    // When on an error page, we just need standard back/forward behavior.
+    // The error page was shown via location.replace() which replaced the failed
+    // navigation entry in history. Going back by 1 will go to the page the user
+    // was on before attempting the failed navigation.
+    if (direction === 'back') {
+      return -1;
+    } else {
+      return 1;
+    }
+  }
+
+  /**
+   * Check if navigation history should skip an index
+   */
+  public shouldSkipHistoryIndex(_index: number): boolean {
+    // In V1, we use location.replace so error pages don't create new history entries
+    // This method is here for future use if we change the navigation strategy
+    return false;
+  }
+
+  /**
+   * Get current error state (immutable copy)
+   */
+  public getErrorState(): Readonly<TabErrorState> {
+    return { ...this.errorState };
+  }
+
+  /**
+   * Clear error state (called when navigating away from error page)
+   */
+  private clearErrorState(): void {
+    this.errorState = {
+      originalFailedUrl: null,
+      errorCode: null,
+      errorMessage: null,
+      isErrorPageDisplayed: false,
+      historyIndexBeforeError: null,
+    };
+
+    this.callbacks.onErrorStateUpdate({ ...this.errorState });
+    this.logger.debug('[TabErrorHandler] Error state cleared');
+  }
+
+  /**
+   * Manually clear error state (e.g., when starting a new navigation)
+   */
+  public resetErrorState(): void {
+    this.clearErrorState();
+  }
+
+  /**
+   * Add an origin to the trusted certificate whitelist for this tab.
+   * The origin should be in the format "protocol://host:port" (e.g., "https://example.com:443").
+   * This whitelist is cleared when the tab is closed.
+   *
+   * @param origin The origin to trust (e.g., "https://example.com")
+   */
+  public trustCertificateOrigin(origin: string): void {
+    this.trustedCertificateOrigins.add(origin);
+    this.logger.debug(
+      `[TabErrorHandler] Added trusted certificate origin: ${origin}`,
+    );
+  }
+
+  /**
+   * Check if an origin has a trusted certificate for this tab.
+   */
+  public isCertificateOriginTrusted(origin: string): boolean {
+    return this.trustedCertificateOrigins.has(origin);
+  }
+
+  /**
+   * Extract the original failed URL from an error page URL.
+   * Returns null if the URL is not an error page or has no errorUrl param.
+   */
+  public static extractFailedUrlFromErrorPage(url: string): string | null {
+    if (!url.includes(ERROR_PAGE_PATH)) return null;
+    try {
+      const parsed = new URL(url);
+      return parsed.searchParams.get('errorUrl');
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Clean up event listeners
+   */
+  public destroy(): void {
+    const wc = this.webContents;
+
+    if (!wc.isDestroyed()) {
+      wc.off('did-fail-load', this.boundHandleDidFailLoad);
+      wc.off('certificate-error', this.boundHandleCertificateError);
+      wc.off('did-navigate', this.boundHandleDidNavigate);
+      wc.off('did-start-navigation', this.boundHandleDidStartNavigation);
+    }
+
+    // Clear trusted certificate origins (per-tab whitelist)
+    this.trustedCertificateOrigins.clear();
+
+    this.clearErrorState();
+
+    this.logger.debug('[TabErrorHandler] Destroyed');
+  }
+}

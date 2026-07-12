@@ -1,0 +1,31 @@
+{
+  "name": "@clodex/runner-sdk",
+  "version": "0.1.0",
+  "description": "Provider-neutral SDK for registering secure Clodex workspace runners.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "node build.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@clodex/agent-shell": "workspace:*"
+  },
+  "devDependencies": {
+    "@clodex/typescript-config": "workspace:*",
+    "@types/node": "^22.10.2",
+    "esbuild": "0.25.9",
+    "typescript": "^5.9.2",
+    "vitest": "3.2.4"
+  }
+}

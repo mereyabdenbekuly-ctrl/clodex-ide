@@ -1,0 +1,1707 @@
+import { applyPatches, enablePatches, type Patch } from 'immer';
+import type { Logger } from './logger';
+import type { KartonService } from './karton';
+import type { PagesService } from './pages';
+import {
+  type UserPreferences,
+  type ConfigurablePermissionType,
+  type WidgetId,
+  type DevToolbarOriginSettings,
+  type ModelProvider,
+  type ProviderProfile,
+  type ProviderProfileSaveInput,
+  providerProfileSaveInputSchema,
+  userPreferencesSchema,
+  defaultUserPreferences,
+  PermissionSetting,
+  configurablePermissionTypes,
+  modelProviderSchema,
+  DEFAULT_WIDGET_ORDER,
+  DEV_TOOLBAR_MAX_ORIGINS,
+} from '@shared/karton-contracts/ui/shared-types';
+import type { CredentialsService } from './credentials';
+import type { AIModelInfo } from '@shared/ai-provider';
+import { readPersistedData, writePersistedData } from '../utils/persisted-data';
+import { DisposableService } from './disposable';
+import { safeStorage } from 'electron';
+import {
+  CODING_PLANS,
+  isCodingPlanId,
+  type CodingPlanId,
+} from '@shared/coding-plans';
+import {
+  validateApiKeys,
+  validateCodingPlanApiKey,
+} from '../utils/validate-api-keys';
+
+// Enable Immer patches support
+enablePatches();
+
+type PreferencesListener = (
+  newPrefs: UserPreferences,
+  oldPrefs: UserPreferences,
+) => void;
+
+/**
+ * Service that manages user preferences with persistence and reactive Karton sync.
+ *
+ * Preferences are stored in preferences.json in the global data directory.
+ * Updates are synced to both UI and Pages Karton contracts.
+ *
+ * ## Creating Patches (Client-side)
+ *
+ * Use Immer's `produceWithPatches` to create patches that describe your changes:
+ *
+ * ```typescript
+ * import { produceWithPatches } from 'immer';
+ *
+ * // Get current preferences from Karton state
+ * const currentPrefs = useKartonState((s) => s.preferences);
+ *
+ * // Create patches by describing mutations
+ * const [nextState, patches, inversePatches] = produceWithPatches(currentPrefs, (draft) => {
+ *   // Simple property change
+ *   draft.privacy.telemetryLevel = 'full';
+ *
+ *   // Array operations (when preferences include arrays)
+ *   // draft.someArray.push({ id: 1, name: 'new item' });
+ *   // draft.someArray.splice(0, 1);  // remove first element
+ *   // draft.someArray[0].name = 'updated';
+ * });
+ *
+ * // patches is now a JSON-serializable array:
+ * // [{ op: 'replace', path: ['privacy', 'telemetryLevel'], value: 'full' }]
+ *
+ * // Send patches to server via Karton procedure
+ * await kartonProcedure('preferences.update', patches);
+ *
+ * // inversePatches can be used for undo functionality
+ * ```
+ *
+ * ## Patch Structure
+ *
+ * Each patch is a JSON object with:
+ * - `op`: 'replace' | 'add' | 'remove'
+ * - `path`: Array of keys/indices to the target location
+ * - `value`: The new value (not present for 'remove')
+ *
+ * Examples:
+ * - `{ op: 'replace', path: ['privacy', 'telemetryLevel'], value: 'off' }`
+ * - `{ op: 'add', path: ['someArray', 0], value: { id: 1 } }`
+ * - `{ op: 'remove', path: ['someArray', 2] }`
+ */
+export class PreferencesService extends DisposableService {
+  private readonly logger: Logger;
+  private uiKarton: KartonService | null = null;
+  private pagesService: PagesService | null = null;
+
+  private preferences: UserPreferences = defaultUserPreferences;
+  private listeners: PreferencesListener[] = [];
+  private preferenceWriteQueue = Promise.resolve();
+  private providerCredentials?: CredentialsService;
+
+  private constructor(logger: Logger) {
+    super();
+    this.logger = logger;
+  }
+
+  /**
+   * Create and initialize a new PreferencesService instance.
+   * This only loads preferences from disk. Call connectKarton() to enable
+   * reactive sync with UI and Pages Karton.
+   */
+  public static async create(logger: Logger): Promise<PreferencesService> {
+    const instance = new PreferencesService(logger);
+    await instance.initialize();
+    return instance;
+  }
+
+  private async initialize(): Promise<void> {
+    this.logger.debug('[PreferencesService] Initializing...');
+
+    // Load preferences from disk
+    this.preferences = await readPersistedData(
+      'preferences',
+      userPreferencesSchema,
+      defaultUserPreferences,
+    );
+
+    // Migration: convert old customBaseUrl configs to customProviderId
+    await this.migrateCustomBaseUrlToProviderId();
+
+    this.logger.debug('[PreferencesService] Loaded preferences', {
+      telemetryLevel: this.preferences.privacy.telemetryLevel,
+    });
+
+    this.logger.debug('[PreferencesService] Initialized');
+  }
+
+  /**
+   * Additively migrates legacy provider/custom-endpoint credentials into the
+   * dedicated encrypted credential store. Legacy routing metadata is retained
+   * for one compatibility release, but migrated key blobs are removed from
+   * preferences once their provider profile has been persisted.
+   */
+  public async migrateProviderProfiles(
+    credentials: CredentialsService,
+    clodexApiKey?: string,
+  ): Promise<void> {
+    this.assertNotDisposed();
+    this.providerCredentials = credentials;
+    const next = structuredClone(this.preferences);
+    const profiles = new Map(
+      next.providerProfiles.map((profile) => [profile.id, profile]),
+    );
+    let changed = false;
+
+    const migrateKey = async (
+      reference: string,
+      encryptedApiKey: string | undefined,
+      directApiKey?: string,
+    ): Promise<string | undefined> => {
+      const apiKey =
+        directApiKey ?? this.decryptProviderApiKey(encryptedApiKey);
+      if (!apiKey) return undefined;
+      await credentials.setProviderApiKey(reference, apiKey);
+      return reference;
+    };
+
+    const legacyProviders: Array<{
+      provider: 'openai' | 'anthropic';
+      protocol: ProviderProfile['protocol'];
+      displayName: string;
+    }> = [
+      {
+        provider: 'openai',
+        protocol: 'openai-responses',
+        displayName: 'OpenAI',
+      },
+      {
+        provider: 'anthropic',
+        protocol: 'anthropic-messages',
+        displayName: 'Anthropic',
+      },
+    ];
+
+    for (const item of legacyProviders) {
+      const legacy = next.providerConfigs[item.provider];
+      if (legacy.mode !== 'official' || !legacy.encryptedApiKey) continue;
+      const id = `official-${item.provider}`;
+      const reference = `provider.${id}`;
+      const apiKeyReference = await migrateKey(
+        reference,
+        legacy.encryptedApiKey,
+      );
+      if (!apiKeyReference) continue;
+      profiles.set(id, {
+        id,
+        providerType: item.provider,
+        displayName: item.displayName,
+        apiKeyReference,
+        protocol: item.protocol,
+        customHeaders: {},
+        enabled: true,
+      });
+      legacy.encryptedApiKey = undefined;
+      next.defaultProviderProfileId ??= id;
+      changed = true;
+    }
+
+    for (const endpoint of next.customEndpoints) {
+      if (!endpoint.encryptedApiKey) continue;
+      if (
+        endpoint.apiSpec !== 'openai-chat-completions' &&
+        endpoint.apiSpec !== 'openai-responses' &&
+        endpoint.apiSpec !== 'anthropic'
+      ) {
+        continue;
+      }
+      const id = `custom-${endpoint.id}`;
+      const reference = `provider.${id}`;
+      const apiKeyReference = await migrateKey(
+        reference,
+        endpoint.encryptedApiKey,
+      );
+      if (!apiKeyReference) continue;
+      profiles.set(id, {
+        id,
+        providerType:
+          endpoint.apiSpec === 'anthropic' ? 'anthropic' : 'openai-compatible',
+        displayName: endpoint.name,
+        baseUrl: endpoint.baseUrl,
+        apiKeyReference,
+        protocol:
+          endpoint.apiSpec === 'anthropic'
+            ? 'anthropic-messages'
+            : endpoint.apiSpec === 'openai-responses'
+              ? 'openai-responses'
+              : 'openai-chat',
+        customHeaders: {},
+        enabled: true,
+      });
+      endpoint.encryptedApiKey = undefined;
+      changed = true;
+    }
+
+    if (clodexApiKey) {
+      const id = 'clodex-account';
+      const reference = `provider.${id}`;
+      await credentials.setProviderApiKey(reference, clodexApiKey);
+      profiles.set(id, {
+        id,
+        providerType: 'clodex',
+        displayName: 'Clodex Cloud',
+        baseUrl:
+          process.env.CLODEX_LLM_RELAY_URL ||
+          process.env.LLM_PROXY_URL ||
+          'https://clodex.xyz/v1',
+        apiKeyReference: reference,
+        protocol: 'openai-responses',
+        customHeaders: {},
+        enabled: true,
+      });
+      next.defaultProviderProfileId ??= id;
+      changed = true;
+    }
+
+    if (!changed) return;
+    next.providerProfiles = Array.from(profiles.values());
+    await this.replacePreferences(next);
+    this.logger.info(
+      `[PreferencesService] Migrated ${next.providerProfiles.length} provider profile(s)`,
+    );
+  }
+
+  public async syncClodexAccountProfile(
+    credentials: CredentialsService,
+    clodexApiKey: string | undefined,
+  ): Promise<void> {
+    this.providerCredentials = credentials;
+    if (clodexApiKey) {
+      await this.migrateProviderProfiles(credentials, clodexApiKey);
+      return;
+    }
+    if (
+      this.preferences.providerProfiles.some(
+        (profile) => profile.id === 'clodex-account',
+      )
+    ) {
+      await this.deleteProviderProfile('clodex-account');
+    }
+  }
+
+  /**
+   * Migrate old `customBaseUrl` provider configs to the new `customProviderId` format.
+   * For each provider in custom mode that has a customBaseUrl but no customProviderId,
+   * create a custom endpoint and link to it.
+   */
+  private async migrateCustomBaseUrlToProviderId(): Promise<void> {
+    const providers = [
+      'anthropic',
+      'openai',
+      'google',
+      'moonshotai',
+      'alibaba',
+      'deepseek',
+      'z-ai',
+      'minimax',
+      'xiaomi-mimo',
+      'mistral',
+    ] as const;
+    let needsSave = false;
+
+    for (const provider of providers) {
+      const config = this.preferences.providerConfigs[provider];
+      if (
+        config.mode === 'custom' &&
+        config.customBaseUrl &&
+        !config.customProviderId
+      ) {
+        const id = crypto.randomUUID();
+        const apiSpecMap: Record<string, string> = {
+          anthropic: 'anthropic',
+          openai: 'openai-chat-completions',
+          google: 'google',
+        };
+
+        this.preferences.customEndpoints.push({
+          id,
+          name: `Migrated ${provider} endpoint`,
+          apiSpec: apiSpecMap[provider] as any,
+          baseUrl: config.customBaseUrl,
+          encryptedApiKey: config.encryptedApiKey,
+          // Default value mirrors the Zod schema — only Bedrock reads it,
+          // and the migration path only hits providers without Bedrock,
+          // but the type makes the field required.
+          awsAuthMode: 'access-keys',
+        });
+
+        config.customProviderId = id;
+        config.customBaseUrl = undefined;
+        config.encryptedApiKey = undefined;
+        needsSave = true;
+
+        this.logger.debug(
+          `[PreferencesService] Migrated ${provider} customBaseUrl to endpoint ${id}`,
+        );
+      }
+    }
+
+    if (needsSave) {
+      await this.save();
+    }
+  }
+
+  /**
+   * Connect to Karton services for reactive sync.
+   * Should be called after WindowLayoutService and PagesService are created.
+   */
+  public connectKarton(
+    uiKarton: KartonService,
+    pagesService: PagesService,
+  ): void {
+    this.logger.debug('[PreferencesService] Connecting to Karton...');
+
+    this.uiKarton = uiKarton;
+    this.pagesService = pagesService;
+
+    // Sync current preferences to Karton state
+    this.syncToKarton();
+
+    // Register procedure handlers
+    this.registerProcedures();
+
+    this.logger.debug('[PreferencesService] Connected to Karton');
+  }
+
+  private registerProcedures(): void {
+    if (!this.uiKarton || !this.pagesService) {
+      throw new Error('Karton not connected');
+    }
+
+    // UI procedure for updating preferences
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.update',
+      async (_callingClientId: string, patches: Patch[]) => {
+        await this.update(patches);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.saveProviderProfile',
+      async (_callingClientId: string, input: ProviderProfileSaveInput) => {
+        return this.saveProviderProfile(input);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.deleteProviderProfile',
+      async (_callingClientId: string, profileId: string) => {
+        await this.deleteProviderProfile(profileId);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.setDefaultProviderProfile',
+      async (_callingClientId: string, profileId: string) => {
+        await this.setDefaultProviderProfile(profileId);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.setProviderApiKey',
+      async (
+        _callingClientId: string,
+        provider: ModelProvider,
+        apiKey: string,
+      ) => {
+        await this.setProviderApiKey(provider, apiKey);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.clearProviderApiKey',
+      async (_callingClientId: string, provider: ModelProvider) => {
+        await this.clearProviderApiKey(provider);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.disconnectProvider',
+      async (_callingClientId: string, provider: ModelProvider) => {
+        await this.disconnectProvider(provider);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.connectCodingPlan',
+      async (
+        _callingClientId: string,
+        planId: CodingPlanId,
+        apiKey: string,
+      ) => {
+        return this.connectCodingPlan(planId, apiKey);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.connectProvider',
+      async (
+        _callingClientId: string,
+        provider: ModelProvider,
+        apiKey: string,
+      ) => {
+        return this.connectProvider(provider, apiKey);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.setCustomEndpointApiKey',
+      async (_callingClientId: string, endpointId: string, apiKey: string) => {
+        await this.setCustomEndpointApiKey(endpointId, apiKey);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.clearCustomEndpointApiKey',
+      async (_callingClientId: string, endpointId: string) => {
+        await this.clearCustomEndpointApiKey(endpointId);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.setCustomEndpointSecretKey',
+      async (
+        _callingClientId: string,
+        endpointId: string,
+        secretKey: string,
+      ) => {
+        await this.setCustomEndpointSecretKey(endpointId, secretKey);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.setCustomEndpointGoogleCredentials',
+      async (
+        _callingClientId: string,
+        endpointId: string,
+        credentials: string,
+      ) => {
+        await this.setCustomEndpointGoogleCredentials(endpointId, credentials);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.listAwsProfiles',
+      async (_callingClientId: string) => {
+        const { listAwsProfiles } = await import('../utils/aws-profiles');
+        return listAwsProfiles();
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'preferences.validateProviderApiKey',
+      async (
+        _callingClientId: string,
+        provider: ModelProvider,
+        apiKey: string,
+        baseUrl?: string,
+      ) => {
+        const { validateApiKeys } = await import('../utils/validate-api-keys');
+        const results = await validateApiKeys({ [provider]: apiKey }, baseUrl);
+        return results[provider];
+      },
+    );
+
+    // Dev toolbar procedures
+    this.uiKarton.registerServerProcedureHandler(
+      'devToolbar.updateWidgetOrder',
+      async (_callingClientId: string, order: WidgetId[]) => {
+        this.logger.debug('[PreferencesService] Updating widget order', {
+          order,
+        });
+        const patches: Patch[] = [
+          {
+            op: 'replace',
+            path: ['devToolbar', 'widgetOrder'],
+            value: order,
+          },
+        ];
+        await this.update(patches);
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'devToolbar.updateOriginSettings',
+      async (
+        _callingClientId: string,
+        origin: string,
+        settings: Partial<Omit<DevToolbarOriginSettings, 'lastAccessedAt'>>,
+      ) => {
+        this.logger.debug('[PreferencesService] Updating origin settings', {
+          origin,
+          settings,
+        });
+
+        // Ensure origin exists first
+        if (!this.preferences.devToolbar?.originSettings?.[origin]) {
+          await this.getOrCreateOriginSettings(origin);
+        }
+
+        // Build patches for each setting that was provided
+        const patches: Patch[] = [];
+
+        if (settings.panelOpenStates !== undefined) {
+          for (const [widgetId, isOpen] of Object.entries(
+            settings.panelOpenStates,
+          )) {
+            patches.push({
+              op: 'add',
+              path: [
+                'devToolbar',
+                'originSettings',
+                origin,
+                'panelOpenStates',
+                widgetId,
+              ],
+              value: isOpen,
+            });
+          }
+        }
+
+        if (settings.toolbarWidth !== undefined) {
+          patches.push({
+            op: 'replace',
+            path: ['devToolbar', 'originSettings', origin, 'toolbarWidth'],
+            value: settings.toolbarWidth,
+          });
+        }
+
+        // Update lastAccessedAt
+        patches.push({
+          op: 'replace',
+          path: ['devToolbar', 'originSettings', origin, 'lastAccessedAt'],
+          value: Date.now(),
+        });
+
+        if (patches.length > 0) {
+          await this.update(patches);
+        }
+      },
+    );
+
+    this.uiKarton.registerServerProcedureHandler(
+      'devToolbar.getOrCreateOriginSettings',
+      async (_callingClientId: string, origin: string) => {
+        return this.getOrCreateOriginSettings(origin);
+      },
+    );
+  }
+
+  private syncToKarton(): void {
+    if (!this.uiKarton || !this.pagesService) {
+      // Not connected yet, skip sync
+      return;
+    }
+
+    const prefs = structuredClone(this.preferences);
+
+    // Sync to UI Karton state
+    this.uiKarton.setState((draft) => {
+      draft.preferences = prefs;
+    });
+  }
+
+  private async save(
+    preferences: UserPreferences = this.preferences,
+  ): Promise<void> {
+    await writePersistedData('preferences', userPreferencesSchema, preferences);
+    this.logger.debug('[PreferencesService] Saved preferences to disk');
+  }
+
+  /**
+   * Get a clone of the current preferences.
+   */
+  public get(): UserPreferences {
+    this.assertNotDisposed();
+    return structuredClone(this.preferences);
+  }
+
+  private async enqueuePreferenceWrite<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const next = this.preferenceWriteQueue.then(operation, operation);
+    this.preferenceWriteQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  private async replacePreferences(
+    nextPreferences: UserPreferences,
+  ): Promise<void> {
+    const parsed = userPreferencesSchema.parse(nextPreferences);
+    const oldPrefs = structuredClone(this.preferences);
+
+    await this.save(parsed);
+    this.preferences = parsed;
+    this.syncToKarton();
+    this.notifyListeners(this.preferences, oldPrefs);
+  }
+
+  /**
+   * Update preferences by applying Immer patches.
+   *
+   * Patches are JSON-serializable objects created using `produceWithPatches` from Immer.
+   * See the class documentation for examples of how to create patches.
+   *
+   * @param patches - Array of Immer patches to apply
+   * @throws If patches result in invalid preferences (fails Zod validation)
+   */
+  public async update(patches: Patch[]): Promise<void> {
+    this.assertNotDisposed();
+    this.logger.debug('[PreferencesService] Applying patches...', { patches });
+
+    await this.enqueuePreferenceWrite(async () => {
+      // Apply patches using Immer
+      const patched = applyPatches(this.preferences, patches);
+
+      await this.replacePreferences(patched);
+    });
+
+    this.logger.debug('[PreferencesService] Patches applied successfully');
+  }
+
+  public async snoozeWorkspaceGitCleanupCandidates(
+    paths: string[],
+  ): Promise<void> {
+    this.assertNotDisposed();
+    const uniquePaths = Array.from(new Set(paths));
+    if (uniquePaths.length === 0) return;
+
+    await this.enqueuePreferenceWrite(async () => {
+      const nextPreferences = structuredClone(this.preferences);
+      const dismissedCandidates = {
+        ...nextPreferences.agent.workspaceGitCleanup.dismissedCandidates,
+      };
+      const dismissedAt = Date.now();
+      for (const path of uniquePaths) {
+        dismissedCandidates[path] = { dismissedAt };
+      }
+      nextPreferences.agent.workspaceGitCleanup.dismissedCandidates =
+        dismissedCandidates;
+
+      await this.replacePreferences(nextPreferences);
+    });
+  }
+
+  public async pruneWorkspaceGitCleanupSnoozes(
+    activeCandidatePaths: string[],
+    maxAgeMs: number,
+    now = Date.now(),
+  ): Promise<void> {
+    this.assertNotDisposed();
+    const activeCandidatePathSet = new Set(activeCandidatePaths);
+
+    await this.enqueuePreferenceWrite(async () => {
+      const dismissedCandidates =
+        this.preferences.agent.workspaceGitCleanup.dismissedCandidates;
+      const nextDismissedCandidates: typeof dismissedCandidates = {};
+
+      for (const [path, value] of Object.entries(dismissedCandidates)) {
+        if (!activeCandidatePathSet.has(path)) continue;
+        if (now - value.dismissedAt >= maxAgeMs) continue;
+        nextDismissedCandidates[path] = value;
+      }
+
+      if (
+        Object.keys(nextDismissedCandidates).length ===
+          Object.keys(dismissedCandidates).length &&
+        Object.entries(nextDismissedCandidates).every(
+          ([path, value]) => dismissedCandidates[path] === value,
+        )
+      ) {
+        return;
+      }
+
+      const nextPreferences = structuredClone(this.preferences);
+      nextPreferences.agent.workspaceGitCleanup.dismissedCandidates =
+        nextDismissedCandidates;
+
+      await this.replacePreferences(nextPreferences);
+    });
+  }
+
+  /**
+   * Add a listener that's called when preferences change.
+   */
+  public addListener(listener: PreferencesListener): void {
+    this.logger.debug('[PreferencesService] Adding preferences listener');
+    this.listeners.push(listener);
+  }
+
+  /**
+   * Remove a previously added listener.
+   */
+  public removeListener(listener: PreferencesListener): void {
+    this.logger.debug('[PreferencesService] Removing preferences listener');
+    this.listeners = this.listeners.filter((l) => l !== listener);
+  }
+
+  // ===========================================================================
+  // Permission Helper Methods
+  // ===========================================================================
+
+  /**
+   * Get the effective permission setting for an origin.
+   * Checks host exceptions first, then falls back to the global default.
+   *
+   * @param origin - The origin to check (e.g., "https://example.com")
+   * @param permissionType - The type of permission to check
+   * @returns The effective permission setting (Ask, Allow, or Block)
+   */
+  public getPermissionSetting(
+    origin: string,
+    permissionType: ConfigurablePermissionType,
+  ): PermissionSetting {
+    this.assertNotDisposed();
+
+    // Check for host exception first
+    const exception =
+      this.preferences.permissions?.exceptions?.[permissionType]?.[origin];
+    if (exception) {
+      return exception.setting;
+    }
+
+    // Fall back to global default
+    return (
+      this.preferences.permissions?.defaults?.[permissionType] ??
+      PermissionSetting.Ask
+    );
+  }
+
+  /**
+   * Set a host-specific permission exception.
+   * Used by "Always Allow" and "Always Block" actions.
+   *
+   * @param origin - The origin to set the exception for
+   * @param permissionType - The type of permission
+   * @param setting - The permission setting to apply
+   */
+  public async setPermissionException(
+    origin: string,
+    permissionType: ConfigurablePermissionType,
+    setting: PermissionSetting,
+  ): Promise<void> {
+    this.assertNotDisposed();
+
+    const patches: Patch[] = [
+      {
+        op: 'add',
+        path: ['permissions', 'exceptions', permissionType, origin],
+        value: {
+          setting,
+          lastModified: Date.now(),
+        },
+      },
+    ];
+
+    await this.update(patches);
+    this.logger.debug(
+      `[PreferencesService] Set permission exception: ${permissionType} for ${origin} = ${PermissionSetting[setting]}`,
+    );
+  }
+
+  /**
+   * Clear a host-specific permission exception.
+   * Reverts the origin to using the global default for this permission type.
+   *
+   * @param origin - The origin to clear the exception for
+   * @param permissionType - The type of permission
+   */
+  public async clearPermissionException(
+    origin: string,
+    permissionType: ConfigurablePermissionType,
+  ): Promise<void> {
+    this.assertNotDisposed();
+
+    // Only clear if it exists
+    if (this.preferences.permissions?.exceptions?.[permissionType]?.[origin]) {
+      const patches: Patch[] = [
+        {
+          op: 'remove',
+          path: ['permissions', 'exceptions', permissionType, origin],
+        },
+      ];
+
+      await this.update(patches);
+      this.logger.debug(
+        `[PreferencesService] Cleared permission exception: ${permissionType} for ${origin}`,
+      );
+    }
+  }
+
+  /**
+   * Clear all exceptions for a specific permission type.
+   *
+   * @param permissionType - The type of permission to clear all exceptions for
+   */
+  public async clearAllPermissionExceptions(
+    permissionType: ConfigurablePermissionType,
+  ): Promise<void> {
+    this.assertNotDisposed();
+
+    const patches: Patch[] = [
+      {
+        op: 'replace',
+        path: ['permissions', 'exceptions', permissionType],
+        value: {},
+      },
+    ];
+
+    await this.update(patches);
+    this.logger.debug(
+      `[PreferencesService] Cleared all permission exceptions for: ${permissionType}`,
+    );
+  }
+
+  /**
+   * Clear ALL permission exceptions for ALL permission types.
+   * Used when clearing browsing data.
+   */
+  public async clearAllPermissionExceptionsForAllTypes(): Promise<void> {
+    this.assertNotDisposed();
+
+    // Create empty exceptions object for all permission types
+    const emptyExceptions: Record<string, Record<string, unknown>> = {};
+    for (const permType of configurablePermissionTypes) {
+      emptyExceptions[permType] = {};
+    }
+
+    const patches: Patch[] = [
+      {
+        op: 'replace',
+        path: ['permissions', 'exceptions'],
+        value: emptyExceptions,
+      },
+    ];
+
+    await this.update(patches);
+    this.logger.debug(
+      '[PreferencesService] Cleared all permission exceptions for all types',
+    );
+  }
+
+  // ===========================================================================
+  // Dev Toolbar Helper Methods
+  // ===========================================================================
+
+  /**
+   * Merges stored widget order with defaults:
+   * - Keeps existing widgets in user's order
+   * - Adds new widgets at their default position
+   * - Removes widgets that no longer exist
+   */
+  private mergeWidgetOrder(storedOrder: WidgetId[]): WidgetId[] {
+    const result: WidgetId[] = [];
+    const storedSet = new Set(storedOrder);
+    const defaultSet = new Set(DEFAULT_WIDGET_ORDER);
+
+    // Keep existing widgets in user's order (if they still exist)
+    for (const id of storedOrder) {
+      if (defaultSet.has(id)) {
+        result.push(id);
+      }
+    }
+
+    // Add new widgets at their default position
+    for (let i = 0; i < DEFAULT_WIDGET_ORDER.length; i++) {
+      const id = DEFAULT_WIDGET_ORDER[i];
+      if (!storedSet.has(id)) {
+        // Find the position to insert: after the last existing item that comes before it in defaults
+        let insertIndex = result.length;
+        for (let j = i - 1; j >= 0; j--) {
+          const prevInDefault = DEFAULT_WIDGET_ORDER[j];
+          const prevIndex = result.indexOf(prevInDefault);
+          if (prevIndex !== -1) {
+            insertIndex = prevIndex + 1;
+            break;
+          }
+        }
+        result.splice(insertIndex, 0, id);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Get the dev toolbar widget order, merging with defaults.
+   */
+  public getDevToolbarWidgetOrder(): WidgetId[] {
+    const stored =
+      this.preferences.devToolbar?.widgetOrder ?? DEFAULT_WIDGET_ORDER;
+    return this.mergeWidgetOrder(stored);
+  }
+
+  /**
+   * Get or create origin settings for a specific origin.
+   * If the origin doesn't exist, creates settings from the last used origin.
+   * Handles LRU eviction if there are too many origins.
+   */
+  public async getOrCreateOriginSettings(
+    origin: string,
+  ): Promise<DevToolbarOriginSettings> {
+    this.assertNotDisposed();
+
+    const existingSettings =
+      this.preferences.devToolbar?.originSettings?.[origin];
+
+    if (existingSettings) {
+      // Update lastAccessedAt and lastUsedOrigin
+      const patches: Patch[] = [
+        {
+          op: 'replace',
+          path: ['devToolbar', 'originSettings', origin, 'lastAccessedAt'],
+          value: Date.now(),
+        },
+        {
+          op: 'replace',
+          path: ['devToolbar', 'lastUsedOrigin'],
+          value: origin,
+        },
+      ];
+      await this.update(patches);
+      return { ...existingSettings, lastAccessedAt: Date.now() };
+    }
+
+    // Create new settings from last used origin or defaults
+    const lastUsedOrigin = this.preferences.devToolbar?.lastUsedOrigin;
+    const lastUsedSettings = lastUsedOrigin
+      ? this.preferences.devToolbar?.originSettings?.[lastUsedOrigin]
+      : null;
+
+    const newSettings: DevToolbarOriginSettings = {
+      panelOpenStates: lastUsedSettings?.panelOpenStates
+        ? { ...lastUsedSettings.panelOpenStates }
+        : {},
+      toolbarWidth: lastUsedSettings?.toolbarWidth ?? null,
+      lastAccessedAt: Date.now(),
+    };
+
+    // Check if we need to evict old origins
+    const currentOrigins = Object.entries(
+      this.preferences.devToolbar?.originSettings ?? {},
+    );
+    if (currentOrigins.length >= DEV_TOOLBAR_MAX_ORIGINS) {
+      // Find and remove the oldest origin
+      const sorted = currentOrigins.sort(
+        (a, b) => a[1].lastAccessedAt - b[1].lastAccessedAt,
+      );
+      const oldestOrigin = sorted[0][0];
+      await this.update([
+        {
+          op: 'remove',
+          path: ['devToolbar', 'originSettings', oldestOrigin],
+        },
+      ]);
+    }
+
+    // Add the new origin settings
+    const patches: Patch[] = [
+      {
+        op: 'add',
+        path: ['devToolbar', 'originSettings', origin],
+        value: newSettings,
+      },
+      {
+        op: 'replace',
+        path: ['devToolbar', 'lastUsedOrigin'],
+        value: origin,
+      },
+    ];
+    await this.update(patches);
+
+    return newSettings;
+  }
+
+  // ===========================================================================
+  // Provider API Key Methods
+  // ===========================================================================
+
+  public async saveProviderProfile(
+    rawInput: ProviderProfileSaveInput,
+  ): Promise<ProviderProfile> {
+    this.assertNotDisposed();
+    if (!this.providerCredentials) {
+      throw new Error('Provider credential storage is not initialized');
+    }
+    const input = providerProfileSaveInputSchema.parse(rawInput);
+    const existing = this.preferences.providerProfiles.find(
+      (profile) => profile.id === input.id,
+    );
+    const reference = existing?.apiKeyReference ?? `provider.${input.id}`;
+    const apiKey = input.apiKey?.trim();
+
+    if (input.clearApiKey) {
+      await this.providerCredentials.deleteProviderApiKey(reference);
+    } else if (apiKey) {
+      await this.providerCredentials.setProviderApiKey(reference, apiKey);
+    }
+
+    const credentialConfigured =
+      this.providerCredentials.hasProviderApiKey(reference);
+    const profile: ProviderProfile = {
+      id: input.id,
+      providerType: input.providerType,
+      displayName: input.displayName,
+      baseUrl: input.baseUrl,
+      protocol: input.protocol,
+      customHeaders: input.customHeaders,
+      enabled: input.enabled,
+      ...(credentialConfigured ? { apiKeyReference: reference } : {}),
+    };
+    const profiles = this.preferences.providerProfiles.filter(
+      (candidate) => candidate.id !== profile.id,
+    );
+    profiles.push(profile);
+    await this.update([
+      { op: 'replace', path: ['providerProfiles'], value: profiles },
+      ...(!this.preferences.defaultProviderProfileId
+        ? [
+            {
+              op: 'replace' as const,
+              path: ['defaultProviderProfileId'],
+              value: profile.id,
+            },
+          ]
+        : []),
+    ]);
+    return profile;
+  }
+
+  public async deleteProviderProfile(profileId: string): Promise<void> {
+    this.assertNotDisposed();
+    const profile = this.preferences.providerProfiles.find(
+      (candidate) => candidate.id === profileId,
+    );
+    if (!profile) return;
+    if (profile.apiKeyReference && this.providerCredentials) {
+      await this.providerCredentials.deleteProviderApiKey(
+        profile.apiKeyReference,
+      );
+    }
+    const profiles = this.preferences.providerProfiles.filter(
+      (candidate) => candidate.id !== profileId,
+    );
+    await this.update([
+      { op: 'replace', path: ['providerProfiles'], value: profiles },
+      ...(this.preferences.providerModelCatalogs[profileId]
+        ? [
+            {
+              op: 'remove' as const,
+              path: ['providerModelCatalogs', profileId],
+            },
+          ]
+        : []),
+      ...(this.preferences.defaultProviderProfileId === profileId
+        ? [
+            {
+              op: 'replace' as const,
+              path: ['defaultProviderProfileId'],
+              value: profiles.find((candidate) => candidate.enabled)?.id,
+            },
+          ]
+        : []),
+    ]);
+  }
+
+  public async setDefaultProviderProfile(profileId: string): Promise<void> {
+    this.assertNotDisposed();
+    const profile = this.preferences.providerProfiles.find(
+      (candidate) => candidate.id === profileId && candidate.enabled,
+    );
+    if (!profile) {
+      throw new Error(`Enabled provider profile ${profileId} not found`);
+    }
+    await this.update([
+      {
+        op: 'replace',
+        path: ['defaultProviderProfileId'],
+        value: profile.id,
+      },
+    ]);
+  }
+
+  public async cacheProviderProfileModels(
+    profileId: string,
+    models: AIModelInfo[],
+  ): Promise<void> {
+    this.assertNotDisposed();
+    if (
+      !this.preferences.providerProfiles.some(
+        (profile) => profile.id === profileId,
+      )
+    ) {
+      throw new Error(`Provider profile ${profileId} not found`);
+    }
+    await this.update([
+      {
+        op: 'add',
+        path: ['providerModelCatalogs', profileId],
+        value: models,
+      },
+    ]);
+  }
+
+  /**
+   * Set an API key for a provider, encrypted via Electron's safeStorage.
+   * The key is encrypted, base64-encoded, and stored in preferences.
+   */
+  public async setProviderApiKey(
+    provider: ModelProvider,
+    plaintextKey: string,
+  ): Promise<void> {
+    this.assertNotDisposed();
+
+    // Validate provider
+    modelProviderSchema.parse(provider);
+
+    if (
+      this.providerCredentials &&
+      (provider === 'openai' || provider === 'anthropic')
+    ) {
+      const profileId = `official-${provider}`;
+      const reference = `provider.${profileId}`;
+      await this.providerCredentials.setProviderApiKey(reference, plaintextKey);
+      const profiles = this.preferences.providerProfiles.filter(
+        (profile) => profile.id !== profileId,
+      );
+      profiles.push({
+        id: profileId,
+        providerType: provider,
+        displayName: provider === 'openai' ? 'OpenAI' : 'Anthropic',
+        apiKeyReference: reference,
+        protocol:
+          provider === 'openai' ? 'openai-responses' : 'anthropic-messages',
+        customHeaders: {},
+        enabled: true,
+      });
+      await this.update([
+        {
+          op: 'replace',
+          path: ['providerProfiles'],
+          value: profiles,
+        },
+        {
+          op: 'replace',
+          path: ['defaultProviderProfileId'],
+          value: this.preferences.defaultProviderProfileId ?? profileId,
+        },
+        {
+          op: 'replace',
+          path: ['providerConfigs', provider, 'encryptedApiKey'],
+          value: undefined,
+        },
+        {
+          op: 'replace',
+          path: ['providerConfigs', provider, 'connectedCodingPlanId'],
+          value: undefined,
+        },
+      ]);
+      return;
+    }
+
+    const encrypted = safeStorage.encryptString(plaintextKey);
+    const encryptedBase64 = encrypted.toString('base64');
+
+    const patches: Patch[] = [
+      {
+        op: 'replace',
+        path: ['providerConfigs', provider, 'encryptedApiKey'],
+        value: encryptedBase64,
+      },
+      {
+        op: 'replace',
+        path: ['providerConfigs', provider, 'connectedCodingPlanId'],
+        value: undefined,
+      },
+    ];
+
+    await this.update(patches);
+    this.logger.debug(
+      `[PreferencesService] Set encrypted API key for provider: ${provider}`,
+    );
+  }
+
+  /**
+   * Clear the API key for a provider.
+   */
+  public async clearProviderApiKey(provider: ModelProvider): Promise<void> {
+    this.assertNotDisposed();
+
+    // Validate provider
+    modelProviderSchema.parse(provider);
+
+    const profileId = `official-${provider}`;
+    const profile = this.preferences.providerProfiles.find(
+      (candidate) => candidate.id === profileId,
+    );
+    if (profile?.apiKeyReference && this.providerCredentials) {
+      await this.providerCredentials.deleteProviderApiKey(
+        profile.apiKeyReference,
+      );
+    }
+    const patches: Patch[] = [
+      {
+        op: 'replace',
+        path: ['providerConfigs', provider, 'encryptedApiKey'],
+        value: undefined,
+      },
+      {
+        op: 'replace',
+        path: ['providerConfigs', provider, 'connectedCodingPlanId'],
+        value: undefined,
+      },
+      {
+        op: 'replace',
+        path: ['providerProfiles'],
+        value: this.preferences.providerProfiles.filter(
+          (candidate) => candidate.id !== profileId,
+        ),
+      },
+    ];
+
+    await this.update(patches);
+    this.logger.debug(
+      `[PreferencesService] Cleared API key for provider: ${provider}`,
+    );
+  }
+
+  /**
+   * Atomically disconnect a provider in one shot:
+   *   1. keep the provider on its official endpoint with no credentials,
+   *   2. clear the encrypted API key.
+   *
+   * Both patches are applied in a single `update()` call, so the UI cannot
+   * observe a partial state where mode is 'clodex' but the encrypted key
+   * is still at rest (or vice versa). This is the inverse of
+   * `connectCodingPlan` and replaces the previous two-RPC pattern.
+   */
+  public async disconnectProvider(provider: ModelProvider): Promise<void> {
+    this.assertNotDisposed();
+    modelProviderSchema.parse(provider);
+
+    const profileId = `official-${provider}`;
+    const profile = this.preferences.providerProfiles.find(
+      (candidate) => candidate.id === profileId,
+    );
+    if (profile?.apiKeyReference && this.providerCredentials) {
+      await this.providerCredentials.deleteProviderApiKey(
+        profile.apiKeyReference,
+      );
+    }
+    const patches: Patch[] = [
+      {
+        op: 'replace',
+        path: ['providerConfigs', provider, 'mode'],
+        value: 'official',
+      },
+      {
+        op: 'replace',
+        path: ['providerConfigs', provider, 'encryptedApiKey'],
+        value: undefined,
+      },
+      {
+        op: 'replace',
+        path: ['providerConfigs', provider, 'connectedCodingPlanId'],
+        value: undefined,
+      },
+      {
+        op: 'replace',
+        path: ['providerProfiles'],
+        value: this.preferences.providerProfiles.filter(
+          (candidate) => candidate.id !== profileId,
+        ),
+      },
+    ];
+
+    await this.update(patches);
+    this.logger.debug(
+      `[PreferencesService] Disconnected provider: ${provider}`,
+    );
+  }
+
+  /**
+   * Atomically connect a provider in one shot:
+   *   1. validate the key against the provider,
+   *   2. encrypt+store it,
+   *   3. flip providerConfigs[provider].mode to 'official'.
+   *
+   * Both the encrypted-key patch and the mode patch are applied in a single
+   * `update()` call, so the UI cannot observe a partial state where the key
+   * is stored but mode is still 'clodex' (or vice versa). This is the
+   * inverse of `disconnectProvider` and replaces the previous two-RPC pattern
+   * (`setProviderApiKey` + separate mode flip).
+   *
+   * Returns without mutating state if validation fails.
+   */
+  public async connectProvider(
+    provider: ModelProvider,
+    apiKey: string,
+  ): Promise<{ success: true } | { success: false; error: string }> {
+    this.assertNotDisposed();
+    modelProviderSchema.parse(provider);
+
+    if (!apiKey) {
+      return { success: false, error: 'API key is required' };
+    }
+
+    // 1. Validate the key against the provider.
+    const results = await validateApiKeys({ [provider]: apiKey });
+    const result = results[provider];
+    if (!result) {
+      return { success: false, error: 'Validation was skipped' };
+    }
+    if (result.success === false) {
+      return result;
+    }
+
+    if (
+      this.providerCredentials &&
+      (provider === 'openai' || provider === 'anthropic')
+    ) {
+      const profileId = `official-${provider}`;
+      const reference = `provider.${profileId}`;
+      await this.providerCredentials.setProviderApiKey(reference, apiKey);
+      const profiles = this.preferences.providerProfiles.filter(
+        (profile) => profile.id !== profileId,
+      );
+      profiles.push({
+        id: profileId,
+        providerType: provider,
+        displayName: provider === 'openai' ? 'OpenAI' : 'Anthropic',
+        apiKeyReference: reference,
+        protocol:
+          provider === 'openai' ? 'openai-responses' : 'anthropic-messages',
+        customHeaders: {},
+        enabled: true,
+      });
+      await this.update([
+        {
+          op: 'replace',
+          path: ['providerProfiles'],
+          value: profiles,
+        },
+        {
+          op: 'replace',
+          path: ['defaultProviderProfileId'],
+          value: this.preferences.defaultProviderProfileId ?? profileId,
+        },
+        {
+          op: 'replace',
+          path: ['providerConfigs', provider, 'encryptedApiKey'],
+          value: undefined,
+        },
+        {
+          op: 'replace',
+          path: ['providerConfigs', provider, 'mode'],
+          value: 'official',
+        },
+        {
+          op: 'replace',
+          path: ['providerConfigs', provider, 'connectedCodingPlanId'],
+          value: undefined,
+        },
+      ]);
+      this.logger.debug(`[PreferencesService] Connected provider: ${provider}`);
+      return { success: true };
+    }
+
+    // 2 + 3. Encrypt+store key and flip mode in one patch batch.
+    const encryptedBase64 = safeStorage
+      .encryptString(apiKey)
+      .toString('base64');
+    const patches: Patch[] = [
+      {
+        op: 'replace',
+        path: ['providerConfigs', provider, 'encryptedApiKey'],
+        value: encryptedBase64,
+      },
+      {
+        op: 'replace',
+        path: ['providerConfigs', provider, 'mode'],
+        value: 'official',
+      },
+      {
+        op: 'replace',
+        path: ['providerConfigs', provider, 'connectedCodingPlanId'],
+        value: undefined,
+      },
+    ];
+    await this.update(patches);
+
+    this.logger.debug(`[PreferencesService] Connected provider: ${provider}`);
+    return { success: true };
+  }
+
+  /**
+   * Connect a Tier-A coding plan in one shot:
+   *   1. validate the key against the plan's provider,
+   *   2. encrypt+store it,
+   *   3. flip providerConfigs[provider].mode to 'official'.
+   *
+   * Returns without mutating state if validation fails.
+   */
+  public async connectCodingPlan(
+    planId: CodingPlanId,
+    apiKey: string,
+  ): Promise<{ success: true } | { success: false; error: string }> {
+    this.assertNotDisposed();
+
+    if (!isCodingPlanId(planId)) {
+      return { success: false, error: `Unknown coding plan: ${planId}` };
+    }
+    const plan = CODING_PLANS[planId];
+
+    if (!apiKey) {
+      return { success: false, error: 'API key is required' };
+    }
+
+    // 1. Validate the key against the plan's provider or dedicated endpoint.
+    const result = await validateCodingPlanApiKey(plan, apiKey);
+    if (!result) {
+      return { success: false, error: 'Validation was skipped' };
+    }
+    if (result.success === false) {
+      return result;
+    }
+
+    // 2 + 3. Encrypt+store key and flip mode in one patch batch.
+    const encryptedBase64 = safeStorage
+      .encryptString(apiKey)
+      .toString('base64');
+    const patches: Patch[] = [
+      {
+        op: 'replace',
+        path: ['providerConfigs', plan.provider, 'encryptedApiKey'],
+        value: encryptedBase64,
+      },
+      {
+        op: 'replace',
+        path: ['providerConfigs', plan.provider, 'mode'],
+        value: 'official',
+      },
+      {
+        op: 'replace',
+        path: ['providerConfigs', plan.provider, 'connectedCodingPlanId'],
+        value: plan.id,
+      },
+    ];
+    await this.update(patches);
+
+    this.logger.debug(
+      `[PreferencesService] Connected coding plan ${planId} ` +
+        `(provider=${plan.provider})`,
+    );
+    return { success: true };
+  }
+
+  // ===========================================================================
+  // Custom Endpoint API Key Methods
+  // ===========================================================================
+
+  /**
+   * Set an API key for a custom endpoint, encrypted via Electron's safeStorage.
+   */
+  public async setCustomEndpointApiKey(
+    endpointId: string,
+    plaintextKey: string,
+  ): Promise<void> {
+    this.assertNotDisposed();
+
+    const idx = this.preferences.customEndpoints.findIndex(
+      (ep) => ep.id === endpointId,
+    );
+    if (idx === -1) throw new Error(`Custom endpoint ${endpointId} not found`);
+
+    const encrypted = safeStorage.encryptString(plaintextKey);
+    const patches: Patch[] = [
+      {
+        op: 'replace',
+        path: ['customEndpoints', idx, 'encryptedApiKey'],
+        value: encrypted.toString('base64'),
+      },
+    ];
+
+    await this.update(patches);
+    this.logger.debug(
+      `[PreferencesService] Set encrypted API key for custom endpoint: ${endpointId}`,
+    );
+  }
+
+  /**
+   * Clear the API key for a custom endpoint.
+   */
+  public async clearCustomEndpointApiKey(endpointId: string): Promise<void> {
+    this.assertNotDisposed();
+
+    const idx = this.preferences.customEndpoints.findIndex(
+      (ep) => ep.id === endpointId,
+    );
+    if (idx === -1) throw new Error(`Custom endpoint ${endpointId} not found`);
+
+    const patches: Patch[] = [
+      {
+        op: 'replace',
+        path: ['customEndpoints', idx, 'encryptedApiKey'],
+        value: undefined,
+      },
+    ];
+
+    await this.update(patches);
+    this.logger.debug(
+      `[PreferencesService] Cleared API key for custom endpoint: ${endpointId}`,
+    );
+  }
+
+  /**
+   * Encrypt and store a secret key for an Amazon Bedrock custom endpoint.
+   */
+  public async setCustomEndpointSecretKey(
+    endpointId: string,
+    plaintextKey: string,
+  ): Promise<void> {
+    this.assertNotDisposed();
+
+    const idx = this.preferences.customEndpoints.findIndex(
+      (ep) => ep.id === endpointId,
+    );
+    if (idx === -1) throw new Error(`Custom endpoint ${endpointId} not found`);
+
+    const encrypted = safeStorage.encryptString(plaintextKey);
+    const patches: Patch[] = [
+      {
+        op: 'replace',
+        path: ['customEndpoints', idx, 'encryptedSecretKey'],
+        value: encrypted.toString('base64'),
+      },
+    ];
+
+    await this.update(patches);
+    this.logger.debug(
+      `[PreferencesService] Set encrypted secret key for endpoint: ${endpointId}`,
+    );
+  }
+
+  /**
+   * Encrypt and store Google service account credentials for a Vertex AI endpoint.
+   */
+  public async setCustomEndpointGoogleCredentials(
+    endpointId: string,
+    credentialsJson: string,
+  ): Promise<void> {
+    this.assertNotDisposed();
+
+    const idx = this.preferences.customEndpoints.findIndex(
+      (ep) => ep.id === endpointId,
+    );
+    if (idx === -1) throw new Error(`Custom endpoint ${endpointId} not found`);
+
+    const encrypted = safeStorage.encryptString(credentialsJson);
+    const patches: Patch[] = [
+      {
+        op: 'replace',
+        path: ['customEndpoints', idx, 'encryptedGoogleCredentials'],
+        value: encrypted.toString('base64'),
+      },
+    ];
+
+    await this.update(patches);
+    this.logger.debug(
+      `[PreferencesService] Set encrypted Google credentials for endpoint: ${endpointId}`,
+    );
+  }
+
+  /**
+   * Decrypt an API key stored in preferences.
+   * Returns empty string if no key is stored or decryption fails.
+   */
+  public decryptProviderApiKey(encryptedBase64?: string): string {
+    if (!encryptedBase64) return '';
+    try {
+      const buffer = Buffer.from(encryptedBase64, 'base64');
+      return safeStorage.decryptString(buffer);
+    } catch (error) {
+      this.logger.error(
+        '[PreferencesService] Failed to decrypt API key',
+        error,
+      );
+      return '';
+    }
+  }
+
+  private notifyListeners(
+    newPrefs: UserPreferences,
+    oldPrefs: UserPreferences,
+  ): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(newPrefs, oldPrefs);
+      } catch (error) {
+        this.logger.error(
+          '[PreferencesService] Listener threw an error',
+          error,
+        );
+      }
+    }
+  }
+
+  protected async onTeardown(): Promise<void> {
+    this.logger.debug('[PreferencesService] Tearing down...');
+    if (this.uiKarton) {
+      this.uiKarton.removeServerProcedureHandler('preferences.update');
+      this.uiKarton.removeServerProcedureHandler(
+        'preferences.setProviderApiKey',
+      );
+      this.uiKarton.removeServerProcedureHandler(
+        'preferences.clearProviderApiKey',
+      );
+      this.uiKarton.removeServerProcedureHandler(
+        'preferences.disconnectProvider',
+      );
+      this.uiKarton.removeServerProcedureHandler(
+        'preferences.connectCodingPlan',
+      );
+      this.uiKarton.removeServerProcedureHandler('preferences.connectProvider');
+      this.uiKarton.removeServerProcedureHandler(
+        'preferences.setCustomEndpointApiKey',
+      );
+      this.uiKarton.removeServerProcedureHandler(
+        'preferences.clearCustomEndpointApiKey',
+      );
+      this.uiKarton.removeServerProcedureHandler(
+        'preferences.setCustomEndpointSecretKey',
+      );
+      this.uiKarton.removeServerProcedureHandler(
+        'preferences.setCustomEndpointGoogleCredentials',
+      );
+      this.uiKarton.removeServerProcedureHandler('preferences.listAwsProfiles');
+      this.uiKarton.removeServerProcedureHandler(
+        'preferences.validateProviderApiKey',
+      );
+      this.uiKarton.removeServerProcedureHandler(
+        'devToolbar.updateWidgetOrder',
+      );
+      this.uiKarton.removeServerProcedureHandler(
+        'devToolbar.updateOriginSettings',
+      );
+      this.uiKarton.removeServerProcedureHandler(
+        'devToolbar.getOrCreateOriginSettings',
+      );
+    }
+    this.listeners = [];
+    this.logger.debug('[PreferencesService] Teardown complete');
+  }
+}

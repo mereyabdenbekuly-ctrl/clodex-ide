@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.backend.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true
+  },
+  "include": [
+    "scripts/collect-isolated-agent-runtime-evidence.ts",
+    "scripts/check-isolated-agent-runtime-observation-build.ts",
+    "scripts/check-isolated-agent-runtime-promotion.ts",
+    "scripts/agent-host-step-executor-smoke.ts",
+    "scripts/agent-host-fault-smoke.ts"
+  ],
+  "exclude": ["node_modules", "dist", "coverage", "tmp", ".turbo"]
+}

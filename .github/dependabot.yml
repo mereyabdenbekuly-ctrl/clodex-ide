@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    reviewers:
+      - "juliangoetze"
+    # Ignore specific dependency versions and update types
+    ignore:
+      # Ignore all updates for @headlessui/react as previously configured
+      - dependency-name: "@headlessui/react"
+      # Ignore major and patch updates for all other dependencies, effectively
+      # only allowing minor updates.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

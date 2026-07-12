@@ -1,0 +1,31 @@
+# This template is heavily inspired by the Next.js's template:
+# See here: https://github.com/vercel/next.js/blob/canary/.github/ISSUE_TEMPLATE/3.feature_request.yml
+# These templates are heavily inspired by the ones from trpc.io
+
+name: 🛠 Feature Request
+description: Create a feature request for the core packages
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to file a feature request. Please fill out this form as completely as possible.
+  - type: textarea
+    attributes:
+      label: Describe the feature you'd like to request
+      description: Please describe the feature as clear and concise as possible. Remember to add context as to why you believe this feature is needed.
+    validations:
+      required: true
+  - type: checkboxes
+    attributes:
+      label: 👨‍👧‍👦 Contributing
+      description: We love contributors in any shape or form. Would you be willing to implement this feature?
+      options:
+        - label: 🙋‍♂️ Yes, I'd be down to file a PR implementing this feature!
+  - type: input
+    id: app-version
+    attributes:
+      label: Current application version
+      description: If you are already using Clodex, please provide the version you're using.
+      placeholder: 1.0.0-alpha.1

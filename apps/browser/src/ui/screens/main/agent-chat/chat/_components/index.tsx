@@ -1,0 +1,150 @@
+import { useMessageEditState } from '@ui/hooks/use-message-edit-state';
+import {
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+  useDeferredValue,
+} from 'react';
+import { ChatHistory } from './chat-history';
+import { ChatPanelFooter } from './panel-footer';
+import { useComparingSelector, useKartonState } from '@ui/hooks/use-karton';
+import { cn } from '@ui/utils';
+import {
+  useOpenAgent,
+  OpenAgentContext,
+  noopAgentSwitcher,
+} from '@ui/hooks/use-open-chat';
+import { useCmdEnterDispatcher } from '@ui/hooks/use-cmd-enter-dispatcher';
+import { TaskGoalCard } from './task-goal-card';
+
+export function ChatPanel() {
+  const { forwardDropEvent } = useMessageEditState();
+  const [openAgent, setOpenAgent, removeFromHistory] = useOpenAgent();
+
+  // Single global CMD+Enter listener — dispatches to the highest-priority
+  // visible target registered via `useCmdEnterTarget`.
+  useCmdEnterDispatcher();
+
+  // Narrow selectors: only extract primitive/stable values so streaming
+  // chunks on unrelated agents don't trigger a re-render.
+  const agentHistoryLengths = useKartonState(
+    useComparingSelector((s) =>
+      Object.fromEntries(
+        Object.entries(s.agents.instances).map(([id, agent]) => [
+          id,
+          agent.state.history?.length ?? 0,
+        ]),
+      ),
+    ),
+  );
+  const openAgentExists = openAgent ? openAgent in agentHistoryLengths : false;
+  // Defer heavy chat rendering so the sidebar updates instantly while the
+  // chat area stays empty during the transition.
+  const deferredAgent = useDeferredValue(openAgent);
+  const isTransitioning = openAgent !== deferredAgent;
+  const deferredAgentHistoryLen = deferredAgent
+    ? (agentHistoryLengths[deferredAgent] ?? 0)
+    : 0;
+
+  // Auto-selecting the first agent when openAgent is null is handled
+  // centrally by `useAutoSelectFirstAgent` at the main layout root —
+  // no need to duplicate it here.
+
+  // Track drag-over state for visual feedback
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    // Accept Files (from file system), text/uri-list (from web pages - images/links),
+    // or workspace file/folder entries dragged from the file tree.
+    if (
+      e.dataTransfer.types.includes('Files') ||
+      e.dataTransfer.types.includes('text/uri-list') ||
+      e.dataTransfer.types.includes('application/x-clodex-file-path') ||
+      e.dataTransfer.types.includes('application/x-clodex-file-paths')
+    ) {
+      setIsDragOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current === 0) {
+      setIsDragOver(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  // Forward drop events to the active input handler (editing message or main chat)
+  // The actual processing (URL→image conversion, etc.) is done by the receiving handler
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current = 0;
+      setIsDragOver(false);
+
+      // Forward the raw event to the active handler
+      forwardDropEvent(e);
+    },
+    [forwardDropEvent],
+  );
+
+  // Context override: ChatHistory reads openAgent from context, so we provide
+  // the deferred value so React can schedule the heavy render as interruptible.
+  const deferredContext = useMemo(
+    () => ({
+      tuple: [deferredAgent, setOpenAgent, removeFromHistory] as [
+        string | null,
+        (id: string | null) => void,
+        (id: string, fallback?: string | null) => void,
+      ],
+      switcher: noopAgentSwitcher,
+    }),
+    [deferredAgent, setOpenAgent, removeFromHistory],
+  );
+
+  if (openAgent === null || openAgent === undefined || !openAgentExists)
+    return (
+      <div className="flex size-full items-center justify-center text-muted-foreground">
+        No agent selected
+      </div>
+    );
+
+  return (
+    <div
+      className={cn(
+        'relative flex size-full flex-col items-stretch justify-center rounded-b-lg bg-transparent transition-colors',
+        isDragOver && 'bg-hover-derived!',
+      )}
+      onDrop={handleDrop}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      role="region"
+      aria-label="Chat panel drop zone"
+    >
+      <OpenAgentContext.Provider value={deferredContext}>
+        {isTransitioning ? (
+          <div className={deferredAgentHistoryLen > 0 ? 'flex-1' : 'h-0'} />
+        ) : (
+          <ChatHistory />
+        )}
+      </OpenAgentContext.Provider>
+      <div className="mx-auto flex w-full max-w-3xl shrink-0 flex-col items-stretch">
+        <TaskGoalCard agentId={openAgent} />
+        <ChatPanelFooter key={openAgent} />
+      </div>
+    </div>
+  );
+}

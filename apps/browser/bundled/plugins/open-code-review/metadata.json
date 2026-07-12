@@ -1,0 +1,5 @@
+{
+  "displayName": "Open Code Review",
+  "description": "Adds Alibaba Open Code Review workflows for reviewing git diffs, staged changes, branches, and full workspace scans from inside Clodex.",
+  "requiredCredentials": []
+}

@@ -1,0 +1,346 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useId } from 'react';
+import { Button } from '@clodex/stage-ui/components/button';
+import { useKartonProcedure, useKartonState } from '@ui/hooks/use-karton';
+import {
+  IconVideoOutline18,
+  IconThumbsUpOutline18,
+  IconThumbsDownOutline18,
+} from 'nucleo-ui-outline-18';
+import { SidebarToast } from './sidebar-toast';
+
+const MESSAGE_THRESHOLD = 5;
+const DISMISS_COOLDOWN_MS = 48 * 60 * 60 * 1000; // 48 hours
+const MAX_DISMISS_COUNT = 3;
+
+const FOUNDER_CALL_AGENT_THRESHOLD = 10;
+const FOUNDER_CALL_USAGE_DAYS = 4;
+const FOUNDER_CALL_STAGGER_MS = 24 * 60 * 60 * 1000; // 24 hours
+const FOUNDER_CALL_DISMISS_COOLDOWN_MS = 96 * 60 * 60 * 1000; // 96 hours
+const BOOKING_URL = 'https://calendar.app.google/McsonxboNHu7oyUF8';
+
+export function SidebarExperienceSurvey() {
+  const [feedback, setFeedback] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // ── First survey state ──
+  const survey = useKartonState(
+    (s) => s.userExperience.storedExperienceData.experienceSurvey,
+  );
+  const answerSurvey = useKartonProcedure(
+    (p) => p.userExperience.survey.answer,
+  );
+  const dismissSurvey = useKartonProcedure(
+    (p) => p.userExperience.survey.dismiss,
+  );
+  const submitFeedback = useKartonProcedure(
+    (p) => p.userExperience.survey.submitFeedback,
+  );
+
+  // ── Second (founder call) survey state ──
+  const founderCallSurvey = useKartonState(
+    (s) => s.userExperience.storedExperienceData.founderCallSurvey,
+  );
+  const firstUsedAt = useKartonState(
+    (s) => s.userExperience.storedExperienceData.firstUsedAt,
+  );
+  const openFounderCallSurvey = useKartonProcedure(
+    (p) => p.userExperience.founderCall.survey.open,
+  );
+  const dismissFounderCallSurvey = useKartonProcedure(
+    (p) => p.userExperience.founderCall.survey.dismiss,
+  );
+
+  // Total agent count from DB (via storedExperienceData)
+  const totalAgentCount = useKartonState(
+    (s) => s.userExperience.storedExperienceData.totalAgentCount,
+  );
+
+  // Count total user messages across all active agents (first survey trigger)
+  const totalUserMessages = useKartonState((s) => {
+    let count = 0;
+    for (const instance of Object.values(s.agents.instances)) {
+      count += instance.state.history.filter((m) => m.role === 'user').length;
+    }
+    return count;
+  });
+
+  const [hasAnswered, setHasAnswered] = useState(false);
+  const [submitError, setSubmitError] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const feedbackLabelId = useId();
+
+  // Tick to force memo recomputation at cooldown boundaries.
+  // Without this, Date.now() inside the memos would stay stale while
+  // the app is idle, and surveys wouldn't appear when cooldowns expire.
+  const [tick, setTick] = useState(0);
+
+  // ── First survey visibility ──
+  const shouldShow = useMemo(() => {
+    if (submitted) return false;
+    // Keep the survey visible while the user is in the feedback phase,
+    // even though the backend already marked it as answered.
+    if (survey.answered && !hasAnswered) return false;
+    if (totalUserMessages <= MESSAGE_THRESHOLD) return false;
+
+    // If never dismissed, show
+    if (survey.dismissedAt === null || survey.dismissedCount === 0) return true;
+
+    // If dismissed max times, don't show
+    if (survey.dismissedCount >= MAX_DISMISS_COUNT) return false;
+
+    // Show again after cooldown
+    return Date.now() - survey.dismissedAt >= DISMISS_COOLDOWN_MS;
+  }, [survey, totalUserMessages, submitted, hasAnswered, tick]);
+
+  // ── Second (founder call) survey visibility ──
+  const shouldShowFounderCall = useMemo(() => {
+    // Never show at the same time as the first survey
+    if (shouldShow) return false;
+
+    if (founderCallSurvey.answered) return false;
+    if (totalAgentCount < FOUNDER_CALL_AGENT_THRESHOLD) return false;
+
+    // Must have used clodex for at least 4 days
+    if (firstUsedAt === null) return false;
+    const daysSinceFirstUse =
+      (Date.now() - firstUsedAt) / (1000 * 60 * 60 * 24);
+    if (daysSinceFirstUse < FOUNDER_CALL_USAGE_DAYS) return false;
+
+    // Must appear at least 24h after the first survey was resolved
+    const firstSurveyResolvedAt = survey.answeredAt ?? survey.dismissedAt;
+    if (firstSurveyResolvedAt === null) return false;
+    if (Date.now() - firstSurveyResolvedAt < FOUNDER_CALL_STAGGER_MS) {
+      return false;
+    }
+
+    // Dismiss logic: reappear after 96h cooldown, up to 3 dismissals total.
+    if (
+      founderCallSurvey.dismissedAt === null ||
+      founderCallSurvey.dismissedCount === 0
+    )
+      return true;
+    if (founderCallSurvey.dismissedCount >= MAX_DISMISS_COUNT) return false;
+    return (
+      Date.now() - founderCallSurvey.dismissedAt >=
+      FOUNDER_CALL_DISMISS_COOLDOWN_MS
+    );
+  }, [
+    shouldShow,
+    founderCallSurvey,
+    totalAgentCount,
+    firstUsedAt,
+    survey,
+    tick,
+  ]);
+
+  // Schedule a re-render at the earliest upcoming cooldown boundary
+  // so surveys appear without waiting for an unrelated state change.
+  useEffect(() => {
+    if (shouldShow || shouldShowFounderCall) return;
+
+    const now = Date.now();
+    const boundaries: number[] = [];
+
+    // First survey: cooldown after dismissal
+    if (
+      !survey.answered &&
+      survey.dismissedAt !== null &&
+      survey.dismissedCount < MAX_DISMISS_COUNT &&
+      totalUserMessages > MESSAGE_THRESHOLD
+    ) {
+      boundaries.push(survey.dismissedAt + DISMISS_COOLDOWN_MS);
+    }
+
+    // Founder call survey: only if preconditions are met
+    if (
+      !founderCallSurvey.answered &&
+      totalAgentCount >= FOUNDER_CALL_AGENT_THRESHOLD &&
+      firstUsedAt !== null
+    ) {
+      // Usage days boundary
+      boundaries.push(
+        firstUsedAt + FOUNDER_CALL_USAGE_DAYS * 24 * 60 * 60 * 1000,
+      );
+
+      // Stagger after first survey resolution
+      const firstSurveyResolvedAt = survey.answeredAt ?? survey.dismissedAt;
+      if (firstSurveyResolvedAt !== null) {
+        boundaries.push(firstSurveyResolvedAt + FOUNDER_CALL_STAGGER_MS);
+      }
+
+      // Dismiss cooldown
+      if (
+        founderCallSurvey.dismissedAt !== null &&
+        founderCallSurvey.dismissedCount < MAX_DISMISS_COUNT
+      ) {
+        boundaries.push(
+          founderCallSurvey.dismissedAt + FOUNDER_CALL_DISMISS_COOLDOWN_MS,
+        );
+      }
+    }
+
+    const nextBoundary = boundaries
+      .filter((b) => b > now)
+      .sort((a, b) => a - b)[0];
+    if (nextBoundary === undefined) return;
+
+    const delay = nextBoundary - now;
+    const timer = setTimeout(() => setTick((t) => t + 1), delay);
+    return () => clearTimeout(timer);
+  }, [
+    shouldShow,
+    shouldShowFounderCall,
+    survey,
+    founderCallSurvey,
+    firstUsedAt,
+    totalUserMessages,
+    totalAgentCount,
+  ]);
+
+  const handleAnswer = useCallback(
+    (answer: 'yes' | 'no') => {
+      setHasAnswered(true);
+      void answerSurvey(answer);
+      // Focus the textarea on next render
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    },
+    [answerSurvey],
+  );
+
+  const handleDismiss = useCallback(() => {
+    void dismissSurvey();
+  }, [dismissSurvey]);
+
+  const handleSubmitFeedback = useCallback(async () => {
+    const trimmed = feedback.trim();
+    if (!trimmed || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await submitFeedback(trimmed);
+      setSubmitted(true);
+    } catch {
+      setSubmitError(true);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [feedback, submitFeedback, isSubmitting]);
+
+  const handleOpenFounderCall = useCallback(() => {
+    void openFounderCallSurvey();
+    window.open(BOOKING_URL, '_blank', 'noopener,noreferrer');
+  }, [openFounderCallSurvey]);
+
+  const handleDismissFounderCall = useCallback(() => {
+    void dismissFounderCallSurvey();
+  }, [dismissFounderCallSurvey]);
+
+  // ── First survey ──
+  if (shouldShow) {
+    return (
+      <SidebarToast
+        dismissLabel="Dismiss survey"
+        onDismiss={!hasAnswered ? handleDismiss : () => setSubmitted(true)}
+      >
+        {!hasAnswered ? (
+          <>
+            <div className="pr-7 font-medium text-foreground text-xs leading-relaxed">
+              Do you enjoy your experience with clodex?
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                size="xs"
+                className="flex-1"
+                aria-label="No"
+                onClick={() => handleAnswer('no')}
+              >
+                <IconThumbsDownOutline18 className="size-3.5" />
+                No
+              </Button>
+              <Button
+                variant="secondary"
+                size="xs"
+                className="flex-1"
+                aria-label="Yes"
+                onClick={() => handleAnswer('yes')}
+              >
+                <IconThumbsUpOutline18 className="size-3.5" />
+                Yes
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div
+              id={feedbackLabelId}
+              className="pr-7 font-medium text-foreground text-xs leading-relaxed"
+            >
+              What could we improve?
+            </div>
+            {submitError && (
+              <p className="text-error-foreground text-xs">
+                Failed to submit. Please try again.
+              </p>
+            )}
+            <textarea
+              ref={textareaRef}
+              aria-labelledby={feedbackLabelId}
+              className="scrollbar-subtle w-full resize-none rounded-md border border-derived bg-surface-1 px-2.5 py-2 text-foreground text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary-foreground"
+              placeholder="e.g. Add MCP support, let me fork agent chats, better error recovery…"
+              rows={3}
+              value={feedback}
+              onChange={(e) => {
+                setFeedback(e.target.value);
+                if (submitError) setSubmitError(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void handleSubmitFeedback();
+                }
+              }}
+            />
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="primary"
+                size="xs"
+                disabled={!feedback.trim() || isSubmitting}
+                onClick={handleSubmitFeedback}
+              >
+                Send
+              </Button>
+            </div>
+          </>
+        )}
+      </SidebarToast>
+    );
+  }
+
+  // ── Second (founder call) survey ──
+  if (shouldShowFounderCall) {
+    return (
+      <SidebarToast
+        dismissLabel="Dismiss survey"
+        onDismiss={handleDismissFounderCall}
+      >
+        <div className="pr-7 font-medium text-foreground text-xs leading-relaxed">
+          Tell our founders what you think about clodex and get 1 month Pro for
+          free!
+        </div>
+        <Button
+          variant="primary"
+          size="xs"
+          className="w-full"
+          onClick={handleOpenFounderCall}
+        >
+          <IconVideoOutline18 className="size-3.5" />
+          Book a call
+        </Button>
+      </SidebarToast>
+    );
+  }
+
+  return null;
+}

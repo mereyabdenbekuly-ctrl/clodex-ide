@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Figma App</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <svg class="figma-icon" width="12" height="18" viewBox="0 0 38 57" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M19 28.5C19 23.2533 23.2533 19 28.5 19C33.7467 19 38 23.2533 38 28.5C38 33.7467 33.7467 38 28.5 38C23.2533 38 19 33.7467 19 28.5Z" fill="#1ABCFE"/>
+        <path d="M0 47.5C0 42.2533 4.25329 38 9.5 38H19V47.5C19 52.7467 14.7467 57 9.5 57C4.25329 57 0 52.7467 0 47.5Z" fill="#0ACF83"/>
+        <path d="M19 0V19H28.5C33.7467 19 38 14.7467 38 9.5C38 4.25329 33.7467 0 28.5 0H19Z" fill="#FF7262"/>
+        <path d="M0 9.5C0 14.7467 4.25329 19 9.5 19H19V0H9.5C4.25329 0 0 4.25329 0 9.5Z" fill="#F24E1E"/>
+        <path d="M0 28.5C0 33.7467 4.25329 38 9.5 38H19V19H9.5C4.25329 19 0 23.2533 0 28.5Z" fill="#A259FF"/>
+      </svg>
+      <span class="title">Figma Selection</span>
+    </div>
+    <span class="counter" id="counter"></span>
+  </header>
+  <main id="main">
+    <div class="empty-state" id="empty">
+      <span class="empty-icon">◇</span>
+      <span>No nodes selected — select elements in Figma</span>
+    </div>
+  </main>
+  <script>
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type === '__clodex_theme') {
+        const root = document.documentElement;
+        for (const [name, value] of Object.entries(e.data.variables)) {
+          root.style.setProperty(name, value);
+        }
+        document.body.classList.add('themed');
+        return;
+      }
+    });
+
+    const mainEl = document.getElementById('main');
+    const emptyEl = document.getElementById('empty');
+    const counterEl = document.getElementById('counter');
+    let badgeContainer = null;
+
+    function renderNodes(nodes) {
+      if (!nodes || nodes.length === 0) {
+        if (badgeContainer) { badgeContainer.remove(); badgeContainer = null; }
+        emptyEl.style.display = '';
+        counterEl.textContent = '';
+        return;
+      }
+      emptyEl.style.display = 'none';
+      counterEl.textContent = nodes.length + (nodes.length === 1 ? ' node' : ' nodes');
+
+      if (!badgeContainer) {
+        badgeContainer = document.createElement('div');
+        badgeContainer.className = 'badges';
+        mainEl.appendChild(badgeContainer);
+      }
+      badgeContainer.innerHTML = '';
+
+      for (const node of nodes) {
+        const pill = document.createElement('div');
+        pill.className = 'badge';
+        pill.title = `${node.type || 'NODE'} · ${node.id}${node.width ? ` (${node.width}×${node.height})` : ''}`;
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'badge-name';
+        nameSpan.textContent = node.name || node.id;
+
+        pill.appendChild(nameSpan);
+        badgeContainer.appendChild(pill);
+      }
+    }
+
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      if (msg && msg.type === 'selectionChanged') {
+        renderNodes(msg.nodes);
+        window.parent.postMessage({ type: 'ack', nodeCount: (msg.nodes || []).length }, '*');
+      } else if (msg && msg.type === 'custom') {
+        emptyEl.style.display = 'none';
+        counterEl.textContent = 'custom data';
+        if (!badgeContainer) {
+          badgeContainer = document.createElement('div');
+          badgeContainer.className = 'badges';
+          mainEl.appendChild(badgeContainer);
+        }
+        badgeContainer.innerHTML = '<pre class="custom-data">' +
+          JSON.stringify(msg.data, null, 2) + '</pre>';
+        window.parent.postMessage({ type: 'ack', received: true }, '*');
+      }
+    });
+  </script>
+</body>
+</html>

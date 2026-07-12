@@ -1,0 +1,132 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import semver from 'semver';
+
+// Release channel: 'dev' | 'prerelease' | 'nightly' | 'release'
+type ReleaseChannel = 'dev' | 'prerelease' | 'nightly' | 'release';
+export const __APP_RELEASE_CHANNEL__: ReleaseChannel = (() => {
+  switch (process.env.RELEASE_CHANNEL) {
+    case 'release':
+      return 'release';
+    case 'nightly':
+      return 'nightly';
+    case 'prerelease':
+      return 'prerelease';
+    case 'dev':
+    default:
+      return 'dev';
+  }
+})();
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Read version from package.json
+const packageJson = JSON.parse(
+  readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'),
+);
+
+export const __APP_BASE_NAME__ = (() => {
+  switch (__APP_RELEASE_CHANNEL__) {
+    case 'release':
+      return 'clodex';
+    case 'nightly':
+      return 'clodex-nightly';
+    case 'prerelease':
+      return 'clodex-prerelease';
+    case 'dev':
+    default:
+      return 'clodex-dev';
+  }
+})();
+
+// App name includes channel suffix for differentiation
+export const __APP_NAME__ = (() => {
+  switch (__APP_RELEASE_CHANNEL__) {
+    case 'release':
+      return 'Clodex Agentic IDE';
+    case 'nightly':
+      return 'Clodex Agentic IDE Nightly';
+    case 'prerelease':
+      return 'Clodex Agentic IDE (Pre-Release)';
+    case 'dev':
+    default:
+      return 'Clodex Agentic IDE (Dev-Build)';
+  }
+})();
+
+export const __APP_BUNDLE_ID__ = (() => {
+  switch (__APP_RELEASE_CHANNEL__) {
+    case 'release':
+      return 'xyz.clodex.agentic-ide';
+    case 'nightly':
+      return 'xyz.clodex.agentic-ide.nightly';
+    case 'prerelease':
+      return 'xyz.clodex.agentic-ide.prerelease';
+    case 'dev':
+    default:
+      return 'xyz.clodex.agentic-ide.dev';
+  }
+})();
+
+export const __APP_VERSION__ = (() => {
+  const override = process.env.APP_VERSION_OVERRIDE;
+  const version = override || packageJson.version;
+  if (typeof version !== 'string') {
+    throw new Error('Version not found in package.json');
+  }
+  if (!semver.valid(version)) {
+    throw new Error(
+      `Invalid app version${override ? ' override' : ''}: ${version}`,
+    );
+  }
+  return version;
+})();
+
+export const __APP_AUTHOR__ = (() => {
+  const author = packageJson.author;
+  if (typeof author === 'string' && author.trim()) {
+    return author;
+  }
+  if (
+    author &&
+    typeof author === 'object' &&
+    typeof author.name === 'string' &&
+    author.name.trim()
+  ) {
+    return author.name;
+  }
+  return 'GENERIC_AUTHOR';
+})();
+
+const readCliOption = (name: string) => {
+  const equalsPrefix = `--${name}=`;
+  const equalsArg = process.argv.find((arg) => arg.startsWith(equalsPrefix));
+  if (equalsArg) return equalsArg.slice(equalsPrefix.length);
+
+  const optionIndex = process.argv.indexOf(`--${name}`);
+  if (optionIndex >= 0) {
+    const nextArg = process.argv[optionIndex + 1];
+    if (!nextArg || nextArg.startsWith('--')) return undefined;
+    return nextArg;
+  }
+
+  return undefined;
+};
+
+export const __APP_PLATFORM__ =
+  process.env.npm_config_platform ||
+  readCliOption('platform') ||
+  process.platform;
+export const __APP_ARCH__ =
+  process.env.npm_config_arch || readCliOption('arch') || process.arch;
+
+export const __APP_COPYRIGHT__ = `Copyright © ${new Date().getFullYear()} ${__APP_AUTHOR__}`;
+
+export const __APP_HOMEPAGE__ = (() => {
+  const homepage = packageJson.homepage;
+  if (typeof homepage === 'string' && homepage.trim()) {
+    return homepage;
+  }
+  return 'https://clodex.xyz';
+})();

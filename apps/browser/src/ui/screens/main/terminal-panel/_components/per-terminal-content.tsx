@@ -1,0 +1,456 @@
+import { useCallback, useEffect, useRef } from 'react';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { useKartonProcedure, useKartonState } from '@ui/hooks/use-karton';
+import { useTabUIState } from '@ui/hooks/use-tab-ui-state';
+import { useHotKeyListener } from '@ui/hooks/use-hotkey-listener';
+import { HotkeyActions } from '@shared/hotkeys';
+import { createRafResizeObserver } from '@ui/utils/resize-observer';
+import '@xterm/xterm/css/xterm.css';
+
+const BASE_FONT_SIZE = 13;
+
+interface PerTerminalContentProps {
+  terminalId: string;
+  isActive: boolean;
+}
+
+const BACKEND_RESIZE_DEBOUNCE_MS = 80;
+
+export function PerTerminalContent({
+  terminalId,
+  isActive,
+}: PerTerminalContentProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const resizeTimerRef = useRef<number | null>(null);
+  const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  /** Absolute backend output offset consumed by this renderer. */
+  const consumedOffsetRef = useRef(0);
+
+  // Global terminal zoom (Cmd+=, Cmd+-, Cmd+0 when terminal has focus).
+  // Persisted in user preferences so it survives app restarts and applies
+  // consistently across all terminal tabs.
+  const zoomPercentage = useKartonState(
+    (s) => s.preferences.general.terminalZoomPercentage,
+  );
+  const terminalScale = zoomPercentage / 100;
+
+  // Terminal lives in the normal DOM. UI zoom affects it like any other UI,
+  // while terminal-specific zoom adjusts xterm's own font size.
+  const fontSize = BASE_FONT_SIZE * terminalScale;
+
+  const outputBuffer = useKartonState(
+    (s) => s.terminals.outputBuffers[terminalId] ?? '',
+  );
+  const baseOffset = useKartonState(
+    (s) => s.terminals.outputBufferOffsets[terminalId]?.baseOffset ?? 0,
+  );
+  const endOffset = useKartonState(
+    (s) => s.terminals.outputBufferOffsets[terminalId]?.endOffset ?? 0,
+  );
+  const terminalInput = useKartonProcedure((p) => p.browser.terminalInput);
+  const terminalResize = useKartonProcedure((p) => p.browser.terminalResize);
+  const getTerminalSnapshot = useKartonProcedure(
+    (p) => p.browser.getTerminalSnapshot,
+  );
+  const updatePreferences = useKartonProcedure((p) => p.preferences.update);
+  const { tabUiState, setTabUiState, clearTerminalFocusRequest } =
+    useTabUIState();
+  const terminalUiState = tabUiState[terminalId];
+  const isTerminalFocused = terminalUiState?.focusedPanel === 'tab-content';
+  const terminalFocusRequestId = terminalUiState?.terminalFocusRequestId;
+
+  const terminalInputRef = useRef(terminalInput);
+  terminalInputRef.current = terminalInput;
+  const terminalResizeRef = useRef(terminalResize);
+  terminalResizeRef.current = terminalResize;
+  const getTerminalSnapshotRef = useRef(getTerminalSnapshot);
+  getTerminalSnapshotRef.current = getTerminalSnapshot;
+  const isActiveRef = useRef(isActive);
+  isActiveRef.current = isActive;
+  const terminalFocusRequestIdRef = useRef(terminalFocusRequestId);
+  terminalFocusRequestIdRef.current = terminalFocusRequestId;
+
+  const markTerminalFocused = useCallback(() => {
+    setTabUiState(terminalId, { focusedPanel: 'tab-content' });
+  }, [setTabUiState, terminalId]);
+
+  const focusTerminalIfReady = useCallback(() => {
+    const term = terminalRef.current;
+    if (!term) return false;
+
+    term.focus();
+    markTerminalFocused();
+    clearTerminalFocusRequest(terminalId);
+    return true;
+  }, [clearTerminalFocusRequest, markTerminalFocused, terminalId]);
+
+  const updateTerminalZoom = useCallback(
+    (nextZoomPercentage: number) => {
+      void updatePreferences([
+        {
+          op: 'replace',
+          path: ['general', 'terminalZoomPercentage'],
+          value: nextZoomPercentage,
+        },
+      ]);
+    },
+    [updatePreferences],
+  );
+
+  useHotKeyListener(
+    () => {
+      if (!isActive || !isTerminalFocused) return false;
+      if (zoomPercentage >= 150) return;
+      updateTerminalZoom(Math.min(zoomPercentage + 10, 150));
+    },
+    HotkeyActions.ZOOM_IN,
+    isActive,
+  );
+
+  useHotKeyListener(
+    () => {
+      if (!isActive || !isTerminalFocused) return false;
+      if (zoomPercentage <= 50) return;
+      updateTerminalZoom(Math.max(zoomPercentage - 10, 50));
+    },
+    HotkeyActions.ZOOM_OUT,
+    isActive,
+  );
+
+  useHotKeyListener(
+    () => {
+      if (!isActive || !isTerminalFocused) return false;
+      if (zoomPercentage === 100) return;
+      updateTerminalZoom(100);
+    },
+    HotkeyActions.ZOOM_RESET,
+    isActive,
+  );
+
+  const sendResize = (immediate = false) => {
+    const term = terminalRef.current;
+    if (!term) return;
+
+    if (resizeTimerRef.current !== null) {
+      window.clearTimeout(resizeTimerRef.current);
+      resizeTimerRef.current = null;
+    }
+
+    const sendCurrentSize = () => {
+      const currentTerm = terminalRef.current;
+      if (!currentTerm) return;
+
+      const size = { cols: currentTerm.cols, rows: currentTerm.rows };
+      const lastSize = lastSentSizeRef.current;
+      if (
+        lastSize &&
+        lastSize.cols === size.cols &&
+        lastSize.rows === size.rows
+      )
+        return;
+
+      lastSentSizeRef.current = size;
+      terminalResizeRef.current(terminalId, size.cols, size.rows);
+    };
+
+    if (immediate) {
+      sendCurrentSize();
+      return;
+    }
+
+    resizeTimerRef.current = window.setTimeout(() => {
+      resizeTimerRef.current = null;
+      sendCurrentSize();
+    }, BACKEND_RESIZE_DEBOUNCE_MS);
+  };
+
+  const HUES = {
+    base: 85,
+    green: 152,
+    red: 25,
+    blue: 220,
+    yellow: 65,
+    magenta: 300,
+    cyan: 175,
+  } as const;
+
+  const getTheme = () => {
+    const styles = getComputedStyle(document.documentElement);
+    const isDark = document.documentElement.classList.contains('dark');
+    const bg = styles.getPropertyValue('--color-background').trim();
+    const fg = styles.getPropertyValue('--color-foreground').trim();
+
+    const ansi = (hue: number, l: number, c: number) =>
+      `oklch(${l} ${c} ${hue})`;
+    const neutral = (l: number) => ansi(HUES.base, l, 0.002);
+
+    return {
+      background: bg || (isDark ? '#0f0f14' : '#fafafa'),
+      foreground: fg || (isDark ? '#e0e0e0' : '#1a1a1a'),
+      cursor: fg || (isDark ? '#e0e0e0' : '#1a1a1a'),
+      selectionBackground: isDark
+        ? 'rgba(255,255,255,0.15)'
+        : 'rgba(0,0,0,0.1)',
+      black: neutral(isDark ? 0.25 : 0.92),
+      red: ansi(HUES.red, isDark ? 0.55 : 0.45, isDark ? 0.16 : 0.14),
+      green: ansi(HUES.green, isDark ? 0.55 : 0.45, isDark ? 0.14 : 0.16),
+      yellow: ansi(HUES.yellow, isDark ? 0.55 : 0.45, isDark ? 0.15 : 0.17),
+      blue: ansi(HUES.blue, isDark ? 0.55 : 0.45, isDark ? 0.14 : 0.16),
+      magenta: ansi(HUES.magenta, isDark ? 0.55 : 0.45, isDark ? 0.14 : 0.18),
+      cyan: ansi(HUES.cyan, isDark ? 0.55 : 0.45, isDark ? 0.1 : 0.15),
+      white: neutral(isDark ? 0.75 : 0.35),
+      brightBlack: neutral(isDark ? 0.45 : 0.65),
+      brightRed: ansi(HUES.red, isDark ? 0.7 : 0.5, isDark ? 0.18 : 0.2),
+      brightGreen: ansi(HUES.green, isDark ? 0.7 : 0.5, isDark ? 0.16 : 0.2),
+      brightYellow: ansi(HUES.yellow, isDark ? 0.7 : 0.5, isDark ? 0.17 : 0.2),
+      brightBlue: ansi(HUES.blue, isDark ? 0.7 : 0.5, isDark ? 0.16 : 0.2),
+      brightMagenta: ansi(
+        HUES.magenta,
+        isDark ? 0.7 : 0.5,
+        isDark ? 0.16 : 0.2,
+      ),
+      brightCyan: ansi(HUES.cyan, isDark ? 0.7 : 0.5, isDark ? 0.12 : 0.17),
+      brightWhite: neutral(isDark ? 0.92 : 0.2),
+    };
+  };
+
+  useEffect(() => {
+    if (!isActive || terminalFocusRequestId === undefined) return;
+    focusTerminalIfReady();
+  }, [focusTerminalIfReady, isActive, terminalFocusRequestId]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const fitAddon = new FitAddon();
+    fitAddonRef.current = fitAddon;
+
+    const term = new Terminal({
+      theme: getTheme(),
+      fontFamily:
+        "'Roboto Mono', Menlo, Monaco, clodex-builtin-roboto-mono, 'Noto Sans Mono', ui-monospace, 'SF Mono', 'Segoe UI Mono', 'Ubuntu Mono', 'Noto Mono', 'Liberation Mono', 'Inter Mono', Consolas, monospace",
+      fontSize,
+      fontWeight: 'normal',
+      fontWeightBold: 'bold',
+      letterSpacing: 0,
+      lineHeight: 1,
+      cursorBlink: true,
+      scrollback: 5000,
+      allowProposedApi: true,
+    });
+
+    term.loadAddon(fitAddon);
+
+    let aborted = false;
+    let fitTimer = 0;
+    let webglRestoreTimer = 0;
+    let webglAddon: WebglAddon | null = null;
+
+    const disposeWebglAddon = () => {
+      webglAddon?.dispose();
+      webglAddon = null;
+    };
+
+    const loadWebglAddon = () => {
+      if (aborted || webglAddon) return;
+
+      let addon: WebglAddon | null = null;
+      try {
+        addon = new WebglAddon();
+        addon.onContextLoss(() => {
+          disposeWebglAddon();
+          if (aborted) return;
+
+          webglRestoreTimer = window.setTimeout(() => {
+            webglRestoreTimer = 0;
+            loadWebglAddon();
+          }, 1000);
+        });
+        term.loadAddon(addon);
+        webglAddon = addon;
+      } catch {
+        addon?.dispose();
+        disposeWebglAddon();
+      }
+    };
+
+    const init = async () => {
+      await document.fonts.ready;
+      await document.fonts.load('normal 400 13px "Roboto Mono"');
+      if (aborted) return;
+
+      const snapshot = await getTerminalSnapshotRef.current(terminalId);
+      if (aborted) return;
+
+      // Backend snapshot is the source of truth.  It includes the
+      // absolute offset of the last byte represented by the serialized
+      // headless terminal state.  Live deltas below only apply bytes
+      // with offsets greater than this value.
+      term.resize(snapshot.cols, snapshot.rows);
+      if (snapshot.state) {
+        term.write(snapshot.state);
+      }
+      consumedOffsetRef.current = snapshot.endOffset;
+
+      term.open(container);
+      terminalRef.current = term;
+      loadWebglAddon();
+
+      if (
+        isActiveRef.current &&
+        terminalFocusRequestIdRef.current !== undefined
+      ) {
+        focusTerminalIfReady();
+      }
+
+      term.onData((data: string) => {
+        markTerminalFocused();
+        terminalInputRef.current(terminalId, data);
+      });
+
+      fitTimer = requestAnimationFrame(() => {
+        try {
+          fitAddon.fit();
+          sendResize(true);
+          // Only claim keyboard focus on an explicit focus request
+          // (hotkey/command center). Becoming active merely because the
+          // user switched agents/tabs must NOT steal focus — the chat
+          // input owns focus on agent switch. The user can click the
+          // terminal to focus it (handled by xterm + onPointerDown).
+          if (
+            isActiveRef.current &&
+            terminalFocusRequestIdRef.current !== undefined
+          ) {
+            focusTerminalIfReady();
+          }
+        } catch {
+          // May fail during layout transitions.
+        }
+      });
+    };
+
+    init();
+
+    return () => {
+      aborted = true;
+      if (webglRestoreTimer !== 0) {
+        window.clearTimeout(webglRestoreTimer);
+        webglRestoreTimer = 0;
+      }
+      disposeWebglAddon();
+      term.dispose();
+      if (terminalRef.current === term) {
+        terminalRef.current = null;
+      }
+      fitAddonRef.current = null;
+      if (resizeTimerRef.current !== null) {
+        window.clearTimeout(resizeTimerRef.current);
+        resizeTimerRef.current = null;
+      }
+      lastSentSizeRef.current = null;
+      cancelAnimationFrame(fitTimer);
+    };
+  }, [terminalId, markTerminalFocused, focusTerminalIfReady]);
+
+  const systemTheme = useKartonState((s) => s.systemTheme);
+  const personalizationThemeId = useKartonState(
+    (s) => s.globalConfig.personalizationThemeId,
+  );
+
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.options.theme = getTheme();
+    }
+  }, [systemTheme, personalizationThemeId]);
+
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+
+    if (endOffset <= consumedOffsetRef.current) return;
+
+    // If our consumed offset fell behind the retained backend buffer,
+    // recover by replaying the retained buffer from its base.  Normal
+    // remounts should never hit this because snapshots set consumed to
+    // snapshot.endOffset.
+    const startOffset = Math.max(consumedOffsetRef.current, baseOffset);
+    const startIndex = startOffset - baseOffset;
+    const data = outputBuffer.slice(startIndex);
+
+    if (data.length > 0) {
+      term.write(data);
+      consumedOffsetRef.current = endOffset;
+    }
+  }, [outputBuffer, baseOffset, endOffset]);
+
+  // Re-fit when terminal zoom or active state changes.
+  //
+  // Deliberately does NOT call term.focus(). Re-fitting on activation or
+  // zoom must not grab keyboard focus, otherwise it competes with the chat
+  // input on agent switch and refocuses the terminal on every zoom change.
+  // Explicit focus requests are handled by the terminalFocusRequestId
+  // effect above; user clicks are handled by xterm itself.
+  useEffect(() => {
+    if (!isActive) return;
+    const term = terminalRef.current;
+    const fit = fitAddonRef.current;
+    if (!term || !fit) return;
+
+    term.options.fontSize = fontSize;
+
+    let frame2 = 0;
+    const frame1 = requestAnimationFrame(() => {
+      frame2 = requestAnimationFrame(() => {
+        try {
+          fit.fit();
+          sendResize(true);
+        } catch {
+          // ignore
+        }
+      });
+    });
+
+    return () => {
+      cancelAnimationFrame(frame1);
+      if (frame2) cancelAnimationFrame(frame2);
+    };
+  }, [isActive, terminalId, fontSize]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const { observer, disconnect } = createRafResizeObserver(() => {
+      const term = terminalRef.current;
+      const fit = fitAddonRef.current;
+      if (!term || !fit) return;
+      const rect = container.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      try {
+        fit.fit();
+        sendResize();
+      } catch {
+        // Ignore fit errors during transition.
+      }
+    });
+
+    observer.observe(container);
+    return () => disconnect();
+  }, [terminalId]);
+
+  return (
+    <div
+      className="size-full overflow-hidden bg-background p-1"
+      style={{ display: isActive ? undefined : 'none' }}
+      onFocusCapture={markTerminalFocused}
+      onPointerDown={markTerminalFocused}
+    >
+      <div ref={containerRef} className="size-full overflow-hidden" />
+    </div>
+  );
+}

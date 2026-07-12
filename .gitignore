@@ -1,0 +1,55 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+retrieved-files
+
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Local env files
+.env
+.env.*
+!.env.example
+
+# Testing
+coverage
+test-data
+experiments-data
+playwright-report
+test-results
+security-reports
+
+# Turbo
+.turbo
+
+# Vercel
+.vercel
+
+# Build Outputs
+.next/
+out/
+build
+dist
+tmp
+*.tsbuildinfo
+
+# Local external agent runtimes must not be committed or packaged.
+# Packaging still scans ignored paths and fails closed if one is present.
+/apps/browser/bundled/plugins/openmanus-runtime/
+
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Misc
+.DS_Store
+*.pem
+.home/
+
+# VSCode
+.vscode-test
+*storybook.log
+storybook-static

@@ -1,0 +1,3 @@
+# @clodex/typescript-config
+
+## null

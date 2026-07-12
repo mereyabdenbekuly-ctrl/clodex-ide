@@ -1,0 +1,1116 @@
+import { modelCapabilitiesSchema } from '@clodex/agent-core/types';
+import { z } from 'zod';
+import { codingPlanIds } from '../../coding-plan-ids';
+import { collaborationModeSchema } from '../../collaboration-modes';
+import { featureGateOverridesSchema } from '../../feature-gates';
+import {
+  DEFAULT_MASCOT_OVERLAY_PREFERENCES,
+  mascotOverlayPreferencesSchema,
+} from '../../mascot-overlay';
+import { memoryNotesRetentionSchema } from '../../memory-notes';
+import { networkEgressPreferencesSchema } from '../../network-egress-control';
+import {
+  AI_PROVIDER_PROTOCOLS,
+  AI_PROVIDER_TYPES,
+} from '../../ai-provider/types';
+
+export {
+  environmentDiffSnapshotSchema,
+  fileDiffSnapshotSchema,
+  MAX_DIFF_TEXT_FILE_SIZE,
+  modelCapabilitiesSchema,
+  modalityConstraintSchema,
+} from '@clodex/agent-core/types';
+export type {
+  BlamedHunk,
+  BlamedLineChange,
+  EnvironmentDiffSnapshot,
+  ExternalFileDiff,
+  ExternalFileResult,
+  FileDiff,
+  FileDiffSnapshot,
+  FileResult,
+  ModelCapabilities,
+  ModelSettings,
+  ModalityConstraint,
+  PendingEditPreview,
+  ClodexProviderOptions,
+  TextFileDiff,
+  TextFileResult,
+} from '@clodex/agent-core/types';
+
+// ============================================================================
+// Model Provider Configuration
+// ============================================================================
+
+/** Supported LLM provider identifiers */
+export const modelProviderSchema = z.enum([
+  'anthropic',
+  'openai',
+  'google',
+  'moonshotai',
+  'alibaba',
+  'deepseek',
+  'z-ai',
+  'minimax',
+  'xiaomi-mimo',
+  'mistral',
+]);
+export type ModelProvider = z.infer<typeof modelProviderSchema>;
+
+export const socialAuthProviderSchema = z.enum(['google', 'github']);
+export type SocialAuthProvider = z.infer<typeof socialAuthProviderSchema>;
+
+/** Endpoint mode for a provider */
+export const providerEndpointModeSchema = z.enum([
+  'clodex',
+  'official',
+  'custom',
+]);
+export type ProviderEndpointMode = z.infer<typeof providerEndpointModeSchema>;
+
+export const connectedCodingPlanIdSchema = z
+  .enum(codingPlanIds)
+  .optional()
+  .catch(undefined);
+export type ConnectedCodingPlanId = z.infer<typeof connectedCodingPlanIdSchema>;
+
+/** Configuration for a single provider endpoint */
+export const providerConfigSchema = z.object({
+  /** Which endpoint to route requests to */
+  mode: providerEndpointModeSchema.default('clodex'),
+  /** Base64-encoded safeStorage-encrypted API key (encrypted on backend, opaque to UI) */
+  encryptedApiKey: z.string().optional(),
+  /** ID of a custom endpoint to use (only when mode is 'custom') */
+  customProviderId: z.string().optional(),
+  /** Coding plan currently connected through this provider, when applicable. */
+  connectedCodingPlanId: connectedCodingPlanIdSchema,
+  /** @deprecated Migrated to customProviderId — kept for backwards compat parsing */
+  customBaseUrl: z.string().optional(),
+});
+export type ProviderConfig = z.infer<typeof providerConfigSchema>;
+
+/** Provider configurations for all supported providers */
+export const providerConfigsSchema = z.object({
+  anthropic: providerConfigSchema.default({ mode: 'clodex' }),
+  openai: providerConfigSchema.default({ mode: 'clodex' }),
+  google: providerConfigSchema.default({ mode: 'clodex' }),
+  moonshotai: providerConfigSchema.default({ mode: 'clodex' }),
+  alibaba: providerConfigSchema.default({ mode: 'clodex' }),
+  deepseek: providerConfigSchema.default({ mode: 'clodex' }),
+  'z-ai': providerConfigSchema.default({ mode: 'clodex' }),
+  minimax: providerConfigSchema.default({ mode: 'clodex' }),
+  'xiaomi-mimo': providerConfigSchema.default({ mode: 'clodex' }),
+  mistral: providerConfigSchema.default({ mode: 'clodex' }),
+});
+export type ProviderConfigs = z.infer<typeof providerConfigsSchema>;
+
+// ============================================================================
+// Provider-neutral profiles, Custom Endpoints & Custom Models
+// ============================================================================
+
+export const aiProviderTypeSchema = z.enum(AI_PROVIDER_TYPES);
+export const aiProviderProtocolSchema = z.enum(AI_PROVIDER_PROTOCOLS);
+
+/**
+ * Provider-neutral persisted profile. API keys are deliberately referenced by
+ * opaque credential ID; plaintext or encrypted key material does not belong in
+ * preferences.json.
+ */
+export const providerProfileSchema = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    providerType: aiProviderTypeSchema,
+    displayName: z.string().trim().min(1).max(120),
+    baseUrl: z.string().url().optional(),
+    apiKeyReference: z.string().trim().min(1).max(180).optional(),
+    customHeaders: z.record(z.string(), z.string()).default({}),
+    protocol: aiProviderProtocolSchema,
+    enabled: z.boolean().default(true),
+  })
+  .strict();
+export type ProviderProfile = z.infer<typeof providerProfileSchema>;
+
+export const providerProfileSaveInputSchema = providerProfileSchema
+  .omit({ apiKeyReference: true })
+  .extend({
+    /** New/replacement secret. Omitted to preserve the existing credential. */
+    apiKey: z.string().max(32_768).optional(),
+    /** Explicitly remove the stored secret while preserving the profile. */
+    clearApiKey: z.boolean().optional(),
+  })
+  .strict();
+export type ProviderProfileSaveInput = z.infer<
+  typeof providerProfileSaveInputSchema
+>;
+
+const providerModelInfoSchema = z.object({
+  id: z.string().min(1),
+  displayName: z.string().min(1),
+  providerId: z.string().min(1),
+  capabilities: z.object({
+    text: z.boolean(),
+    images: z.boolean(),
+    streaming: z.boolean(),
+    functionTools: z.boolean(),
+    customTools: z.boolean(),
+    reasoning: z.boolean(),
+    contextWindow: z.number().positive().optional(),
+    maxOutputTokens: z.number().positive().optional(),
+  }),
+});
+
+/** API spec that a custom endpoint implements */
+const apiSpecValues = [
+  'anthropic',
+  'openai-chat-completions',
+  'openai-responses',
+  'google',
+  'azure',
+  'amazon-bedrock',
+  'google-vertex',
+] as const;
+export const apiSpecSchema = z
+  .string()
+  .transform((val) => {
+    // Migration: remap old 'openai' value to 'openai-chat-completions'
+    if (val === 'openai') return 'openai-chat-completions' as const;
+    return val as (typeof apiSpecValues)[number];
+  })
+  .pipe(z.enum(apiSpecValues));
+export type ApiSpec = z.infer<typeof apiSpecSchema>;
+
+/** A user-defined API endpoint */
+export const customEndpointSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+  apiSpec: apiSpecSchema,
+  baseUrl: z.string(),
+  encryptedApiKey: z.string().optional(),
+  /** Maps built-in model IDs to the IDs expected by this endpoint */
+  modelIdMapping: z.record(z.string(), z.string()).optional(),
+  // Azure-specific fields
+  resourceName: z.string().optional(),
+  apiVersion: z.string().optional(),
+  // Amazon Bedrock-specific fields
+  region: z.string().optional(),
+  encryptedSecretKey: z.string().optional(),
+  /**
+   * Amazon Bedrock auth mode. Defaults to 'access-keys' for backward
+   * compatibility with endpoints created before this field existed
+   * (they all used static access keys).
+   */
+  awsAuthMode: z
+    .enum(['access-keys', 'profile', 'default-chain'])
+    .default('access-keys'),
+  /** Named AWS profile to use when awsAuthMode === 'profile'. */
+  awsProfileName: z.string().optional(),
+  // Google Vertex-specific fields
+  projectId: z.string().optional(),
+  location: z.string().optional(),
+  encryptedGoogleCredentials: z.string().optional(),
+});
+export type CustomEndpoint = z.infer<typeof customEndpointSchema>;
+
+/** A user-defined model that routes to a built-in provider or custom endpoint */
+export const customModelSchema = z.object({
+  modelId: z.string().min(1),
+  displayName: z.string().min(1),
+  description: z.string().default(''),
+  contextWindowSize: z.number().int().positive().default(128000),
+  endpointId: z.string(),
+  thinkingEnabled: z.boolean().default(false),
+  capabilities: modelCapabilitiesSchema.default({
+    inputModalities: {
+      text: true,
+      audio: false,
+      image: false,
+      video: false,
+      file: false,
+    },
+    outputModalities: {
+      text: true,
+      audio: false,
+      image: false,
+      video: false,
+      file: false,
+    },
+    toolCalling: true,
+  }),
+  providerOptions: z.record(z.string(), z.unknown()).default({}),
+  headers: z.record(z.string(), z.string()).default({}),
+});
+export type CustomModel = z.infer<typeof customModelSchema>;
+
+/** Official API base URLs for each provider (for UI display) */
+export const PROVIDER_OFFICIAL_URLS: Record<ModelProvider, string> = {
+  anthropic: 'https://api.anthropic.com/v1',
+  openai: 'https://api.openai.com/v1',
+  google: 'https://generativelanguage.googleapis.com/v1beta',
+  moonshotai: 'https://api.moonshot.ai/v1',
+  alibaba: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+  deepseek: 'https://api.deepseek.com/v1',
+  'z-ai': 'https://api.z.ai/api/paas/v4',
+  minimax: 'https://api.minimax.io/v1',
+  'xiaomi-mimo': 'https://api.xiaomimimo.com/v1',
+  mistral: 'https://api.mistral.ai/v1',
+};
+
+/** Display info for each provider (for UI) */
+export const PROVIDER_DISPLAY_INFO: Record<
+  ModelProvider,
+  { name: string; description: string }
+> = {
+  anthropic: {
+    name: 'Anthropic',
+    description: 'Claude models (Opus, Sonnet, Haiku)',
+  },
+  openai: {
+    name: 'OpenAI',
+    description: 'GPT and Codex models',
+  },
+  google: {
+    name: 'Google',
+    description: 'Gemini models',
+  },
+  moonshotai: {
+    name: 'Moonshot AI',
+    description: 'Kimi models',
+  },
+  alibaba: {
+    name: 'Alibaba Cloud',
+    description: 'Qwen models',
+  },
+  deepseek: {
+    name: 'DeepSeek',
+    description: 'DeepSeek V-series models',
+  },
+  'z-ai': {
+    name: 'Z.ai',
+    description: 'GLM models',
+  },
+  minimax: {
+    name: 'MiniMax',
+    description: 'MiniMax M-series models',
+  },
+  'xiaomi-mimo': {
+    name: 'Xiaomi MiMo',
+    description: 'MiMo V2.5-series models',
+  },
+  mistral: {
+    name: 'Mistral',
+    description: 'Mistral AI models',
+  },
+};
+
+export const thinkingProviderSchema = z.enum([
+  'clodex',
+  'openai',
+  'google',
+  'anthropic',
+  'openai-compatible',
+]);
+export type ThinkingProvider = z.infer<typeof thinkingProviderSchema>;
+
+export const modelThinkingOverrideSchema = z.unknown().transform((value) => {
+  if (!isPlainRecord(value)) return {};
+
+  return {
+    ...(typeof value.enabled === 'boolean' ? { enabled: value.enabled } : {}),
+    ...(thinkingProviderSchema.safeParse(value.provider).success
+      ? { provider: value.provider as ThinkingProvider }
+      : {}),
+    ...(typeof value.value === 'string' ? { value: value.value } : {}),
+  };
+});
+export type ModelThinkingOverride = z.infer<typeof modelThinkingOverrideSchema>;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+
+/**
+ * GLOBAL CONFIG CAPABILITIES
+ */
+
+export const openFilesInIdeSchema = z.enum([
+  'vscode',
+  'cursor',
+  'zed',
+  'windsurf',
+  'trae',
+  'kiro',
+  'other',
+]);
+
+export type OpenFilesInIde = z.infer<typeof openFilesInIdeSchema>;
+
+export const personalizationThemeIds = [
+  'default',
+  'fire',
+  'forest',
+  'bubblegum',
+  'titanium',
+] as const;
+export const personalizationThemeIdSchema = z.enum(personalizationThemeIds);
+export type PersonalizationThemeId = z.infer<
+  typeof personalizationThemeIdSchema
+>;
+
+export const appColorSchemeSchema = z.enum(['system', 'light', 'dark']);
+export type AppColorScheme = z.infer<typeof appColorSchemeSchema>;
+
+export const globalConfigSchema = z
+  .object({
+    notificationSoundLoudness: z
+      .enum(['off', 'subtle', 'default'])
+      .default('subtle'),
+    notificationSoundPack: z.string().default('bubble-pops'),
+    dockBounceEnabled: z.boolean().default(true),
+    blockAppSuspensionWhenAgentsActive: z.boolean().default(true),
+    personalizationThemeId: personalizationThemeIdSchema
+      .catch('default')
+      .default('default'),
+    appColorScheme: appColorSchemeSchema.catch('system').default('system'),
+  })
+  .loose();
+
+export type GlobalConfig = z.infer<typeof globalConfigSchema>;
+
+/**
+ * USER PREFERENCES (stored in Preferences.json)
+ */
+
+export const agentPersonalityIds = ['pragmatic', 'friendly'] as const;
+export const agentPersonalitySchema = z.enum(agentPersonalityIds);
+export type AgentPersonality = z.infer<typeof agentPersonalitySchema>;
+
+/** Page setting that can be either clodex home or a custom URL */
+export const pageSettingSchema = z.object({
+  type: z.enum(['home', 'custom']).default('home'),
+  /** Custom URL (only used when type is 'custom') */
+  customUrl: z.string().optional(),
+});
+
+export type PageSetting = z.infer<typeof pageSettingSchema>;
+
+/** Per-workspace agent settings (keyed by workspace absolute path) */
+export const workspaceAgentSettingsSchema = z.object({
+  /** Whether the AGENTS.md file is included in the agent's system prompt */
+  respectAgentsMd: z.boolean().default(false),
+  /** Skill names that have been disabled by the user */
+  disabledSkills: z.array(z.string()).default([]),
+});
+
+export type WorkspaceAgentSettings = z.infer<
+  typeof workspaceAgentSettingsSchema
+>;
+
+export const workspaceGitActionSchema = z.enum([
+  'create-worktree',
+  'create-branch',
+  'switch-branch',
+  'switch-worktree',
+]);
+export type WorkspaceGitAction = z.infer<typeof workspaceGitActionSchema>;
+
+const defaultWorkspaceGitActionPreferences = {
+  general: {},
+  repositories: {},
+};
+
+const workspaceGitActionPreferenceSchema = z
+  .object({
+    selectedAction: workspaceGitActionSchema.optional(),
+  })
+  .default({})
+  .catch({});
+
+const workspaceGitRepositoryActionPreferenceSchema = z
+  .object({
+    selectedAction: workspaceGitActionSchema.optional(),
+    createWorktreeFrom: z.string().optional(),
+    createBranchFrom: z.string().optional(),
+    switchWorktreeTarget: z.string().optional(),
+    switchBranchTarget: z.string().optional(),
+  })
+  .default({})
+  .catch({});
+
+export const workspaceGitActionPreferencesSchema = z
+  .object({
+    general: workspaceGitActionPreferenceSchema,
+    repositories: z
+      .record(z.string(), workspaceGitRepositoryActionPreferenceSchema)
+      .default({}),
+  })
+  .default(defaultWorkspaceGitActionPreferences)
+  .catch(defaultWorkspaceGitActionPreferences);
+
+export type WorkspaceGitActionPreferences = z.infer<
+  typeof workspaceGitActionPreferencesSchema
+>;
+
+const defaultWorkspaceGitCleanupPreferences = {
+  dismissedCandidates: {},
+};
+
+const workspaceGitCleanupPreferencesSchema = z
+  .object({
+    dismissedCandidates: z
+      .preprocess(
+        (value) => {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return {};
+          }
+
+          return Object.fromEntries(
+            Object.entries(value).filter(([, entry]) => {
+              return (
+                entry &&
+                typeof entry === 'object' &&
+                !Array.isArray(entry) &&
+                typeof (entry as { dismissedAt?: unknown }).dismissedAt ===
+                  'number'
+              );
+            }),
+          );
+        },
+        z.record(z.string(), z.object({ dismissedAt: z.number() })),
+      )
+      .default({}),
+  })
+  .default(defaultWorkspaceGitCleanupPreferences)
+  .catch(defaultWorkspaceGitCleanupPreferences);
+
+// Tool-approval enum / default were moved into `@clodex/agent-core` so
+// the core's persistence layer can validate them without a back-reference
+// into this host-only contracts package. Re-exported here for callers that
+// still import via `@shared/karton-contracts/ui/shared-types`.
+export {
+  toolApprovalModeSchema,
+  DEFAULT_TOOL_APPROVAL_MODE,
+  type ToolApprovalMode,
+} from '@clodex/agent-core/types/tool-approval';
+
+/** Update channel for prerelease builds ('alpha' or 'beta') */
+export const updateChannelSchema = z.enum(['alpha', 'beta']);
+export type UpdateChannel = z.infer<typeof updateChannelSchema>;
+
+const agentListGroupingModeSchema = z.enum(['age', 'workspace']);
+export type AgentListGroupingMode = z.infer<typeof agentListGroupingModeSchema>;
+
+const defaultSidebarPreferences = {
+  showActiveAgents: true,
+  pinnedAgentIds: [],
+  agentListGroupingMode: 'age' as AgentListGroupingMode,
+  workspaceGroupOrder: [],
+  collapsedWorkspaceGroupKeys: [],
+};
+
+const sidebarPreferencesSchema = z
+  .object({
+    /** Whether to show the active agents grid in the sidebar */
+    showActiveAgents: z.boolean().default(true),
+    /** Ordered agent IDs pinned to the top of the sidebar */
+    pinnedAgentIds: z.array(z.string()).default([]),
+    /** How the unpinned agent list is grouped in the sidebar */
+    agentListGroupingMode: agentListGroupingModeSchema.default('age'),
+    /** Ordered workspace group keys in the sidebar workspace grouping mode */
+    workspaceGroupOrder: z.array(z.string()).default([]),
+    /** Collapsed workspace/worktree group keys in the sidebar workspace grouping mode */
+    collapsedWorkspaceGroupKeys: z.array(z.string()).default([]),
+  })
+  .default(defaultSidebarPreferences)
+  .catch(defaultSidebarPreferences);
+
+export const userPreferencesSchema = z.object({
+  privacy: z
+    .object({
+      telemetryLevel: z.enum(['off', 'anonymous', 'full']).default('off'),
+    })
+    .default({ telemetryLevel: 'off' }),
+  search: z
+    .object({
+      /** ID of the default search engine (references keywords.id in Web Data DB) */
+      defaultEngineId: z.number().default(1), // Google
+    })
+    .default({ defaultEngineId: 1 }),
+  general: z
+    .object({
+      /** Default page opened when creating a new tab */
+      newTabPage: pageSettingSchema.default({ type: 'home' }),
+      /** Default page opened when the browser starts */
+      startupPage: pageSettingSchema.default({ type: 'home' }),
+      /** UI zoom percentage applied to the Clodex interface (70-130) */
+      uiZoomPercentage: z.number().min(70).max(130).default(100),
+      /** Global terminal zoom percentage applied to all terminal tabs (50-150) */
+      terminalZoomPercentage: z.number().min(50).max(150).default(100),
+      /** Global file code editor zoom percentage applied to all file tabs (50-200) */
+      fileCodeZoomPercentage: z.number().min(50).max(200).default(100),
+      /** Whether file search includes gitignored files (global toggle) */
+      fileSearchIncludeGitignored: z.boolean().default(false),
+      /** Custom hex background color for SVG previews (without #) */
+      svgCustomBackground: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{6}$/, 'must be a 6-digit hex without #')
+        .default('ffffff'),
+      /** Custom hex foreground color for SVG previews (without #) */
+      svgCustomForeground: z
+        .string()
+        .regex(/^[0-9A-Fa-f]{6}$/, 'must be a 6-digit hex without #')
+        .default('8b5cf6'),
+    })
+    .default({
+      newTabPage: { type: 'home' },
+      startupPage: { type: 'home' },
+      uiZoomPercentage: 100,
+      terminalZoomPercentage: 100,
+      fileCodeZoomPercentage: 100,
+      fileSearchIncludeGitignored: false,
+      svgCustomBackground: 'ffffff',
+      svgCustomForeground: '8b5cf6',
+    }),
+  /** Website permission settings (defaults and host-specific overrides) */
+  permissions: z.lazy(() => permissionsPreferencesSchema),
+  /** Dev toolbar preferences (widget order and per-origin settings) */
+  devToolbar: z
+    .lazy(() => devToolbarPreferencesSchema)
+    .default({
+      widgetOrder: [
+        'console',
+        'dom-inspector',
+        'color-scheme',
+        'device-emulation',
+        'color-tools',
+        'font-tools',
+        'performance-tools',
+        'accessibility-tools',
+        'image-generation-tools',
+        'network-tools',
+        'chrome-devtools',
+      ],
+      originSettings: {},
+      lastUsedOrigin: null,
+    }),
+  /** Sidebar display preferences */
+  sidebar: sidebarPreferencesSchema,
+  /** Per-workspace agent settings (keyed by workspace absolute path) */
+  agent: z
+    .object({
+      /** Communication style used by interactive coding agents */
+      personality: agentPersonalitySchema
+        .catch('pragmatic')
+        .default('pragmatic'),
+      /** Workflow preset applied to interactive coding agents */
+      collaborationMode: collaborationModeSchema
+        .catch('default')
+        .default('default'),
+      workspaceSettings: z
+        .record(z.string(), workspaceAgentSettingsSchema)
+        .default({}),
+      /** Model IDs the user has chosen to hide from the model selector */
+      disabledModelIds: z.array(z.string()).default([]),
+      /** Plugin IDs the user has chosen to disable */
+      disabledPluginIds: z.array(z.string()).default([]),
+      /** Last workspace Git action choices used to seed future selectors */
+      workspaceGitActionPreferences: workspaceGitActionPreferencesSchema,
+      /** Snoozed worktree cleanup candidates keyed by worktree path */
+      workspaceGitCleanup: workspaceGitCleanupPreferencesSchema,
+      /** Per-built-in-model thinking overrides keyed by model ID */
+      modelThinkingOverrides: z
+        .record(z.string(), modelThinkingOverrideSchema)
+        .default({})
+        .catch({}),
+      /**
+       * External global skill directories the user has opted in to.
+       * Contains mount prefixes (e.g. `globalskills-codex`,
+       * `globalskills-claude`). The built-in `globalskills-sw` and
+       * `globalskills-agents` dirs are always enabled and never appear
+       * here. Empty array = no external dirs loaded.
+       */
+      enabledGlobalSkillDirs: z.array(z.string()).default([]),
+      /**
+       * Skill names disabled at the global level (analogous to the
+       * per-workspace `disabledSkills`). Applies to skills discovered
+       * from any global skill directory.
+       */
+      disabledGlobalSkills: z.array(z.string()).default([]),
+    })
+    .default({
+      personality: 'pragmatic',
+      collaborationMode: 'default',
+      workspaceSettings: {},
+      disabledModelIds: [],
+      disabledPluginIds: [],
+      workspaceGitActionPreferences: defaultWorkspaceGitActionPreferences,
+      workspaceGitCleanup: defaultWorkspaceGitCleanupPreferences,
+      modelThinkingOverrides: {},
+      enabledGlobalSkillDirs: [],
+      disabledGlobalSkills: [],
+    }),
+  /** User overrides for preview and experimental feature gates */
+  featureGates: z
+    .object({
+      overrides: featureGateOverridesSchema,
+    })
+    .default({ overrides: {} })
+    .catch({ overrides: {} }),
+  /** Retention policy for explicitly stored long-term memory notes */
+  memoryNotes: z
+    .object({
+      retention: memoryNotesRetentionSchema.catch('forever').default('forever'),
+    })
+    .default({ retention: 'forever' })
+    .catch({ retention: 'forever' }),
+  /** Exact browser-session egress grants managed by the local control center. */
+  networkEgress: networkEgressPreferencesSchema,
+  /** Renderer-only mascot appearance and last user-selected position */
+  mascotOverlay: mascotOverlayPreferencesSchema,
+  /** LLM provider endpoint configurations (API keys, custom URLs) */
+  providerConfigs: providerConfigsSchema.default({
+    anthropic: { mode: 'clodex' },
+    openai: { mode: 'clodex' },
+    google: { mode: 'clodex' },
+    moonshotai: { mode: 'clodex' },
+    alibaba: { mode: 'clodex' },
+    deepseek: { mode: 'clodex' },
+    'z-ai': { mode: 'clodex' },
+    minimax: { mode: 'clodex' },
+    'xiaomi-mimo': { mode: 'clodex' },
+    mistral: { mode: 'clodex' },
+  }),
+  /** Provider-neutral profiles. Empty means the user has not selected a provider. */
+  providerProfiles: z.array(providerProfileSchema).default([]),
+  /** Last successfully discovered model catalog per provider profile. */
+  providerModelCatalogs: z
+    .record(z.string(), z.array(providerModelInfoSchema))
+    .default({}),
+  /** Provider selected for newly created chats/workspaces. */
+  defaultProviderProfileId: z.string().trim().min(1).optional(),
+  /** User-defined API endpoints */
+  customEndpoints: z.array(customEndpointSchema).default([]),
+  /** User-defined models */
+  customModels: z.array(customModelSchema).default([]),
+  /** Preferred update channel for prerelease builds (alpha or beta). If not set, inferred from the installed version. */
+  updateChannel: updateChannelSchema.optional(),
+});
+
+export type UserPreferences = z.infer<typeof userPreferencesSchema>;
+export type TelemetryLevel = UserPreferences['privacy']['telemetryLevel'];
+
+/** Default permissions preferences - defined inline to avoid circular reference issues */
+const defaultPermissionsForUserPrefs = {
+  defaults: {
+    media: 0 as const, // PermissionSetting.Ask
+    geolocation: 0 as const,
+    notifications: 0 as const,
+    fullscreen: 1 as const, // PermissionSetting.Allow
+    bluetooth: 0 as const,
+    hid: 0 as const,
+    serial: 0 as const,
+    usb: 0 as const,
+    'clipboard-read': 0 as const,
+    'display-capture': 0 as const,
+    midi: 1 as const, // PermissionSetting.Allow
+    'idle-detection': 0 as const,
+    'speaker-selection': 0 as const,
+    'storage-access': 0 as const,
+  },
+  exceptions: {
+    media: {},
+    geolocation: {},
+    notifications: {},
+    fullscreen: {},
+    bluetooth: {},
+    hid: {},
+    serial: {},
+    usb: {},
+    'clipboard-read': {},
+    'display-capture': {},
+    midi: {},
+    'idle-detection': {},
+    'speaker-selection': {},
+    'storage-access': {},
+  },
+};
+
+/** Default dev toolbar preferences - defined inline to avoid circular reference issues */
+const defaultDevToolbarForUserPrefs: DevToolbarPreferences = {
+  widgetOrder: [
+    'console',
+    'dom-inspector',
+    'color-scheme',
+    'device-emulation',
+    'color-tools',
+    'font-tools',
+    'performance-tools',
+    'accessibility-tools',
+    'image-generation-tools',
+    'network-tools',
+    'chrome-devtools',
+  ],
+  originSettings: {},
+  lastUsedOrigin: null,
+};
+
+export const defaultUserPreferences: UserPreferences = {
+  privacy: {
+    telemetryLevel: 'off',
+  },
+  search: {
+    defaultEngineId: 1,
+  },
+  general: {
+    newTabPage: { type: 'home' },
+    startupPage: { type: 'home' },
+    uiZoomPercentage: 100,
+    terminalZoomPercentage: 100,
+    fileCodeZoomPercentage: 100,
+    fileSearchIncludeGitignored: false,
+    svgCustomBackground: 'ffffff',
+    svgCustomForeground: '8b5cf6',
+  },
+  permissions: defaultPermissionsForUserPrefs,
+  devToolbar: defaultDevToolbarForUserPrefs,
+  sidebar: defaultSidebarPreferences,
+  agent: {
+    personality: 'pragmatic',
+    collaborationMode: 'default',
+    workspaceSettings: {},
+    disabledModelIds: [
+      'claude-opus-4.7',
+      'claude-opus-4.6',
+      'claude-sonnet-4.6',
+      'kimi-k2.5',
+      'gpt-5.4',
+      'MiniMax-M2',
+      'gemini-3-flash-preview',
+    ],
+    disabledPluginIds: [],
+    workspaceGitActionPreferences: defaultWorkspaceGitActionPreferences,
+    workspaceGitCleanup: defaultWorkspaceGitCleanupPreferences,
+    modelThinkingOverrides: {},
+    enabledGlobalSkillDirs: [],
+    disabledGlobalSkills: [],
+  },
+  featureGates: {
+    overrides: {},
+  },
+  memoryNotes: {
+    retention: 'forever',
+  },
+  networkEgress: {
+    browserGrants: [],
+  },
+  mascotOverlay: { ...DEFAULT_MASCOT_OVERLAY_PREFERENCES },
+  providerConfigs: {
+    anthropic: { mode: 'clodex' },
+    openai: { mode: 'clodex' },
+    google: { mode: 'clodex' },
+    moonshotai: { mode: 'clodex' },
+    alibaba: { mode: 'clodex' },
+    deepseek: { mode: 'clodex' },
+    'z-ai': { mode: 'clodex' },
+    minimax: { mode: 'clodex' },
+    'xiaomi-mimo': { mode: 'clodex' },
+    mistral: { mode: 'clodex' },
+  },
+  providerProfiles: [],
+  providerModelCatalogs: {},
+  defaultProviderProfileId: undefined,
+  customEndpoints: [],
+  customModels: [],
+};
+
+/**
+ * SEARCH ENGINE TYPES
+ */
+
+/** Search engine entry from Web Data database */
+export const searchEngineSchema = z.object({
+  id: z.number(),
+  shortName: z.string(),
+  keyword: z.string(),
+  url: z.string(), // Internal format with {searchTerms}
+  faviconUrl: z.string(),
+  isBuiltIn: z.boolean(), // true for prepopulate_id > 0
+});
+
+export type SearchEngine = z.infer<typeof searchEngineSchema>;
+
+/** Input for adding a new search engine. Placeholder is normalized to {searchTerms} on save. */
+export const addSearchEngineInputSchema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  url: z
+    .string()
+    .min(1, 'URL is required')
+    .refine((url) => url.includes('%s') || url.includes('{searchTerms}'), {
+      message:
+        'URL must contain {searchTerms} or %s placeholder for search terms',
+    }),
+  keyword: z.string().min(1, 'Keyword is required'),
+});
+
+export type AddSearchEngineInput = z.infer<typeof addSearchEngineInputSchema>;
+
+// Re-export Patch type from immer for use in Karton contracts
+export type { Patch } from 'immer';
+
+/**
+ * FILE PICKER CAPABILITIES
+ */
+
+export type FilePickerMode = 'file' | 'directory';
+
+export type FilePickerRequest = {
+  title?: string;
+  description?: string;
+  type: FilePickerMode;
+  multiple?: boolean;
+  allowCreateDirectory?: boolean;
+};
+
+// ============================================================================
+// Permission Settings (Chrome-style model)
+// ============================================================================
+
+/**
+ * Permission setting enum - maps to Chrome's numeric values:
+ * - 0: Ask (default for most permissions - prompt user)
+ * - 1: Allow (auto-grant without prompting)
+ * - 2: Block (auto-deny without prompting)
+ *
+ * Using an enum provides type safety while maintaining Chrome compatibility.
+ */
+export enum PermissionSetting {
+  Ask = 0,
+  Allow = 1,
+  Block = 2,
+}
+
+/**
+ * Permission types that can be configured and persisted.
+ * Excludes 'bluetooth-pairing' as it's a transient request type.
+ */
+export const configurablePermissionTypes = [
+  'media',
+  'geolocation',
+  'notifications',
+  'fullscreen',
+  'bluetooth',
+  'hid',
+  'serial',
+  'usb',
+  'clipboard-read',
+  'display-capture',
+  'midi',
+  'idle-detection',
+  'speaker-selection',
+  'storage-access',
+] as const;
+
+export type ConfigurablePermissionType =
+  (typeof configurablePermissionTypes)[number];
+
+/**
+ * Schema for a single host exception (similar to Chrome's content_settings.exceptions).
+ * Stores the permission setting for a specific origin.
+ */
+export const hostPermissionExceptionSchema = z.object({
+  /** The permission setting for this origin */
+  setting: z.enum(PermissionSetting),
+  /** Unix timestamp when this exception was last modified */
+  lastModified: z.number().optional(),
+});
+
+export type HostPermissionException = z.infer<
+  typeof hostPermissionExceptionSchema
+>;
+
+/**
+ * Default permission settings - global defaults for each permission type.
+ * These are used when no host-specific exception exists.
+ */
+export const defaultPermissionSettingsSchema = z.object({
+  media: z.enum(PermissionSetting).default(PermissionSetting.Ask),
+  geolocation: z.enum(PermissionSetting).default(PermissionSetting.Ask),
+  notifications: z.enum(PermissionSetting).default(PermissionSetting.Ask),
+  fullscreen: z.enum(PermissionSetting).default(PermissionSetting.Allow),
+  bluetooth: z.enum(PermissionSetting).default(PermissionSetting.Ask),
+  hid: z.enum(PermissionSetting).default(PermissionSetting.Ask),
+  serial: z.enum(PermissionSetting).default(PermissionSetting.Ask),
+  usb: z.enum(PermissionSetting).default(PermissionSetting.Ask),
+  'clipboard-read': z.enum(PermissionSetting).default(PermissionSetting.Ask),
+  'display-capture': z.enum(PermissionSetting).default(PermissionSetting.Ask),
+  midi: z.enum(PermissionSetting).default(PermissionSetting.Allow),
+  'idle-detection': z.enum(PermissionSetting).default(PermissionSetting.Ask),
+  'speaker-selection': z.enum(PermissionSetting).default(PermissionSetting.Ask),
+  'storage-access': z.enum(PermissionSetting).default(PermissionSetting.Ask),
+});
+
+export type DefaultPermissionSettings = z.infer<
+  typeof defaultPermissionSettingsSchema
+>;
+
+/**
+ * Host-specific permission overrides.
+ * Structure: { [permissionType]: { [origin]: { setting, lastModified? } } }
+ * Similar to Chrome's profile.content_settings.exceptions.<type>
+ */
+export const hostPermissionOverridesSchema = z.object({
+  media: z.record(z.string(), hostPermissionExceptionSchema).default({}),
+  geolocation: z.record(z.string(), hostPermissionExceptionSchema).default({}),
+  notifications: z
+    .record(z.string(), hostPermissionExceptionSchema)
+    .default({}),
+  fullscreen: z.record(z.string(), hostPermissionExceptionSchema).default({}),
+  bluetooth: z.record(z.string(), hostPermissionExceptionSchema).default({}),
+  hid: z.record(z.string(), hostPermissionExceptionSchema).default({}),
+  serial: z.record(z.string(), hostPermissionExceptionSchema).default({}),
+  usb: z.record(z.string(), hostPermissionExceptionSchema).default({}),
+  'clipboard-read': z
+    .record(z.string(), hostPermissionExceptionSchema)
+    .default({}),
+  'display-capture': z
+    .record(z.string(), hostPermissionExceptionSchema)
+    .default({}),
+  midi: z.record(z.string(), hostPermissionExceptionSchema).default({}),
+  'idle-detection': z
+    .record(z.string(), hostPermissionExceptionSchema)
+    .default({}),
+  'speaker-selection': z
+    .record(z.string(), hostPermissionExceptionSchema)
+    .default({}),
+  'storage-access': z
+    .record(z.string(), hostPermissionExceptionSchema)
+    .default({}),
+});
+
+export type HostPermissionOverrides = z.infer<
+  typeof hostPermissionOverridesSchema
+>;
+
+/** Default values for permission settings */
+export const defaultPermissionSettings: DefaultPermissionSettings = {
+  media: PermissionSetting.Ask,
+  geolocation: PermissionSetting.Ask,
+  notifications: PermissionSetting.Ask,
+  fullscreen: PermissionSetting.Allow,
+  bluetooth: PermissionSetting.Ask,
+  hid: PermissionSetting.Ask,
+  serial: PermissionSetting.Ask,
+  usb: PermissionSetting.Ask,
+  'clipboard-read': PermissionSetting.Ask,
+  'display-capture': PermissionSetting.Ask,
+  midi: PermissionSetting.Allow,
+  'idle-detection': PermissionSetting.Ask,
+  'speaker-selection': PermissionSetting.Ask,
+  'storage-access': PermissionSetting.Ask,
+};
+
+/** Default empty host overrides */
+export const defaultHostPermissionOverrides: HostPermissionOverrides = {
+  media: {},
+  geolocation: {},
+  notifications: {},
+  fullscreen: {},
+  bluetooth: {},
+  hid: {},
+  serial: {},
+  usb: {},
+  'clipboard-read': {},
+  'display-capture': {},
+  midi: {},
+  'idle-detection': {},
+  'speaker-selection': {},
+  'storage-access': {},
+};
+
+/**
+ * Complete permissions preferences structure.
+ */
+export const permissionsPreferencesSchema = z
+  .object({
+    /** Global default settings per permission type */
+    defaults: defaultPermissionSettingsSchema.default(
+      defaultPermissionSettings,
+    ),
+    /** Per-origin overrides (exceptions) */
+    exceptions: hostPermissionOverridesSchema.default(
+      defaultHostPermissionOverrides,
+    ),
+  })
+  .default({
+    defaults: defaultPermissionSettings,
+    exceptions: defaultHostPermissionOverrides,
+  });
+
+export type PermissionsPreferences = z.infer<
+  typeof permissionsPreferencesSchema
+>;
+
+// ============================================================================
+// Dev Toolbar Preferences
+// ============================================================================
+
+export const widgetIdSchema = z.enum([
+  'console',
+  'dom-inspector',
+  'color-scheme',
+  'device-emulation',
+  'color-tools',
+  'font-tools',
+  'performance-tools',
+  'accessibility-tools',
+  'image-generation-tools',
+  'network-tools',
+  'chrome-devtools',
+]);
+export type WidgetId = z.infer<typeof widgetIdSchema>;
+
+export const DEFAULT_WIDGET_ORDER: WidgetId[] = [
+  'console',
+  'dom-inspector',
+  'color-scheme',
+  'device-emulation',
+  'color-tools',
+  'font-tools',
+  'performance-tools',
+  'accessibility-tools',
+  'image-generation-tools',
+  'network-tools',
+  'chrome-devtools',
+];
+
+export const devToolbarOriginSettingsSchema = z.object({
+  // Use z.string() instead of widgetIdSchema for record keys since panels may only have some widgets configured
+  panelOpenStates: z.record(z.string(), z.boolean()).default({}),
+  toolbarWidth: z.number().nullable().default(null),
+  lastAccessedAt: z.number(),
+});
+export type DevToolbarOriginSettings = z.infer<
+  typeof devToolbarOriginSettingsSchema
+>;
+
+export const DEV_TOOLBAR_MAX_ORIGINS = 100;
+
+export const devToolbarPreferencesSchema = z.object({
+  widgetOrder: z.array(widgetIdSchema).default([...DEFAULT_WIDGET_ORDER]),
+  originSettings: z
+    .record(z.string(), devToolbarOriginSettingsSchema)
+    .default({}),
+  lastUsedOrigin: z.string().nullable().default(null),
+});
+export type DevToolbarPreferences = z.infer<typeof devToolbarPreferencesSchema>;
+
+export const defaultDevToolbarPreferences: DevToolbarPreferences = {
+  widgetOrder: [...DEFAULT_WIDGET_ORDER],
+  originSettings: {},
+  lastUsedOrigin: null,
+};

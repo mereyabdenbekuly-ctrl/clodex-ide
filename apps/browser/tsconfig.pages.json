@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "tsBuildInfoFile": "node_modules/.cache/tsbuildinfo/tsconfig.pages.tsbuildinfo",
+    "baseUrl": ".",
+    "module": "es2022",
+    "lib": ["es2022", "dom"],
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "paths": {
+      "@pages/*": ["./src/pages/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@ui/*": ["./src/ui/*"],
+      "@assets/*": ["./assets/pages/*"]
+    },
+    "types": ["vite/client"],
+    "skipLibCheck": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "resolveJsonModule": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": ["src/pages", "forge.env.d.ts", "src/shared", "src/ui"],
+  "exclude": [
+    "**/*.stories.tsx",
+    "**/*.stories.ts",
+    "node_modules",
+    "dist",
+    "coverage",
+    "tmp",
+    ".turbo"
+  ]
+}

@@ -1,0 +1,173 @@
+/**
+ * Canonical Tailwind CSS configuration for the browser app.
+ * This file contains all shared theme, utilities, and animations used by both:
+ * - apps/browser/src/ui (Electron app)
+ * - apps/browser/src/pages (TanStack SPA)
+ *
+ * Each app's app.css should import this file and add its own @source directives.
+ */
+
+@import "tailwindcss";
+
+@config "../../../tailwind.config.js";
+
+@import "../../../../../packages/stage-ui/src/styles/index.css";
+@import "./codex-design-tokens.css";
+@import "../../../assets/fonts/Geist/geist.css";
+@import "../../../assets/fonts/GeistMono/geist-mono.css";
+@import "../../../assets/fonts/RobotoMono/roboto-mono.css";
+
+@plugin 'tailwind-scrollbar';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme default {
+  --font-sans: clodex-builtin-geist, -apple-system, BlinkMacSystemFont,
+              "Segoe UI", "Ubuntu", "Roboto", "Noto Sans", "Cantarell",
+              "Helvetica Neue", "Inter", Arial, sans-serif;
+  --font-mono: "Roboto Mono", Menlo, Monaco, clodex-builtin-roboto-mono, "Noto Sans Mono", ui-monospace, "SF Mono",
+              "Segoe UI Mono", "Ubuntu Mono",  "Noto Mono",
+              "Liberation Mono", "Inter Mono", Consolas, monospace;
+  --text-2xs: 0.625rem;
+}
+
+
+@layer base {
+  * {
+    min-height: 0;
+    min-width: 0;
+    position: relative;
+  }
+
+  .root {
+    isolation: isolate;
+  }
+
+  :root {
+    background-color: transparent;
+    color-scheme: light;
+    font-feature-settings: 'liga' 1, 'calt' 1;
+  }
+
+  :root.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    display: block;
+    background-color: transparent;
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+    user-select: none;
+  }
+
+  :root.theme-transitions-enabled,
+  :root.theme-transitions-enabled *,
+  :root.theme-transitions-enabled *::before,
+  :root.theme-transitions-enabled *::after {
+    transition-duration: 250ms, 250ms, 250ms, 250ms, 250ms, 500ms, 500ms,
+      500ms, 500ms, 500ms, 500ms, 500ms;
+    transition-property: --H, --H-primary, --H-base, --primary-chroma-scale,
+      --base-chroma-scale, background-color, border-color, color, fill, stroke,
+      outline-color, box-shadow;
+    transition-timing-function: ease-out;
+  }
+} 
+
+@layer components {
+  .markdown {
+    a {
+      @apply text-primary-foreground hover:text-hover-derived;
+    }
+
+    ul {
+      @apply list-disc;
+      @apply ml-4;
+    }
+
+    ol {
+      @apply list-decimal;
+      @apply ml-4;
+    }
+  }
+
+  /* Make all shapes inside a .seti-icon SVG use the parent text color */
+  .seti-icon svg * {
+    fill: currentColor;
+  }
+}
+
+@utility app-drag {
+  -webkit-app-region: drag !important;
+  app-region: drag !important;
+  user-select: none !important;
+}
+
+@utility app-no-drag {
+  -webkit-app-region: no-drag !important;
+  app-region: no-drag !important;
+}
+
+@utility non-interactive {
+  -electron-interaction: passthrough;
+}
+
+/* scrollbar-subtle and scrollbar-hover-only are now in stage-ui/src/styles/scrollbar.css */
+
+@utility scrollbar-visible {
+  @apply scrollbar-thin scrollbar-thumb-foreground/20 scrollbar-track-muted-foreground/10;
+}
+
+@keyframes command-center-label-reveal-mask {
+  0%, 80% {
+    mask-image: linear-gradient(
+      to right,
+      black 0px,
+      black calc(100% - 14px),
+      transparent 100%
+    );
+  }
+
+  100% {
+    mask-image: linear-gradient(
+      to right,
+      black 0%,
+      black 0%,
+      black 100%,
+      black 100%
+    );
+  }
+}
+
+@keyframes command-center-label-conceal-mask {
+  0% {
+    mask-image: linear-gradient(
+      to right,
+      black 0%,
+      black 0%,
+      black 100%,
+      black 100%
+    );
+  }
+
+  20%, 100% {
+    mask-image: linear-gradient(
+      to right,
+      black 0px,
+      black calc(100% - 14px),
+      transparent 100%
+    );
+  }
+}
+
+/* For Virtuoso container to avoid flickering due to layout shifts */
+@utility virtuoso-contain {
+  & [data-item-index] {
+    contain: layout style;
+  }
+}

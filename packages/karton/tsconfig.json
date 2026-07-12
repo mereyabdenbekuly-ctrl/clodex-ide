@@ -1,0 +1,17 @@
+{
+  "extends": "../../packages/typescript-config/base.json",
+  "references": [],
+  "compilerOptions": {
+    "composite": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "moduleResolution": "bundler",
+    "module": "ESNext",
+    "jsx": "react",
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist", "test", ".turbo"]
+}

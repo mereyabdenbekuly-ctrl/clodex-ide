@@ -1,0 +1,44 @@
+# These templates are heavily inspired by the ones from trpc.io
+
+name: 🤖 Agent Issue
+description: Report an issue with the agent's behavior or related logic
+title: 'Agent Behavior: '
+labels: ['agent']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If you encount an issue during the use of the agent or are unhappy with the behavior of the agent, please file an issue here so we can investigate and fix the problem.
+  - type: textarea
+    id: behavior-issue-description
+    attributes:
+      label: Describe the behavior issue and what should've happened instead.
+      placeholder: The agent refuses to answer the question "...?" and should instead answer because this is a relevant question to the project.
+    validations:
+      required: true
+  - type: textarea
+    id: chat-history
+    attributes:
+      label: Chat History
+      description: If possible, provide a cut-out of the relevant part of the chat history that shows the behavior issue. Simple copy-paste or screenshot upload is fine. Please note that the provided information is public.
+      placeholder: I would like to see more in-depth API documentation for how to use batch-links.
+    validations:
+      required: false
+  - type: input
+    id: agent-instance-id
+    attributes:
+      label: Agent Instance ID
+      description: Please provide the agent instance ID if available. This helps us investigate the issue faster. Other users won't have access to the chat even with the agent instance ID.
+      placeholder: xxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  - type: input
+    id: error-data
+    attributes:
+      label: Error Data
+      description: Please provide the error data if available. This helps us investigate the issue faster.
+      placeholder: Use the "Copy error data" button to get the error data.
+    validations:
+      required: false
+  - type: textarea
+    attributes:
+      label: Additional information
+      description: Add any other information that may help us understand here.

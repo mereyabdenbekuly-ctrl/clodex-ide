@@ -1,0 +1,24 @@
+pre-commit:
+  parallel: true
+  jobs:
+    - name: biome-staged
+      run: pnpm biome check --write --unsafe --staged --no-errors-on-unmatched
+      glob: "*.{js,ts,jsx,tsx,json,jsonc,css,md,mdx,yaml,yml}"
+      stage_fixed: true
+      exclude:
+       - "**/tests/**/*"
+       - "**/test/**/*"
+    - name: biome-check
+      run: pnpm check
+    - name: typecheck-browser
+      run: pnpm -F clodex typecheck
+      glob: "apps/browser/**/*.{ts,tsx}"
+    - name: generate-theme-colors
+      run: pnpm -F @clodex/stage-ui generate:theme-colors && git add apps/browser/src/backend/shared/theme-colors.ts
+      glob: "packages/stage-ui/src/{palette,theme}.css"
+
+commit-msg:
+  parallel: true
+  jobs:
+    - name: commitlint
+      run: pnpm commitlint --edit $1

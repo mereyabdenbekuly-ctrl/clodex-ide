@@ -1,0 +1,97 @@
+import type { KartonService } from '../karton';
+import type { BrowsingTabController } from './browsing-tab-controller';
+import type { SelectedElement } from '@shared/selected-elements';
+
+export class ChatStateController {
+  private uiKarton: KartonService;
+  private tabs: Record<string, BrowsingTabController>;
+
+  constructor(
+    uiKarton: KartonService,
+    tabs: Record<string, BrowsingTabController>,
+  ) {
+    this.uiKarton = uiKarton;
+    this.tabs = tabs;
+  }
+
+  /**
+   * Update the tabs reference when tabs are added or removed.
+   * This is called by WindowLayoutService to keep the reference in sync.
+   */
+  public updateTabsReference(tabs: Record<string, BrowsingTabController>) {
+    this.tabs = tabs;
+  }
+
+  /**
+   * Add an element to the selected elements list.
+   * Prevents duplicates based on clodexId.
+   * @param element The element to add
+   */
+  public addElement(element: SelectedElement): void {
+    this.uiKarton.setState((draft) => {
+      if (!draft.browsing.selectedElements)
+        draft.browsing.selectedElements = [];
+
+      const elements = draft.browsing.selectedElements;
+      // Add if not exists
+      if (!elements.some((e) => e.clodexId === element.clodexId))
+        elements.push(element);
+    });
+    this.broadcastSelectionUpdate();
+  }
+
+  /**
+   * Remove an element from the selected elements list by clodexId.
+   * @param elementId The clodexId of the element to remove
+   */
+  public removeElement(elementId: string): void {
+    this.uiKarton.setState((draft) => {
+      draft.browsing.selectedElements = draft.browsing.selectedElements.filter(
+        (e) => e.clodexId !== elementId,
+      );
+    });
+    this.broadcastSelectionUpdate();
+  }
+
+  /**
+   * Clear all selected elements.
+   */
+  public clearElements(): void {
+    this.uiKarton.setState((draft) => {
+      draft.browsing.selectedElements = [];
+    });
+    this.broadcastSelectionUpdate();
+  }
+
+  /**
+   * Restore selected elements directly (bulk restore).
+   * @param elements The elements to restore
+   */
+  public restoreElements(elements: SelectedElement[]): void {
+    this.uiKarton.setState((draft) => {
+      draft.browsing.selectedElements = [...elements];
+    });
+    this.broadcastSelectionUpdate();
+  }
+
+  /**
+   * Get the current list of selected elements.
+   * @returns Array of selected elements
+   */
+  public getSelectedElements(): SelectedElement[] {
+    return this.uiKarton.state.browsing.selectedElements ?? [];
+  }
+
+  /**
+   * Broadcast the current selection to all tabs to update highlights.
+   * This allows elements to be highlighted on the page.
+   */
+  private broadcastSelectionUpdate(): void {
+    const state = this.uiKarton.state;
+    const allSelectedElements = state.browsing.selectedElements;
+
+    Object.values(this.tabs).forEach((tab) => {
+      tab.updateContextSelection(allSelectedElements);
+    });
+  }
+}

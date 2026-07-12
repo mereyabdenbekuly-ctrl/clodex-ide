@@ -1,0 +1,438 @@
+import { injectStealthOverrides } from './stealth';
+import { contextBridge, ipcRenderer } from 'electron';
+import { createElement, StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { App } from '@/app';
+import { getHotkeyDefinitionForEvent } from '@shared/hotkeys';
+import type { MessagePortProxy } from '@clodex/karton/client';
+import type { KartonMessage } from '@clodex/karton/shared';
+import { shouldChromeConsumeEvent } from './utils';
+
+// Inject stealth overrides into the main world before any page scripts run
+injectStealthOverrides();
+
+declare global {
+  interface Window {
+    tunnelKeyDown?: (keyDownEvent: KeyboardEvent) => void;
+    tunnelWheel?: (wheelEvent: WheelEvent) => void;
+  }
+}
+
+/**
+ * Compute origin validity once at script load time.
+ * Since preload scripts are reloaded on navigation, the origin can't change
+ * during the script's lifetime. This provides better performance than
+ * checking on every operation.
+ *
+ * This is captured in the isolated world and cannot be spoofed by the main world.
+ */
+const IS_VALID_PAGES_CONTEXT = (() => {
+  try {
+    return window.location.origin === 'clodex://internal';
+  } catch {
+    return false;
+  }
+})();
+
+/**
+ * Runtime origin check for defensive purposes (e.g., event handlers).
+ * Most operations should just use IS_VALID_PAGES_CONTEXT since the preload
+ * script is reloaded on navigation.
+ */
+function isValidOrigin(): boolean {
+  // Use the cached value - origin can't change without page reload
+  return IS_VALID_PAGES_CONTEXT;
+}
+
+/**
+ * Reconnection configuration for PagesAPI karton connection
+ */
+const RECONNECT_CONFIG = {
+  MAX_ATTEMPTS: 10,
+  BASE_DELAY: 1000, // 1 second
+  MAX_DELAY: 30000, // 30 seconds
+};
+
+/**
+ * Reconnection state for PagesAPI
+ */
+let pagesApiReconnectAttempts = 0;
+let _pagesApiReconnectTimer: NodeJS.Timeout | null = null;
+let isPagesApiReconnecting = false;
+
+/**
+ * Current message handler for PagesAPI - stored so we can re-apply it on reconnection
+ */
+let currentPagesApiMessageHandler: ((message: KartonMessage) => void) | null =
+  null;
+
+/**
+ * Current port reference for PagesAPI - will be updated on reconnection
+ */
+let currentPagesApiPort: MessagePort | null = null;
+
+/**
+ * Flag to track if the connection has been invalidated due to origin change
+ */
+let isPagesApiConnectionInvalidated = false;
+
+/**
+ * Invalidate the PagesAPI connection (e.g., on origin change)
+ */
+function invalidatePagesApiConnection() {
+  isPagesApiConnectionInvalidated = true;
+
+  // Close the current port if it exists
+  if (currentPagesApiPort) {
+    try {
+      currentPagesApiPort.close();
+    } catch {
+      // Port might already be closed
+    }
+    currentPagesApiPort = null;
+  }
+
+  // Clear message handler
+  currentPagesApiMessageHandler = null;
+
+  // Clear any pending reconnection
+  if (_pagesApiReconnectTimer) {
+    clearTimeout(_pagesApiReconnectTimer);
+    _pagesApiReconnectTimer = null;
+  }
+
+  isPagesApiReconnecting = false;
+  pagesApiReconnectAttempts = 0;
+}
+
+/**
+ * Setup port listeners for PagesAPI connection monitoring
+ */
+function setupPagesApiPortListeners(port: MessagePort) {
+  // Check if connection was invalidated
+  if (isPagesApiConnectionInvalidated) {
+    return;
+  }
+
+  // Validate origin before setting up listeners
+  if (!isValidOrigin()) {
+    invalidatePagesApiConnection();
+    return;
+  }
+
+  // Handle message errors (connection issues)
+  port.onmessageerror = (_error) => {
+    attemptPagesApiReconnect();
+  };
+
+  // Re-apply message handler if it exists
+  if (currentPagesApiMessageHandler) {
+    port.onmessage = (event) => {
+      // Check if connection was invalidated
+      if (isPagesApiConnectionInvalidated) {
+        return;
+      }
+
+      // Validate origin on every message
+      if (!isValidOrigin()) {
+        invalidatePagesApiConnection();
+        return;
+      }
+      currentPagesApiMessageHandler!(event.data as KartonMessage);
+    };
+  }
+}
+
+/**
+ * Attempt to reconnect PagesAPI with exponential backoff
+ */
+function attemptPagesApiReconnect() {
+  // Check if connection was invalidated
+  if (isPagesApiConnectionInvalidated) {
+    return;
+  }
+
+  // Validate origin before attempting reconnection
+  if (!isValidOrigin()) {
+    invalidatePagesApiConnection();
+    return;
+  }
+
+  // Prevent multiple simultaneous reconnection attempts
+  if (isPagesApiReconnecting) {
+    return;
+  }
+
+  if (pagesApiReconnectAttempts >= RECONNECT_CONFIG.MAX_ATTEMPTS) {
+    return;
+  }
+
+  isPagesApiReconnecting = true;
+  pagesApiReconnectAttempts++;
+
+  // Calculate delay with exponential backoff
+  const delay = Math.min(
+    RECONNECT_CONFIG.BASE_DELAY * Math.pow(2, pagesApiReconnectAttempts - 1),
+    RECONNECT_CONFIG.MAX_DELAY,
+  );
+
+  _pagesApiReconnectTimer = setTimeout(() => {
+    _pagesApiReconnectTimer = null;
+    performPagesApiReconnect();
+  }, delay);
+}
+
+/**
+ * Perform the actual PagesAPI reconnection
+ */
+function performPagesApiReconnect() {
+  // Check if connection was invalidated
+  if (isPagesApiConnectionInvalidated) {
+    isPagesApiReconnecting = false;
+    return;
+  }
+
+  // Validate origin before reconnecting
+  if (!isValidOrigin()) {
+    invalidatePagesApiConnection();
+    isPagesApiReconnecting = false;
+    return;
+  }
+
+  try {
+    // Close old port before creating new channel to prevent leaks
+    if (currentPagesApiPort) {
+      try {
+        currentPagesApiPort.close();
+      } catch {
+        // Port might already be closed
+      }
+    }
+
+    // Create new MessageChannel
+    const newChannel = new MessageChannel();
+
+    // Send port2 to main process
+    ipcRenderer.postMessage('karton-connect', 'pages-api', [newChannel.port2]);
+
+    // Update current port reference
+    currentPagesApiPort = newChannel.port1;
+
+    // Setup listeners on new port (this will also re-apply the message handler)
+    setupPagesApiPortListeners(currentPagesApiPort);
+
+    // Reset reconnection state
+    pagesApiReconnectAttempts = 0;
+    isPagesApiReconnecting = false;
+  } catch (_error) {
+    isPagesApiReconnecting = false;
+
+    // Try again
+    attemptPagesApiReconnect();
+  }
+}
+
+/**
+ * Initialize PagesAPI connection only if origin is valid
+ */
+function initializePagesApiConnection(): MessagePortProxy | null {
+  // Use the cached constant - checked once at script load time
+  if (!IS_VALID_PAGES_CONTEXT) {
+    return null;
+  }
+
+  const msgChannel = new MessageChannel();
+  currentPagesApiPort = msgChannel.port1;
+
+  // Request the port from main process
+  ipcRenderer.postMessage('karton-connect', 'pages-api', [msgChannel.port2]);
+
+  /**
+   * MessagePort proxy that works with reconnection and origin validation
+   * The port will automatically start when onmessage is set
+   */
+  const messagePortProxy: MessagePortProxy = {
+    setOnMessage: (handler: (message: KartonMessage) => void) => {
+      // Check if connection was invalidated
+      if (isPagesApiConnectionInvalidated) {
+        return;
+      }
+
+      // Validate origin before setting message handler
+      if (!isValidOrigin()) {
+        invalidatePagesApiConnection();
+        return;
+      }
+
+      // Store the handler so we can re-apply it on reconnection
+      currentPagesApiMessageHandler = handler;
+
+      if (!currentPagesApiPort) {
+        return;
+      }
+
+      // Apply message handler to current port with origin validation
+      currentPagesApiPort.onmessage = (event) => {
+        // Check if connection was invalidated
+        if (isPagesApiConnectionInvalidated) {
+          return;
+        }
+
+        // Validate origin on every message
+        if (!isValidOrigin()) {
+          invalidatePagesApiConnection();
+          return;
+        }
+        handler(event.data as KartonMessage);
+      };
+
+      // Setup error handler for detecting connection issues
+      currentPagesApiPort.onmessageerror = (_error) => {
+        attemptPagesApiReconnect();
+      };
+    },
+    postMessage: (message: KartonMessage) => {
+      // Check if connection was invalidated
+      if (isPagesApiConnectionInvalidated) {
+        return;
+      }
+
+      // Validate origin before posting message
+      if (!isValidOrigin()) {
+        invalidatePagesApiConnection();
+        return;
+      }
+
+      if (!currentPagesApiPort) {
+        return;
+      }
+
+      try {
+        currentPagesApiPort.postMessage(message);
+      } catch (_error) {
+        // Trigger reconnection if post fails
+        attemptPagesApiReconnect();
+      }
+    },
+  };
+
+  return messagePortProxy;
+}
+
+// Initialize PagesAPI connection
+const pagesApiPortProxy = initializePagesApiConnection();
+
+// Expose PagesAPI to main world only if we're in the valid context
+// Note: pagesApiPortProxy is only non-null if IS_VALID_PAGES_CONTEXT was true
+if (pagesApiPortProxy) {
+  contextBridge.exposeInMainWorld('clodexPagesApi', {
+    portProxy: pagesApiPortProxy,
+  });
+
+  // Clean up connection on page unload
+  window.addEventListener('beforeunload', () => {
+    invalidatePagesApiConnection();
+  });
+}
+
+declare const CLODEX_CONSOLE_URL: string;
+
+/**
+ * Check if the current page is the Clodex console (web or local dev).
+ * Only these origins get access to the Turnstile captcha proxy bridge.
+ * CLODEX_CONSOLE_URL is injected at build time via vite.web-content-preload.config.ts.
+ */
+const IS_CONSOLE_ORIGIN = (() => {
+  try {
+    const consoleOrigin = new URL(CLODEX_CONSOLE_URL).origin;
+    return window.location.origin === consoleOrigin;
+  } catch {
+    return false;
+  }
+})();
+
+// Expose captcha proxy to console pages so they can request a Turnstile
+// token from the renderer UI (where the Turnstile challenge succeeds).
+if (IS_CONSOLE_ORIGIN) {
+  contextBridge.exposeInMainWorld('__clodex_captcha', {
+    requestTurnstileToken: () => ipcRenderer.invoke('request-turnstile-token'),
+  });
+}
+
+// Dominant captures in capture phase
+window.addEventListener(
+  'keydown',
+  (e) => {
+    const hotkeyDef = getHotkeyDefinitionForEvent(e);
+    if (hotkeyDef?.captureDominantly) {
+      if (hotkeyDef.preserveNativeInput && shouldChromeConsumeEvent(e)) return;
+
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      e.stopPropagation();
+      window.tunnelKeyDown?.(e);
+    }
+  },
+  { capture: true },
+);
+
+// Non-dominant captures in bubble phase
+window.addEventListener('keydown', (e) => {
+  // Only tunnel up if event was not captured by a dominant listener in the capture phase
+  if (e.defaultPrevented) return;
+  if (shouldChromeConsumeEvent(e)) return;
+  window.tunnelKeyDown?.(e);
+});
+
+// Capture wheel events with CMD/Ctrl for zoom
+window.addEventListener(
+  'wheel',
+  (e) => {
+    // Pinch-to-zoom on trackpad synthesizes ctrlKey - always allow this for native zoom feel
+    if (e.ctrlKey) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      e.stopPropagation();
+      window.tunnelWheel?.(e);
+      return;
+    }
+
+    // For CMD+wheel (metaKey on Mac), only zoom if it's a mouse wheel, not trackpad scroll.
+    // Trackpads use deltaMode 0 (DOM_DELTA_PIXEL), mouse wheels use deltaMode 1 (DOM_DELTA_LINE).
+    // This prevents two-finger trackpad scrolling with CMD from triggering zoom.
+    if (e.metaKey && e.deltaMode !== 0) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      e.stopPropagation();
+      window.tunnelWheel?.(e);
+    }
+  },
+  { capture: true, passive: false },
+);
+
+/**
+ * Setup section for the actual app that offers the context element selection UI
+ */
+window.addEventListener(
+  'DOMContentLoaded',
+  () => {
+    const container = document.createElement('clodex-container');
+    container.style.position = 'fixed';
+    container.style.top = '0';
+    container.style.left = '0';
+    container.style.width = '100vw';
+    container.style.height = '100vh';
+    container.style.zIndex = '2147483647';
+    container.style.pointerEvents = 'none';
+    document.body.appendChild(container);
+    const host = container.attachShadow({ mode: 'closed' });
+
+    // Initialize the app
+    try {
+      createRoot(host).render(
+        createElement(StrictMode, null, createElement(App)),
+      );
+    } catch (_error) {}
+  },
+  { capture: true, once: true, passive: true },
+);

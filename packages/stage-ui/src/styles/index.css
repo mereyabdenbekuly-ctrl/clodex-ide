@@ -1,0 +1,19 @@
+/**
+ * Stage UI - Main Style Entry Point
+ * 
+ * This file serves as the central import for all stage-ui styles.
+ * Individual concerns are split into separate files for maintainability.
+ */
+
+@import "tailwindcss";
+@import "./palette.css";
+@import "./theme.css";
+@import "./shadows.css";
+@import "./derived-utilities.css";
+@import "./animations.css";
+@import "./code-block-syntax.css";
+@import "./code-block-syntax-example.css";
+@import "./code-block.css";
+@import "./constants.css";
+@import "./overlay-scrollbar.css";
+@import "./scrollbar.css";

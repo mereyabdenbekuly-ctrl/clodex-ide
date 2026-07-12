@@ -1,0 +1,389 @@
+name: Docker runner physical promotion evidence
+
+on:
+  push:
+    branches:
+      - release-evidence/runner-docker-candidate
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact main commit to execute inside the physical Docker runner
+        required: true
+        type: string
+      repetitions:
+        description: Four-workload physical replay repetitions
+        required: true
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-docker-promotion-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  collect_and_verify:
+    name: Run commit-bound paired replay in real Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: runner-docker-promotion
+    env:
+      CI: "true"
+      SOURCE_COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.source_commit || github.sha }}
+      REPETITIONS: ${{ github.event_name == 'workflow_dispatch' && inputs.repetitions || '1' }}
+      BASE_IMAGE_TAG: alpine:3.21
+      LOCAL_REGISTRY: localhost:5000
+      EVIDENCE_DIRECTORY: /tmp/clodex-runner-docker-evidence
+      OUTPUT_DIRECTORY: /tmp/clodex-runner-docker-promotion
+      COLLECTOR_IDENTITY_PATH: /tmp/clodex-runner-docker-collector.json
+      EXPECTED_COLLECTOR_PUBLIC_KEY: ${{ vars.CLODEX_RUNNER_DOGFOOD_COLLECTOR_PUBLIC_KEY }}
+      EXPECTED_COLLECTOR_KEY_ID: ${{ vars.CLODEX_RUNNER_DOGFOOD_COLLECTOR_KEY_ID }}
+
+    steps:
+      - name: Check out trusted main workflow revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify trusted source boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "Release Docker promotion dispatch must run from refs/heads/main" >&2
+              exit 1
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/release-evidence/runner-docker-candidate" ]]; then
+              echo "Candidate Docker evidence ran from an unexpected branch" >&2
+              exit 1
+            fi
+          else
+            echo "Unsupported Docker promotion event: $GITHUB_EVENT_NAME" >&2
+            exit 1
+          fi
+          if [[ ! "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "source_commit must be a full lowercase SHA" >&2
+            exit 1
+          fi
+          if [[ "$SOURCE_COMMIT" != "$GITHUB_SHA" ]] || \
+             [[ "$(git rev-parse HEAD)" != "$SOURCE_COMMIT" ]]; then
+            echo "Docker runner evidence must bind to the trusted main workflow commit" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "Trusted workflow checkout is not clean" >&2
+            git status --short >&2
+            exit 1
+          fi
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install trusted runner tooling
+        run: pnpm install --frozen-lockfile --filter 'clodex...'
+
+      - name: Build trusted runner libraries
+        run: |
+          pnpm -F @clodex/agent-runtime-node build
+          pnpm -F @clodex/agent-core build
+          pnpm -F @clodex/agent-shell build
+
+      - name: Verify Docker runner and evidence contracts
+        run: |
+          pnpm --dir packages/agent-shell exec vitest run \
+            src/engine/docker-runner-adapter.test.ts
+          pnpm --dir apps/browser exec vitest run \
+            src/backend/services/docker-runner/docker-runner-transport.test.ts \
+            src/backend/services/runner-routing/dogfood-evidence.test.ts \
+            src/backend/services/runner-routing/dogfood-ingestion.test.ts \
+            src/backend/services/runner-routing/shadow-ledger.test.ts \
+            src/backend/services/main-plan-promotion-assessments.test.ts
+
+      - name: Build an immutable local runner image
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker version
+          docker pull "$BASE_IMAGE_TAG"
+          base_image="$(docker image inspect "$BASE_IMAGE_TAG" --format '{{index .RepoDigests 0}}')"
+          if [[ ! "$base_image" =~ ^alpine@sha256:[a-f0-9]{64}$ ]]; then
+            echo "Could not resolve the Alpine base image to an immutable digest" >&2
+            exit 1
+          fi
+          docker run -d \
+            --name clodex-local-registry \
+            --restart no \
+            -p 127.0.0.1:5000:5000 \
+            registry:2
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:5000/v2/ >/dev/null; then
+              break
+            fi
+            if [[ "$attempt" == '30' ]]; then
+              echo "Local Docker registry did not become ready" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          build_root="$RUNNER_TEMP/clodex-runner-image"
+          rm -rf "$build_root"
+          mkdir -p "$build_root"
+          cat > "$build_root/Dockerfile" <<'DOCKERFILE'
+          ARG BASE_IMAGE
+          FROM ${BASE_IMAGE}
+          RUN apk add --no-cache git
+          DOCKERFILE
+          image_tag="$LOCAL_REGISTRY/clodex/runner:${SOURCE_COMMIT:0:12}"
+          docker build \
+            --build-arg "BASE_IMAGE=$base_image" \
+            --label "org.opencontainers.image.revision=$SOURCE_COMMIT" \
+            --tag "$image_tag" \
+            "$build_root"
+          docker push "$image_tag"
+          runner_image="$(docker image inspect "$image_tag" --format '{{index .RepoDigests 0}}')"
+          if [[ ! "$runner_image" =~ ^localhost:5000/clodex/runner@sha256:[a-f0-9]{64}$ ]]; then
+            echo "Local runner image did not receive an immutable registry digest" >&2
+            exit 1
+          fi
+          docker image inspect "$runner_image" >/dev/null
+          echo "base_image=$base_image" >> "$GITHUB_OUTPUT"
+          echo "runner_image=$runner_image" >> "$GITHUB_OUTPUT"
+          echo "CLODEX_DOCKER_RUNNER_IMAGE=$runner_image" >> "$GITHUB_ENV"
+
+      - name: Materialize protected collector identity
+        shell: bash
+        env:
+          COLLECTOR_IDENTITY_JSON: ${{ secrets.CLODEX_RUNNER_DOGFOOD_COLLECTOR_IDENTITY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$COLLECTOR_IDENTITY_JSON" ]]; then
+            echo "Runner dogfood collector identity is not configured" >&2
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_COLLECTOR_PUBLIC_KEY" =~ ^[A-Za-z0-9_-]{16,1024}$ ]] || \
+             [[ ! "$EXPECTED_COLLECTOR_KEY_ID" =~ ^[A-Za-z0-9_-]{16,128}$ ]]; then
+            echo "Runner dogfood collector public identity is missing or invalid" >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$COLLECTOR_IDENTITY_JSON" > "$COLLECTOR_IDENTITY_PATH"
+          node - <<'NODE'
+          const { createPrivateKey, createPublicKey } = require('node:crypto');
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.env.COLLECTOR_IDENTITY_PATH, 'utf8'));
+          if (
+            value.version !== 1 ||
+            typeof value.privateKeyPem !== 'string' ||
+            typeof value.publicKey !== 'string'
+          ) {
+            throw new Error('Collector identity JSON is malformed');
+          }
+          const derived = createPublicKey(createPrivateKey(value.privateKeyPem))
+            .export({ type: 'spki', format: 'der' })
+            .toString('base64url');
+          if (derived !== value.publicKey || derived !== process.env.EXPECTED_COLLECTOR_PUBLIC_KEY) {
+            throw new Error('Collector keypair/public trust mismatch');
+          }
+          NODE
+
+      - name: Execute physical Docker paired replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$EVIDENCE_DIRECTORY" "$OUTPUT_DIRECTORY"
+          mkdir -p "$EVIDENCE_DIRECTORY" "$OUTPUT_DIRECTORY"
+          chmod 700 "$EVIDENCE_DIRECTORY" "$OUTPUT_DIRECTORY"
+          umask 077
+          CLODEX_RUNNER_DOGFOOD_REVISION="$SOURCE_COMMIT" \
+          CLODEX_RUNNER_DOGFOOD_REPETITIONS="$REPETITIONS" \
+          CLODEX_RUNNER_DOGFOOD_COLLECTOR_IDENTITY_PATH="$COLLECTOR_IDENTITY_PATH" \
+          CLODEX_RUNNER_DOGFOOD_EVIDENCE_INBOX="$EVIDENCE_DIRECTORY" \
+          pnpm --silent --dir apps/browser exec tsx \
+            --tsconfig tsconfig.backend.json \
+            scripts/runner-paired-replay-docker-dogfood.ts \
+            > "$OUTPUT_DIRECTORY/docker-dogfood-report.json"
+
+      - name: Verify collector binding and promotion evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          output = Path(os.environ["OUTPUT_DIRECTORY"])
+          evidence = Path(os.environ["EVIDENCE_DIRECTORY"])
+          report = json.loads((output / "docker-dogfood-report.json").read_bytes())
+          required = {
+              "schemaVersion", "checkedAt", "sourceCommitSha", "image",
+              "dockerServerVersion", "snapshotHash", "dirtyPatchHash",
+              "dependencyFingerprintHash", "hasDirtyChanges", "collectorKeyId",
+              "collectorPublicKey", "evidenceBundleId", "evidenceBundleFile",
+              "evidenceSamples", "distinctCommandClasses", "workloads", "audit",
+              "isolation", "privacy",
+          }
+          if set(report) != required or report["schemaVersion"] != 1:
+              raise SystemExit("Docker dogfood report schema mismatch")
+          if report["sourceCommitSha"] != os.environ["SOURCE_COMMIT"]:
+              raise SystemExit("Docker dogfood source commit mismatch")
+          if report["image"] != os.environ["CLODEX_DOCKER_RUNNER_IMAGE"]:
+              raise SystemExit("Docker dogfood image digest mismatch")
+          if report["collectorPublicKey"] != os.environ["EXPECTED_COLLECTOR_PUBLIC_KEY"]:
+              raise SystemExit("Docker dogfood collector public key mismatch")
+          if report["collectorKeyId"] != os.environ["EXPECTED_COLLECTOR_KEY_ID"]:
+              raise SystemExit("Docker dogfood collector key ID mismatch")
+          if report["evidenceSamples"] < 4 or report["distinctCommandClasses"] < 2:
+              raise SystemExit("Docker dogfood workload coverage is insufficient")
+          if report["isolation"] != {
+              "network": "none",
+              "readOnlyRootFilesystem": True,
+              "nonRootUser": "65532:65532",
+              "capabilityDrop": "ALL",
+              "noNewPrivileges": True,
+          }:
+              raise SystemExit("Docker dogfood isolation report mismatch")
+          if report["privacy"] != {
+              "commandTextPersisted": False,
+              "outputPersisted": False,
+              "workspacePathsPersisted": False,
+          }:
+              raise SystemExit("Docker dogfood privacy report mismatch")
+          if any(
+              item.get("actualOutcome") != "completed" or
+              item.get("replayOutcome") != "completed"
+              for item in report["workloads"]
+          ):
+              raise SystemExit("Docker dogfood report contains a failed workload")
+          bundles = sorted(evidence.glob("*.json"))
+          if len(bundles) != 1 or bundles[0].name != report["evidenceBundleFile"]:
+              raise SystemExit("Docker dogfood evidence bundle set mismatch")
+          bundle = json.loads(bundles[0].read_bytes())
+          if bundle.get("schemaVersion") != 2 or bundle.get("sourceCommitSha") != os.environ["SOURCE_COMMIT"]:
+              raise SystemExit("Docker dogfood signed bundle source binding mismatch")
+          if bundle.get("collectorPublicKey") != os.environ["EXPECTED_COLLECTOR_PUBLIC_KEY"]:
+              raise SystemExit("Docker dogfood signed bundle collector mismatch")
+          trusted = output / "runner-routing-trusted-collectors.txt"
+          trusted.write_text(os.environ["EXPECTED_COLLECTOR_PUBLIC_KEY"] + "\n", encoding="utf-8")
+          trusted.chmod(0o600)
+          PY
+
+          pnpm --dir apps/browser check:main-plan-readiness -- \
+            --channel prerelease \
+            --require-clean \
+            --require-promotion decoupled-execution \
+            --runner-evidence-dir "$EVIDENCE_DIRECTORY" \
+            --runner-trusted-collectors "$OUTPUT_DIRECTORY/runner-routing-trusted-collectors.txt" \
+            --out "$OUTPUT_DIRECTORY/main-plan-readiness.json"
+
+      - name: Write immutable workflow metadata
+        shell: bash
+        env:
+          BASE_IMAGE_DIGEST: ${{ steps.image.outputs.base_image }}
+          RUNNER_IMAGE_DIGEST: ${{ steps.image.outputs.runner_image }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import shutil
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          evidence = Path(os.environ["EVIDENCE_DIRECTORY"])
+          output = Path(os.environ["OUTPUT_DIRECTORY"])
+          bundled_evidence = output / "runner-routing"
+          bundled_evidence.mkdir(mode=0o700)
+          hashes = {}
+          for source in sorted(evidence.glob("*.json")):
+              target = bundled_evidence / source.name
+              shutil.copyfile(source, target)
+              target.chmod(0o600)
+              hashes[f"runner-routing/{source.name}"] = hashlib.sha256(target.read_bytes()).hexdigest()
+          for name in [
+              "docker-dogfood-report.json",
+              "runner-routing-trusted-collectors.txt",
+              "main-plan-readiness.json",
+          ]:
+              target = output / name
+              if target.is_symlink() or not target.is_file():
+                  raise SystemExit(f"runner promotion output is missing: {target}")
+              raw = target.read_bytes()
+              if not raw or len(raw) > 8 * 1024 * 1024 or b"\x00" in raw:
+                  raise SystemExit(f"runner promotion output is invalid: {target}")
+              hashes[name] = hashlib.sha256(raw).hexdigest()
+          metadata = {
+              "format": "clodex-runner-docker-promotion-workflow",
+              "version": 1,
+              "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "trustedWorkflowCommitSha": os.environ["GITHUB_SHA"],
+              "sourceCommitSha": os.environ["SOURCE_COMMIT"],
+              "baseImageDigest": os.environ["BASE_IMAGE_DIGEST"],
+              "runnerImageDigest": os.environ["RUNNER_IMAGE_DIGEST"],
+              "collectorKeyId": os.environ["EXPECTED_COLLECTOR_KEY_ID"],
+              "artifactSha256": hashes,
+              "workflowRunUrl": os.environ["RUN_URL"],
+              "actor": os.environ["GITHUB_ACTOR"],
+          }
+          target = output / "workflow-metadata.json"
+          target.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+          target.chmod(0o600)
+          PY
+
+      - name: Remove collector identity and Docker resources
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$COLLECTOR_IDENTITY_PATH"
+          docker ps -aq --filter label=clodex.runner=true | xargs -r docker rm -f || true
+          docker rm -f clodex-local-registry || true
+
+      - name: Build checksummed evidence bundle
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/runner-docker-${SOURCE_COMMIT:0:12}.tar.gz"
+          checksum="$bundle.sha256"
+          tar --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -C "$OUTPUT_DIRECTORY" \
+            -czf "$bundle" .
+          (cd "$(dirname "$bundle")" && sha256sum "$(basename "$bundle")") > "$checksum"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+
+      - name: Upload physical Docker promotion evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runner-docker-promotion-${{ github.sha }}
+          path: |
+            ${{ env.OUTPUT_DIRECTORY }}/
+            ${{ steps.bundle.outputs.bundle }}
+            ${{ steps.bundle.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 30

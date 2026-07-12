@@ -1,0 +1,1171 @@
+import { useEditor, EditorContent, type Content } from '@tiptap/react';
+import { Fragment, type Node as ProseMirrorNode } from '@tiptap/pm/model';
+import type { EditorView } from '@tiptap/pm/view';
+import StarterKit from '@tiptap/starter-kit';
+import Placeholder from '@tiptap/extension-placeholder';
+import { ModelSelect } from './model-select';
+import { ToolApprovalSelect } from './tool-approval-select';
+import { CollaborationModeSelect } from './collaboration-mode-select';
+import { ContextUsageRing } from './context-usage-ring';
+import { DictationControl } from './dictation-control';
+import { Button } from '@clodex/stage-ui/components/button';
+import { cn } from '@ui/utils';
+import type { DictationState } from '@shared/dictation';
+import { HotkeyActions } from '@shared/hotkeys';
+import {
+  ArrowUpIcon,
+  BrainCircuitIcon,
+  SquareIcon,
+  SquareDashedMousePointerIcon,
+  SwordsIcon,
+} from 'lucide-react';
+import { IconPaperclip2Outline18 } from 'nucleo-ui-outline-18';
+import {
+  useCallback,
+  useMemo,
+  useImperativeHandle,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+} from 'react';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@clodex/stage-ui/components/tooltip';
+import { ShortcutCombo } from '@clodex/stage-ui/components/shortcut-key';
+import { HotkeyCombo } from '@ui/components/hotkey-combo';
+import { Tutorial } from '@ui/components/tutorial';
+import {
+  configureAttachmentExtensions,
+  ALL_ATTACHMENT_NODE_NAMES,
+  type AttachmentAttributes,
+  type AttachmentType,
+} from './rich-text/attachments';
+import {
+  MentionExtension,
+  mentionContextRef,
+  type MentionContext,
+} from './rich-text/mentions';
+import { SlashExtension, slashSkillsRef } from './rich-text/slash';
+import type { SkillDefinitionUI } from '@shared/skills';
+import { useState, memo } from 'react';
+import { useIsContainerScrollable } from '@ui/hooks/use-is-container-scrollable';
+import {
+  dispatchChatHistoryScroll,
+  type ChatHistoryScrollDirection,
+} from '../_lib/chat-history-scroll-event';
+// Re-export types for convenience
+export type { AttachmentAttributes, AttachmentType };
+
+/** Minimum paste length to auto-convert into a `.textclip` file attachment */
+const TEXT_CLIP_THRESHOLD = 100;
+const CHAT_INPUT_PAGE_SCROLL_FACTOR = 0.6;
+const CHAT_INPUT_PAGE_SCROLL_MIN = 120;
+const SLASH_CYCLE_BUILTIN_IDS = new Set([
+  'command:plan',
+  'command:preview',
+  'command:debug',
+  'command:learn',
+]);
+
+function isCtrlPageScrollEvent(event: KeyboardEvent) {
+  if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)
+    return false;
+
+  const key = event.key.toLowerCase();
+  return key === 'u' || key === 'd';
+}
+
+function getChatHistoryScrollDirectionFromEvent(
+  event: KeyboardEvent,
+): ChatHistoryScrollDirection | null {
+  if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)
+    return null;
+
+  const key = event.key.toLowerCase();
+  if (key === 'u') return 'up';
+  if (key === 'd') return 'down';
+
+  return null;
+}
+
+function isShiftTabSlashCycleEvent(event: KeyboardEvent) {
+  return (
+    event.key === 'Tab' &&
+    event.shiftKey &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey
+  );
+}
+
+type SlashCycleItem = {
+  id: string;
+  label: string;
+};
+
+type LeadingSlashNode = {
+  from: number;
+  to: number;
+  deleteTo: number;
+  id: string;
+};
+
+function getSlashCycleItems(): SlashCycleItem[] {
+  return slashSkillsRef.current
+    .filter((skill) => SLASH_CYCLE_BUILTIN_IDS.has(skill.id))
+    .map((skill) => ({
+      id: skill.id,
+      label: skill.displayName,
+    }));
+}
+
+function isZeroWidthTextNode(node: ProseMirrorNode) {
+  if (!node.isText) return false;
+  return (node.text ?? '').replaceAll('\u200B', '').length === 0;
+}
+
+function findLeadingSlashNode(doc: ProseMirrorNode): LeadingSlashNode | null {
+  const firstBlock = doc.firstChild;
+  if (!firstBlock?.isTextblock) return null;
+
+  let offset = 0;
+  for (let i = 0; i < firstBlock.childCount; i++) {
+    const node = firstBlock.child(i);
+    const from = 1 + offset;
+
+    if (isZeroWidthTextNode(node)) {
+      offset += node.nodeSize;
+      continue;
+    }
+
+    if (node.type.name !== 'slash') return null;
+
+    const to = from + node.nodeSize;
+    const next = i + 1 < firstBlock.childCount ? firstBlock.child(i + 1) : null;
+    const deleteTo = next?.isText && next.text?.startsWith(' ') ? to + 1 : to;
+
+    return {
+      from,
+      to,
+      deleteTo,
+      id: String(node.attrs.id ?? ''),
+    };
+  }
+
+  return null;
+}
+
+function createSlashCycleFragment(
+  view: EditorView,
+  item: SlashCycleItem,
+): Fragment | null {
+  const slashType = view.state.schema.nodes.slash;
+  if (!slashType) return null;
+
+  return Fragment.fromArray([
+    slashType.create({ id: item.id, label: item.label }),
+    view.state.schema.text(' '),
+  ]);
+}
+
+function cycleLeadingSlashCommand(view: EditorView) {
+  const items = getSlashCycleItems();
+  const firstBlock = view.state.doc.firstChild;
+  if (items.length === 0 || !firstBlock?.isTextblock) return false;
+
+  const leadingSlash = findLeadingSlashNode(view.state.doc);
+  const currentIndex = leadingSlash
+    ? items.findIndex((item) => item.id === leadingSlash.id)
+    : -1;
+  const nextIndex = leadingSlash
+    ? (Math.max(0, currentIndex) + 1) % items.length
+    : 0;
+
+  const nextItem = items[nextIndex];
+  if (!nextItem) return false;
+
+  const fragment = createSlashCycleFragment(view, nextItem);
+  if (!fragment) return false;
+
+  const from = leadingSlash?.from ?? 1;
+  const to = leadingSlash?.deleteTo ?? from;
+  view.dispatch(view.state.tr.replaceWith(from, to, fragment).scrollIntoView());
+  view.focus();
+  return true;
+}
+
+export interface ChatInputProps {
+  // Core controlled input
+  value?: Content; // TipTap JSON content string
+  defaultValue?: Content; // TipTap JSON content string
+  onChange?: (TipTapContent: Content) => void;
+  onSubmit: () => void;
+  disabled?: boolean;
+  placeholder?: string;
+
+  // Attachment count for display
+  attachmentCount?: number;
+
+  // Model selector
+  showModelSelect?: boolean;
+  onModelChange?: () => void;
+
+  // Collaboration workflow selector
+  showCollaborationModeSelect?: boolean;
+  collaborationModeDisabled?: boolean;
+  onCollaborationModeChange?: () => void;
+
+  // Tool approval selector
+  showToolApprovalSelect?: boolean;
+  onToolApprovalChange?: () => void;
+
+  // Context usage ring
+  showContextUsageRing?: boolean;
+  contextUsedPercentage?: number;
+  contextUsedKb?: number;
+  contextMaxKb?: number;
+
+  // Queued messages (for early flushing)
+  hasQueuedMessages?: boolean;
+  onFlushQueue?: () => void;
+
+  // Focus management
+  onFocus?: () => void;
+  onBlur?: (event: FocusEvent) => void;
+  onEscape?: () => void;
+
+  // File paste handling
+  onPasteFiles?: (files: File[], insertPos?: number) => void;
+
+  // Attachment removal callback (when badges are deleted from editor)
+  onAttachmentRemoved?: (
+    id: string,
+    type: AttachmentType,
+    attrs?: Record<string, unknown>,
+  ) => void;
+
+  // Mention provider context (Karton state bridge)
+  mentionContext?: MentionContext;
+
+  // Slash command definitions (from Karton state)
+  slashCommands?: SkillDefinitionUI[];
+
+  // Styling
+  className?: string;
+
+  ref: React.RefObject<ChatInputHandle>;
+}
+
+export interface ChatInputHandle {
+  focus: () => void;
+  blur: () => void;
+  /** Replace the editor contents with plain text and move the caret to the end. */
+  setText: (text: string) => void;
+  /** Insert plain text at the current editor selection. */
+  insertText: (text: string) => void;
+  /** Insert an attachment mention at the current cursor position */
+  insertAttachment: (attrs: AttachmentAttributes, position?: number) => void;
+  getTextContent: () => string;
+  /** Get the current TipTap JSON content as a string */
+  getJsonContent: () => string;
+  /** Clear all editor content */
+  clear: () => void;
+  /** Replace an attachment node (by id) with plain text */
+  replaceAttachmentWithText: (attachmentId: string, text: string) => void;
+  /** Update attributes on an existing attachment node (by id) */
+  updateAttachmentAttrs: (
+    attachmentId: string,
+    attrs: Record<string, unknown>,
+  ) => void;
+}
+
+export const ChatInput = memo(function ChatInput({
+  value,
+  defaultValue,
+  onChange,
+  onSubmit,
+  disabled = false,
+  placeholder,
+  attachmentCount: _attachmentCount = 0,
+
+  showModelSelect = true,
+  onModelChange,
+
+  showCollaborationModeSelect = false,
+  collaborationModeDisabled = false,
+  onCollaborationModeChange,
+
+  showToolApprovalSelect = true,
+  onToolApprovalChange,
+
+  showContextUsageRing = false,
+  contextUsedPercentage = 0,
+  contextUsedKb = 0,
+  contextMaxKb = 0,
+
+  hasQueuedMessages = false,
+  onFlushQueue,
+
+  onFocus,
+  onBlur,
+  onEscape,
+  onPasteFiles,
+  onAttachmentRemoved,
+
+  mentionContext,
+  slashCommands,
+
+  className,
+  ref,
+}: ChatInputProps) {
+  const shownPlaceholder = useRef('');
+  useEffect(() => {
+    shownPlaceholder.current =
+      placeholder ??
+      `Use / to plan and run commands. Use @ for context. ${hasQueuedMessages ? 'Press ↵ to send now' : ''}`;
+  }, [placeholder, hasQueuedMessages]);
+  const staticPlaceholderRef = useRef(() => shownPlaceholder.current);
+
+  const [textContent, setTextContent] = useState<string>('');
+
+  // Track if the last change was from the editor (internal) vs from props (external)
+  // This prevents the value effect from overwriting user edits
+  const isInternalChangeRef = useRef(false);
+
+  const [internalValue, setInternalValue] = useState<Content | null>(
+    value ?? defaultValue ?? { type: 'doc', content: [{ type: 'paragraph' }] },
+  );
+  useEffect(() => {
+    if (value !== undefined) {
+      setInternalValue(value);
+    }
+  }, [value]);
+
+  const inputScrollContainerRef = useRef<HTMLDivElement>(null);
+  const { canScrollUp, canScrollDown } = useIsContainerScrollable(
+    inputScrollContainerRef,
+  );
+  const canScrollUpRef = useRef(canScrollUp);
+  const canScrollDownRef = useRef(canScrollDown);
+  canScrollUpRef.current = canScrollUp;
+  canScrollDownRef.current = canScrollDown;
+
+  // TipTap editor setup
+  const editor = useEditor({
+    enableInputRules: false,
+    enablePasteRules: false,
+    extensions: [
+      StarterKit.configure({
+        heading: false,
+        dropcursor: false,
+        bulletList: false,
+        orderedList: false,
+        codeBlock: false,
+        blockquote: false,
+        horizontalRule: false,
+        bold: false,
+        italic: false,
+        strike: false,
+        code: false,
+        link: false,
+        paragraph: {
+          HTMLAttributes: {
+            class: 'min-h-[1.5em]',
+          },
+        },
+      }),
+      Placeholder.configure({
+        placeholder: staticPlaceholderRef.current,
+      }),
+      ...configureAttachmentExtensions({
+        onNodeDeleted: onAttachmentRemoved,
+      }),
+      MentionExtension,
+      SlashExtension,
+    ],
+    content: internalValue,
+    editable: !disabled,
+    editorProps: {
+      attributes: {
+        class: cn(
+          'h-full w-full resize-none text-[length:var(--codex-chat-font-size)] text-foreground leading-6 outline-none',
+          'prose prose-sm max-w-none',
+          // Style paragraphs to not have extra margins
+          '[&_p]:m-0 [&_p]:leading-relaxed',
+        ),
+      },
+      handleKeyDown: (view, event) => {
+        if (isShiftTabSlashCycleEvent(event)) {
+          const hasSuggestionPopup = document.querySelector(
+            '.mention-suggestion-container, .slash-suggestion-container',
+          );
+          if (hasSuggestionPopup) return false;
+
+          if (cycleLeadingSlashCommand(view)) {
+            event.preventDefault();
+            return true;
+          }
+        }
+
+        const scrollDirection = getChatHistoryScrollDirectionFromEvent(event);
+        if (scrollDirection) {
+          const canInputScroll =
+            scrollDirection === 'up'
+              ? canScrollUpRef.current
+              : canScrollDownRef.current;
+          if (canInputScroll) {
+            if (!isCtrlPageScrollEvent(event)) return false;
+
+            const scroller = inputScrollContainerRef.current;
+            if (!scroller) return false;
+
+            const amount = Math.max(
+              CHAT_INPUT_PAGE_SCROLL_MIN,
+              scroller.clientHeight * CHAT_INPUT_PAGE_SCROLL_FACTOR,
+            );
+            scroller.scrollBy({
+              top: scrollDirection === 'up' ? -amount : amount,
+              behavior: 'smooth',
+            });
+            event.preventDefault();
+            return true;
+          }
+
+          event.preventDefault();
+          dispatchChatHistoryScroll(scrollDirection);
+          return true;
+        }
+
+        // Handle Enter without Shift for submit
+        if (event.key === 'Enter' && !event.shiftKey) {
+          // Check DOM for actual popup presence — the boolean flags
+          // have timing gaps during TipTap's exit→re-detect cycle.
+          const hasSuggestionPopup = document.querySelector(
+            '.mention-suggestion-container, .slash-suggestion-container',
+          );
+          if (hasSuggestionPopup) return false;
+          event.preventDefault();
+          // If input is empty and there are queued messages, flush the queue
+          const isEmpty = view.state.doc.textContent.trim().length === 0;
+          if (isEmpty && hasQueuedMessages && onFlushQueue) {
+            onFlushQueue();
+          } else {
+            handleSubmit();
+          }
+          return true;
+        }
+        // Handle Escape
+        if (event.key === 'Escape') {
+          const hasSuggestionPopup = document.querySelector(
+            '.mention-suggestion-container, .slash-suggestion-container',
+          );
+          if (hasSuggestionPopup) {
+            // Let ProseMirror continue routing to the suggestion
+            // plugin (which handles popup dismissal), but stop the
+            // native event from bubbling to React handlers that
+            // would blur/deselect the input.
+            event.stopImmediatePropagation();
+            return false;
+          }
+          event.preventDefault();
+          onEscape?.();
+          return true;
+        }
+        return false;
+      },
+      handlePaste: (view, event) => {
+        const items = event.clipboardData?.items;
+        if (!items || !onPasteFiles) return false;
+
+        // Snapshot the caret position synchronously here — the subsequent
+        // `addFileAttachment` flow awaits an IPC roundtrip to the blob store
+        // before inserting the badge, during which the selection may move.
+        const insertPos = view.state.selection.from;
+
+        const files: File[] = [];
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item?.kind === 'file') {
+            const file = item.getAsFile();
+            if (file) files.push(file);
+          }
+        }
+
+        if (files.length > 0) {
+          event.preventDefault();
+          onPasteFiles(files, insertPos);
+          return true;
+        }
+
+        // Convert long text pastes into .textclip file attachments
+        const text = event.clipboardData?.getData('text/plain') || '';
+        const html = event.clipboardData?.getData('text/html') || '';
+        if (
+          text.length >= TEXT_CLIP_THRESHOLD &&
+          !html.includes('data-attachment') &&
+          !html.includes('data-element-attachment')
+        ) {
+          event.preventDefault();
+          // Build a filename from the first 32 characters of the pasted text
+          const prefix = text
+            .substring(0, 32)
+            .trim()
+            .replace(/[^a-zA-Z0-9 _-]/g, '')
+            .replace(/\s+/g, '_')
+            .substring(0, 32);
+          const fileName = `${prefix || 'pasted_text'}.textclip`;
+          const blob = new Blob([text], { type: 'text/x-textclip' });
+          const file = new File([blob], fileName, {
+            type: 'text/x-textclip',
+          });
+          onPasteFiles([file], insertPos);
+          return true;
+        }
+
+        return false;
+      },
+      // Prevent TipTap from handling drops - let parent elements handle via useDragDrop
+      handleDrop: () => true,
+    },
+    onUpdate: ({ editor: ed }) => {
+      const json = ed.getJSON();
+      setTextContent(ed.getText());
+      // Mark this as an internal change so the value effect doesn't interfere
+      isInternalChangeRef.current = true;
+      onChange?.(json);
+    },
+
+    onFocus: () => {
+      onFocus?.();
+    },
+    onBlur: ({ event }) => {
+      onBlur?.(event);
+    },
+  });
+
+  useEffect(() => {
+    editor?.commands.selectAll();
+  }, [editor, shownPlaceholder]);
+
+  // Sync mention context to the module-level ref synchronously during render
+  // so the TipTap suggestion `items` callback always has current data.
+  if (mentionContext) mentionContextRef.current = mentionContext;
+
+  // Sync slash skills to the module-level ref synchronously during render.
+  if (slashCommands) slashSkillsRef.current = slashCommands;
+
+  const canSendMessage = useMemo(() => {
+    return !disabled && textContent.trim().length > 0;
+  }, [disabled, textContent]);
+
+  const handleSubmit = useCallback(() => {
+    if (canSendMessage) {
+      onSubmit();
+    }
+  }, [canSendMessage, onSubmit]);
+
+  // Update editable state when disabled changes
+  // CRITICAL: Use useLayoutEffect to sync editor state BEFORE paint
+  // This prevents visual flicker when transitioning between edit/view modes
+  useLayoutEffect(() => {
+    if (editor) editor.setEditable(!disabled);
+  }, [editor, disabled]);
+
+  // Sync external value to editor when their emptiness is out of sync.
+  // This covers two scenarios:
+  // 1. Clearing after send: parent resets value to an empty doc, but editor
+  //    still has the old message text → reset editor to empty.
+  // 2. Inherited input on agent creation: the editor mounted empty (TipTap
+  //    always starts with a single empty paragraph), but the value now carries
+  //    content inherited from the previous agent → populate the editor.
+  // We only act on this empty/non-empty mismatch to avoid feedback loops that
+  // would occur if we synced every value change back into the editor.
+  useEffect(() => {
+    if (isInternalChangeRef.current) {
+      isInternalChangeRef.current = false;
+      return;
+    }
+
+    if (!editor || value == null) return;
+
+    const valueContent = (value as { content?: unknown[] })?.content;
+    const isValueEmpty =
+      valueContent?.length === 1 &&
+      (valueContent[0] as { type?: string })?.type === 'paragraph' &&
+      !(valueContent[0] as { content?: unknown[] })?.content;
+
+    const isEditorEmpty = editor.state.doc.content.size <= 2;
+
+    if (isValueEmpty !== isEditorEmpty) {
+      let cancelled = false;
+      setTimeout(() => {
+        if (cancelled || editor.isDestroyed) return;
+        editor.commands.setContent(value);
+      }, 0);
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [value, editor]);
+
+  // Fix cursor positioning around inline attachment badges.
+  // Without whitespace adjacent to badges, ProseMirror inserts <img class="ProseMirror-separator">
+  // and <br class="ProseMirror-trailingBreak"> elements. The cursor ends up positioned between
+  // element children rather than inside a text node, causing the browser's Selection API to
+  // return a zero rect - resulting in a mispositioned, oversized cursor.
+  //
+  // This MutationObserver injects zero-width space text nodes (\u200B) at positions where
+  // the cursor would otherwise be at an element boundary with no text node to anchor to.
+  useEffect(() => {
+    const editorElement = editor?.view?.dom;
+    if (!editorElement) return;
+
+    // Build selector for all inline badge node types (attachments + mentions)
+    const allInlineNodeNames = [
+      ...ALL_ATTACHMENT_NODE_NAMES,
+      'mention',
+      'slash',
+    ];
+    const attachmentSelectors = allInlineNodeNames
+      .map((name) => `.react-renderer.node-${name}`)
+      .join(', ');
+
+    const observer = new MutationObserver(() => {
+      editorElement
+        .querySelectorAll(attachmentSelectors)
+        .forEach((renderer) => {
+          // Fix BEFORE badge: ensure a text node exists so the cursor can anchor to it
+          const prev = renderer.previousSibling;
+          if (!prev || prev.nodeType !== 3) {
+            const textNode = document.createTextNode('\u200B');
+            renderer.parentNode?.insertBefore(textNode, renderer);
+          }
+
+          // Fix AFTER badge: ensure a text node exists before separator or next badge
+          const next = renderer.nextSibling;
+          if (next && next.nodeType !== 3) {
+            const isProblematic =
+              // Next is ProseMirror separator
+              (next.nodeName === 'IMG' &&
+                (next as Element).classList?.contains(
+                  'ProseMirror-separator',
+                )) ||
+              // Next is another badge (consecutive badges)
+              allInlineNodeNames.some((name) =>
+                (next as Element).classList?.contains(`node-${name}`),
+              );
+            if (isProblematic) {
+              const textNode = document.createTextNode('\u200B');
+              renderer.parentNode?.insertBefore(textNode, next);
+            }
+          }
+        });
+    });
+
+    observer.observe(editorElement, {
+      childList: true,
+      subtree: true,
+    });
+
+    return () => observer.disconnect();
+  }, [editor]);
+
+  // Expose methods via ref
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      editor?.commands.focus('end');
+    },
+    blur: () => {
+      editor?.commands.blur();
+    },
+    setText: (text: string) => {
+      if (!editor || editor.isDestroyed) return;
+      isInternalChangeRef.current = true;
+      editor.commands.setContent({
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: text.length > 0 ? [{ type: 'text', text }] : undefined,
+          },
+        ],
+      });
+      editor.commands.focus('end');
+    },
+    insertText: (text: string) => {
+      if (!editor || editor.isDestroyed || text.length === 0) return;
+      isInternalChangeRef.current = true;
+      editor.chain().focus().insertContent({ type: 'text', text }).run();
+    },
+    insertAttachment: (attrs: AttachmentAttributes, position?: number) => {
+      if (!editor) return;
+      // Mark as internal change so valueEffect doesn't reset content
+      isInternalChangeRef.current = true;
+      editor.commands.insertAttachment(attrs, position);
+      // When the insert originates from a native drag/drop or other
+      // out-of-React event, TipTap's React node-view portals may not flush
+      // until a later transaction (which is why the badge previously only
+      // appeared after typing/refocusing). Force a follow-up no-op
+      // transaction + focus on the next frame so the node view paints
+      // immediately.
+      requestAnimationFrame(() => {
+        if (editor.isDestroyed) return;
+        editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
+        editor.commands.focus();
+      });
+    },
+    getTextContent: () => {
+      if (!editor) return '';
+      return editor.getText();
+    },
+    getJsonContent: () => {
+      if (!editor) return '';
+      return JSON.stringify(editor.getJSON());
+    },
+    clear: () => {
+      setTimeout(() => {
+        if (!editor || editor.isDestroyed) return;
+        editor.commands.clearContent();
+      }, 0);
+    },
+    replaceAttachmentWithText: (attachmentId: string, text: string) => {
+      if (!editor) return;
+      isInternalChangeRef.current = true;
+      const { doc, tr } = editor.state;
+      let replaced = false;
+      doc.descendants((node, pos) => {
+        if (replaced) return false;
+        if (node.attrs.id === attachmentId) {
+          // Replace the attachment node with a text node
+          tr.replaceWith(
+            pos,
+            pos + node.nodeSize,
+            editor.state.schema.text(text),
+          );
+          replaced = true;
+          return false;
+        }
+        return true;
+      });
+      if (replaced) {
+        editor.view.dispatch(tr);
+      }
+    },
+    updateAttachmentAttrs: (
+      attachmentId: string,
+      attrs: Record<string, unknown>,
+    ) => {
+      if (!editor) return;
+      isInternalChangeRef.current = true;
+      const { doc, tr } = editor.state;
+      let updated = false;
+      doc.descendants((node, pos) => {
+        if (updated) return false;
+        if (node.attrs.id === attachmentId) {
+          tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...attrs });
+          updated = true;
+          return false;
+        }
+        return true;
+      });
+      if (updated) {
+        editor.view.dispatch(tr);
+      }
+    },
+  }));
+
+  // Stable callbacks for ModelSelect/ToolApprovalSelect — avoids creating
+  // new closures on every ChatInput render which would bust their memo().
+  const editorRef = useRef(editor);
+  editorRef.current = editor;
+  const onModelChangeRef = useRef(onModelChange);
+  onModelChangeRef.current = onModelChange;
+  const onCollaborationModeChangeRef = useRef(onCollaborationModeChange);
+  onCollaborationModeChangeRef.current = onCollaborationModeChange;
+  const onToolApprovalChangeRef = useRef(onToolApprovalChange);
+  onToolApprovalChangeRef.current = onToolApprovalChange;
+
+  const handleModelSelectChange = useCallback(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        editorRef.current?.commands.focus('end');
+        onModelChangeRef.current?.();
+      });
+    });
+  }, []);
+
+  const handleCollaborationModeChange = useCallback(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        editorRef.current?.commands.focus('end');
+        onCollaborationModeChangeRef.current?.();
+      });
+    });
+  }, []);
+
+  const handleToolApprovalChange = useCallback(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        editorRef.current?.commands.focus('end');
+        onToolApprovalChangeRef.current?.();
+      });
+    });
+  }, []);
+
+  return (
+    <div className={cn('flex flex-1 flex-col items-stretch gap-2', className)}>
+      {/* Rich text input area */}
+      <div
+        className={cn(
+          'relative h-full w-full',
+          // Only add padding when editable (not in view mode)
+          !disabled && 'pr-1',
+        )}
+      >
+        <EditorContent
+          ref={inputScrollContainerRef}
+          editor={editor}
+          className={cn(
+            'h-full w-full',
+            '[&_.tiptap]:cursor-text [&_.tiptap]:select-text [&_.tiptap]:caret-foreground',
+            // Editable mode: scrollbar and max-height constraints
+            !disabled && 'scrollbar-subtle max-h-64 overflow-y-auto',
+            // View mode: no overflow/scroll styling, natural content flow
+            disabled && 'overflow-visible',
+            // Placeholder styling (from @tiptap/extension-placeholder) - only for editable
+            !disabled &&
+              '[&_.tiptap_p.is-editor-empty:first-child]:before:pointer-events-none',
+            !disabled &&
+              '[&_.tiptap_p.is-editor-empty:first-child]:before:float-left',
+            !disabled && '[&_.tiptap_p.is-editor-empty:first-child]:before:h-0',
+            !disabled &&
+              '[&_.tiptap_p.is-editor-empty:first-child]:before:text-subtle-foreground',
+            !disabled &&
+              '[&_.tiptap_p.is-editor-empty:first-child]:before:content-[attr(data-placeholder)]',
+            // Breathing room around inline attachment nodes (all types)
+            // These pseudo-elements provide visual spacing for cursor positioning
+            // Height constraint (h-[1em]) prevents taller cursor when no text follows the attachment
+            '[&_.react-renderer.node-attachment]:align-middle',
+            '[&_.react-renderer.node-attachment]:before:content-[""] [&_.react-renderer.node-attachment]:after:content-[""]',
+            '[&_.react-renderer.node-attachment]:before:inline-block [&_.react-renderer.node-attachment]:after:inline-block',
+            '[&_.react-renderer.node-attachment]:before:w-0.5 [&_.react-renderer.node-attachment]:after:w-0.5',
+            '[&_.react-renderer.node-attachment]:before:h-[1em] [&_.react-renderer.node-attachment]:after:h-[1em]',
+            '[&_.react-renderer.node-attachment]:before:align-middle [&_.react-renderer.node-attachment]:after:align-middle',
+            '[&_.react-renderer.node-elementAttachment]:align-middle',
+            '[&_.react-renderer.node-elementAttachment]:before:content-[""] [&_.react-renderer.node-elementAttachment]:after:content-[""]',
+            '[&_.react-renderer.node-elementAttachment]:before:inline-block [&_.react-renderer.node-elementAttachment]:after:inline-block',
+            '[&_.react-renderer.node-elementAttachment]:before:w-0.5 [&_.react-renderer.node-elementAttachment]:after:w-0.5',
+            '[&_.react-renderer.node-elementAttachment]:before:h-[1em] [&_.react-renderer.node-elementAttachment]:after:h-[1em]',
+            '[&_.react-renderer.node-elementAttachment]:before:align-middle [&_.react-renderer.node-elementAttachment]:after:align-middle',
+
+            '[&_.react-renderer.node-mention]:before:content-[""] [&_.react-renderer.node-mention]:after:content-[""]',
+            '[&_.react-renderer.node-mention]:before:inline-block [&_.react-renderer.node-mention]:after:inline-block',
+            '[&_.react-renderer.node-mention]:before:w-0.5 [&_.react-renderer.node-mention]:after:w-0.5',
+            '[&_.react-renderer.node-mention]:before:h-[1em] [&_.react-renderer.node-mention]:after:h-[1em]',
+            '[&_.react-renderer.node-mention]:before:align-middle [&_.react-renderer.node-mention]:after:align-middle',
+            '[&_.react-renderer.node-slash]:before:content-[""] [&_.react-renderer.node-slash]:after:content-[""]',
+            '[&_.react-renderer.node-slash]:before:inline-block [&_.react-renderer.node-slash]:after:inline-block',
+            '[&_.react-renderer.node-slash]:before:w-0.5 [&_.react-renderer.node-slash]:after:w-0.5',
+            '[&_.react-renderer.node-slash]:before:h-[1em] [&_.react-renderer.node-slash]:after:h-[1em]',
+            '[&_.react-renderer.node-slash]:before:align-middle [&_.react-renderer.node-slash]:after:align-middle',
+            // Hide ProseMirror-separator elements to prevent cursor height issues at node boundaries
+            '[&_.ProseMirror-separator]:hidden',
+          )}
+        />
+      </div>
+
+      {/* Controls area - only shown when not disabled and has content to show */}
+      {!disabled &&
+        (showCollaborationModeSelect ||
+          showModelSelect ||
+          showToolApprovalSelect ||
+          (showContextUsageRing && contextUsedPercentage > 0)) && (
+          <div
+            className={cn(
+              'flex shrink-0 flex-row flex-wrap items-center justify-start gap-2 pr-2 pl-1 *:shrink-0',
+              'pt-0.5',
+            )}
+          >
+            {showCollaborationModeSelect && (
+              <CollaborationModeSelect
+                disabled={collaborationModeDisabled}
+                onCollaborationModeChange={handleCollaborationModeChange}
+              />
+            )}
+            {showModelSelect && (
+              <ModelSelect onModelChange={handleModelSelectChange} />
+            )}
+            {showContextUsageRing && contextUsedPercentage > 0 && (
+              <ContextUsageRing
+                percentage={contextUsedPercentage}
+                usedKb={contextUsedKb}
+                maxKb={contextMaxKb}
+              />
+            )}
+            {showToolApprovalSelect && (
+              <>
+                {/*
+                  Invisible flex spacer that eats remaining horizontal space on
+                  the line containing `ToolApprovalSelect`, pushing the select
+                  to the right edge. `!shrink` overrides the parent's
+                  `*:shrink-0` so the spacer can collapse to 0 when the row
+                  wraps — otherwise it would prevent natural wrap behavior and
+                  force `ToolApprovalSelect` onto its own line prematurely.
+                */}
+                <div className="!shrink min-w-0 grow" aria-hidden />
+                <ToolApprovalSelect
+                  onToolApprovalChange={handleToolApprovalChange}
+                />
+              </>
+            )}
+          </div>
+        )}
+    </div>
+  );
+});
+
+export interface ChatInputActionsProps {
+  /** Whether the agent is currently working (used to determine stop/send button visibility) */
+  isAgentWorking?: boolean;
+  /** Whether the agent has a pending user question (hides stop button) */
+  hasPendingQuestion?: boolean;
+  onStop?: () => void;
+
+  showElementSelectorButton?: boolean;
+  elementSelectionActive?: boolean;
+  onToggleElementSelection?: () => void;
+  elementSelectorDisabled?: boolean;
+
+  showImageUploadButton?: boolean;
+  onAddFileAttachment?: (file: File) => void;
+
+  dictationState?: DictationState;
+  dictationDisabled?: boolean;
+  onToggleDictation?: () => void;
+
+  swarmModeActive?: boolean;
+  battleModeActive?: boolean;
+  onToggleSwarmMode?: () => void;
+  onToggleBattleMode?: () => void;
+  swarmModeDisabled?: boolean;
+
+  canSendMessage: boolean;
+  onSubmit: () => void;
+}
+
+export const ChatInputActions = memo(function ChatInputActions({
+  isAgentWorking = false,
+  hasPendingQuestion = false,
+  onStop,
+
+  showElementSelectorButton = true,
+  elementSelectionActive = false,
+  onToggleElementSelection,
+  elementSelectorDisabled = false,
+
+  showImageUploadButton = true,
+  onAddFileAttachment,
+
+  dictationState,
+  dictationDisabled = false,
+  onToggleDictation,
+
+  swarmModeActive = false,
+  battleModeActive = false,
+  onToggleSwarmMode,
+  onToggleBattleMode,
+  swarmModeDisabled = false,
+
+  canSendMessage,
+  onSubmit,
+}: ChatInputActionsProps) {
+  // Always show the send button; show stop button alongside it when agent is working
+  const showStopButton = isAgentWorking && !hasPendingQuestion && !!onStop;
+  const showSendButton = true;
+
+  return (
+    <div className="flex shrink-0 flex-row items-end justify-end gap-1 pb-0.5">
+      {/* Element selector and image upload - always shown (can add context to queued messages) */}
+      {showElementSelectorButton && (
+        <>
+          <Tutorial tutorialId="browser-element-selector" />
+          <Tooltip>
+            <TooltipTrigger>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                disabled={elementSelectorDisabled}
+                className="shrink-0 data-[element-selector-active=true]:bg-primary-foreground/5 data-[element-selector-active=true]:text-primary-foreground"
+                data-element-selector-active={elementSelectionActive}
+                data-tutorial="chat-element-selector"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onToggleElementSelection?.();
+                }}
+                aria-label="Select context elements"
+              >
+                <SquareDashedMousePointerIcon className="size-3.5 stroke-[2.5px]" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <span className="flex items-center gap-1.5">
+                <span>
+                  {elementSelectionActive
+                    ? 'Stop selecting elements'
+                    : 'Add reference elements'}
+                </span>
+                {elementSelectionActive ? (
+                  <ShortcutCombo value="Esc" size="xs" />
+                ) : (
+                  <HotkeyCombo
+                    action={HotkeyActions.TOGGLE_CONTEXT_SELECTOR}
+                    size="xs"
+                  />
+                )}
+              </span>
+            </TooltipContent>
+          </Tooltip>
+        </>
+      )}
+      {showImageUploadButton && onAddFileAttachment && (
+        <>
+          <input
+            type="file"
+            multiple
+            className="hidden"
+            id="chat-file-attachment-input-file"
+          />
+          <Tooltip>
+            <TooltipTrigger>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Attach file"
+                className="shrink-0"
+                onClick={() => {
+                  const input = document.getElementById(
+                    'chat-file-attachment-input-file',
+                  ) as HTMLInputElement;
+                  input.value = '';
+                  input.click();
+                  input.onchange = (e) => {
+                    Array.from(
+                      (e.target as HTMLInputElement).files ?? [],
+                    ).forEach((file) => {
+                      onAddFileAttachment(file);
+                    });
+                  };
+                }}
+              >
+                <IconPaperclip2Outline18 className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Attach file</TooltipContent>
+          </Tooltip>
+        </>
+      )}
+      {/* Stop + Send buttons row — stop is shown to the left when agent is working */}
+      <div className="flex flex-row items-center gap-1">
+        {dictationState && onToggleDictation && (
+          <DictationControl
+            state={dictationState}
+            disabled={dictationDisabled}
+            onToggle={onToggleDictation}
+          />
+        )}
+        {onToggleSwarmMode && (
+          <Tooltip>
+            <TooltipTrigger>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                disabled={swarmModeDisabled}
+                className="z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 disabled:opacity-50 data-[active=true]:bg-codex-blue-400/12 data-[active=true]:text-codex-blue-400 data-[active=true]:ring-1 data-[active=true]:ring-codex-blue-400/25"
+                data-active={swarmModeActive}
+                aria-label="Toggle Deep Think"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onToggleSwarmMode();
+                }}
+              >
+                <BrainCircuitIcon className="size-4 stroke-[2.5px]" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {swarmModeActive
+                ? 'Deep Think enabled: route next message through Swarm'
+                : 'Enable Deep Think / Swarm'}
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {onToggleBattleMode && (
+          <Tooltip>
+            <TooltipTrigger>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                disabled={swarmModeDisabled}
+                className="z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 disabled:opacity-50 data-[active=true]:bg-codex-blue-400/12 data-[active=true]:text-codex-blue-400 data-[active=true]:ring-1 data-[active=true]:ring-codex-blue-400/25"
+                data-active={battleModeActive}
+                aria-label="Toggle Battle Agent"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onToggleBattleMode();
+                }}
+              >
+                <SwordsIcon className="size-4 stroke-[2.5px]" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {battleModeActive
+                ? 'Battle Agent enabled: models will debate before coding'
+                : 'Enable Battle Agent'}
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {showStopButton && (
+          <Tooltip>
+            <TooltipTrigger>
+              <Button
+                onClick={onStop}
+                aria-label="Stop agent"
+                variant="secondary"
+                className="group z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 opacity-100! shadow-md"
+              >
+                <SquareIcon className="size-3 fill-current" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <span className="flex items-center gap-1.5">
+                <span>Stop agent</span>
+                <HotkeyCombo action={HotkeyActions.STOP_AGENT} size="xs" />
+                <ShortcutCombo value="Esc" size="xs" />
+              </span>
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {showSendButton && (
+          <Tooltip>
+            <TooltipTrigger>
+              <Button
+                disabled={!canSendMessage}
+                onClick={onSubmit}
+                aria-label="Send message"
+                variant="primary"
+                className="z-10 size-8 shrink-0 cursor-pointer rounded-full border-codex-blue-400 bg-codex-blue-400 p-1 shadow-codex-md transition-all hover:bg-codex-blue-500 disabled:opacity-40 disabled:shadow-none"
+              >
+                <ArrowUpIcon className="size-4 stroke-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Send message</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+    </div>
+  );
+});

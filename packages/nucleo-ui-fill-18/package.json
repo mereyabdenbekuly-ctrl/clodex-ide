@@ -1,0 +1,20 @@
+{
+  "name": "nucleo-ui-fill-18",
+  "version": "0.0.0-local",
+  "type": "module",
+  "private": true,
+  "main": "./src/index.tsx",
+  "module": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "exports": {
+    ".": {
+      "types": "./src/index.tsx",
+      "import": "./src/index.tsx",
+      "default": "./src/index.tsx"
+    }
+  },
+  "peerDependencies": {
+    "lucide-react": "^0.554.0",
+    "react": "^19.1.0"
+  }
+}
