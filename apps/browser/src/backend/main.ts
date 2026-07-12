@@ -20,6 +20,7 @@ import { AppMenuService } from './services/app-menu';
 import { URIHandlerService } from './services/uri-handler';
 import { IdentifierService } from './services/identifier';
 import { Logger } from './services/logger';
+import { createMainShutdownCoordinator } from './services/shutdown-coordinator';
 import {
   isUIEventName,
   parseUIEventProperties,
@@ -4504,172 +4505,65 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
   );
 
   // Set up graceful shutdown to clean up database connections
-  let isShuttingDown = false;
-  const shutdown = (event: Electron.Event) => {
-    if (isShuttingDown) return;
-    isShuttingDown = true;
-    event.preventDefault();
+  const shutdownCoordinator = createMainShutdownCoordinator({
+    logger,
+    exitApp: (exitCode) => app.exit(exitCode),
+    preferenceListenerTeardowns: {
+      agentBehaviorPreferenceListener: () => {
+        preferencesService.removeListener(agentBehaviorPreferenceListener);
+      },
+      agentOsFeatureGatePreferenceListener: () => {
+        preferencesService.removeListener(agentOsFeatureGatePreferenceListener);
+      },
+      updateEvidenceMemorySummaryModel: () => {
+        preferencesService.removeListener(updateEvidenceMemorySummaryModel);
+      },
+    },
+    synchronousServices: {
+      localPortsScannerService,
+      webDataService,
+      historyService,
+      faviconService,
+      memoryNotesSettingsService,
+      evidenceMemoryInspectorService,
+      dictationService,
+      hostedPullRequestService,
+      quickTaskWindowService,
+      diffHistoryService,
+      agentCorePersistence: persistence,
+      assetCacheService,
+      autoUpdateService,
+      agentPowerSaveBlockerService,
+      macOSClosedLidSleepService,
+      agentRuntimeRecoveryService,
+      cloudTaskArtifactService,
+    },
+    asynchronousServices: {
+      automationService,
+      artifactBridgeService,
+      spacesService,
+      sessionContinuityService,
+      cloudTaskTeleportController,
+      cloudTaskTeleportRecovery: cloudTaskRuntime?.teleportRecovery,
+      cloudTaskMemorySyncJournal: cloudTaskRuntime?.memorySyncJournal,
+      agentOsService,
+      remoteConnectionsService,
+      pluginMarketplaceService,
+      privateMarketplaceSourcesService,
+      mcpSettingsService,
+      mcpRegistryService,
+      networkEgressControlService,
+      controlledBrowserEgressSession,
+      transparentEgressProxy,
+      mcpOAuthService,
+      toolboxService,
+      telemetryService,
+      agentHostProcessService,
+      agentManagerService,
+    },
+  });
 
-    const runTeardown = (name: string, teardown: () => void) => {
-      try {
-        teardown();
-      } catch (error) {
-        logger.warn(`[Main] Failed to teardown ${name}`, error);
-      }
-    };
-
-    const exitApp = () => {
-      logger.debug('[Main] Services shut down');
-      app.exit(0);
-    };
-
-    try {
-      logger.debug('[Main] Shutting down services...');
-      runTeardown('agentBehaviorPreferenceListener', () =>
-        preferencesService.removeListener(agentBehaviorPreferenceListener),
-      );
-      runTeardown('agentOsFeatureGatePreferenceListener', () =>
-        preferencesService.removeListener(agentOsFeatureGatePreferenceListener),
-      );
-      runTeardown('updateEvidenceMemorySummaryModel', () =>
-        preferencesService.removeListener(updateEvidenceMemorySummaryModel),
-      );
-      runTeardown('localPortsScannerService', () =>
-        localPortsScannerService.teardown(),
-      );
-      runTeardown('webDataService', () => webDataService.teardown());
-      runTeardown('historyService', () => historyService.teardown());
-      runTeardown('faviconService', () => faviconService.teardown());
-      runTeardown('memoryNotesSettingsService', () =>
-        memoryNotesSettingsService.teardown(),
-      );
-      runTeardown('evidenceMemoryInspectorService', () =>
-        evidenceMemoryInspectorService.teardown(),
-      );
-      runTeardown('dictationService', () => dictationService.teardown());
-      runTeardown('hostedPullRequestService', () =>
-        hostedPullRequestService.teardown(),
-      );
-      runTeardown('quickTaskWindowService', () =>
-        quickTaskWindowService.teardown(),
-      );
-      runTeardown('diffHistoryService', () => diffHistoryService.teardown());
-      runTeardown('agentCorePersistence', () => persistence.teardown());
-      runTeardown('assetCacheService', () => assetCacheService.teardown());
-      runTeardown('autoUpdateService', () => autoUpdateService.teardown());
-      runTeardown('agentPowerSaveBlockerService', () =>
-        agentPowerSaveBlockerService.teardown(),
-      );
-      runTeardown('macOSClosedLidSleepService', () =>
-        macOSClosedLidSleepService.teardown(),
-      );
-      runTeardown('agentRuntimeRecoveryService', () =>
-        agentRuntimeRecoveryService.teardown(),
-      );
-      runTeardown('cloudTaskArtifactService', () =>
-        cloudTaskArtifactService?.teardown(),
-      );
-      // Shared budget for async teardowns. Toolbox teardown kills live
-      // PTY sessions before Node env teardown begins — this is what
-      // prevents the node-pty ThreadSafeFunction crash during
-      // app.exit(). Telemetry flush is parallelised under the same cap.
-      const SHUTDOWN_BUDGET_MS = 1000;
-
-      const runAsyncTeardown = (name: string, fn: () => Promise<void> | void) =>
-        Promise.resolve()
-          .then(() => fn())
-          .catch((error) => {
-            logger.warn(`[Main] Failed to teardown ${name}`, error);
-          });
-
-      const asyncTeardowns = Promise.all([
-        runAsyncTeardown('automationService', () =>
-          automationService.teardown(),
-        ),
-        runAsyncTeardown('artifactBridgeService', () =>
-          artifactBridgeService.teardown(),
-        ),
-        runAsyncTeardown('spacesService', () => spacesService.teardown()),
-        runAsyncTeardown('sessionContinuityService', () =>
-          sessionContinuityService.teardown(),
-        ),
-        runAsyncTeardown('cloudTaskTeleportController', () =>
-          cloudTaskTeleportController.teardown(),
-        ),
-        runAsyncTeardown('cloudTaskTeleportRecovery', () =>
-          cloudTaskRuntime?.teleportRecovery.teardown(),
-        ),
-        runAsyncTeardown('cloudTaskMemorySyncJournal', () =>
-          cloudTaskRuntime?.memorySyncJournal.flush(),
-        ),
-        runAsyncTeardown('agentOsService', () => agentOsService?.teardown()),
-        runAsyncTeardown('remoteConnectionsService', () =>
-          remoteConnectionsService.teardown(),
-        ),
-        runAsyncTeardown('pluginMarketplaceService', () =>
-          pluginMarketplaceService.teardown(),
-        ),
-        runAsyncTeardown('privateMarketplaceSourcesService', () =>
-          privateMarketplaceSourcesService.teardown(),
-        ),
-        runAsyncTeardown('mcpSettingsService', () =>
-          mcpSettingsService.teardown(),
-        ),
-        runAsyncTeardown('mcpRegistryService', () =>
-          mcpRegistryService.teardown(),
-        ),
-        runAsyncTeardown('networkEgressControlService', () =>
-          networkEgressControlService?.teardown(),
-        ),
-        runAsyncTeardown('controlledBrowserEgressSession', () =>
-          controlledBrowserEgressSession?.teardown(),
-        ),
-        runAsyncTeardown('transparentEgressProxy', () =>
-          transparentEgressProxy?.teardown(),
-        ),
-        runAsyncTeardown('mcpOAuthService', () => mcpOAuthService.teardown()),
-        runAsyncTeardown('toolboxService', () => toolboxService.teardown()),
-        runAsyncTeardown('telemetryService', () => telemetryService.teardown()),
-        runAsyncTeardown('agentHostProcessService', () =>
-          agentHostProcessService?.teardown(),
-        ),
-        // Tail-flush active agents before exit so the latest in-flight
-        // stream chunk lands in `agentMessages`. `AgentManager.onTeardown`
-        // awaits one final `persistAgentState` per agent.
-        runAsyncTeardown('agentManagerService', () =>
-          agentManagerService.teardown(),
-        ),
-      ]);
-
-      void Promise.race([
-        asyncTeardowns,
-        new Promise<void>((resolve) => {
-          setTimeout(() => {
-            // The race resolved via the budget — at least one async
-            // teardown was still running when the deadline fired. Log it
-            // so we can correlate with `AgentManager` tail-flush stats
-            // from `onTeardown`. Refusing to silently drop work without a
-            // trace is the whole point of this observability hook.
-            logger.warn(
-              `[Main] Shutdown budget of ${SHUTDOWN_BUDGET_MS}ms expired, some async teardowns may be incomplete`,
-            );
-            resolve();
-          }, SHUTDOWN_BUDGET_MS);
-        }),
-      ]).finally(() => {
-        // Defer `app.exit(0)` one event-loop turn to give libuv a final
-        // chance to drain any pending ThreadSafeFunction calls before
-        // Electron starts FreeEnvironment. Defense-in-depth; cannot
-        // deadlock because `exitApp` runs unconditionally.
-        setImmediate(exitApp);
-      });
-    } catch (error) {
-      logger.error(`[Main] Shutdown failed: ${String(error)}`);
-      exitApp();
-    }
-  };
-
-  app.on('will-quit', shutdown);
+  app.on('will-quit', shutdownCoordinator.handleWillQuit);
 }
 
 function createCloudTaskRuntime(input: {
