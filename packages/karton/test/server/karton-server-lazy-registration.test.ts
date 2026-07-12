@@ -1,12 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { WebSocketServer } from 'ws';
-import { createServer } from 'http';
+import { once } from 'node:events';
+import { createServer, type Server } from 'node:http';
 import { createKartonServer } from '../../src/server/karton-server.js';
 import type { KartonServer } from '../../src/shared/types.js';
 import { KartonProcedureError } from '../../src/shared/types.js';
 import { createKartonClient } from '../../src/client/karton-client.js';
 import type { KartonClient } from '../../src/shared/types.js';
-import type { Server } from 'http';
 
 type TestAppType = {
   state: {
@@ -28,25 +27,97 @@ type TestAppType = {
 describe('KartonServer Lazy Registration', () => {
   let server: KartonServer<TestAppType>;
   let client: KartonClient<TestAppType>;
-  let httpServer: Server;
-  let port: number;
+  let httpServer: Server | undefined;
+  let activeClients: KartonClient<TestAppType>[];
 
-  beforeEach(async () => {
-    port = 8080 + Math.floor(Math.random() * 1000);
+  beforeEach(() => {
+    httpServer = undefined;
+    activeClients = [];
   });
 
   afterEach(async () => {
-    if (client) {
-      // @ts-ignore - accessing private property for cleanup
-      client.cleanup?.();
+    for (const activeClient of activeClients) {
+      (activeClient as KartonClient<TestAppType> & { close(): void }).close();
     }
-    if (server) {
-      await server.wss?.close();
+
+    if (server?.wss) {
+      await new Promise<void>((resolve, reject) => {
+        server.wss?.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
     }
-    if (httpServer) {
-      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+
+    if (httpServer?.listening) {
+      await new Promise<void>((resolve, reject) => {
+        httpServer?.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
     }
   });
+
+  async function startHttpServer(): Promise<string> {
+    httpServer = createServer();
+    const wss = server.wss;
+
+    if (!wss) {
+      throw new Error('Expected Karton to expose a WebSocket server');
+    }
+
+    httpServer.on('upgrade', (request, socket, head) => {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    });
+
+    const listening = once(httpServer, 'listening');
+    httpServer.listen(0, '127.0.0.1');
+    await listening;
+
+    const address = httpServer.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Expected HTTP server to listen on a TCP port');
+    }
+
+    return `ws://127.0.0.1:${address.port}`;
+  }
+
+  function createClientConnection(
+    webSocketPath: string,
+    procedures: TestAppType['clientProcedures'],
+  ): { client: KartonClient<TestAppType>; ready: Promise<void> } {
+    const isReady = (candidate: KartonClient<TestAppType> | undefined) =>
+      candidate?.isConnected && candidate.state.message === 'initial';
+
+    let resolveReady = () => {};
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+
+    let createdClient: KartonClient<TestAppType> | undefined;
+    createdClient = createKartonClient<TestAppType>({
+      webSocketPath,
+      procedures,
+      fallbackState: { counter: 0, message: '' },
+      onStateChange: () => {
+        // Initial state sync is Karton's first application-level message. Waiting
+        // for it verifies the full WebSocket/message pipeline, not just TCP open.
+        if (isReady(createdClient)) {
+          resolveReady();
+        }
+      },
+    });
+
+    activeClients.push(createdClient);
+    if (isReady(createdClient)) {
+      resolveReady();
+    }
+
+    return { client: createdClient, ready };
+  }
 
   describe('registerServerProcedureHandler', () => {
     it('should allow registering a procedure handler after server creation', async () => {
@@ -65,32 +136,18 @@ describe('KartonServer Lazy Registration', () => {
 
       server.registerServerProcedureHandler('increment', handler);
 
-      // Create HTTP server and attach WebSocket server
-      httpServer = createServer();
-      const wss = server.wss as WebSocketServer;
-      httpServer.on('upgrade', (request, socket, head) => {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request);
-        });
-      });
-      httpServer.listen(port);
-
-      client = createKartonClient<TestAppType>({
-        webSocketPath: `ws://localhost:${port}`,
-        procedures: {
-          notify: async (message: string) => {
-            console.log('Client notified:', message);
-          },
+      const webSocketPath = await startHttpServer();
+      const connection = createClientConnection(webSocketPath, {
+        notify: async (message: string) => {
+          console.log('Client notified:', message);
         },
-        fallbackState: { counter: 0, message: '' },
       });
-
-      // Wait for connection
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      client = connection.client;
+      await connection.ready;
 
       // Call the procedure
       const result = await client.serverProcedures.increment(5);
-      
+
       expect(handler).toHaveBeenCalledWith(expect.any(String), 5);
       expect(result).toBe(5);
     });
@@ -111,25 +168,12 @@ describe('KartonServer Lazy Registration', () => {
       server.registerServerProcedureHandler('nested.getData', getDataHandler);
       server.registerServerProcedureHandler('nested.process', processHandler);
 
-      // Create HTTP server and attach WebSocket server
-      httpServer = createServer();
-      const wss = server.wss as WebSocketServer;
-      httpServer.on('upgrade', (request, socket, head) => {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request);
-        });
+      const webSocketPath = await startHttpServer();
+      const connection = createClientConnection(webSocketPath, {
+        notify: async () => {},
       });
-      httpServer.listen(port);
-
-      client = createKartonClient<TestAppType>({
-        webSocketPath: `ws://localhost:${port}`,
-        procedures: {
-          notify: async () => {},
-        },
-        fallbackState: { counter: 0, message: '' },
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      client = connection.client;
+      await connection.ready;
 
       const data = await client.serverProcedures.nested.getData();
       expect(data).toBe('test data');
@@ -148,30 +192,17 @@ describe('KartonServer Lazy Registration', () => {
         },
       });
 
-      // Create HTTP server and attach WebSocket server
-      httpServer = createServer();
-      const wss = server.wss as WebSocketServer;
-      httpServer.on('upgrade', (request, socket, head) => {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request);
-        });
+      const webSocketPath = await startHttpServer();
+      const connection1 = createClientConnection(webSocketPath, {
+        notify: async () => {},
       });
-      httpServer.listen(port);
-
-      // Create multiple clients
-      const client1 = createKartonClient<TestAppType>({
-        webSocketPath: `ws://localhost:${port}`,
-        procedures: { notify: async () => {} },
-        fallbackState: { counter: 0, message: '' },
+      const connection2 = createClientConnection(webSocketPath, {
+        notify: async () => {},
       });
+      const client1 = connection1.client;
+      const client2 = connection2.client;
 
-      const client2 = createKartonClient<TestAppType>({
-        webSocketPath: `ws://localhost:${port}`,
-        procedures: { notify: async () => {} },
-        fallbackState: { counter: 0, message: '' },
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await Promise.all([connection1.ready, connection2.ready]);
 
       // Register handler after clients are connected
       const handler = vi.fn(async (clientId: string, amount: number) => amount * 2);
@@ -184,12 +215,6 @@ describe('KartonServer Lazy Registration', () => {
       expect(result1).toBe(10);
       expect(result2).toBe(20);
       expect(handler).toHaveBeenCalledTimes(2);
-
-      // Cleanup
-      // @ts-ignore
-      client1.cleanup?.();
-      // @ts-ignore
-      client2.cleanup?.();
     });
 
     it('should throw error when registering duplicate handler', async () => {
@@ -235,26 +260,15 @@ describe('KartonServer Lazy Registration', () => {
       const newHandler = vi.fn(async (clientId: string, amount: number) => amount * 3);
       server.registerServerProcedureHandler('increment', newHandler);
 
-      // Create HTTP server and attach WebSocket server
-      httpServer = createServer();
-      const wss = server.wss as WebSocketServer;
-      httpServer.on('upgrade', (request, socket, head) => {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request);
-        });
+      const webSocketPath = await startHttpServer();
+      const connection = createClientConnection(webSocketPath, {
+        notify: async () => {},
       });
-      httpServer.listen(port);
-
-      client = createKartonClient<TestAppType>({
-        webSocketPath: `ws://localhost:${port}`,
-        procedures: { notify: async () => {} },
-        fallbackState: { counter: 0, message: '' },
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      client = connection.client;
+      await connection.ready;
 
       const result = await client.serverProcedures.increment(4);
-      
+
       expect(result).toBe(12);
       expect(handler).not.toHaveBeenCalled();
       expect(newHandler).toHaveBeenCalledWith(expect.any(String), 4);
@@ -268,23 +282,12 @@ describe('KartonServer Lazy Registration', () => {
         },
       });
 
-      // Create HTTP server and attach WebSocket server
-      httpServer = createServer();
-      const wss = server.wss as WebSocketServer;
-      httpServer.on('upgrade', (request, socket, head) => {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request);
-        });
+      const webSocketPath = await startHttpServer();
+      const connection = createClientConnection(webSocketPath, {
+        notify: async () => {},
       });
-      httpServer.listen(port);
-
-      client = createKartonClient<TestAppType>({
-        webSocketPath: `ws://localhost:${port}`,
-        procedures: { notify: async () => {} },
-        fallbackState: { counter: 0, message: '' },
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      client = connection.client;
+      await connection.ready;
 
       const handler = async (clientId: string, amount: number) => amount * 2;
       server.registerServerProcedureHandler('increment', handler);
@@ -310,23 +313,12 @@ describe('KartonServer Lazy Registration', () => {
         },
       });
 
-      // Create HTTP server and attach WebSocket server
-      httpServer = createServer();
-      const wss = server.wss as WebSocketServer;
-      httpServer.on('upgrade', (request, socket, head) => {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request);
-        });
+      const webSocketPath = await startHttpServer();
+      const connection = createClientConnection(webSocketPath, {
+        notify: async () => {},
       });
-      httpServer.listen(port);
-
-      client = createKartonClient<TestAppType>({
-        webSocketPath: `ws://localhost:${port}`,
-        procedures: { notify: async () => {} },
-        fallbackState: { counter: 0, message: '' },
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      client = connection.client;
+      await connection.ready;
 
       // Try to call procedure without handler
       await expect(client.serverProcedures.increment(5)).rejects.toThrow(
@@ -342,23 +334,12 @@ describe('KartonServer Lazy Registration', () => {
         },
       });
 
-      // Create HTTP server and attach WebSocket server
-      httpServer = createServer();
-      const wss = server.wss as WebSocketServer;
-      httpServer.on('upgrade', (request, socket, head) => {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request);
-        });
+      const webSocketPath = await startHttpServer();
+      const connection = createClientConnection(webSocketPath, {
+        notify: async () => {},
       });
-      httpServer.listen(port);
-
-      client = createKartonClient<TestAppType>({
-        webSocketPath: `ws://localhost:${port}`,
-        procedures: { notify: async () => {} },
-        fallbackState: { counter: 0, message: '' },
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      client = connection.client;
+      await connection.ready;
 
       try {
         await client.serverProcedures.nested.getData();
@@ -392,23 +373,12 @@ describe('KartonServer Lazy Registration', () => {
       const lazyHandler = vi.fn(async (clientId: string, amount: number) => amount * 2);
       server.registerServerProcedureHandler('increment', lazyHandler);
 
-      // Create HTTP server and attach WebSocket server
-      httpServer = createServer();
-      const wss = server.wss as WebSocketServer;
-      httpServer.on('upgrade', (request, socket, head) => {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request);
-        });
+      const webSocketPath = await startHttpServer();
+      const connection = createClientConnection(webSocketPath, {
+        notify: async () => {},
       });
-      httpServer.listen(port);
-
-      client = createKartonClient<TestAppType>({
-        webSocketPath: `ws://localhost:${port}`,
-        procedures: { notify: async () => {} },
-        fallbackState: { counter: 0, message: '' },
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      client = connection.client;
+      await connection.ready;
 
       // Both procedures should work
       const dataResult = await client.serverProcedures.nested.getData();
@@ -433,23 +403,12 @@ describe('KartonServer Lazy Registration', () => {
         } as any,
       });
 
-      // Create HTTP server and attach WebSocket server
-      httpServer = createServer();
-      const wss = server.wss as WebSocketServer;
-      httpServer.on('upgrade', (request, socket, head) => {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request);
-        });
+      const webSocketPath = await startHttpServer();
+      const connection = createClientConnection(webSocketPath, {
+        notify: async () => {},
       });
-      httpServer.listen(port);
-
-      client = createKartonClient<TestAppType>({
-        webSocketPath: `ws://localhost:${port}`,
-        procedures: { notify: async () => {} },
-        fallbackState: { counter: 0, message: '' },
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      client = connection.client;
+      await connection.ready;
 
       // Initial handler works
       const result1 = await client.serverProcedures.increment(5);
