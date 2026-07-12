@@ -10,7 +10,6 @@ import type {
   ActiveAgentCardData,
   MergedAgentEntry,
   ProjectSessionGroup,
-  WorkspaceRepoGroup,
 } from '../../../_lib/agent-list-model';
 import { getToolActivityLabel } from './tool-label';
 
@@ -254,12 +253,12 @@ export function getAgentAgeGroupLabel(
 
 export function insertAgentAgeGroupHeaders(
   agents: readonly MergedAgentEntry[],
-  now = new Date(),
+  now?: Date,
 ): AgentAgeGroupedItem[] {
   const result: AgentAgeGroupedItem[] = [];
   let currentGroup: AgentAgeGroupLabel | null = null;
   for (const agent of agents) {
-    const group = getAgentAgeGroupLabel(agent.lastMessageAt, now);
+    const group = getAgentAgeGroupLabel(agent.lastMessageAt, now ?? new Date());
     if (group !== currentGroup) {
       currentGroup = group;
       result.push({ type: 'header', label: group });
@@ -341,10 +340,10 @@ export function reorderVisiblePinnedAgentIds({
 }
 
 export function appendOrphanProjectGroups(
-  groups: readonly ProjectSessionGroup[],
+  groups: ProjectSessionGroup[],
   projects: readonly ChatProject[],
 ): ProjectSessionGroup[] {
-  if (projects.length === 0) return [...groups];
+  if (projects.length === 0) return groups;
 
   const knownKeys = new Set(groups.map((group) => group.key));
   const orphanGroups: ProjectSessionGroup[] = [];
@@ -362,31 +361,8 @@ export function appendOrphanProjectGroups(
     });
   }
 
-  if (orphanGroups.length === 0) return [...groups];
+  if (orphanGroups.length === 0) return groups;
   return [...groups, ...orphanGroups].sort((a, b) => b.updatedAt - a.updatedAt);
-}
-
-export function findWorkspaceGroupKeysForAgent(
-  agentId: string,
-  noWorkspaceAgents: readonly MergedAgentEntry[],
-  workspaceGroups: readonly WorkspaceRepoGroup[],
-): string[] {
-  if (noWorkspaceAgents.some((agent) => agent.id === agentId)) {
-    return [NO_WORKSPACE_GROUP_KEY];
-  }
-
-  for (const repo of workspaceGroups) {
-    if (repo.directAgents.some((row) => row.agent.id === agentId)) {
-      return [repo.key];
-    }
-
-    const worktree = repo.worktrees.find((group) =>
-      group.agents.some((row) => row.agent.id === agentId),
-    );
-    if (worktree) return [repo.key, `${repo.key}:${worktree.key}`];
-  }
-
-  return [];
 }
 
 export function findProjectGroupKeysForAgent(

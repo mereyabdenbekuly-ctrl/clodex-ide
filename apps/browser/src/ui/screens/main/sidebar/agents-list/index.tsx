@@ -52,7 +52,6 @@ import {
   getSeverityDotClass,
   maxSeverity,
   mergeAgentEntries,
-  type ActiveAgentCardData,
   type MergedAgentEntry,
   type ProjectSessionGroup,
   type WorkspaceGroupOrder,
@@ -112,17 +111,26 @@ import {
   IconTrashOutline18,
   IconTriangleWarningOutline18,
 } from 'nucleo-ui-outline-18';
-import { extractTipTapText, firstWords } from '@ui/utils/text-utils';
 import { cn } from '@ui/utils';
-import {
-  isChatLikeAgentType,
-  useEmptyAgentId,
-} from '@ui/hooks/use-empty-agent';
+import { useEmptyAgentId } from '@ui/hooks/use-empty-agent';
 import { useTrack } from '@ui/hooks/use-track';
 import { AgentCard, AgentCardSkeleton } from './_components/agent-card';
 import { AgentCardWithPreview } from './_components/agent-card-with-preview';
 import type { CachedPreview } from '../../_components/agent-preview-panel';
-import { getToolActivityLabel } from './_utils/tool-label';
+import {
+  agentHistoryEntriesEqual,
+  appendOrphanProjectGroups,
+  deriveActiveAgentCards,
+  filterAgentsByTitle,
+  findProjectGroupKeysForAgent,
+  getRemoteRepositoryOpenLabel,
+  insertAgentAgeGroupHeaders,
+  mergeUniqueAgentHistoryEntries,
+  NO_WORKSPACE_GROUP_KEY,
+  partitionPinnedAgents,
+  reorderVisiblePinnedAgentIds,
+  stringArraysEqual,
+} from './_utils/agents-list-derivations';
 import {
   useSharedAgentContextMenu,
   SharedAgentContextMenuHost,
@@ -139,108 +147,6 @@ import { useQuickTask } from '../../quick-task';
 enablePatches();
 
 // ============================================================================
-// Types & helpers
-// ============================================================================
-
-function stringArraysEqual(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  return a.every((value, index) => value === b[index]);
-}
-
-function agentHistoryEntriesEqual(
-  a: AgentHistoryEntry[],
-  b: AgentHistoryEntry[],
-): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    const ai = a[i]!;
-    const bi = b[i]!;
-    if (
-      ai.id !== bi.id ||
-      ai.projectId !== bi.projectId ||
-      ai.projectRootPath !== bi.projectRootPath ||
-      ai.projectName !== bi.projectName ||
-      ai.title !== bi.title ||
-      ai.createdAt !== bi.createdAt ||
-      ai.lastMessageAt !== bi.lastMessageAt ||
-      ai.messageCount !== bi.messageCount ||
-      ai.parentAgentInstanceId !== bi.parentAgentInstanceId ||
-      (ai.mountedWorkspaces?.length ?? 0) !==
-        (bi.mountedWorkspaces?.length ?? 0)
-    )
-      return false;
-
-    for (let j = 0; j < (ai.mountedWorkspaces?.length ?? 0); j++) {
-      const aw = ai.mountedWorkspaces?.[j];
-      const bw = bi.mountedWorkspaces?.[j];
-      if (
-        aw?.path !== bw?.path ||
-        aw?.git?.repositoryId !== bw?.git?.repositoryId ||
-        aw?.git?.worktreeId !== bw?.git?.worktreeId
-      )
-        return false;
-    }
-  }
-  return true;
-}
-
-/**
- * Derive a short preview from the last assistant text output.
- * Returns the first 10 words of the most recent text part.
- * Reasoning parts show "Thinking…" instead of their content.
- * Falls back to user input draft or last sent user message.
- */
-function deriveActivityText(
-  history: { role: string; parts: { type: string; text?: string }[] }[],
-  inputState: string,
-): { text: string; isUserInput: boolean } {
-  for (let i = history.length - 1; i >= 0; i--) {
-    const msg = history[i]!;
-    if (msg.role !== 'assistant') continue;
-    const parts = msg.parts;
-    for (let j = parts.length - 1; j >= 0; j--) {
-      const part = parts[j]!;
-      if (part.type === 'reasoning')
-        return { text: 'Thinking…', isUserInput: false };
-      if (part.type === 'text') {
-        const snippet = firstWords(part.text ?? '', 10);
-        if (snippet) return { text: snippet, isUserInput: false };
-        continue;
-      }
-      if (part.type.startsWith('tool-')) {
-        return { text: getToolActivityLabel(part.type), isUserInput: false };
-      }
-    }
-    break;
-  }
-
-  // Fall back to persisted input draft (already plain text, skip markdown stripping)
-  if (inputState) {
-    const draftText = extractTipTapText(inputState).trim();
-    if (draftText) {
-      const snippet = firstWords(draftText, 10, false);
-      if (snippet) return { text: snippet, isUserInput: true };
-    }
-  }
-
-  // Fall back to last user message preview
-  for (let i = history.length - 1; i >= 0; i--) {
-    const msg = history[i]!;
-    if (msg.role !== 'user') continue;
-    for (let j = msg.parts.length - 1; j >= 0; j--) {
-      const part = msg.parts[j]!;
-      if (part.type === 'text') {
-        const snippet = firstWords(part.text ?? '', 10);
-        if (snippet) return { text: snippet, isUserInput: true };
-      }
-    }
-    break;
-  }
-
-  return { text: '', isUserInput: false };
-}
-
-// ============================================================================
 // Constants
 // ============================================================================
 
@@ -249,82 +155,6 @@ const SHOW_MORE_INCREMENT = 20;
 const INITIAL_HISTORY_FETCH = DEFAULT_VISIBLE + SHOW_MORE_INCREMENT; // 30
 const DEFAULT_VISIBLE_WORKTREES_PER_REPO = 5;
 const SHOW_MORE_WORKTREES_INCREMENT = 10;
-const NO_WORKSPACE_GROUP_KEY = '__no-workspace__';
-
-function getRemoteRepositoryOpenLabel(url: string | null | undefined): string {
-  if (!url) return 'Open remote repository';
-
-  try {
-    const host = new URL(url).hostname.toLowerCase();
-    if (host === 'github.com' || host.endsWith('.github.com')) {
-      return 'Open in GitHub';
-    }
-    if (host === 'gitlab.com' || host.endsWith('.gitlab.com')) {
-      return 'Open in GitLab';
-    }
-    if (host === 'bitbucket.org' || host.endsWith('.bitbucket.org')) {
-      return 'Open in Bitbucket';
-    }
-  } catch {
-    return 'Open remote repository';
-  }
-
-  return 'Open remote repository';
-}
-
-// ============================================================================
-// Time grouping
-// ============================================================================
-
-type GroupLabel =
-  | 'Today'
-  | 'Yesterday'
-  | 'Last 7 days'
-  | 'Last 30 days'
-  | 'Older';
-
-function getGroupLabel(timestamp: number): GroupLabel {
-  // A zero timestamp means no messages yet — treat as "Today".
-  if (!timestamp) return 'Today';
-  // Bucket by calendar days (local date), not elapsed 24-hour windows.
-  const now = new Date();
-  const ts = new Date(timestamp);
-  const nowMidnight = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-  ).getTime();
-  const tsMidnight = new Date(
-    ts.getFullYear(),
-    ts.getMonth(),
-    ts.getDate(),
-  ).getTime();
-  const diffDays = Math.round((nowMidnight - tsMidnight) / 86_400_000);
-  if (diffDays < 0) return 'Today'; // clock skew
-  if (diffDays === 0) return 'Today';
-  if (diffDays === 1) return 'Yesterday';
-  if (diffDays <= 7) return 'Last 7 days';
-  if (diffDays <= 30) return 'Last 30 days';
-  return 'Older';
-}
-
-type GroupedItem =
-  | { type: 'agent'; agent: MergedAgentEntry }
-  | { type: 'header'; label: GroupLabel };
-
-function insertGroupHeaders(agents: MergedAgentEntry[]): GroupedItem[] {
-  const result: GroupedItem[] = [];
-  let currentGroup: GroupLabel | null = null;
-  for (const agent of agents) {
-    const group = getGroupLabel(agent.lastMessageAt);
-    if (group !== currentGroup) {
-      currentGroup = group;
-      result.push({ type: 'header', label: group });
-    }
-    result.push({ type: 'agent', agent });
-  }
-  return result;
-}
 
 // ============================================================================
 // Sortable rows
@@ -811,70 +641,7 @@ export function AgentsList() {
 
   const agents = useKartonState(
     useComparingSelector(
-      (s): ActiveAgentCardData[] =>
-        Object.entries(s.agents.instances)
-          .filter(([_, agent]) => isChatLikeAgentType(agent.type))
-          .map(([id, agent]) => {
-            const history = agent.state.history;
-            const lastMsg = history[history.length - 1]!;
-            const mountedWorkspaces = s.toolbox[id]?.workspace?.mounts ?? [];
-            const projectRootPath = mountedWorkspaces[0]?.path ?? null;
-            const hasPendingQuestion = !!s.toolbox[id]?.pendingUserQuestion;
-            // Detect any open tool-approval requests in the last assistant message.
-            const hasPendingToolApproval = (() => {
-              const h = agent.state.history;
-              for (let i = h.length - 1; i >= 0; i--) {
-                const msg = h[i]!;
-                if (msg.role !== 'assistant') continue;
-                return msg.parts.some(
-                  (p: { type: string; state?: string }) =>
-                    p.state === 'approval-requested',
-                );
-              }
-              return false;
-            })();
-            const isWorking = agent.state.isWorking;
-            const rawActivity = hasPendingQuestion
-              ? { text: 'Waiting for response...', isUserInput: false }
-              : deriveActivityText(
-                  history as {
-                    role: string;
-                    parts: { type: string; text?: string }[];
-                  }[],
-                  agent.state.inputState,
-                );
-            // When the agent is actively working but we only have a
-            // user-input fallback, show "Working…" instead.
-            const activity =
-              isWorking && rawActivity.isUserInput
-                ? { text: 'Working…', isUserInput: false }
-                : rawActivity;
-            return {
-              id,
-              type: agent.type,
-              title: agent.state.title,
-              isWorking: agent.state.isWorking,
-              isWaitingForUser: hasPendingQuestion || hasPendingToolApproval,
-              activityText: activity.text,
-              activityIsUserInput: activity.isUserInput,
-              hasError:
-                !!agent.state.error &&
-                agent.state.error.kind !== 'plan-limit-exceeded',
-              unread: !!agent.state.unread,
-              lastMessageAt: lastMsg?.metadata?.createdAt
-                ? new Date(lastMsg.metadata.createdAt).getTime()
-                : 0,
-              createdAt: agent.state.history[0]?.metadata?.createdAt
-                ? new Date(agent.state.history[0].metadata.createdAt).getTime()
-                : 0,
-              messageCount: history.length,
-              mountedWorkspaces,
-              projectRootPath,
-              projectName: projectRootPath
-                ? getBaseName(projectRootPath) || projectRootPath
-                : undefined,
-            };
-          }),
+      (state) => deriveActiveAgentCards(state),
       activeAgentCardsEqual,
     ),
   );
@@ -1405,11 +1172,7 @@ export function AgentsList() {
   // =========================================================================
 
   const mergedHistoryList = useMemo(
-    () =>
-      [...pinnedHistoryList, ...historyList].filter(
-        (entry, index, entries) =>
-          entries.findIndex((candidate) => candidate.id === entry.id) === index,
-      ),
+    () => mergeUniqueAgentHistoryEntries(pinnedHistoryList, historyList),
     [pinnedHistoryList, historyList],
   );
 
@@ -1616,28 +1379,19 @@ export function AgentsList() {
     [allAgents],
   );
 
-  const { filteredPinnedAgents, filteredUnpinnedAgents } = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    const matchesSearch = (agent: MergedAgentEntry) =>
-      !q || agent.title.toLowerCase().includes(q);
+  const filteredWorkspaceAgents = useMemo(
+    () => filterAgentsByTitle(allAgents, searchQuery),
+    [allAgents, searchQuery],
+  );
 
-    return {
-      filteredPinnedAgents: displayedPinnedAgentIds
-        .map((id) => allAgentsById.get(id))
-        .filter(
-          (agent): agent is MergedAgentEntry => !!agent && matchesSearch(agent),
-        ),
-      filteredUnpinnedAgents: allAgents.filter(
-        (agent) => !pinnedAgentIdSet.has(agent.id) && matchesSearch(agent),
-      ),
-    };
-  }, [
-    allAgents,
-    allAgentsById,
-    displayedPinnedAgentIds,
-    pinnedAgentIdSet,
-    searchQuery,
-  ]);
+  const {
+    pinnedAgents: filteredPinnedAgents,
+    unpinnedAgents: filteredUnpinnedAgents,
+  } = useMemo(
+    () =>
+      partitionPinnedAgents(filteredWorkspaceAgents, displayedPinnedAgentIds),
+    [displayedPinnedAgentIds, filteredWorkspaceAgents],
+  );
 
   const dndSensors = useSensors(
     useSensor(PinnedPointerSensor, {
@@ -1679,21 +1433,11 @@ export function AgentsList() {
       if (!over || active.id === over.id) return;
 
       const visiblePinnedIds = filteredPinnedAgents.map((agent) => agent.id);
-      const oldVisibleIndex = visiblePinnedIds.indexOf(String(active.id));
-      const newVisibleIndex = visiblePinnedIds.indexOf(String(over.id));
-      if (oldVisibleIndex === -1 || newVisibleIndex === -1) return;
-
-      const reorderedVisibleIds = arrayMove(
-        visiblePinnedIds,
-        oldVisibleIndex,
-        newVisibleIndex,
-      );
-      const reorderedVisibleIdSet = new Set(reorderedVisibleIds);
-      let visibleIndex = 0;
-      const nextPinnedIds = displayedPinnedAgentIds.map((id) => {
-        if (!reorderedVisibleIdSet.has(id)) return id;
-        const nextVisibleId = reorderedVisibleIds[visibleIndex++];
-        return nextVisibleId ?? id;
+      const nextPinnedIds = reorderVisiblePinnedAgentIds({
+        pinnedAgentIds: displayedPinnedAgentIds,
+        visiblePinnedAgentIds: visiblePinnedIds,
+        activeId: String(active.id),
+        overId: String(over.id),
       });
 
       if (!stringArraysEqual(nextPinnedIds, displayedPinnedAgentIds)) {
@@ -1735,7 +1479,7 @@ export function AgentsList() {
   );
 
   const groupedItems = useMemo(
-    () => insertGroupHeaders(visibleUnpinnedAgents),
+    () => insertAgentAgeGroupHeaders(visibleUnpinnedAgents),
     [visibleUnpinnedAgents],
   );
 
@@ -1751,35 +1495,13 @@ export function AgentsList() {
   // entries from `ChatProject[]` and append any whose key is not already
   // represented. The render path handles empty `agents` arrays correctly
   // (severity=null, collapsible, shows a "+ New agent" CTA).
-  const projectSessionGroupsWithOrphans = useMemo(() => {
-    if (agentListGroupingMode !== 'workspace') {
-      return projectSessionGroups;
-    }
-    if (chatProjects.length === 0) {
-      return projectSessionGroups;
-    }
-    const knownKeys = new Set(projectSessionGroups.map((group) => group.key));
-    const orphanGroups: typeof projectSessionGroups = [];
-    for (const project of chatProjects) {
-      const rootPath = project.rootPath ?? null;
-      const key = rootPath ? `project:${rootPath}` : 'project:__none__';
-      if (knownKeys.has(key)) continue;
-      orphanGroups.push({
-        key,
-        label: project.name,
-        rootPath,
-        severity: null,
-        updatedAt: project.updatedAt.getTime(),
-        agents: [],
-      });
-    }
-    if (orphanGroups.length === 0) {
-      return projectSessionGroups;
-    }
-    return [...projectSessionGroups, ...orphanGroups].sort(
-      (a, b) => b.updatedAt - a.updatedAt,
-    );
-  }, [projectSessionGroups, chatProjects, agentListGroupingMode]);
+  const projectSessionGroupsWithOrphans = useMemo(
+    () =>
+      agentListGroupingMode === 'workspace'
+        ? appendOrphanProjectGroups(projectSessionGroups, chatProjects)
+        : projectSessionGroups,
+    [projectSessionGroups, chatProjects, agentListGroupingMode],
+  );
 
   const enableWorktreeMetadataFetch = false;
 
@@ -1809,13 +1531,6 @@ export function AgentsList() {
     worktreeKeysByRepo: {},
   });
   const prevWorkspaceGroupKeysRef = useRef<Set<string>>(new Set());
-
-  const filteredWorkspaceAgents = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return allAgents.filter(
-      (agent) => !q || agent.title.toLowerCase().includes(q),
-    );
-  }, [allAgents, searchQuery]);
 
   const visibleNoWorkspaceAgents = useMemo(
     () =>
@@ -2023,38 +1738,6 @@ export function AgentsList() {
     workspaceGroups,
   ]);
 
-  const _findWorkspaceGroupKeysForAgent = useCallback(
-    (agentId: string): string[] => {
-      if (visibleNoWorkspaceAgents.some((agent) => agent.id === agentId)) {
-        return [NO_WORKSPACE_GROUP_KEY];
-      }
-
-      for (const repo of workspaceGroups) {
-        if (repo.directAgents.some((row) => row.agent.id === agentId)) {
-          return [repo.key];
-        }
-
-        const worktree = repo.worktrees.find((group) =>
-          group.agents.some((row) => row.agent.id === agentId),
-        );
-        if (worktree) return [repo.key, `${repo.key}:${worktree.key}`];
-      }
-
-      return [];
-    },
-    [visibleNoWorkspaceAgents, workspaceGroups],
-  );
-
-  const findProjectGroupKeysForAgent = useCallback(
-    (agentId: string): string[] => {
-      const project = projectSessionGroups.find((group) =>
-        group.agents.some((agent) => agent.id === agentId),
-      );
-      return project ? [project.key] : [];
-    },
-    [projectSessionGroups],
-  );
-
   const updateCollapsedWorkspaceGroupKeys = useCallback(
     (keys: string[]) => {
       const nextKeys = keys.filter(
@@ -2190,7 +1873,7 @@ export function AgentsList() {
 
     const keysToExpand =
       agentListGroupingMode === 'workspace'
-        ? findProjectGroupKeysForAgent(openAgent)
+        ? findProjectGroupKeysForAgent(openAgent, projectSessionGroups)
         : [];
     if (keysToExpand.length > 0) {
       const next = new Set(collapsedWorkspaceGroups);
@@ -2224,8 +1907,8 @@ export function AgentsList() {
     effectiveVisible,
     collapsedWorkspaceGroups,
     filteredUnpinnedAgents,
-    findProjectGroupKeysForAgent,
     openAgent,
+    projectSessionGroups,
     scrollCardIntoView,
     updateCollapsedWorkspaceGroupKeys,
   ]);

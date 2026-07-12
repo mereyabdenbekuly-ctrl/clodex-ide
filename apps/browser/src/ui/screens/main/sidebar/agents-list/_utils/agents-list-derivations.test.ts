@@ -4,7 +4,6 @@ import type { AgentHistoryEntry } from '@shared/karton-contracts/ui/agent';
 import type {
   MergedAgentEntry,
   ProjectSessionGroup,
-  WorkspaceRepoGroup,
 } from '../../../_lib/agent-list-model';
 import {
   agentHistoryEntriesEqual,
@@ -13,7 +12,6 @@ import {
   deriveActivityText,
   filterAgentsByTitle,
   findProjectGroupKeysForAgent,
-  findWorkspaceGroupKeysForAgent,
   getAgentAgeGroupLabel,
   getRemoteRepositoryOpenLabel,
   insertAgentAgeGroupHeaders,
@@ -390,38 +388,8 @@ describe('agents list presentation-independent lookups', () => {
     );
   });
 
-  it('finds no-workspace, direct-workspace, worktree, and project ancestors', () => {
-    const noWorkspace = agent('none');
+  it('finds the project ancestor for an agent', () => {
     const direct = agent('direct');
-    const worktree = agent('worktree');
-    const repoGroup = {
-      key: 'repo',
-      label: 'repo',
-      path: '/repo',
-      git: null,
-      isGit: false,
-      severity: null,
-      directAgents: [
-        { agent: direct, workspace: { path: '/repo', git: null } },
-      ],
-      worktrees: [
-        {
-          key: 'feature',
-          label: 'feature',
-          path: '/repo-feature',
-          branch: 'feature',
-          isRoot: false,
-          createdAt: null,
-          severity: null,
-          agents: [
-            {
-              agent: worktree,
-              workspace: { path: '/repo-feature', git: null },
-            },
-          ],
-        },
-      ],
-    } satisfies WorkspaceRepoGroup;
     const projectGroup: ProjectSessionGroup = {
       key: 'project:/repo',
       label: 'repo',
@@ -431,15 +399,6 @@ describe('agents list presentation-independent lookups', () => {
       agents: [direct],
     };
 
-    expect(
-      findWorkspaceGroupKeysForAgent('none', [noWorkspace], [repoGroup]),
-    ).toEqual(['__no-workspace__']);
-    expect(
-      findWorkspaceGroupKeysForAgent('direct', [noWorkspace], [repoGroup]),
-    ).toEqual(['repo']);
-    expect(
-      findWorkspaceGroupKeysForAgent('worktree', [noWorkspace], [repoGroup]),
-    ).toEqual(['repo', 'repo:feature']);
     expect(findProjectGroupKeysForAgent('direct', [projectGroup])).toEqual([
       'project:/repo',
     ]);
