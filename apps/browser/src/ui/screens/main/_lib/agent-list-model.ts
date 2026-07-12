@@ -9,6 +9,7 @@ import type {
   WorkspaceGitWorktreesResult,
 } from '@shared/karton-contracts/ui';
 import { getBaseName, normalizePath } from '@shared/path-utils';
+import { AGENT_STATUS_COLOR_CLASSES } from '@ui/lib/agent-status-colors';
 
 export type AgentWorkspaceEntry = Pick<MountEntry, 'path' | 'git'> & {
   permissions?: AgentHistoryWorkspaceEntry['permissions'];
@@ -260,13 +261,13 @@ export function getSeverityDotClass(
 ): string | null {
   switch (severity) {
     case 'error':
-      return 'bg-error-solid';
+      return AGENT_STATUS_COLOR_CLASSES.error.dot;
     case 'warning':
-      return 'bg-warning-solid';
+      return AGENT_STATUS_COLOR_CLASSES.warning.dot;
     case 'success':
-      return 'bg-success-solid';
+      return AGENT_STATUS_COLOR_CLASSES.success.dot;
     case 'info':
-      return 'bg-primary-solid';
+      return AGENT_STATUS_COLOR_CLASSES.info.dot;
     default:
       return null;
   }

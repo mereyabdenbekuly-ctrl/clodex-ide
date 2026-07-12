@@ -29,6 +29,7 @@ import {
 } from '@ui/hooks/use-karton';
 import { useOpenAgent } from '@ui/hooks/use-open-chat';
 import { cn } from '@ui/utils';
+import { AGENT_STATUS_COLOR_CLASSES } from '@ui/lib/agent-status-colors';
 
 enablePatches();
 
@@ -49,27 +50,27 @@ const STATUS_PRESENTATION: Record<
   },
   working: {
     label: 'Working',
-    dotClassName: 'bg-primary-solid',
-    glowClassName: 'bg-primary-solid/20',
-    faceClassName: 'text-primary-solid',
+    dotClassName: AGENT_STATUS_COLOR_CLASSES.info.dot,
+    glowClassName: AGENT_STATUS_COLOR_CLASSES.info.glow,
+    faceClassName: AGENT_STATUS_COLOR_CLASSES.info.solidText,
   },
   waiting: {
     label: 'Waiting for you',
-    dotClassName: 'bg-warning-solid',
-    glowClassName: 'bg-warning-solid/20',
-    faceClassName: 'text-warning-solid',
+    dotClassName: AGENT_STATUS_COLOR_CLASSES.warning.dot,
+    glowClassName: AGENT_STATUS_COLOR_CLASSES.warning.glow,
+    faceClassName: AGENT_STATUS_COLOR_CLASSES.warning.solidText,
   },
   success: {
     label: 'Finished',
-    dotClassName: 'bg-success-solid',
-    glowClassName: 'bg-success-solid/20',
-    faceClassName: 'text-success-solid',
+    dotClassName: AGENT_STATUS_COLOR_CLASSES.success.dot,
+    glowClassName: AGENT_STATUS_COLOR_CLASSES.success.glow,
+    faceClassName: AGENT_STATUS_COLOR_CLASSES.success.solidText,
   },
   error: {
     label: 'Needs attention',
-    dotClassName: 'bg-error-solid',
-    glowClassName: 'bg-error-solid/20',
-    faceClassName: 'text-error-solid',
+    dotClassName: AGENT_STATUS_COLOR_CLASSES.error.dot,
+    glowClassName: AGENT_STATUS_COLOR_CLASSES.error.glow,
+    faceClassName: AGENT_STATUS_COLOR_CLASSES.error.solidText,
   },
 };
 

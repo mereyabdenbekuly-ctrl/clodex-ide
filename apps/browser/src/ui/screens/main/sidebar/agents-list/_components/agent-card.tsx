@@ -16,6 +16,7 @@ import {
 } from 'nucleo-ui-outline-18';
 import { AgentTypes } from '@shared/karton-contracts/ui/agent';
 import { useInlineTitleEdit } from '../../../_lib/use-inline-title-edit';
+import { AGENT_STATUS_COLOR_CLASSES } from '@ui/lib/agent-status-colors';
 
 function compactTimeAgo(timestamp: number): string {
   const diffSec = Math.floor((Date.now() - timestamp) / 1000);
@@ -163,13 +164,13 @@ export const AgentCard = memo(
         {(() => {
           // Priority: error > waitingForUser > working > unseen > idle
           const dotColor = hasError
-            ? 'bg-error-solid'
+            ? AGENT_STATUS_COLOR_CLASSES.error.dot
             : isWaitingForUser
-              ? 'bg-warning-solid'
+              ? AGENT_STATUS_COLOR_CLASSES.warning.dot
               : isWorking
-                ? 'bg-primary-solid'
+                ? AGENT_STATUS_COLOR_CLASSES.info.dot
                 : hasUnseen
-                  ? 'bg-success-solid'
+                  ? AGENT_STATUS_COLOR_CLASSES.success.dot
                   : null;
           return (
             <div

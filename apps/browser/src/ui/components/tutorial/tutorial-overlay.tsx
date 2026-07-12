@@ -11,6 +11,7 @@ import ReactMarkdown from 'react-markdown';
 import { Button } from '@clodex/stage-ui/components/button';
 import { IconXmarkFill18 } from 'nucleo-ui-fill-18';
 import { useTutorial } from '@ui/contexts/tutorial';
+import { getTutorialStatusTextColorClass } from '@ui/lib/agent-status-colors';
 import { cn } from '@ui/utils';
 
 // How long to wait for a step's target element before skipping the step.
@@ -150,18 +151,7 @@ function getNodeText(children?: React.ReactNode): string {
 }
 
 function getStrongTextColorClass(children?: React.ReactNode): string {
-  switch (getNodeText(children).trim().toLowerCase()) {
-    case 'green':
-      return 'text-success-foreground';
-    case 'yellow':
-      return 'text-warning-foreground';
-    case 'blue':
-      return 'text-primary-foreground';
-    case 'red':
-      return 'text-error-foreground';
-    default:
-      return 'text-foreground';
-  }
+  return getTutorialStatusTextColorClass(getNodeText(children));
 }
 
 /** Minimal markdown components for tutorial descriptions */

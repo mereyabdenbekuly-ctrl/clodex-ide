@@ -11,6 +11,7 @@ import type {
   FileContentMatch,
 } from '../command-center-model';
 import { getCommandCenterItemDomId } from '../command-center-model';
+import { AGENT_STATUS_COLOR_CLASSES } from '@ui/lib/agent-status-colors';
 
 function compactTimeAgo(timestamp: number): string {
   const diffSec = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
@@ -49,10 +50,10 @@ export function CommandCenterRow({
 }) {
   const agentStatusColor = (() => {
     if (item.kind !== 'agent') return null;
-    if (item.hasError) return 'bg-error-solid';
-    if (item.isWaitingForUser) return 'bg-warning-solid';
-    if (item.isWorking) return 'bg-primary-solid';
-    if (item.unread) return 'bg-success-solid';
+    if (item.hasError) return AGENT_STATUS_COLOR_CLASSES.error.dot;
+    if (item.isWaitingForUser) return AGENT_STATUS_COLOR_CLASSES.warning.dot;
+    if (item.isWorking) return AGENT_STATUS_COLOR_CLASSES.info.dot;
+    if (item.unread) return AGENT_STATUS_COLOR_CLASSES.success.dot;
     return null;
   })();
   const isPinned =
