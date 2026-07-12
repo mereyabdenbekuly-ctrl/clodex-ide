@@ -2,142 +2,48 @@
 title: Privacy policy
 ---
 
-export const metadata = {
-  title: "Privacy Policy"
-};
-
 # Privacy Policy
 
-**Effective Date: March 9, 2026**
+**Effective date: July 12, 2026**
 
-### Last changes
+This policy explains how the Clodex project handles information when you use the project website or the Clodex Agentic IDE.
 
-#### March 9, 2026
+## Website data
 
-- Updated Privacy Policy to reflect current infrastructure, AI service integration, and data processing practices.
+The website may process standard server logs such as IP address, request time, browser type, requested URL, and error information. These records are used to operate, secure, and troubleshoot the service.
 
-#### September 15, 2025
+Optional analytics are enabled only when you grant the relevant consent. You can withdraw that consent through the website's privacy controls.
 
-- Changed name of company from "tiq UG (haftungsbeschränkt)" to "clodex GmbH".
+## Accounts and authentication
 
-### 1. Introduction
+If you choose to sign in, the authentication service may process the account identifier you provide, such as an email address or Telegram account identifier, together with session and security metadata needed to authenticate you.
 
-Welcome to clodex! This Privacy Policy explains how **clodex GmbH**, operating as **clodex** ("we," "us," or "our"), collects, uses, and protects your personal data when you use our AI agent and related services (collectively, the "Service"). Our registered address is Obernstraße 50, 33602 Bielefeld, Germany, and we are registered at the local court (Amtsgericht) of Bielefeld under HRB 45829.
+## Desktop application and project data
 
-This policy applies to all users of our Service ("User," "you"), including individual developers and business customers. We are committed to protecting your privacy in compliance with applicable data protection laws, including the EU General Data Protection Regulation (GDPR).
+Clodex is designed to keep project data local unless you choose a feature that requires transmission. Data may leave your machine when you use a model provider, remote runner, cloud task, plugin, MCP server, sharing feature, authentication service, or another external integration.
 
-This Privacy Policy is an integral part of our Terms of Service.
+The selected service receives the information required to perform the requested action. Its own privacy policy and retention rules apply. Review provider settings before sending source code, credentials, personal data, or confidential material.
 
-### 2. Data Controller
+Credentials should be stored through the operating system's protected credential facilities where supported. Do not place secrets in prompts, repositories, screenshots, logs, or issue reports.
 
-The entity responsible for the processing of your personal data (the "data controller") is:
+## Telemetry
 
-**clodex GmbH**<br/>
-**Obernstraße 50**<br/>
-**33602 Bielefeld, Germany**<br/>
-**Email: privacy@clodex.io**
+Optional product telemetry may include feature usage, diagnostics, application version, platform information, and error metadata. It is intended to exclude source files, prompts, responses, credentials, and terminal output unless a diagnostic flow explicitly asks you to include that material.
 
-### 3. What Personal Data We Collect and Why
+## Sharing and sale of data
 
-We collect different types of data for specific purposes, always ensuring we have a valid legal basis for processing under GDPR.
+The project does not sell personal data. Information may be processed by infrastructure and integration providers only as needed to provide the selected functionality, protect the service, or comply with applicable law.
 
-**A. Data You Provide Directly to Us**
+## Retention and deletion
 
-* **Account Information:** When you register for our Service, we collect your **email address**. We use this to create and manage your account, provide you with access via magic links, and send you important service-related communications.
-    * **Legal Basis:** Performance of a contract (Art. 6(1)(b) GDPR).
-* **Payment Information:** When you subscribe to a paid plan, our payment provider, Stripe, collects your payment details (e.g., credit card information, billing address). If you register as a business customer, this may include your VAT ID. We do not store your full payment card details on our servers.
-    * **Legal Basis:** Performance of a contract (Art. 6(1)(b) GDPR).
-* **Waitlist Information:** If you register for our waitlist, your information is processed by Waitlister.me.
-    * **Legal Basis:** Consent (Art. 6(1)(a) GDPR).
+Local application data remains on your device until you remove it or use an in-product deletion control. External services keep data according to their own policies. Operational logs are retained only as long as reasonably necessary for security, reliability, and abuse prevention.
 
-**B. Data We Process to Provide the Service**
+## Security
 
-* **Customer Content (Your Codebase & Assets):** To enable our AI agent to function, the Service requires temporary access to your project's source code and related files ("Customer Content"). This content is processed ephemerally in memory to understand context and generate code changes. **We do not permanently store your codebase on our servers, and we do not share it with third parties.** Multi-modal assets are stored temporarily in our AWS S3 Bucket for a maximum of 72 hours before being deleted. These assets are only accessible through highly randomized, secure URLs.
-    * **Legal Basis:** Performance of a contract (Art. 6(1)(b) GDPR). The license to perform these actions is granted in our Terms of Service.
-* **AI Model Interaction:** We access AI models through our API, which routes requests through the Vercel AI Gateway. We utilize various AI inference providers (OpenAI, Anthropic, Google Vertex, Microsoft Azure, Amazon Bedrock, Fireworks AI). **Please note: We do not currently guarantee Zero Data Retention for these third-party AI services.**
-    * **Legal Basis:** Performance of a contract (Art. 6(1)(b) GDPR).
+Clodex uses technical safeguards appropriate to a developer tool, but no system can guarantee absolute security. Keep the application updated, review permissions, rotate exposed credentials immediately, and report suspected vulnerabilities privately.
 
-**C. Data We Collect Automatically**
+## Contact
 
-* **Server Logs:** When you use our Service, our servers (hosted on Vercel) automatically record technical information, including your **IP address**, request timestamps, and browser/client type. We use this information for security monitoring, preventing abuse, and troubleshooting.
-    * **Legal Basis:** Legitimate interest (Art. 6(1)(f) GDPR) to ensure the security and stability of our Service.
-* **Usage & Analytics Data:** Depending on your configuration (opt-in), we use PostHog (EU instance) to collect pseudonymous usage data (basic telemetry and usage patterns) to improve our product. This is subject to your cookie consent.
-    * **Legal Basis:** Consent (Art. 6(1)(a) GDPR) for opt-in analytics.
+For privacy requests, contact **privacy@clodex.io**. For security reports, contact **security@clodex.io**.
 
-**D. Data for AI Service Improvement (Requires Your Explicit Consent)**
-
-* **What it is:** Depending on your configuration (opt-in), we collect personally identifiable information as well as chat history.
-* **What we collect (if you opt-in):** If you provide your explicit consent via the settings in your account, we will collect and store your **chat history** with the agent and related data.
-* **How we use it:** We reserve the right to use this collected data for improvement of our service, our product offerings, and associated processes. We will never share this raw data with third parties for their own use, other than necessary processing by our AI providers.
-* **How to withdraw consent:** You can withdraw your consent at any time in your account settings. This will stop any future collection of this data for improvement purposes.
-    * **Legal Basis:** Consent (Art. 6(1)(a) GDPR).
-
-### 4. How We Share Your Information (Our Sub-processors)
-
-We do not sell your personal data. We share it only with trusted third-party service providers ("sub-processors") who are necessary for us to operate the Service.
-
-| Provider         | Purpose                               | Location | Data Transfer Mechanism      |
-| ---------------- | ------------------------------------- | -------- | ---------------------------- |
-| **Vercel**       | Cloud Hosting (Landing/API)           | USA      | Standard Contractual Clauses |
-| **Supabase**     | Primary Database (US primary, UK replica) | USA/UK | Standard Contractual Clauses |
-| **AWS (S3)**     | Temporary Asset Storage (72h)         | USA/EU   | Standard Contractual Clauses |
-| **Waitlister.me**| Waitlist Management                   | USA      | Data Processing Agreement    |
-| **Vercel AI GW** | AI API Gateway                        | USA      | Standard Contractual Clauses |
-| **AI Providers** | OpenAI, Anthropic, Google, MS, Amazon, Fireworks AI | USA      | Standard Contractual Clauses |
-| **Stripe**       | Payment Processing                    | USA      | EU-U.S. DPF                 |
-| **PostHog**      | Product Analytics                     | EU       | ---                          |
-
-### 5. International Data Transfers
-
-Your personal data will be processed on servers located in the United States and the United Kingdom. This means that when you use our Service from the European Union, your data may be transferred outside of the EU. We ensure these transfers are lawful and secure through recognized legal mechanisms:
-
-* **EU-U.S. Data Privacy Framework (DPF):** For transfers to our providers who are certified under the DPF (Stripe), we rely on the European Commission's adequacy decision for this framework.
-* **Standard Contractual Clauses (SCCs):** For transfers to providers not certified under the DPF, we enter into the EU's Standard Contractual Clauses. These are contractual commitments that impose EU-level data protection standards on the data importer.
-
-### 6. Data Retention
-
-We retain your personal data only for as long as necessary to fulfill the purposes for which it was collected.
-
-* **Account Data:** Retained for the duration of your account's existence. Upon deletion of your account, basic information, including connection data (IP address) and your email address, is persisted for up to 30 days before full erasure.
-* **Payment & Invoicing Data:** Retained for 10 years to comply with German tax and commercial law.
-* **Assets (S3):** Automatically deleted after 72 hours.
-* **Server Logs:** Retained for 90 days for security and troubleshooting purposes.
-* **AI Improvement Data (from Opt-in):** Retained for a maximum of 24 months before it is fully anonymized and detached from your account.
-
-### 7. Your Data Protection Rights
-
-Under GDPR, you have the following rights regarding your personal data:
-
-* **Right of Access** (Art. 15 GDPR): You can request a copy of the personal data we hold about you.
-* **Right to Rectification** (Art. 16 GDPR): You can ask us to correct inaccurate or incomplete data.
-* **Right to Erasure ("Right to be Forgotten")** (Art. 17 GDPR): You can request the deletion of your personal data, subject to legal obligations (like invoice retention).
-* **Right to Restriction of Processing** (Art. 18 GDPR): You can request that we limit the processing of your data.
-* **Right to Data Portability** (Art. 20 GDPR): You can request your data in a machine-readable format.
-* **Right to Object** (Art. 21 GDPR): You can object to processing based on our legitimate interests.
-* **Right to Withdraw Consent** (Art. 7 GDPR): You can withdraw your consent for AI improvement data at any time.
-
-To exercise any of these rights, please contact us at **privacy@clodex.io**. We will respond to your request within 30 days. You also have the right to lodge a complaint with a supervisory authority.
-
-### 8. AI Disclaimer and User Responsibility
-
-Our Service uses artificial intelligence which, despite our best efforts, may produce code or information that is incorrect, incomplete, insecure, or otherwise flawed ("hallucinations"). The Service is an assistive tool that requires human oversight. **You are solely responsible for reviewing, testing, and validating all output from the Service before use.**
-
-### 9. Cookies
-
-We use only **strictly necessary cookies** that are essential for the core functionality of our Service, such as managing your login session and ensuring security. Under EU and German law (§ 25 TTDSG), these cookies do not require your prior consent. Other tracking (PostHog) is subject to your explicit opt-in and cookie consent.
-
-### 10. Children's Privacy
-
-Our Service is not directed at or intended for use by individuals under the age of 18. We do not knowingly collect personal data from anyone under 18. If we become aware that we have, we will take steps to delete that information.
-
-### 11. Security
-
-We implement appropriate technical and organizational measures, such as encryption and access controls, to protect your personal data. However, no method of transmission or storage is 100% secure, and we cannot guarantee absolute security.
-
-### 12. Changes to This Privacy Policy
-
-We may update this Privacy Policy from time to time. We will notify you of any material changes by email or through a notice in the Service at least 30 days before the changes take effect. Your continued use of the Service after the effective date constitutes your acceptance of the revised policy.
-
-### 13. Governing Law
-
-This Privacy Policy and any disputes arising from it shall be governed by the laws of the Federal Republic of Germany.
+This policy may be updated as the project and its optional services evolve. Material changes will be reflected on this page with a new effective date.

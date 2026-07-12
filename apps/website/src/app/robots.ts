@@ -5,16 +5,7 @@ export default function robots(): MetadataRoute.Robots {
     rules: {
       userAgent: '*',
       allow: '/',
-      disallow: [
-        '/api/',
-        '/vscode-extension/',
-        '/pricing',
-        '/enterprise',
-        '/company',
-        '/careers',
-        '/news',
-        '/use-cases/',
-      ],
+      disallow: ['/api/', '/vscode-extension/'],
     },
     sitemap: 'https://ide.clodex.xyz/sitemap.xml',
     host: 'https://ide.clodex.xyz',

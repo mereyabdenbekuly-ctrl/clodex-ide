@@ -71,7 +71,7 @@ export class AppMenuService extends DisposableService {
             label: 'Open our GitHub repository',
             click: () => {
               void this.windowLayoutService.openUrl(
-                'https://github.com/clodex-io/clodex',
+                'https://github.com/mereyabdenbekuly-ctrl/clodex-ide',
               );
             },
           },

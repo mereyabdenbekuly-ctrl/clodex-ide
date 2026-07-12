@@ -609,7 +609,7 @@ export function AboutSection() {
           name: appInfo.name,
           version: appInfo.version,
           license: 'AGPL-3.0',
-          repository: 'https://github.com/clodex-io/clodex',
+          repository: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide',
           publisher: 'Clodex Labs',
           licenseText: agplLicenseText,
         }}

@@ -124,48 +124,48 @@ describe('GitService', () => {
   it('returns normalized web URL for HTTPS Git remotes', async () => {
     const { service } = await createGitService({
       'remote -v':
-        'origin\thttps://github.com/clodex-io/clodex.git (fetch)\n' +
-        'origin\thttps://github.com/clodex-io/clodex.git (push)\n',
+        'origin\thttps://github.com/mereyabdenbekuly-ctrl/clodex-ide.git (fetch)\n' +
+        'origin\thttps://github.com/mereyabdenbekuly-ctrl/clodex-ide.git (push)\n',
     });
 
     await expect(service.getRepositoryRemoteUrl('/repo')).resolves.toBe(
-      'https://github.com/clodex-io/clodex',
+      'https://github.com/mereyabdenbekuly-ctrl/clodex-ide',
     );
   });
 
   it('returns normalized web URL for SSH Git remotes', async () => {
     const { service } = await createGitService({
       'remote -v':
-        'origin\tgit@gitlab.com:clodex-io/clodex.git (fetch)\n' +
-        'origin\tgit@gitlab.com:clodex-io/clodex.git (push)\n',
+        'origin\tgit@gitlab.com:mereyabdenbekuly-ctrl/clodex-ide.git (fetch)\n' +
+        'origin\tgit@gitlab.com:mereyabdenbekuly-ctrl/clodex-ide.git (push)\n',
     });
 
     await expect(service.getRepositoryRemoteUrl('/repo')).resolves.toBe(
-      'https://gitlab.com/clodex-io/clodex',
+      'https://gitlab.com/mereyabdenbekuly-ctrl/clodex-ide',
     );
   });
 
   it('returns normalized web URL for ssh protocol Git remotes', async () => {
     const { service } = await createGitService({
       'remote -v':
-        'origin\tssh://git@bitbucket.org/clodex-io/clodex.git (fetch)\n' +
-        'origin\tssh://git@bitbucket.org/clodex-io/clodex.git (push)\n',
+        'origin\tssh://git@bitbucket.org/mereyabdenbekuly-ctrl/clodex-ide.git (fetch)\n' +
+        'origin\tssh://git@bitbucket.org/mereyabdenbekuly-ctrl/clodex-ide.git (push)\n',
     });
 
     await expect(service.getRepositoryRemoteUrl('/repo')).resolves.toBe(
-      'https://bitbucket.org/clodex-io/clodex',
+      'https://bitbucket.org/mereyabdenbekuly-ctrl/clodex-ide',
     );
   });
 
   it('prefers the origin remote web URL', async () => {
     const { service } = await createGitService({
       'remote -v':
-        'upstream\thttps://github.com/clodex-io/upstream.git (fetch)\n' +
-        'origin\thttps://github.com/clodex-io/clodex.git (fetch)\n',
+        'upstream\thttps://github.com/mereyabdenbekuly-ctrl/upstream.git (fetch)\n' +
+        'origin\thttps://github.com/mereyabdenbekuly-ctrl/clodex-ide.git (fetch)\n',
     });
 
     await expect(service.getRepositoryRemoteUrl('/repo')).resolves.toBe(
-      'https://github.com/clodex-io/clodex',
+      'https://github.com/mereyabdenbekuly-ctrl/clodex-ide',
     );
   });
 
@@ -182,7 +182,7 @@ describe('GitService', () => {
       'remote -v':
         'origin\tgit@github.com:octocat/clodex.git (fetch)\n' +
         'origin\tgit@github.com:octocat/clodex.git (push)\n' +
-        'upstream\thttps://github.com/clodex-io/clodex.git (fetch)\n' +
+        'upstream\thttps://github.com/mereyabdenbekuly-ctrl/clodex-ide.git (fetch)\n' +
         'local\tfile:///tmp/clodex.git (fetch)\n',
     });
 
@@ -194,8 +194,8 @@ describe('GitService', () => {
       },
       {
         remoteName: 'upstream',
-        url: 'https://github.com/clodex-io/clodex.git',
-        webUrl: 'https://github.com/clodex-io/clodex',
+        url: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide.git',
+        webUrl: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide',
       },
       {
         remoteName: 'local',

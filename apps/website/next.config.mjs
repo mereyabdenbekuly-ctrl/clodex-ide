@@ -91,7 +91,12 @@ const config = {
       },
       {
         source: '/trademark-policy',
-        destination: '/legal-notice',
+        destination: '/',
+        permanent: true,
+      },
+      {
+        source: '/legal-notice',
+        destination: '/',
         permanent: true,
       },
     ];
@@ -116,15 +121,11 @@ const config = {
       },
       {
         source: '/imprint',
-        destination: '/legal-notice',
+        destination: '/',
       },
       {
         source: '/socials/x',
         destination: 'https://x.com/CLODEx_lab',
-      },
-      {
-        source: '/socials/linkedin',
-        destination: 'https://www.linkedin.com/company/clodex-io/',
       },
     ];
   },

@@ -24,10 +24,5 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: 'yearly',
       priority: 0.2,
     },
-    {
-      url: `${siteUrl}/legal-notice`,
-      changeFrequency: 'yearly',
-      priority: 0.2,
-    },
   ];
 }

@@ -506,7 +506,7 @@ function GenericError({
     setTimeout(() => setHasCopied(false), 2000);
   };
 
-  const reportIssueUrl = `https://github.com/clodex-io/clodex/issues/new?template=5.agent_issue.yml&conversation-id=${agentInstanceId}&error-data=${encodeURIComponent(JSON.stringify(error))}`;
+  const reportIssueUrl = `https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/new?template=5.agent_issue.yml&conversation-id=${agentInstanceId}&error-data=${encodeURIComponent(JSON.stringify(error))}`;
 
   return (
     <div className="mt-6 flex w-full flex-col gap-1.5 rounded-lg border border-derived-strong p-2 text-sm">

@@ -9,9 +9,9 @@ interface AliasVariables {
  */
 const LINK_ALIAS_MAP: Record<string, (v: AliasVariables) => string> = {
   'report-agent-issue': (v) =>
-    `https://github.com/clodex-io/clodex/issues/new?template=5.agent_issue.yml&agent-instance-id=${encodeURIComponent(v.agentInstanceId)}`,
+    `https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/new?template=5.agent_issue.yml&agent-instance-id=${encodeURIComponent(v.agentInstanceId)}`,
   'request-new-feature': (v) =>
-    `https://github.com/clodex-io/clodex/issues/new?template=2.feature_request.yml&app-version=${encodeURIComponent(v.appVersion)}`,
+    `https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/new?template=2.feature_request.yml&app-version=${encodeURIComponent(v.appVersion)}`,
   'socials-discord': () => 'https://discord.gg/c9uGs3cFXr',
   'socials-x': () => 'https://clodex.xyz',
   'socials-linkedin': () => 'https://clodex.xyz',
