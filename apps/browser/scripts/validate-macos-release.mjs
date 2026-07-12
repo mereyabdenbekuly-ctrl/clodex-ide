@@ -571,10 +571,20 @@ async function runUiLaunch(executablePath, profilePath, logPath) {
 
   if (!startupComplete || !windowShown || child.exitCode !== null) {
     child.kill('SIGTERM');
+    let terminationError = null;
+    try {
+      await waitForProcess(child, 10_000);
+    } catch (error) {
+      terminationError = error;
+    }
     const text = Buffer.concat(output).toString('utf8');
     writeFileSync(logPath, text);
     throw new Error(
-      `Clean-profile UI launch failed (startup=${startupComplete}, window=${windowShown}, exit=${child.exitCode})\n${text}`,
+      `Clean-profile UI launch failed (startup=${startupComplete}, window=${windowShown}, exit=${child.exitCode})${
+        terminationError instanceof Error
+          ? `; cleanup=${terminationError.message}`
+          : ''
+      }\n${text}`,
     );
   }
 
@@ -632,9 +642,9 @@ async function main() {
     );
   }
 
-  const packageJson = JSON.parse(
-    readFileSync(path.join(browserDirectory, 'package.json'), 'utf8'),
-  );
+  const packageJsonPath = path.join(browserDirectory, 'package.json');
+  const packageJsonSource = readFileSync(packageJsonPath, 'utf8');
+  const packageJson = JSON.parse(packageJsonSource);
   const version = options.version ?? packageJson.version;
   const config = channelConfig[options.channel];
   const outputRoot = path.join(browserDirectory, 'out', options.channel);
@@ -681,10 +691,23 @@ async function main() {
       printStep(
         `Building ${options.channel} ${options.arch} artifacts with Node ${actualNodeVersion}`,
       );
-      run('pnpm', ['make', `--arch=${options.arch}`], {
-        env: buildEnvironment,
-        inherit: true,
-      });
+      const packageVersionOverride = packageJson.version !== version;
+      try {
+        if (packageVersionOverride) {
+          writeFileSync(
+            packageJsonPath,
+            `${JSON.stringify({ ...packageJson, version }, null, 2)}\n`,
+          );
+        }
+        run('pnpm', ['make', `--arch=${options.arch}`], {
+          env: buildEnvironment,
+          inherit: true,
+        });
+      } finally {
+        if (packageVersionOverride) {
+          writeFileSync(packageJsonPath, packageJsonSource);
+        }
+      }
     }
 
     const appPath = path.join(
