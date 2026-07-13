@@ -85,8 +85,7 @@ import { discoverPluginMcpServers } from './services/mcp/plugin-bridge';
 import { McpSettingsService } from './services/mcp/settings';
 import type { CredentialTypeId } from '@shared/credential-types';
 import { ModelProviderService } from './agents/model-provider';
-import { wirePagesStateSync } from './wiring/pages-state-sync';
-import { wirePagesHandlers } from './wiring/pages-handler-wiring';
+import { wirePagesRuntime } from './wiring/pages-runtime';
 import {
   ensureDataDirectories,
   getNetworkPolicyAuditPath,
@@ -3742,20 +3741,10 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     getMountedWorkspacePaths: () => toolboxService.getAllMountedPaths(),
   });
 
-  // Wire all uiKarton-to-pages state syncs (pending edits, mounts,
-  // workspace-md generating, search engines, global config, auth)
-  await wirePagesStateSync({
+  await wirePagesRuntime({
     uiKarton,
     pagesService,
     globalConfigService,
-    logger,
-  });
-
-  // Wire all pages-api handler setters (pending edits accept/reject,
-  // context files, certificate trust, auth, home page, etc.)
-  wirePagesHandlers({
-    uiKarton,
-    pagesService,
     diffHistoryService,
     pendingEditService,
     windowLayoutService,
@@ -3768,11 +3757,6 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     credentialsService,
     logger,
   });
-
-  // Wire permission-exceptions clear handler (used by clearBrowsingData)
-  pagesService.setClearPermissionExceptionsHandler(() =>
-    preferencesService.clearAllPermissionExceptionsForAllTypes(),
-  );
 
   uiKarton.registerServerProcedureHandler(
     'fileTree.listDirectory',
