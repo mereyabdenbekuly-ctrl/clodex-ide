@@ -9,11 +9,10 @@ import { enrichHistoryEntryWorkspaces } from './services/agent-manager/history-w
 import { Logger } from './services/logger';
 import { createMainShutdownCoordinator } from './services/shutdown-coordinator';
 import { isUIEventName, parseUIEventProperties } from './services/telemetry';
-import { AgentCorePersistence } from '@clodex/agent-core/persistence';
 import {
   ChatPersistenceService,
   DynamicSwarmOrchestrator,
-  PendingEditService,
+  type PendingEditService,
   SwarmRunner,
   createBattleSwarmPlan,
   createAgentSessionCheckpoint,
@@ -32,24 +31,13 @@ import {
 } from '@clodex/agent-core';
 import { AgentTypes } from '@shared/karton-contracts/ui/agent';
 import type { MountPermission } from '@shared/karton-contracts/ui/agent/metadata';
-import type { UserPreferences } from '@shared/karton-contracts/ui/shared-types';
 import { WorktreeSetupSettingsService } from './services/worktree-setup-settings';
-import {
-  createAgentCoreSeam,
-  attachAgentCoreBridge,
-} from './services/agent-core-bridge/wiring';
-import { registerToolboxGenerateWorkspaceMd } from './services/agent-core-bridge/handlers/toolbox';
-import {
-  applyBrowserAgentBehavior,
-  createBrowserAgentHost,
-} from './services/agent-core-bridge/host';
 import { resolveFeatureGate } from '@shared/feature-gates';
 import {
   getIsolatedAgentRuntimeRolloutPolicy,
   ISOLATED_AGENT_RUNTIME_DISABLE_SWITCH,
   isIsolatedAgentRuntimeDisabledByEnvironment,
 } from '@shared/isolated-agent-runtime-policy';
-import { createLazyBrowserHostModels } from './services/agent-core-bridge/host-models';
 import { createBrowserAgentTypeRegistry } from './agents/agents-registry';
 import { buildLocalWorkspaceSnapshotMetadata } from './agent-host/workspace-snapshot-builder';
 import { wirePagesRuntime } from './wiring/pages-runtime';
@@ -59,22 +47,12 @@ import { wireWorkspaceCredentialsRpc } from './wiring/workspace-credentials-rpc'
 import {
   ensureDataDirectories,
   getNetworkPolicyAuditPath,
-  getInstalledPluginsDir,
-  getPluginsPath,
 } from './utils/paths';
 import { migrateLegacyPaths } from './utils/migrate-legacy-paths';
 import { readPersistedDataSync } from './utils/persisted-data';
 import { z } from 'zod';
 import { runFoundationalServicesPhase } from './startup/phases/foundational-services';
-import { discoverPlugins } from './utils/discover-plugins';
-import type { SkillDefinitionUI } from '@shared/skills';
 import { isCloudTaskKillSwitchActive } from '@shared/cloud-task-rollout';
-import {
-  EvidenceMemoryCanaryController,
-  getEvidenceMemoryRolloutPolicy,
-  isEvidenceMemoryInjectionDisabled,
-} from '@shared/evidence-memory-rollout';
-import { NetworkEgressControlCenterService } from './services/network-policy/control-center';
 import { initializeGuardianEgressStartup } from './services/network-policy/startup';
 import path from 'node:path';
 import {
@@ -84,39 +62,17 @@ import {
 import { handleCommandLineUrls } from './startup/url-routing';
 import { runBrowserUiServicesPhase } from './startup/phases/browser-ui-services';
 import { runNotificationRuntimePhase } from './startup/phases/notification-runtime';
-import { AgentPowerSaveBlockerService } from './services/agent-power-save-blocker';
-import { AgentRuntimeRecoveryService } from './services/agent-runtime-recovery';
-import { MacOSClosedLidSleepService } from './services/macos-closed-lid-sleep';
 import {
-  AgentHostProcessService,
   CloudTaskExecutionLeaseRegistry,
   createBrowserAgentStepExecutor,
   createExecutionTargetRouter,
 } from './agent-host';
 import { CloudTaskTeleportController } from './services/cloud-task-teleport';
 import { BrowserSwarmStore } from './services/swarm-orchestrator';
-import {
-  createAgentsMdDomainAdapter,
-  createEnabledSkillsDomainAdapter,
-  createFileDiffsDomainAdapter,
-  createLogsDomainAdapter,
-  createMemoryDomainAdapter,
-  createPlansDomainAdapter,
-  createRuntimeContextDomainAdapter,
-  createWorkspaceDomainAdapter,
-  createWorkspaceMdDomainAdapter,
-} from '@clodex/agent-core/env/adapters';
-import {
-  createBrowserHostEnvironmentSources,
-  registerHostEnvDomainAdapters,
-} from './env-domains';
 import { AgentOsService } from './services/agent-os';
 import { GuardianService } from './services/guardian';
 import { toGuardianAssessmentObservation } from './services/guardian/audit';
 import { createNetworkGuardianRequest } from './services/guardian/requests';
-import { MemoryNotesSettingsService } from './services/memory-notes-settings';
-import { EvidenceMemoryInspectorService } from './services/evidence-memory-inspector';
-import { EvidenceMemoryDogfoodBackfill } from './services/evidence-memory-dogfood-backfill';
 import {
   GeneratedAppLibraryService,
   type GeneratedAppOwnerSnapshot,
@@ -139,6 +95,8 @@ import {
   runSessionRecoveryAcceptance,
 } from './session-recovery-acceptance';
 import { SESSION_RECOVERY_ACCEPTANCE_SWITCH } from '../shared/session-recovery-acceptance';
+import { runAgentCoreActivationPhase } from './startup/phases/agent-core-activation';
+import { runAgentCoreFoundationPhase } from './startup/phases/agent-core-foundation';
 import { prepareProtectedStorage } from './startup/phases/prepare-protected-storage';
 import { runModelToolboxRuntimePhase } from './startup/phases/model-toolbox-runtime';
 import { runPlatformIntegrationServicesPhase } from './startup/phases/platform-integration-services';
@@ -259,265 +217,39 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
   });
   startSearchEngineSync();
 
-  // Phase 3a: build the agent-core seam (store + controllers + registry)
-  // early so services that consume store-canonical state — currently
-  // `DiffHistoryService` via the store itself — can receive their
-  // dependency as an injected capability. The bridge itself is attached
-  // later, once `agentCoreHost` exists (post-ModelProviderService).
-  const agentCoreSeam = createAgentCoreSeam({ karton: uiKarton });
-  const agentHostProcessService = await AgentHostProcessService.create(logger, {
-    telemetry: {
-      capture(eventName, properties) {
-        telemetryService.capture(eventName as never, properties as never);
-      },
-    },
-  }).catch((error) => {
-    // This first split-process slice is a control-plane watchdog and
-    // content-free runtime ledger. Keep startup available if the worker
-    // cannot launch and let AgentRuntimeRecoveryService retain its local
-    // watchdog fallback.
-    logger.warn(
-      '[Main] Agent utility process failed to start; using main-process recovery watchdog',
-      error,
-    );
-    return null;
-  });
-  agentHostProcessService?.bindAgentStore(agentCoreSeam.store);
-  const isolatedAgentRuntimeLaunchGate = resolveFeatureGate(
-    'isolated-agent-runtime',
-    preferencesService.get().featureGates.overrides,
-    __APP_RELEASE_CHANNEL__,
-  );
-  const isolatedAgentRuntimeWorkerAvailable =
-    agentHostProcessService?.canExecuteAgentWorkloads ?? false;
-  telemetryService.capture('isolated-agent-runtime-rollout-observed', {
-    rollout_stage: isolatedAgentRuntimePolicy.rolloutStage,
-    policy_default_enabled: isolatedAgentRuntimePolicy.defaultEnabled,
-    gate_enabled: isolatedAgentRuntimeLaunchGate.enabled,
-    gate_source: isolatedAgentRuntimeLaunchGate.source,
-    kill_switch_active: isolatedAgentRuntimeKillSwitchActive,
-    worker_available: isolatedAgentRuntimeWorkerAvailable,
-    effective_enabled:
-      isolatedAgentRuntimeLaunchGate.enabled &&
-      !isolatedAgentRuntimeKillSwitchActive &&
-      isolatedAgentRuntimeWorkerAvailable,
-    failure_threshold: isolatedAgentRuntimePolicy.failureThreshold,
-    cooldown_ms: isolatedAgentRuntimePolicy.cooldownMs,
-  });
-
-  // Phase 5: assemble a partial `AgentHost` early so `DiffHistoryService`
-  // (now a package-side service) can receive the host + store as
-  // injected dependencies. `ModelProviderService` does not exist yet —
-  // `createLazyBrowserHostModels()` returns a proxy whose `get()` throws
-  // until `setModelProviderService(...)` is called further down. The
-  // `DiffHistoryService` itself never consults `host.models`, so the
-  // lazy slot is invisible in practice.
-  const lazyHostModels = createLazyBrowserHostModels();
-  const resolveAgentBehavior = (preferences: UserPreferences) => {
-    const collaborationPresets = resolveFeatureGate(
-      'collaboration-presets',
-      preferences.featureGates.overrides,
-      __APP_RELEASE_CHANNEL__,
-    );
-
-    return {
-      personality: preferences.agent.personality,
-      collaborationMode: collaborationPresets.enabled
-        ? preferences.agent.collaborationMode
-        : ('default' as const),
-    };
-  };
-  const initialAgentBehavior = resolveAgentBehavior(preferencesService.get());
-  const agentCoreHost = createBrowserAgentHost({
+  // Phase 3a + 5 + D.2: compose the early Agent Core foundation at the
+  // original startup point. The bridge remains unattached until activation.
+  const agentCoreFoundation = await runAgentCoreFoundationPhase({
     logger,
     telemetryService,
-    paths: hostPaths,
-    models: lazyHostModels.hostModels,
+    preferencesService,
+    pagesService,
+    karton: uiKarton,
+    hostPaths,
     dataProtection,
     protectedFiles,
-    agentPersonality: initialAgentBehavior.personality,
-    collaborationMode: initialAgentBehavior.collaborationMode,
-  });
-  const agentBehaviorPreferenceListener = (
-    newPreferences: UserPreferences,
-    oldPreferences: UserPreferences,
-  ) => {
-    const nextBehavior = resolveAgentBehavior(newPreferences);
-    const previousBehavior = resolveAgentBehavior(oldPreferences);
-    if (
-      nextBehavior.personality === previousBehavior.personality &&
-      nextBehavior.collaborationMode === previousBehavior.collaborationMode
-    ) {
-      return;
-    }
-
-    applyBrowserAgentBehavior(
-      agentCoreHost,
-      nextBehavior.personality,
-      nextBehavior.collaborationMode,
-    );
-  };
-  preferencesService.addListener(agentBehaviorPreferenceListener);
-
-  const refreshPluginDefinitions = async (): Promise<void> => {
-    const [bundledPlugins, marketplacePlugins] = await Promise.all([
-      discoverPlugins(getPluginsPath(), 'bundled'),
-      discoverPlugins(getInstalledPluginsDir(), 'marketplace'),
-    ]);
-    const bundledIds = new Set(bundledPlugins.map((plugin) => plugin.id));
-    const collisionIds = marketplacePlugins
-      .filter((plugin) => bundledIds.has(plugin.id))
-      .map((plugin) => plugin.id);
-    if (collisionIds.length > 0) {
-      logger.warn(
-        `[Main] Ignoring marketplace plugins that collide with bundled IDs: ${collisionIds.join(', ')}`,
-      );
-    }
-    const plugins = [
-      ...bundledPlugins,
-      ...marketplacePlugins.filter((plugin) => !bundledIds.has(plugin.id)),
-    ];
-    uiKarton.setState((draft: { plugins: typeof plugins }) => {
-      draft.plugins = plugins;
-    });
-    if (verbose) {
-      logger.debug(
-        `[Main] Pushed ${bundledPlugins.length} bundled and ${plugins.length - bundledPlugins.length} marketplace plugins to UI karton`,
-      );
-    }
-  };
-
-  // Phase D.2: the host enumerates `AgentCorePersistence` once instead
-  // of constructing each persistence service by name. The facade owns
-  // construction order, schema-migration sequencing, and teardown for
-  // `DiffHistoryService`, `FileReadCacheService`,
-  // `ProcessedImageCacheService`, `AttachmentsService`, and
-  // `AgentPersistenceDB`. `attachments` is passed in so we share the
-  // already-constructed instance with `WindowLayoutService`.
-  const evidenceMemoryCanary = new EvidenceMemoryCanaryController(
-    getEvidenceMemoryRolloutPolicy(__APP_RELEASE_CHANNEL__),
-    isEvidenceMemoryInjectionDisabled(
-      process.env.CLODEX_DISABLE_EVIDENCE_MEMORY_INJECTION,
-    ),
-  );
-  const evidenceMemoryPromptGateEnabled = resolveFeatureGate(
-    'evidence-memory-prompt-injection',
-    preferencesService.get().featureGates.overrides,
-    __APP_RELEASE_CHANNEL__,
-  ).enabled;
-  const persistence = await AgentCorePersistence.create({
-    host: agentCoreHost,
-    store: agentCoreSeam.store,
+    protectedMigrationOrder,
     attachments,
-    enableEvidenceMemory:
-      resolveFeatureGate(
-        'evidence-memory-shadow',
-        preferencesService.get().featureGates.overrides,
-        __APP_RELEASE_CHANNEL__,
-      ).enabled || evidenceMemoryPromptGateEnabled,
-    enableEvidenceMemoryPromptInjection: evidenceMemoryPromptGateEnabled,
-    evidenceMemoryPromptInjectionAdmission: (taskId) =>
-      evidenceMemoryCanary.isTaskAdmitted(taskId),
-    onEvidenceMemoryDogfoodCohortEvaluated: (report) => {
-      const before = evidenceMemoryCanary.snapshot();
-      const after = evidenceMemoryCanary.observe(report);
-      if (!before.rolledBack && after.rolledBack) {
-        logger.error(
-          `[EvidenceMemory] Canary rolled back automatically: ${after.rollbackReasons.join(', ')}`,
-        );
-      }
-    },
-    enableEvidenceMemoryHybridRetrieval: resolveFeatureGate(
-      'evidence-memory-hybrid-retrieval',
-      preferencesService.get().featureGates.overrides,
-      __APP_RELEASE_CHANNEL__,
-    ).enabled,
-    onProtectedMigrationStage: (stage) => {
-      protectedMigrationOrder.mark(stage);
-    },
+    guardianEgressStartup,
+    startupFeatureEnabled,
+    isolatedAgentRuntimePolicy,
+    isolatedAgentRuntimeKillSwitchActive,
+    releaseChannel: __APP_RELEASE_CHANNEL__,
+    verbose,
   });
-  if (persistence.evidenceMemory) {
-    try {
-      const restoredCohort =
-        await persistence.evidenceMemory.getDogfoodCohortReport();
-      const restoredSnapshot = evidenceMemoryCanary.observe(restoredCohort);
-      if (restoredSnapshot.rolledBack) {
-        logger.warn(
-          `[EvidenceMemory] Canary starts rolled back from durable cohort evidence: ${restoredSnapshot.rollbackReasons.join(', ')}`,
-        );
-      }
-    } catch (error) {
-      evidenceMemoryCanary.rollback('health-restore-failed');
-      logger.warn(
-        '[EvidenceMemory] Failed to restore canary health; prompt injection remains fail-closed by task admission',
-        error,
-      );
-    }
-  }
-  protectedMigrationOrder.assertComplete();
-  const diffHistoryService = persistence.diffHistory;
-  const pendingEditService = new PendingEditService({
-    store: agentCoreSeam.store,
-    logger,
-  });
-
-  // Connect PreferencesService to Karton for reactive sync
-  preferencesService.connectKarton(uiKarton, pagesService);
-  let networkEgressControlService: NetworkEgressControlCenterService | null =
-    null;
-  const guardianEgressControlCenter = guardianEgressStartup.controlCenter;
-  if (guardianEgressControlCenter.enabled) {
-    try {
-      networkEgressControlService =
-        await NetworkEgressControlCenterService.create({
-          logger,
-          karton: uiKarton,
-          preferences: preferencesService,
-          auditPath: getNetworkPolicyAuditPath(),
-          isFeatureEnabled: startupFeatureEnabled,
-          getRuntimeStatus: guardianEgressControlCenter.getRuntimeStatus,
-          getBrowserPolicy: guardianEgressControlCenter.getBrowserPolicy,
-          applyBrowserGrants: guardianEgressControlCenter.applyBrowserGrants,
-        });
-    } catch (error) {
-      logger.error(
-        '[NetworkEgressControl] Initialization failed; control surface unavailable',
-        error,
-      );
-    }
-  }
-  const memoryNotesSettingsService = await MemoryNotesSettingsService.create({
-    logger,
-    karton: uiKarton,
-    preferences: preferencesService,
-    memoryNotes: persistence.memoryNotes,
-    isFeatureEnabled: (feature) =>
-      resolveFeatureGate(
-        feature,
-        preferencesService.get().featureGates.overrides,
-        __APP_RELEASE_CHANNEL__,
-      ).enabled,
-  });
-  const evidenceMemoryInspectorService =
-    await EvidenceMemoryInspectorService.create({
-      logger,
-      karton: uiKarton,
-      evidenceMemory: persistence.evidenceMemory,
-      summaryScheduler: persistence.evidenceMemorySummaryScheduler,
-      dogfoodBackfill: persistence.evidenceMemory
-        ? new EvidenceMemoryDogfoodBackfill({
-            memoryDir: agentCoreHost.paths.memoryDir(),
-            protectedFiles: agentCoreHost.protectedFiles,
-            evidenceMemory: persistence.evidenceMemory,
-          })
-        : undefined,
-      isFeatureEnabled: (feature) =>
-        resolveFeatureGate(
-          feature,
-          preferencesService.get().featureGates.overrides,
-          __APP_RELEASE_CHANNEL__,
-        ).enabled,
-    });
+  const {
+    agentCoreSeam,
+    agentHostProcessService,
+    agentCoreHost,
+    agentBehaviorPreferenceListener,
+    refreshPluginDefinitions,
+    persistence,
+    diffHistoryService,
+    pendingEditService,
+    networkEgressControlService,
+    memoryNotesSettingsService,
+    evidenceMemoryInspectorService,
+  } = agentCoreFoundation;
 
   const {
     omniboxSuggestionsService: _omniboxSuggestionsService,
@@ -1646,159 +1378,25 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
   };
   preferencesService.addListener(agentOsFeatureGatePreferenceListener);
 
-  toolboxService.setWorkspaceLastUsedAtResolver(
-    async (workspacePaths) =>
-      (await persistence.agentDb.getWorkspaceLastUsedAtByPath(
-        workspacePaths,
-      )) ?? new Map(),
-  );
-
-  registerToolboxGenerateWorkspaceMd(agentCoreSeam.registry, uiKarton, {
-    store: agentCoreSeam.store,
-    generateWorkspaceMdForPath: (workspacePath) =>
-      agentManagerService.generateWorkspaceMdForPath(workspacePath),
-  });
-
-  // Phase 5: now that `ModelProviderService` exists, activate the lazy
-  // `HostModels` slot inside the already-assembled `agentCoreHost`. Must
-  // happen before `attachAgentCoreBridge` so any attach-phase handler
-  // that consults `host.models` sees a ready adapter.
-  lazyHostModels.setModelProviderService(modelProviderService);
-
-  // Phase 1c+1d+5: attach the bridge. Bridges every migrated Karton
-  // procedure (`toolbox.dismissActiveApp`, `toolbox.clearPendingAppMessage`,
-  // `toolbox.acceptHunks`, `toolbox.rejectHunks`) through the
-  // `CommandRegistry`, and starts mirroring the AgentStore-canonical
-  // `activeApp`, `pendingAppMessage`, `pendingFileDiffs`, `editSummary`,
-  // and `workspace.mounts` slices into Karton for the UI.
-  //
-  // Must run AFTER every legacy service has finished registering its own
-  // Karton handlers — the bridge's drift guard runs against the final
-  // registry, and Karton rejects double-registrations. Handles are kept
-  // alive for the host lifetime.
-  const agentCoreBridge = attachAgentCoreBridge(agentCoreSeam, {
-    host: agentCoreHost,
-    diffHistory: diffHistoryService,
-    pendingEdits: pendingEditService,
-  });
-  // Phase 1d: route `SandboxService` app-lifecycle writes through the
-  // AgentStore-backed controller instead of Karton.
-  toolboxService.setActiveAppController(agentCoreBridge.activeAppController);
-
-  // Register every env-state {@link DomainAdapter} (core + host) on
-  // the agent manager. Core adapters are wired here so `AgentManager`
-  // stays host-agnostic; host adapters reuse the same `toolboxService`
-  // closures previously used by the legacy environment providers.
-  agentCoreHost.environmentSources = createBrowserHostEnvironmentSources({
+  // Keep activation synchronous at this exact point: every legacy Karton
+  // handler is registered, so the bridge drift guard sees the final registry.
+  const agentCoreActivation = runAgentCoreActivationPhase({
+    logger,
     karton: uiKarton,
-    toolbox: toolboxService,
-  });
-  const coreMountManager = toolboxService.getMountManager();
-  if (!coreMountManager) {
-    throw new Error(
-      '[Main] toolboxService.getMountManager() returned null — mount manager must be initialized before env-state adapter wiring',
-    );
-  }
-  agentManagerService.registerEnvAdapter(
-    createRuntimeContextDomainAdapter({
-      host: agentCoreHost,
-      mountManager: coreMountManager,
-    }),
-  );
-  agentManagerService.registerEnvAdapter(
-    createWorkspaceDomainAdapter({
-      host: agentCoreHost,
-      mountManager: coreMountManager,
-    }),
-  );
-  const workspaceMdRelativePath = agentCoreHost.workspaceMdRelativePath?.();
-  agentManagerService.registerEnvAdapter(
-    createAgentsMdDomainAdapter({
-      host: agentCoreHost,
-      mountManager: coreMountManager,
-      workspaceMdRelativePath,
-    }),
-  );
-  agentManagerService.registerEnvAdapter(
-    createWorkspaceMdDomainAdapter({
-      mountManager: coreMountManager,
-      workspaceMdRelativePath,
-    }),
-  );
-  agentManagerService.registerEnvAdapter(
-    createEnabledSkillsDomainAdapter({
-      host: agentCoreHost,
-      getSkillDetails: async (agentInstanceId: string) => {
-        const skills: SkillDefinitionUI[] =
-          await toolboxService.getSkillsList(agentInstanceId);
-        return new Map(
-          skills
-            .filter((s) => s.agentInvocable !== false && s.skillPath)
-            .map((s) => [
-              s.skillPath as string,
-              {
-                name: s.displayName,
-                description: s.description,
-                path: s.skillPath as string,
-              },
-            ]),
-        );
-      },
-    }),
-  );
-  agentManagerService.registerEnvAdapter(createMemoryDomainAdapter());
-  agentManagerService.registerEnvAdapter(
-    createPlansDomainAdapter({
-      host: agentCoreHost,
-      store: agentCoreSeam.store,
-    }),
-  );
-  agentManagerService.registerEnvAdapter(
-    createLogsDomainAdapter({
-      host: agentCoreHost,
-      store: agentCoreSeam.store,
-    }),
-  );
-  agentManagerService.registerEnvAdapter(
-    createFileDiffsDomainAdapter({ store: agentCoreSeam.store }),
-  );
-
-  registerHostEnvDomainAdapters(agentManagerService, {
-    karton: uiKarton,
-    store: agentCoreSeam.store,
-    getShellSnapshot: (agentInstanceId) =>
-      toolboxService.getShellSnapshot(agentInstanceId),
-    getShellInfo: () => {
-      const info = toolboxService.getShellInfo();
-      if (!info) return null;
-      return { platform: process.platform, type: info.type, path: info.path };
-    },
-    getSandboxSessionId: (agentInstanceId) =>
-      toolboxService.getSandboxSessionId(agentInstanceId),
-    getLogIngestSnapshot: () => toolboxService.getLogIngestSnapshot(),
-  });
-
-  const agentPowerSaveBlockerService = AgentPowerSaveBlockerService.create(
-    logger,
-    uiKarton,
-  );
-  const macOSClosedLidSleepService = MacOSClosedLidSleepService.create(
-    logger,
-    uiKarton,
-  );
-  const agentRuntimeRecoveryService = AgentRuntimeRecoveryService.create(
-    logger,
+    toolboxService,
     agentManagerService,
-    agentHostProcessService ?? undefined,
-    cloudTaskRuntime
-      ? {
-          reconcile: async (reason) =>
-            isClodexCloudEnabled()
-              ? cloudTaskRuntime.recovery.reconcile(reason)
-              : undefined,
-        }
-      : undefined,
-  );
+    modelProviderService,
+    foundation: agentCoreFoundation,
+    cloudTaskRuntime,
+    isClodexCloudEnabled,
+  });
+  const {
+    agentCoreBridge,
+    agentPowerSaveBlockerService,
+    macOSClosedLidSleepService,
+    agentRuntimeRecoveryService,
+  } = agentCoreActivation;
+
   const browserSwarmStore = new BrowserSwarmStore(uiKarton);
   const appendSwarmMessage = (
     agentInstanceId: string,
