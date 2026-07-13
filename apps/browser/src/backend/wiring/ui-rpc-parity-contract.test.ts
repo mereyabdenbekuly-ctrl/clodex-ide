@@ -12,6 +12,7 @@ type Registration = {
 
 const wiringDirectory = path.dirname(fileURLToPath(import.meta.url));
 const backendDirectory = path.dirname(wiringDirectory);
+const startupDirectory = path.join(backendDirectory, 'startup');
 
 function listProductionTypeScriptFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true })
@@ -74,6 +75,7 @@ describe('UI RPC parity contract', () => {
     const sourceFiles = [
       path.join(backendDirectory, 'main.ts'),
       ...listProductionTypeScriptFiles(wiringDirectory),
+      ...listProductionTypeScriptFiles(startupDirectory),
     ];
     const registrations = sourceFiles.flatMap(scanRegistrations);
     const registrationsByName = new Map<string, Registration[]>();

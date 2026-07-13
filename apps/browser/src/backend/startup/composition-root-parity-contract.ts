@@ -414,6 +414,20 @@ export const COMPOSITION_ROOT_PARITY_CONTRACT = {
       execution: 'awaited',
       expectedCount: 1,
     },
+    {
+      kind: 'procedure-registration',
+      method: 'registerServerProcedureHandler',
+      procedure: 'preferences.testProviderProfile',
+      execution: 'sync',
+      expectedCount: 1,
+    },
+    {
+      kind: 'procedure-registration',
+      method: 'registerServerProcedureHandler',
+      procedure: 'preferences.listProviderProfileModels',
+      execution: 'sync',
+      expectedCount: 1,
+    },
   ],
   agentCore: [
     {

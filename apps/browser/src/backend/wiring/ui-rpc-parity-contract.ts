@@ -8,7 +8,8 @@ export type UiRpcWiringGroup =
   | 'pages'
   | 'fileTreeAndSwarm'
   | 'settingsAndBrowser'
-  | 'workspaceAndCredentials';
+  | 'workspaceAndCredentials'
+  | 'modelToolboxRuntime';
 
 export const EXPECTED_UI_RPC_PROCEDURE_NAMES = {
   // Pages runtime wiring configures state sync and PagesService callbacks, but
@@ -59,5 +60,9 @@ export const EXPECTED_UI_RPC_PROCEDURE_NAMES = {
     'credentials.set',
     'credentials.delete',
     'credentials.getConfiguredIds',
+  ],
+  modelToolboxRuntime: [
+    'preferences.testProviderProfile',
+    'preferences.listProviderProfileModels',
   ],
 } as const satisfies Record<UiRpcWiringGroup, readonly UiRpcProcedureName[]>;
