@@ -245,6 +245,11 @@ import {
   SessionContinuityService,
   type SessionSharingAdapter,
 } from './services/session-continuity';
+import {
+  parseSessionRecoveryAcceptancePhase,
+  runSessionRecoveryAcceptance,
+} from './session-recovery-acceptance';
+import { SESSION_RECOVERY_ACCEPTANCE_SWITCH } from '../shared/session-recovery-acceptance';
 
 export type MainParameters = {
   launchOptions: {
@@ -4564,6 +4569,29 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
   });
 
   app.on('will-quit', shutdownCoordinator.handleWillQuit);
+
+  if (app.commandLine.hasSwitch(SESSION_RECOVERY_ACCEPTANCE_SWITCH)) {
+    const phase = parseSessionRecoveryAcceptancePhase(
+      app.commandLine.getSwitchValue(SESSION_RECOVERY_ACCEPTANCE_SWITCH),
+    );
+    const artifact = await runSessionRecoveryAcceptance({
+      phase,
+      explicitUserDataDirectory:
+        app.commandLine.getSwitchValue('user-data-dir'),
+      userDataDirectory: app.getPath('userData'),
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      agentManager: agentManagerService,
+      agentStore: agentCoreSeam.store,
+      agentDb: persistence.agentDb,
+      windowLayout: windowLayoutService,
+    });
+    logger.info(
+      `[session-recovery-acceptance] phase=${artifact.phase} status=passed`,
+    );
+    app.quit();
+  }
 }
 
 function createCloudTaskRuntime(input: {

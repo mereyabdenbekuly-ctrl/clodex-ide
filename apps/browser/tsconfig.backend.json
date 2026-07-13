@@ -23,6 +23,7 @@
     "scripts/mcp-packaged-acceptance.ts",
     "scripts/run-agentic-app-runtime-evaluation.ts",
     "scripts/runner-paired-replay-docker-dogfood.ts",
+    "scripts/session-recovery-acceptance.ts",
     "forge.env.d.ts",
     "src/shared"
   ],

@@ -566,6 +566,30 @@ describe('AgentPersistenceDB task lifecycle', () => {
       archivedAt: expect.any(Date),
     });
   });
+
+  it('rejects the flush when the persistence transaction fails', async () => {
+    await insertAgentInstance(db, {
+      id: 'failed-flush-task',
+      title: 'Before failed flush',
+    });
+    const stored =
+      await persistence.getStoredAgentInstanceById('failed-flush-task');
+    expect(stored).not.toBeNull();
+
+    (persistence as unknown as { _db: { transaction(): Promise<never> } })._db =
+      {
+        transaction: async () => {
+          throw new Error('simulated transaction failure');
+        },
+      };
+
+    await expect(
+      persistence.storeAgentInstance(
+        { ...stored!, title: 'Must not report success' },
+        stored!.history,
+      ),
+    ).rejects.toThrow('simulated transaction failure');
+  });
 });
 
 describe('AgentPersistenceDB data protection', () => {

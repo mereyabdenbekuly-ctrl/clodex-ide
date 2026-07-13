@@ -62,6 +62,7 @@
     "smoke:dictation-hardware": "electron scripts/dictation-hardware-smoke.mjs",
     "smoke:remote-control-physical": "tsx scripts/remote-control-physical-smoke.ts",
     "smoke:cloud-tasks:suspend-resume": "tsx scripts/cloud-task-suspend-resume-smoke.ts",
+    "smoke:session-recovery": "tsx scripts/session-recovery-acceptance.ts",
     "smoke:agent-host:fault": "pnpm typecheck:agent-host-smoke && pnpm build:agent-host && vite build --config vite.agent-host-fault-smoke.config.ts && electron scripts/agent-host-fault-smoke-app",
     "test": "vitest run",
     "test:watch": "vitest",
