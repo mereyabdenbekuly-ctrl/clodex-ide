@@ -82,6 +82,10 @@ const nativeDependencies = [
   'semver',
   'web-tree-sitter',
   '@vscode/tree-sitter-wasm',
+  // Rollup leaves Ajv's generated validators as runtime requires in the
+  // otherwise self-contained MCP host bundle.
+  'ajv',
+  'ajv-formats',
 ];
 
 const copyNativeDependencies = (
