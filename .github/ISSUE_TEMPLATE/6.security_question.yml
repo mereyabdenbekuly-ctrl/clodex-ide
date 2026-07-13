@@ -1,0 +1,57 @@
+name: Security question (not a vulnerability)
+description: Ask a public question about security design, hardening, trust boundaries, or safe configuration
+title: "[Security question]: "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **This public form is not for suspected vulnerabilities.**
+
+        If you found a vulnerability, an exploitable weakness, a possible security bypass, leaked credentials, or a report that should remain confidential, stop here. Read [SECURITY.md](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/blob/main/SECURITY.md) and use [GitHub private vulnerability reporting](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/security/advisories/new).
+
+        Use this form only for questions that are safe to discuss publicly, such as documented trust boundaries, deployment hardening, expected policy behavior, or security architecture clarification.
+
+  - type: checkboxes
+    id: public_safety
+    attributes:
+      label: Public-report confirmation
+      options:
+        - label: This is a security question, not a suspected or confirmed vulnerability.
+          required: true
+        - label: This report is safe to discuss publicly and does not reveal an exploitable bypass or confidential security detail.
+          required: true
+        - label: I removed secrets, credentials, private data, and sensitive logs.
+          required: true
+
+  - type: input
+    id: security_area
+    attributes:
+      label: Security area
+      description: Identify the trust boundary, component, deployment mode, policy, or documentation involved.
+      placeholder: "MCP isolation, provider credentials, runner policy, update verification, deployment hardening, etc."
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: Ask the concrete public security question you want maintainers to answer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Public context and assumptions
+      description: Describe the deployment model, actors, assets, and assumptions needed to understand the question without including sensitive details.
+    validations:
+      required: true
+
+  - type: textarea
+    id: documentation
+    attributes:
+      label: Related documentation or prior discussion
+      description: Link relevant Clodex documentation, ADRs, issues, discussions, or public external sources.

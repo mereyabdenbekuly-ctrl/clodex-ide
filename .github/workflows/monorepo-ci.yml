@@ -5,32 +5,31 @@ on:
     branches:
       - "**"
     paths:
-      - "apps/browser/**"
+      - "apps/**"
       - "packages/**"
       - "agent/**"
+      - "scripts/**"
       - ".release-evidence/**"
+      - ".release-notes/**"
       - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "package.json"
       - ".github/workflows/**"
       - "turbo.json"
-      - "biome.json"
+      - "biome.jsonc"
+      - "tsconfig.json"
   pull_request:
     branches:
       - main
       - release-tests
-    paths:
-      - "apps/browser/**"
-      - "packages/**"
-      - "agent/**"
-      - ".release-evidence/**"
-      - "pnpm-lock.yaml"
-      - ".github/workflows/**"
-      - "turbo.json"
-      - "biome.json"
 
 # Cancel in-progress runs for the same branch
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  NPM_CONFIG_IGNORE_PNPMFILE: "true"
 
 jobs:
   # Lint - runs in parallel with build
@@ -45,6 +44,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate pnpm bootstrap policy
+        run: node scripts/ci/check-pnpm-bootstrap.mjs
+
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
@@ -57,7 +59,7 @@ jobs:
           cache: "pnpm"
 
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-pnpmfile
 
       - name: Build Package Prerequisites
         run: pnpm build:packages
@@ -87,18 +89,23 @@ jobs:
         env:
           CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY: ${{ secrets.CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY }}
 
+      - name: Validate Clodex kernel boundaries
+        run: pnpm check:boundaries
+
       - name: Run Biome Check
         run: pnpm check
 
-  # Build - runs in parallel with lint
-  build:
-    name: Build Packages
+  typecheck:
+    name: Typecheck
     runs-on: ubuntu-latest
     env:
       NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Validate pnpm bootstrap policy
+        run: node scripts/ci/check-pnpm-bootstrap.mjs
 
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -112,7 +119,37 @@ jobs:
           cache: "pnpm"
 
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-pnpmfile
+
+      - name: Run Typecheck
+        run: pnpm typecheck
+
+  # Build - runs in parallel with lint
+  build:
+    name: Build Packages
+    runs-on: ubuntu-latest
+    env:
+      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Validate pnpm bootstrap policy
+        run: node scripts/ci/check-pnpm-bootstrap.mjs
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: ".node-version"
+          cache: "pnpm"
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile --ignore-pnpmfile
 
       - name: Build All Packages
         run: pnpm build
@@ -137,6 +174,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Validate pnpm bootstrap policy
+        run: node scripts/ci/check-pnpm-bootstrap.mjs
+
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
@@ -149,7 +189,7 @@ jobs:
           cache: "pnpm"
 
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-pnpmfile
 
       - name: Restore Build Artifacts
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -174,6 +214,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Validate pnpm bootstrap policy
+        run: node scripts/ci/check-pnpm-bootstrap.mjs
+
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
@@ -186,7 +229,7 @@ jobs:
           cache: "pnpm"
 
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-pnpmfile
 
       - name: Build Package Prerequisites
         run: pnpm build:packages
@@ -223,6 +266,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Validate pnpm bootstrap policy
+        run: node scripts/ci/check-pnpm-bootstrap.mjs
+
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
@@ -235,7 +281,7 @@ jobs:
           cache: "pnpm"
 
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-pnpmfile
 
       - name: Build All Packages
         run: pnpm build
@@ -287,6 +333,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Validate pnpm bootstrap policy
+        run: node scripts/ci/check-pnpm-bootstrap.mjs
+
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
@@ -299,7 +348,7 @@ jobs:
           cache: "pnpm"
 
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-pnpmfile
 
       - name: Build All Packages
         run: pnpm build
@@ -402,12 +451,13 @@ jobs:
   ci-basic:
     name: Basic CI
     if: always()
-    needs: [lint, test, build, visual-regression]
+    needs: [lint, typecheck, test, build, visual-regression]
     runs-on: ubuntu-latest
     steps:
       - name: Check Basic CI Status
         run: |
           if [ "${{ needs.lint.result }}" != "success" ] || \
+             [ "${{ needs.typecheck.result }}" != "success" ] || \
              [ "${{ needs.test.result }}" != "success" ] || \
              [ "${{ needs.build.result }}" != "success" ] || \
              [ "${{ needs.visual-regression.result }}" != "success" ]; then
@@ -420,12 +470,13 @@ jobs:
   ci-full:
     name: Full CI (PR)
     if: github.event_name == 'pull_request' && always()
-    needs: [lint, test, build, test-windows, build-clodex, visual-regression]
+    needs: [lint, typecheck, test, build, test-windows, build-clodex, visual-regression]
     runs-on: ubuntu-latest
     steps:
       - name: Check Full CI Status
         run: |
           if [ "${{ needs.lint.result }}" != "success" ] || \
+             [ "${{ needs.typecheck.result }}" != "success" ] || \
              [ "${{ needs.test.result }}" != "success" ] || \
              [ "${{ needs.build.result }}" != "success" ] || \
              [ "${{ needs.visual-regression.result }}" != "success" ] || \
@@ -436,6 +487,7 @@ jobs:
             echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
             echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
             echo "| Lint | ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Typecheck | ${{ needs.typecheck.result }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Test | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Visual regression | ${{ needs.visual-regression.result }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Test (Windows) | ${{ needs.test-windows.result }} |" >> $GITHUB_STEP_SUMMARY

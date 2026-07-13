@@ -1,0 +1,67 @@
+name: Feature request
+description: Propose an actionable capability or improvement grounded in a user problem
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for an actionable feature proposal. For an early idea, open-ended design question, or general discussion, start in [GitHub Discussions](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/discussions).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched existing issues and discussions for this proposal.
+          required: true
+        - label: This request describes a user problem and a bounded outcome, not only a preferred implementation.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Who is affected, what are they trying to accomplish, and why are current workflows insufficient?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_outcome
+    attributes:
+      label: Proposed outcome
+      description: Describe the observable capability or workflow that should exist. Avoid expanding the request beyond the stated problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: Example workflow
+      description: Show a concrete before-and-after scenario, command, API shape, or user interaction.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe existing workarounds or alternative designs and their tradeoffs.
+
+  - type: textarea
+    id: scope_boundaries
+    attributes:
+      label: Suggested scope boundaries
+      description: State what should be included in the first version and what should explicitly remain out of scope.
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and compatibility considerations
+      description: Note possible security, privacy, data, migration, network, performance, provider, API, or backward-compatibility impact.
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to help design, implement, document, or test this feature.

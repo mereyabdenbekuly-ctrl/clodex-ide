@@ -1,0 +1,103 @@
+name: Reproducible bug
+description: Report a repeatable defect with enough detail for maintainers to reproduce it
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form is for a specific, reproducible product or code defect. Use the dedicated installation or provider form when the failure is limited to those areas.
+
+        A minimal reproduction is the fastest path to investigation. Remove secrets, private repository content, personal data, and sensitive logs before submitting.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched existing issues and did not find the same bug.
+          required: true
+        - label: I can reproduce this problem and have included the exact steps or a minimal reproduction.
+          required: true
+        - label: I removed secrets, credentials, private data, and sensitive content from the report and evidence.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Clodex version or commit
+      placeholder: "v0.1.0, build identifier, or commit abc1234"
+    validations:
+      required: true
+
+  - type: input
+    id: affected_area
+    attributes:
+      label: Affected area
+      description: Identify the application, package, runtime, command, or workflow where the bug occurs.
+      placeholder: "Electron app, CLI, agent runtime, MCP runtime, API client, update server, etc."
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, architecture, relevant runtime versions, execution mode, and any other condition needed to reproduce the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction and exact steps
+      description: Link a minimal public repository or provide the smallest safe example and numbered steps. State any required fixture or configuration without including secrets.
+      placeholder: |
+        Minimal reproduction: https://github.com/example/reproduction
+
+        1. Start from ...
+        2. Configure ...
+        3. Run ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual_behavior
+    attributes:
+      label: Actual behavior
+      description: Describe the result, frequency, and exact redacted error output.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Regression status
+      options:
+        - This worked in an earlier Clodex version
+        - This has never worked for me
+        - Unknown
+    validations:
+      required: true
+
+  - type: input
+    id: last_working_version
+    attributes:
+      label: Last known working version
+      description: Required only when this is a regression.
+      placeholder: "Version, build, or commit"
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence
+      description: Add screenshots, recordings, traces, stack output, or logs that demonstrate the bug. Explain timestamps or markers that matter.

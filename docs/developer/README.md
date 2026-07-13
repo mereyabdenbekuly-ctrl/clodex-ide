@@ -18,6 +18,12 @@ testing, packaging, and operational work.
 | [Testing and release](testing-and-release.md) | Test layers, typechecks, packaging, evidence gates, signing, and release channels |
 | [Operations and troubleshooting](operations-and-troubleshooting.md) | Common failures, recovery procedures, logs, and diagnostics |
 | [Status and roadmap](status-and-roadmap.md) | Implemented, gated, operationally pending, and planned work |
+| [Architecture decision records](../adr/README.md) | Durable trust-boundary and evidence constraints for contributors |
+| [Hybrid migration](../migration/README.md) | Strangler stages, parity matrix, provenance ledger, and cutover rules |
+| [Architecture boundaries](../architecture/BOUNDARIES.md) | Independent, migration, and legacy zones plus dependency and shadow-mode rules |
+| [Provenance policy](../governance/PROVENANCE_POLICY.md) | Independent implementation, AI assistance, third-party material, and DCO expectations |
+| [Security invariants](../security/INVARIANTS.md) | Authority, isolation, credentials, egress, replay, and side-effect constraints |
+| [Component registry](../provenance/components.yml) | Machine-readable component status, ownership, and dependency allowlists |
 
 ## Engineering principles
 

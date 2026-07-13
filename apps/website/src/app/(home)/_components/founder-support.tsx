@@ -75,7 +75,7 @@ export function FounderSection({ locale }: { locale: LandingLocale }) {
                     {copy.xProfile}
                   </a>
                   <a
-                    href="mailto:sales@clodex.io"
+                    href="mailto:support@clodex.xyz"
                     className={cn(
                       buttonVariants({ size: 'md', variant: 'secondary' }),
                       'w-full',

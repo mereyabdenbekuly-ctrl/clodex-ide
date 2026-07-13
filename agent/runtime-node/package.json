@@ -1,7 +1,7 @@
 {
   "name": "@clodex/agent-runtime-node",
   "version": "0.2.0",
-  "author": "clodex GmbH",
+  "author": "stagewise GmbH and Clodex contributors",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

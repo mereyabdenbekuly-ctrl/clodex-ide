@@ -1,0 +1,100 @@
+name: Provider problem
+description: Report a model provider, endpoint, authentication, routing, or response problem
+title: "[Provider]: "
+labels:
+  - "area: provider"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form when Clodex can start but a model provider, model endpoint, relay, or provider configuration does not work as expected.
+
+        Do not paste API keys, bearer tokens, request authorization headers, private endpoint credentials, full prompts containing private data, or unredacted provider responses.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched existing issues for this provider and error.
+          required: true
+        - label: I confirmed that no API keys, tokens, credentials, or private prompt content are included.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Clodex version or commit
+      placeholder: "v0.1.0 or commit abc1234"
+    validations:
+      required: true
+
+  - type: input
+    id: provider
+    attributes:
+      label: Provider or endpoint
+      description: Name the provider, relay, local runtime, or OpenAI-compatible endpoint type. Do not include credentials in the URL.
+      placeholder: "Provider name and endpoint type"
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model identifier
+      description: Provide the exact model identifier requested by Clodex, if applicable.
+      placeholder: "provider/model-name"
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and redacted configuration
+      description: Include OS, connection path, relevant non-secret settings, custom base URL shape, proxy/VPN use, and local-runtime version where applicable.
+      placeholder: |
+        OS: ...
+        Connection: direct / relay / local / custom compatible endpoint
+        Base URL shape: https://example.invalid/v1 (no credentials)
+        Proxy or VPN: ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: outside_clodex
+    attributes:
+      label: Does the same provider and model work outside Clodex?
+      options:
+        - "Yes"
+        - "No"
+        - Not tested
+        - Not applicable
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Describe the smallest sequence that consistently triggers the provider problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed_result
+    attributes:
+      label: Observed result
+      description: Include the exact redacted status code, error message, routing result, or response behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_result
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Add relevant request metadata, logs, health-check output, or screenshots. Remove authorization headers, keys, prompt content, and private data.

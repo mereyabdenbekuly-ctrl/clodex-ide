@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "common_development_dependencies": [
+    "@clodex/typescript-config",
+    "@types/node",
+    "typescript",
+    "vitest"
+  ],
+  "components": {
+    "clodex-contracts": {
+      "status": "independent",
+      "owner": "core",
+      "paths": ["packages/clodex-contracts/**"],
+      "package_name": "@clodex/contracts",
+      "allowed_internal_dependencies": [],
+      "allowed_external_dependencies": [],
+      "allowed_builtins": [],
+      "allowed_typescript_libs": ["es2022"],
+      "allowed_typescript_types": [],
+      "enforce_dependency_allowlist": true
+    },
+    "clodex-kernel": {
+      "status": "independent",
+      "owner": "core",
+      "planned_paths": ["packages/clodex-kernel/**"],
+      "package_name": "@clodex/kernel",
+      "allowed_internal_dependencies": ["clodex-contracts"],
+      "allowed_external_dependencies": [],
+      "allowed_builtins": [],
+      "allowed_typescript_libs": ["es2022"],
+      "allowed_typescript_types": [],
+      "enforce_dependency_allowlist": true
+    },
+    "clodex-guardian": {
+      "status": "independent",
+      "owner": "security",
+      "planned_paths": ["packages/clodex-guardian/**"],
+      "package_name": "@clodex/guardian",
+      "allowed_internal_dependencies": ["clodex-contracts"],
+      "allowed_external_dependencies": [],
+      "allowed_builtins": [],
+      "allowed_typescript_libs": ["es2022"],
+      "allowed_typescript_types": [],
+      "enforce_dependency_allowlist": true
+    },
+    "clodex-ledger": {
+      "status": "independent",
+      "owner": "core",
+      "planned_paths": ["packages/clodex-ledger/**"],
+      "package_name": "@clodex/ledger",
+      "allowed_internal_dependencies": ["clodex-contracts"],
+      "allowed_external_dependencies": [],
+      "allowed_builtins": [],
+      "allowed_typescript_libs": ["es2022"],
+      "allowed_typescript_types": [],
+      "enforce_dependency_allowlist": true
+    },
+    "clodex-evidence": {
+      "status": "independent",
+      "owner": "security",
+      "planned_paths": ["packages/clodex-evidence/**"],
+      "package_name": "@clodex/evidence",
+      "allowed_internal_dependencies": ["clodex-contracts"],
+      "allowed_external_dependencies": [],
+      "allowed_builtins": [],
+      "allowed_typescript_libs": ["es2022"],
+      "allowed_typescript_types": [],
+      "enforce_dependency_allowlist": true
+    },
+    "clodex-runtime": {
+      "status": "independent",
+      "owner": "runtime",
+      "planned_paths": ["packages/clodex-runtime/**"],
+      "package_name": "@clodex/runtime",
+      "allowed_internal_dependencies": [
+        "clodex-contracts",
+        "clodex-evidence",
+        "clodex-guardian",
+        "clodex-kernel",
+        "clodex-ledger"
+      ],
+      "allowed_external_dependencies": [],
+      "allowed_builtins": [],
+      "allowed_typescript_libs": ["es2022"],
+      "allowed_typescript_types": [],
+      "enforce_dependency_allowlist": true
+    },
+    "legacy-karton-adapter": {
+      "status": "migration",
+      "owner": "desktop",
+      "planned_paths": ["apps/browser/src/backend/adapters/clodex/**"],
+      "source_of_truth": "legacy",
+      "removal_issue": "TBD before implementation",
+      "enforce_dependency_allowlist": false
+    },
+    "browser-legacy": {
+      "status": "legacy",
+      "owner": "desktop",
+      "paths": ["apps/browser/**"],
+      "replacement": "planned",
+      "enforce_dependency_allowlist": false
+    },
+    "agent-foundations-legacy": {
+      "status": "legacy",
+      "owner": "runtime",
+      "paths": [
+        "agent/runtime-node/**",
+        "packages/agent-core/**",
+        "packages/agent-shell/**"
+      ],
+      "replacement": "audit pending",
+      "enforce_dependency_allowlist": false
+    },
+    "karton-legacy": {
+      "status": "legacy",
+      "owner": "desktop",
+      "paths": ["packages/karton/**"],
+      "replacement": "planned",
+      "enforce_dependency_allowlist": false
+    },
+    "stage-ui-legacy": {
+      "status": "legacy",
+      "owner": "desktop",
+      "paths": ["packages/stage-ui/**"],
+      "replacement": "planned",
+      "enforce_dependency_allowlist": false
+    }
+  }
+}

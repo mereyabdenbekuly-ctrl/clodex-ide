@@ -100,7 +100,7 @@ export function Footer() {
               X · @CLODEx_lab
             </a>
             <a
-              href="mailto:sales@clodex.io"
+              href="mailto:support@clodex.xyz"
               className="text-muted-foreground transition-colors hover:text-foreground"
             >
               {locale === 'ru' ? 'Контакты' : 'Contact'}
@@ -108,7 +108,9 @@ export function Footer() {
           </div>
         </div>
         <div className="mt-8 flex flex-col gap-2 border-border-subtle border-t pt-5 text-muted-foreground/70 text-xs sm:flex-row sm:items-center sm:justify-between">
-          <span>© {new Date().getFullYear()} Clodex. All rights reserved.</span>
+          <span>
+            © {new Date().getFullYear()} Clodex contributors · AGPL-3.0
+          </span>
           <span>
             {locale === 'ru'
               ? 'Исходный код Clodex распространяется по лицензии AGPLv3.'

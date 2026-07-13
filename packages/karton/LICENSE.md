@@ -1,6 +1,7 @@
 MIT License
 
-Copyright (c) 2025 clodex GmbH
+Copyright (c) 2025 stagewise GmbH
+Copyright (c) 2026 Merey Abdenbekuly and Clodex contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

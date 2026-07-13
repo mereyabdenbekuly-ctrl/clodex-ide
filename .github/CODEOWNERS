@@ -1,0 +1,46 @@
+# Default owner for every tracked file.
+* @mereyabdenbekuly-ctrl
+
+# Repository governance and contribution controls.
+/.github/ @mereyabdenbekuly-ctrl
+/CONTRIBUTING.md @mereyabdenbekuly-ctrl
+/DCO @mereyabdenbekuly-ctrl
+/SECURITY.md @mereyabdenbekuly-ctrl
+/SUPPORT.md @mereyabdenbekuly-ctrl
+
+# Privileged application, agent, provider, MCP, credential, and execution boundaries.
+/agent/runtime-node/ @mereyabdenbekuly-ctrl
+/apps/browser/src/backend/ @mereyabdenbekuly-ctrl
+/apps/browser/src/quick-task-preload/ @mereyabdenbekuly-ctrl
+/apps/browser/src/shared/credential-types/ @mereyabdenbekuly-ctrl
+/apps/browser/src/ui-preload/ @mereyabdenbekuly-ctrl
+/apps/browser/src/web-content-preload/ @mereyabdenbekuly-ctrl
+/apps/clodex-cli/ @mereyabdenbekuly-ctrl
+/apps/update-server/ @mereyabdenbekuly-ctrl
+/packages/agent-core/ @mereyabdenbekuly-ctrl
+/packages/agent-shell/ @mereyabdenbekuly-ctrl
+/packages/api-client/ @mereyabdenbekuly-ctrl
+/packages/clodex-*/ @mereyabdenbekuly-ctrl
+/packages/mcp-runtime/ @mereyabdenbekuly-ctrl
+/packages/runner-sdk/ @mereyabdenbekuly-ctrl
+
+# Security, release, dependency, and publication automation.
+/.github/dependabot.yml @mereyabdenbekuly-ctrl
+/.github/workflows/ @mereyabdenbekuly-ctrl
+/docs/security/ @mereyabdenbekuly-ctrl
+/docs/adr/ @mereyabdenbekuly-ctrl
+/docs/architecture/ @mereyabdenbekuly-ctrl
+/docs/governance/ @mereyabdenbekuly-ctrl
+/docs/migration/ @mereyabdenbekuly-ctrl
+/docs/provenance/ @mereyabdenbekuly-ctrl
+/scripts/ci/ @mereyabdenbekuly-ctrl
+/scripts/release/ @mereyabdenbekuly-ctrl
+/scripts/security/ @mereyabdenbekuly-ctrl
+
+# Workspace and environment contracts that affect every package or deployment.
+/.env.example @mereyabdenbekuly-ctrl
+/package.json @mereyabdenbekuly-ctrl
+/pnpm-lock.yaml @mereyabdenbekuly-ctrl
+/pnpm-workspace.yaml @mereyabdenbekuly-ctrl
+/tsconfig.json @mereyabdenbekuly-ctrl
+/turbo.json @mereyabdenbekuly-ctrl

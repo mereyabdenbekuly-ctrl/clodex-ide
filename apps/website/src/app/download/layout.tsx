@@ -12,11 +12,11 @@ export const metadata: Metadata = {
   twitter: {
     title: 'Download Clodex · Agentic IDE',
     description: 'Download clodex for macOS, Windows, and Linux.',
-    creator: '@clodex_io',
+    creator: '@CLODEx_lab',
   },
   category: 'technology',
   alternates: {
-    canonical: 'https://clodex.io/download',
+    canonical: 'https://ide.clodex.xyz/download',
   },
   robots: { index: true, follow: true },
 };
