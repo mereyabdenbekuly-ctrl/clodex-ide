@@ -27,33 +27,8 @@ if (started) {
   app.quit();
 }
 
-const appBaseName = (() => {
-  switch (__APP_RELEASE_CHANNEL__) {
-    case 'release':
-      return 'clodex';
-    case 'nightly':
-      return 'clodex-nightly';
-    case 'prerelease':
-      return 'clodex-prerelease';
-    case 'dev':
-    default:
-      return 'clodex-dev';
-  }
-})();
-
-const appName = (() => {
-  switch (__APP_RELEASE_CHANNEL__) {
-    case 'release':
-      return 'Clodex Agentic IDE';
-    case 'nightly':
-      return 'Clodex Agentic IDE Nightly';
-    case 'prerelease':
-      return 'Clodex Agentic IDE (Pre-Release)';
-    case 'dev':
-    default:
-      return 'Clodex Agentic IDE (Dev-Build)';
-  }
-})();
+const appBaseName = __APP_BASE_NAME__;
+const appName = __APP_NAME__;
 
 // Set the app name for macOS menu bar
 app.setName(appName);

@@ -3,6 +3,7 @@ declare const __APP_RELEASE_CHANNEL__:
   | 'prerelease'
   | 'nightly'
   | 'release';
+declare const __APP_LOCAL_BUILD_ID__: string;
 declare const __APP_BASE_NAME__: string;
 declare const __APP_NAME__: string;
 declare const __APP_BUNDLE_ID__: string;

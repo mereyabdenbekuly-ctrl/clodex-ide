@@ -2,10 +2,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import semver from 'semver';
+import {
+  resolveAppIdentity,
+  type AppReleaseChannel,
+} from './src/shared/local-build-identity';
 
 // Release channel: 'dev' | 'prerelease' | 'nightly' | 'release'
-type ReleaseChannel = 'dev' | 'prerelease' | 'nightly' | 'release';
-export const __APP_RELEASE_CHANNEL__: ReleaseChannel = (() => {
+export const __APP_RELEASE_CHANNEL__: AppReleaseChannel = (() => {
   switch (process.env.RELEASE_CHANNEL) {
     case 'release':
       return 'release';
@@ -26,48 +29,17 @@ const packageJson = JSON.parse(
   readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'),
 );
 
-export const __APP_BASE_NAME__ = (() => {
-  switch (__APP_RELEASE_CHANNEL__) {
-    case 'release':
-      return 'clodex';
-    case 'nightly':
-      return 'clodex-nightly';
-    case 'prerelease':
-      return 'clodex-prerelease';
-    case 'dev':
-    default:
-      return 'clodex-dev';
-  }
-})();
+const appIdentity = resolveAppIdentity({
+  releaseChannel: __APP_RELEASE_CHANNEL__,
+  localBuildId: process.env.CLODEX_LOCAL_BUILD_ID,
+  allowUnsignedLocalBuild:
+    process.env.CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD === 'true',
+});
 
-// App name includes channel suffix for differentiation
-export const __APP_NAME__ = (() => {
-  switch (__APP_RELEASE_CHANNEL__) {
-    case 'release':
-      return 'Clodex Agentic IDE';
-    case 'nightly':
-      return 'Clodex Agentic IDE Nightly';
-    case 'prerelease':
-      return 'Clodex Agentic IDE (Pre-Release)';
-    case 'dev':
-    default:
-      return 'Clodex Agentic IDE (Dev-Build)';
-  }
-})();
-
-export const __APP_BUNDLE_ID__ = (() => {
-  switch (__APP_RELEASE_CHANNEL__) {
-    case 'release':
-      return 'xyz.clodex.agentic-ide';
-    case 'nightly':
-      return 'xyz.clodex.agentic-ide.nightly';
-    case 'prerelease':
-      return 'xyz.clodex.agentic-ide.prerelease';
-    case 'dev':
-    default:
-      return 'xyz.clodex.agentic-ide.dev';
-  }
-})();
+export const __APP_LOCAL_BUILD_ID__ = appIdentity.localBuildId;
+export const __APP_BASE_NAME__ = appIdentity.baseName;
+export const __APP_NAME__ = appIdentity.appName;
+export const __APP_BUNDLE_ID__ = appIdentity.bundleId;
 
 export const __APP_VERSION__ = (() => {
   const override = process.env.APP_VERSION_OVERRIDE;

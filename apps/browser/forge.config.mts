@@ -12,6 +12,7 @@ import { SquirrelInstallerNameFixPlugin } from './etc/forge-plugins/squirrel-ins
 import { getWindowsSignConfig } from './etc/windows/windowsSign';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { execFileSync, execSync } from 'node:child_process';
 import * as buildConstants from './build-constants';
 import {
@@ -43,10 +44,40 @@ const visualAssetChannel =
 const bundledAssetsPath = path.resolve(__dirname, 'bundled');
 const allowUnsignedLocalBuild =
   process.env.CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD === 'true';
-const packagerIconPath = path.resolve(
-  __dirname,
-  `assets/icons/${visualAssetChannel}/icon.icns`,
-);
+
+const resolvePackagerIconPath = (): string => {
+  const iconBasePath = path.resolve(
+    __dirname,
+    `assets/icons/${visualAssetChannel}/icon`,
+  );
+  if (!allowUnsignedLocalBuild || process.platform !== 'darwin') {
+    return `${iconBasePath}.icns`;
+  }
+
+  /*
+   * Electron Packager probes for a sibling `.icon` asset even when its icon
+   * option explicitly points at an `.icns` file. On macOS versions before 26,
+   * that makes local packaging fail as soon as both formats share a basename.
+   * Copy the legacy icon to an isolated basename so Packager can only discover
+   * the `.icns` variant. Other builds keep the existing canonical `.icns`
+   * path unchanged.
+   */
+  const localIconDirectory = path.join(
+    os.tmpdir(),
+    'clodex-electron-packager-icons',
+    visualAssetChannel,
+  );
+  const localIconPath = path.join(localIconDirectory, 'legacy-app.icns');
+  fs.mkdirSync(localIconDirectory, { recursive: true });
+  fs.rmSync(path.join(localIconDirectory, 'legacy-app.icon'), {
+    recursive: true,
+    force: true,
+  });
+  fs.copyFileSync(`${iconBasePath}.icns`, localIconPath);
+  return localIconPath;
+};
+
+const packagerIconPath = resolvePackagerIconPath();
 
 if (allowUnsignedLocalBuild && process.env.CI) {
   throw new Error(
@@ -202,7 +233,17 @@ const signUnsignedLocalMacApplication = (
     );
     execFileSync(
       '/usr/bin/codesign',
-      ['--force', '--deep', '--sign', '-', appPath],
+      [
+        '--force',
+        '--deep',
+        '--sign',
+        '-',
+        '--identifier',
+        buildConstants.__APP_BUNDLE_ID__,
+        '--requirements',
+        `=designated => identifier "${buildConstants.__APP_BUNDLE_ID__}"`,
+        appPath,
+      ],
       { stdio: 'inherit' },
     );
     execFileSync('/usr/bin/codesign', [
