@@ -42,8 +42,10 @@ export function DownloadButtons({
         'https://ide.clodex.xyz/downloads/clodex-1.16.0-arm64.dmg',
       );
     } else if (platform.includes('win') || userAgent.includes('win')) {
-      setUserOS('Windows');
-      setDownloadUrl('https://dl.clodex.io/download/clodex/release/win/x64');
+      setUserOS('Windows · x64 Preview');
+      setDownloadUrl(
+        'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-preview.1-windows-x64/clodex-1.16.0-x64-setup.exe',
+      );
     } else if (platform.includes('linux') || userAgent.includes('linux')) {
       setUserOS('Linux');
       setDownloadUrl(
