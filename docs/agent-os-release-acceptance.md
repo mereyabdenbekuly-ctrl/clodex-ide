@@ -68,6 +68,10 @@ As expected for an ad-hoc rehearsal build, Gatekeeper rejected the app and
 
 ## Requirements for the distributable RC
 
+The exact GitHub `Release` Environment manifest, content-free blocker codes,
+and readiness-only commands are maintained in
+[`release-signing-readiness.md`](./release-signing-readiness.md).
+
 The final build requires all of the following:
 
 1. A `Developer ID Application` certificate with its private key imported into

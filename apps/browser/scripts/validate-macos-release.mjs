@@ -19,6 +19,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  inspectDeveloperIdSignature,
+  inspectUpdateServerOrigin,
+  parseCodesignAuthorities,
+} from '../../../scripts/release/signing-readiness.mjs';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const browserDirectory = path.resolve(scriptDirectory, '..');
@@ -241,6 +246,7 @@ function inspectSignature(appPath) {
     output.match(/^CodeDirectory\s+(.+)$/m)?.[1]?.trim() ??
     value('CodeDirectory');
   return {
+    authorities: parseCodesignAuthorities(output),
     codeDirectory,
     hardenedRuntime: /\bruntime\b/.test(codeDirectory ?? ''),
     identifier: value('Identifier'),
@@ -262,6 +268,12 @@ function assertSignatureSecurity(signature, allowAdhoc, label) {
   }
   if (!signature.teamIdentifier || signature.teamIdentifier === 'not set') {
     throw new Error(`${label} does not have a signing team identifier`);
+  }
+  const developerId = inspectDeveloperIdSignature(signature);
+  if (!developerId.ok) {
+    throw new Error(
+      `${label} is not a valid Developer ID Application signature [${developerId.code}]`,
+    );
   }
 }
 
@@ -688,16 +700,17 @@ async function main() {
     buildEnvironment.CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD = 'true';
   }
 
-  const updateServerConfigured = Boolean(
-    process.env.UPDATE_SERVER_ORIGIN?.trim(),
+  const updateServer = inspectUpdateServerOrigin(
+    process.env.UPDATE_SERVER_ORIGIN,
   );
+  const updateServerConfigured = updateServer.ok;
   if (
     !options.allowAdhoc &&
     options.channel !== 'dev' &&
     !updateServerConfigured
   ) {
     throw new Error(
-      'UPDATE_SERVER_ORIGIN must be configured for distributable builds',
+      `UPDATE_SERVER_ORIGIN must be a valid HTTPS update-server URL for distributable builds [${updateServer.code}]`,
     );
   }
 

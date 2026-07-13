@@ -68,6 +68,7 @@ jobs:
   promotion-gate:
     name: Validate release safety gates
     runs-on: ubuntu-latest
+    environment: Release
     steps:
       - name: Validate release channel input
         shell: bash
@@ -82,8 +83,15 @@ jobs:
               ;;
           esac
 
-      - name: Validate distributable release configuration
-        shell: bash
+      - name: Checkout release candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate signing and update-server contract
+        id: signing-readiness
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -98,44 +106,30 @@ jobs:
           AZURE_ACCOUNT_ENDPOINT_URI: ${{ secrets.AZURE_ACCOUNT_ENDPOINT_URI }}
           AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
           UPDATE_SERVER_ORIGIN: ${{ vars.UPDATE_SERVER_ORIGIN }}
-        run: |
-          set -euo pipefail
-          required=(
-            APPLE_ID
-            APPLE_PASSWORD
-            APPLE_TEAM_ID
-            APPLE_SIGNING_IDENTITY
-            MACOS_CERT_P12_BASE64
-            MACOS_CERT_P12_PASSWORD
-            AZURE_TENANT_ID
-            AZURE_CLIENT_ID
-            AZURE_CLIENT_SECRET
-            AZURE_ACCOUNT_NAME
-            AZURE_ACCOUNT_ENDPOINT_URI
-            AZURE_CERTIFICATE_PROFILE_NAME
-            UPDATE_SERVER_ORIGIN
-          )
-          missing=()
-          for name in "${required[@]}"; do
-            if [ -z "${!name:-}" ]; then
-              missing+=("$name")
-            fi
-          done
-          if [ "${#missing[@]}" -gt 0 ]; then
-            printf '::error::Missing distributable release configuration: %s\n' "${missing[*]}"
-            exit 1
-          fi
+        run: >-
+          node scripts/release/signing-readiness.mjs
+          --artifacts=all
+          --github-annotations
+          --report=${{ runner.temp }}/release-signing-readiness.json
+          --summary=${{ runner.temp }}/release-signing-readiness.md
+
+      - name: Publish signing readiness summary
+        if: always() && steps.signing-readiness.outcome != 'skipped'
+        shell: bash
+        run: cat "${{ runner.temp }}/release-signing-readiness.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload signing readiness report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clodex-signing-readiness-${{ inputs.channel }}
+          path: ${{ runner.temp }}/release-signing-readiness.json
+          retention-days: 30
+          if-no-files-found: error
 
       - name: Skip isolated runtime gates for nightly
         if: inputs.channel == 'nightly'
         run: echo "Nightly uses its separately validated default-on canary policy."
-
-      - name: Checkout release candidate
-        if: inputs.channel != 'nightly'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ inputs.ref }}
-          fetch-depth: 0
 
       - name: Setup pnpm
         if: inputs.channel != 'nightly'
