@@ -11,7 +11,7 @@ const CLODEX_APP_SCHEME = 'clodex-ide';
  * Service responsible for registering the app as the default protocol client for auth callback URLs.
  * This enables the OS to route configured callback scheme URLs to this app.
  *
- * Note: URL handling is done in main.ts via setupUrlHandlers() and handleCommandLineUrls().
+ * Note: URL handling is done in startup/url-routing.ts.
  * This service only sets up the protocol registration.
  */
 export class URIHandlerService extends DisposableService {

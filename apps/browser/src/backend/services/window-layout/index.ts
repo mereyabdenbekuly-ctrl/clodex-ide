@@ -651,7 +651,7 @@ export class WindowLayoutService extends DisposableService {
         if (this.baseWindow.isMinimized()) this.baseWindow.restore();
         this.baseWindow.focus();
       }
-      // URL handling is done in main.ts
+      // URL handling is done in startup/url-routing.ts
     });
 
     // Initialize browser state
