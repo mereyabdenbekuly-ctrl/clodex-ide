@@ -1,7 +1,7 @@
 import { Button } from '@clodex/stage-ui/components/button';
+import { cn } from '@clodex/stage-ui/lib/utils';
 import { HotkeyActions } from '@shared/hotkeys';
 import { HotkeyCombo } from '@ui/components/hotkey-combo';
-import { cn } from '@ui/utils';
 import {
   ArrowUpIcon,
   CheckIcon,
