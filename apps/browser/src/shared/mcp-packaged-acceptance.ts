@@ -54,7 +54,12 @@ export const mcpPackagedAcceptanceReportSchema = z
   })
   .strict()
   .superRefine((report, context) => {
-    for (const [index, id] of MCP_PACKAGED_ACCEPTANCE_CHECK_IDS.entries()) {
+    for (
+      let index = 0;
+      index < MCP_PACKAGED_ACCEPTANCE_CHECK_IDS.length;
+      index += 1
+    ) {
+      const id = MCP_PACKAGED_ACCEPTANCE_CHECK_IDS[index];
       const check = report.checks[index];
       if (check?.id !== id) {
         context.addIssue({
