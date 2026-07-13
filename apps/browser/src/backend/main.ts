@@ -3,20 +3,9 @@
  */
 
 import { app, powerMonitor } from 'electron';
-import {
-  generateText,
-  stepCountIs,
-  tool,
-  type ModelMessage,
-  type ToolSet,
-} from 'ai';
-import { AuthService } from './services/auth';
+import { generateText, stepCountIs, type ModelMessage, type ToolSet } from 'ai';
 import { AgentManagerService } from './services/agent-manager';
 import { enrichHistoryEntryWorkspaces } from './services/agent-manager/history-workspace-enrichment';
-import { UserExperienceService } from './services/experience';
-import { FilePickerService } from './services/file-picker';
-import { AppMenuService } from './services/app-menu';
-import { URIHandlerService } from './services/uri-handler';
 import { Logger } from './services/logger';
 import { createMainShutdownCoordinator } from './services/shutdown-coordinator';
 import { isUIEventName, parseUIEventProperties } from './services/telemetry';
@@ -45,8 +34,6 @@ import { AgentTypes } from '@shared/karton-contracts/ui/agent';
 import type { MountPermission } from '@shared/karton-contracts/ui/agent/metadata';
 import type { UserPreferences } from '@shared/karton-contracts/ui/shared-types';
 import { WorktreeSetupSettingsService } from './services/worktree-setup-settings';
-import { DevToolAPIService } from './services/dev-tool-api';
-import { ToolboxService } from './services/toolbox';
 import {
   createAgentCoreSeam,
   attachAgentCoreBridge,
@@ -65,13 +52,6 @@ import {
 import { createLazyBrowserHostModels } from './services/agent-core-bridge/host-models';
 import { createBrowserAgentTypeRegistry } from './agents/agents-registry';
 import { buildLocalWorkspaceSnapshotMetadata } from './agent-host/workspace-snapshot-builder';
-import { CredentialsService } from './services/credentials';
-import { McpRegistryService } from './services/mcp';
-import { McpHostSupervisor } from './mcp-host';
-import { McpOAuthService } from './services/mcp/oauth';
-import { discoverPluginMcpServers } from './services/mcp/plugin-bridge';
-import { McpSettingsService } from './services/mcp/settings';
-import { ModelProviderService } from './agents/model-provider';
 import { wirePagesRuntime } from './wiring/pages-runtime';
 import { wireFileTreeSwarmRpc } from './wiring/file-tree-swarm-rpc';
 import { wireSettingsBrowserRpc } from './wiring/settings-browser-rpc';
@@ -81,28 +61,22 @@ import {
   getNetworkPolicyAuditPath,
   getInstalledPluginsDir,
   getPluginsPath,
-  getBuiltinSkillsPath,
 } from './utils/paths';
 import { migrateLegacyPaths } from './utils/migrate-legacy-paths';
 import { readPersistedDataSync } from './utils/persisted-data';
 import { z } from 'zod';
 import { runFoundationalServicesPhase } from './startup/phases/foundational-services';
 import { discoverPlugins } from './utils/discover-plugins';
-import { discoverSkills } from './agents/shared/prompts/utils/get-skills';
-import type { Skill } from './agents/shared/prompts/utils/get-skills';
-import type { SkillDefinition, SkillDefinitionUI } from '@shared/skills';
+import type { SkillDefinitionUI } from '@shared/skills';
 import { isCloudTaskKillSwitchActive } from '@shared/cloud-task-rollout';
-import { isClodexCloudSelected } from '@shared/provider-consent';
 import {
   EvidenceMemoryCanaryController,
   getEvidenceMemoryRolloutPolicy,
   isEvidenceMemoryInjectionDisabled,
 } from '@shared/evidence-memory-rollout';
-import { AssetCacheService } from './services/asset-cache';
 import { NetworkEgressControlCenterService } from './services/network-policy/control-center';
 import { initializeGuardianEgressStartup } from './services/network-policy/startup';
 import path from 'node:path';
-import { readFile as readFsFile } from 'node:fs/promises';
 import {
   createCloudTaskRuntime,
   type CloudTaskRuntimeResult,
@@ -120,7 +94,6 @@ import {
   createExecutionTargetRouter,
 } from './agent-host';
 import { CloudTaskTeleportController } from './services/cloud-task-teleport';
-import { createBrowserIsolatedAgentTurnHandlers } from './agent-host/browser-turn-adapter';
 import { BrowserSwarmStore } from './services/swarm-orchestrator';
 import {
   createAgentsMdDomainAdapter,
@@ -144,19 +117,12 @@ import { createNetworkGuardianRequest } from './services/guardian/requests';
 import { MemoryNotesSettingsService } from './services/memory-notes-settings';
 import { EvidenceMemoryInspectorService } from './services/evidence-memory-inspector';
 import { EvidenceMemoryDogfoodBackfill } from './services/evidence-memory-dogfood-backfill';
-import { createEvidenceMemoryModelSummarizer } from './services/evidence-memory-model-summarizer';
-import { DictationService } from './services/dictation';
-import { HostedPullRequestService } from './services/hosted-pull-request';
 import {
   GeneratedAppLibraryService,
   type GeneratedAppOwnerSnapshot,
 } from './services/generated-app-library';
 import { QuickTaskWindowService } from './services/quick-task-window';
 import { CloudTaskArtifactService } from './services/cloud-task-artifacts';
-import { RemoteConnectionsService } from './services/remote-connections';
-import { PluginMarketplaceService } from './services/plugin-marketplace';
-import { PrivateMarketplaceSourcesService } from './services/plugin-marketplace/private-sources';
-import { OFFICIAL_PLUGIN_MARKETPLACE_KEYS } from './services/plugin-marketplace/trusted-keys';
 import {
   AutomationService,
   createAutomationAgentMessage,
@@ -174,6 +140,8 @@ import {
 } from './session-recovery-acceptance';
 import { SESSION_RECOVERY_ACCEPTANCE_SWITCH } from '../shared/session-recovery-acceptance';
 import { prepareProtectedStorage } from './startup/phases/prepare-protected-storage';
+import { runModelToolboxRuntimePhase } from './startup/phases/model-toolbox-runtime';
+import { runPlatformIntegrationServicesPhase } from './startup/phases/platform-integration-services';
 
 export type MainParameters = {
   launchOptions: {
@@ -603,509 +571,74 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     },
   );
 
-  // Start remaining services that are irrelevant to non-regular operation of the app.
-  const filePickerService = await FilePickerService.create(logger, uiKarton);
-
-  // DevToolAPIService handles devtools-related functionality and state
-  const _devToolAPIService = await DevToolAPIService.create(
-    logger,
-    uiKarton,
-    windowLayoutService,
-  );
-
-  // URIHandlerService registers the app as the default protocol client for clodex://
-  // URL handling is delegated to startup/url-routing.ts
-  await URIHandlerService.create(logger);
-
-  const authService = await AuthService.create(
-    identifierService,
-    uiKarton,
-    notificationService,
-    logger,
-  );
-
-  // Wire auth callback handler so social sign-in / protocol URLs are
-  // routed to AuthService instead of opened as browser tabs.
-  registerAuthCallbackHandler((url) => authService.handleAuthCallbackUrl(url));
-
-  const userExperienceService = await UserExperienceService.create(
-    logger,
-    uiKarton,
-    telemetryService,
-    gitService,
-    () => persistence.agentDb.getOldestAgentCreatedAt(),
-    () => persistence.agentDb.getAgentCount(),
-  );
-
-  const credentialsService = await CredentialsService.create(logger);
-
-  credentialsService.setAccessTokenProvider(() => authService.accessToken);
-  await preferencesService.migrateProviderProfiles(
-    credentialsService,
-    authService.modelAccessToken,
-  );
-  authService.registerAuthStateChangeCallback(() => {
-    void preferencesService
-      .syncClodexAccountProfile(
-        credentialsService,
-        authService.modelAccessToken,
-      )
-      .catch((error) =>
-        logger.error(
-          `[PreferencesService] Failed to sync Clodex provider profile: ${error}`,
-        ),
-      );
-  });
-  const isClodexCloudEnabled = () =>
-    isClodexCloudSelected(
-      preferencesService.get(),
-      Boolean(authService.accessToken),
-    );
-  const mcpOAuthService = await McpOAuthService.create({ logger });
-  const guardianEgressRemoteMcp = guardianEgressStartup.remoteMcp;
-  const mcpRegistryService = await McpRegistryService.create({
-    logger,
-    credentialsService,
-    oauthService: mcpOAuthService,
-    ...(guardianEgressRemoteMcp.enabled
-      ? {
-          createHost: async (hostOptions) =>
-            await McpHostSupervisor.create(logger, {
-              ...hostOptions,
-              resolveNetworkProxy: guardianEgressRemoteMcp.resolveNetworkProxy,
-              revokeNetworkProxy: guardianEgressRemoteMcp.revokeNetworkProxy,
-            }),
-        }
-      : {}),
-  });
-  registerMcpOAuthCallbackHandler((url) =>
-    mcpRegistryService.handleOAuthCallback(url),
-  );
-  const mcpSettingsService = await McpSettingsService.create({
-    logger,
-    karton: uiKarton,
-    registry: mcpRegistryService,
-    credentials: credentialsService,
-  });
-  const syncMarketplaceMcpServers = async (
-    installed: ReturnType<PluginMarketplaceService['getState']>['installed'],
-  ) => {
-    const servers = await discoverPluginMcpServers({
-      installedDir: getInstalledPluginsDir(),
-      installed,
-      isExecutableRuntimeEnabled: () =>
-        resolveFeatureGate(
-          'executable-extensions',
-          preferencesService.get().featureGates.overrides,
-          __APP_RELEASE_CHANNEL__,
-        ).enabled,
-    });
-    await mcpRegistryService.syncPluginServers(servers);
-  };
-  let toolboxServiceForMarketplace: ToolboxService | null = null;
-  const pluginMarketplaceService = await PluginMarketplaceService.create({
-    logger,
-    karton: uiKarton,
-    appVersion: __APP_VERSION__,
-    trustedKeys: OFFICIAL_PLUGIN_MARKETPLACE_KEYS,
-    isFeatureEnabled: (feature) =>
-      resolveFeatureGate(
-        feature,
-        preferencesService.get().featureGates.overrides,
-        __APP_RELEASE_CHANNEL__,
-      ).enabled,
-    onPluginsChanged: async () => {
-      await refreshPluginDefinitions();
-      toolboxServiceForMarketplace?.refreshPluginSkills();
-      await syncMarketplaceMcpServers(
-        pluginMarketplaceService.getState().installed,
-      );
-    },
-    audit: (event) => {
-      telemetryService.capture('plugin-marketplace-operation', {
-        operation: event.operation,
-        success: event.success,
-        duration_ms: event.durationMs,
-        plugin_id: event.pluginId,
-        version: event.version,
-        permission_count: event.permissionCount,
-        catalog_size: event.catalogSize,
-        key_id: event.keyId,
-      });
-    },
-  });
-  const privateMarketplaceSourcesService =
-    await PrivateMarketplaceSourcesService.create({
-      logger,
-      karton: uiKarton,
-      appVersion: __APP_VERSION__,
-      installer: pluginMarketplaceService,
-      isFeatureEnabled: (feature) =>
-        resolveFeatureGate(
-          feature,
-          preferencesService.get().featureGates.overrides,
-          __APP_RELEASE_CHANNEL__,
-        ).enabled,
-    });
-  await refreshPluginDefinitions();
-  await syncMarketplaceMcpServers(
-    pluginMarketplaceService.getState().installed,
-  );
-
-  const hostedPullRequestService = await HostedPullRequestService.create({
-    logger,
-    telemetryService,
-    credentialsService,
-    gitService,
-  });
-  const toolboxService = await ToolboxService.create(
-    logger,
-    uiKarton,
-    diffHistoryService,
-    pendingEditService,
-    windowLayoutService,
+  const {
     authService,
-    telemetryService,
-    filePickerService,
     userExperienceService,
     credentialsService,
+    mcpOAuthService,
     mcpRegistryService,
+    mcpSettingsService,
+    pluginMarketplaceService,
+    privateMarketplaceSourcesService,
+    hostedPullRequestService,
+    toolboxService,
+    remoteConnectionsService,
+    isClodexCloudEnabled,
+    startBuiltinSkillsSync,
+  } = await runPlatformIntegrationServicesPhase({
+    logger,
+    verbose,
+    releaseChannel: __APP_RELEASE_CHANNEL__,
+    appVersion: __APP_VERSION__,
+    uiKarton,
+    windowLayoutService,
+    identifierService,
+    notificationService,
+    telemetryService,
     gitService,
+    persistence,
     preferencesService,
+    registerAuthCallbackHandler,
+    registerMcpOAuthCallbackHandler,
+    guardianEgressStartup,
+    diffHistoryService,
+    pendingEditService,
     detectedShell,
     resolvedEnvPromise,
-    agentCoreSeam.store,
-    agentCoreSeam.hostAgentStateMutations,
+    agentStore: agentCoreSeam.store,
+    hostAgentStateMutations: agentCoreSeam.hostAgentStateMutations,
     attachments,
-    persistence.memoryNotes,
     agentHostProcessService,
     protectedFiles,
-  );
-  toolboxService.setNetworkPolicyEvaluator(
-    guardianEgressStartup.networkPolicyEvaluator,
-  );
-  toolboxServiceForMarketplace = toolboxService;
-  mcpRegistryService.setElicitationHandler(
-    async (serverId, agentInstanceId, request, signal) =>
-      await toolboxService.requestMcpElicitation(
-        serverId,
-        agentInstanceId,
-        request,
-        signal,
-      ),
-  );
-  const remoteConnectionsService = await RemoteConnectionsService.create({
-    logger,
-    karton: uiKarton,
-    createTerminal: () => toolboxService.createUserTerminal(),
-    writeTerminalInput: (terminalId, data) =>
-      toolboxService.writeUserTerminalInput(terminalId, data),
-  });
-  toolboxService.setRemoteConnectionsService(remoteConnectionsService);
-  agentHostProcessService?.setAgentTurnHandlers(
-    createBrowserIsolatedAgentTurnHandlers({
-      host: agentCoreHost,
-      toolbox: toolboxService,
-    }),
-  );
-
-  // Give DiffHistoryService a way to resolve workspace roots for the
-  // gitignore-aware filter in `registerAgentEdit`. Evaluated lazily per
-  // call, so the (still-async) MountManager initialization inside
-  // ToolboxService does not need to be awaited before wiring.
-  persistence.setMountPathsResolver(() => toolboxService.getAllMountedPaths());
-
-  // Push bundled skill definitions via the toolbox so it can
-  // merge them with workspace/plugin skills on mount changes.
-  // Display order for builtin slash commands (unlisted ones sort last).
-  const BUILTIN_ORDER: Record<string, number> = {
-    plan: 0,
-    debug: 1,
-    preview: 2,
-    learn: 3,
-  };
-
-  discoverSkills(getBuiltinSkillsPath()).then((skills: Skill[]) => {
-    const builtins: SkillDefinition[] = skills
-      .map((s) => ({
-        id: `command:${s.name.toLowerCase()}`,
-        displayName: s.name,
-        description: s.description,
-        source: 'builtin' as const,
-        contentPath: `${s.path}/SKILL.md`,
-        userInvocable: s.userInvocable,
-        agentInvocable: s.agentInvocable,
-      }))
-      .sort(
-        (a, b) =>
-          (BUILTIN_ORDER[a.displayName.toLowerCase()] ?? 99) -
-          (BUILTIN_ORDER[b.displayName.toLowerCase()] ?? 99),
-      );
-    toolboxService.setBuiltinSkills(builtins);
-    if (verbose)
-      logger.debug(
-        `[Main] Pushed ${builtins.length} bundled skills to UI karton`,
-      );
+    agentCoreHost,
+    refreshPluginDefinitions,
   });
 
-  const _appMenuService = new AppMenuService(
+  // Register discovery before model composition so an already-resolved skills
+  // promise still publishes only after the model phase reaches its first await.
+  startBuiltinSkillsSync();
+  const {
+    modelProviderService,
+    dictationService,
+    runManualGeminiDiagnostic,
+    assetCacheService,
+    updateEvidenceMemorySummaryModel,
+  } = await runModelToolboxRuntimePhase({
     logger,
+    releaseChannel: __APP_RELEASE_CHANNEL__,
+    uiKarton,
     authService,
     windowLayoutService,
-  );
-
-  const modelProviderService = new ModelProviderService(
     telemetryService,
-    authService,
     preferencesService,
     credentialsService,
-  );
-  const evidenceMemoryModelSummarizer =
-    createEvidenceMemoryModelSummarizer(modelProviderService);
-  const updateEvidenceMemorySummaryModel = () => {
-    const enabled = resolveFeatureGate(
-      'evidence-memory-model-summaries',
-      preferencesService.get().featureGates.overrides,
-      __APP_RELEASE_CHANNEL__,
-    ).enabled;
-    persistence.evidenceMemorySummaryScheduler?.setSummarizer(
-      enabled ? evidenceMemoryModelSummarizer : undefined,
-    );
-  };
-  updateEvidenceMemorySummaryModel();
-  preferencesService.addListener(updateEvidenceMemorySummaryModel);
-  uiKarton.registerServerProcedureHandler(
-    'preferences.testProviderProfile',
-    async (_callingClientId: string, profileId: string) =>
-      modelProviderService.validateProviderProfile(profileId),
-  );
-  uiKarton.registerServerProcedureHandler(
-    'preferences.listProviderProfileModels',
-    async (_callingClientId: string, profileId: string) =>
-      modelProviderService.listProviderProfileModels(profileId),
-  );
-  const dictationService = DictationService.create({
-    logger,
-    karton: uiKarton,
-    modelProvider: modelProviderService,
-    isFeatureEnabled: (feature) =>
-      resolveFeatureGate(
-        feature,
-        preferencesService.get().featureGates.overrides,
-        __APP_RELEASE_CHANNEL__,
-      ).enabled,
+    persistence,
+    toolboxService,
+    isClodexCloudEnabled,
+    dataProtection,
+    hostPaths,
+    attachments,
   });
-  const runManualGeminiDiagnostic = async () => {
-    const modelId = process.env.CLODEX_DIAG_GEMINI_MODEL ?? 'gemini-3.5-flash';
-    const traceBase = `manual-gemini-diagnostic:${crypto.randomUUID()}`;
-    const truncate = (value: string, maxLength = 900) =>
-      value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
-    const stringifyErrorPart = (value: unknown): string => {
-      if (typeof value === 'string') return value;
-      if (value instanceof Error) return value.message;
-      try {
-        return JSON.stringify(value);
-      } catch {
-        return String(value);
-      }
-    };
-    const getErrorSearchText = (
-      error: unknown,
-      seen = new WeakSet<object>(),
-    ): string => {
-      if (error === null || error === undefined) return '';
-      if (typeof error !== 'object') return String(error);
-      if (seen.has(error)) return '';
-      seen.add(error);
-
-      const record = error as Record<string, unknown>;
-      const parts = [
-        error instanceof Error ? error.name : undefined,
-        error instanceof Error ? error.message : undefined,
-        record.message,
-        record.statusText,
-        record.responseBody,
-        record.body,
-        record.data,
-        record.error,
-        record.errors,
-        record.cause,
-      ];
-
-      return parts
-        .flatMap((part) => [
-          stringifyErrorPart(part),
-          getErrorSearchText(part, seen),
-        ])
-        .filter(Boolean)
-        .join('\n');
-    };
-    const withTimeout = async <T>(
-      name: string,
-      run: (abortSignal: AbortSignal) => Promise<T>,
-    ): Promise<T> => {
-      const abortController = new AbortController();
-      const timeout = setTimeout(() => abortController.abort(), 45_000);
-      try {
-        return await run(abortController.signal);
-      } catch (error) {
-        if (abortController.signal.aborted) {
-          throw new Error(`${name} timed out after 45s`, { cause: error });
-        }
-        throw error;
-      } finally {
-        clearTimeout(timeout);
-      }
-    };
-    const runCase = async <
-      TResult extends {
-        finishReason: string;
-        text: string;
-        usage: { totalTokens?: number | null };
-      },
-    >(
-      name: string,
-      run: (abortSignal: AbortSignal) => Promise<TResult>,
-    ) => {
-      logger.info(`[GeminiDiag] ${name}: START model=${modelId}`);
-      try {
-        const result = await withTimeout(name, run);
-        logger.info(
-          `[GeminiDiag] ${name}: PASS finishReason=${result.finishReason} totalTokens=${result.usage.totalTokens ?? 'unknown'} text="${truncate(result.text.trim(), 220)}"`,
-        );
-        return true;
-      } catch (error) {
-        logger.error(
-          `[GeminiDiag] ${name}: FAIL ${truncate(getErrorSearchText(error))}`,
-        );
-        return false;
-      }
-    };
-
-    logger.info(
-      `[GeminiDiag] Starting manual Gemini route test for ${modelId}`,
-    );
-    try {
-      const modelWithOptions =
-        await modelProviderService.getModelWithOptionsAsync(
-          modelId,
-          traceBase,
-          {
-            $ai_span_name: 'manual-gemini-diagnostic',
-            [MODEL_REQUEST_PURPOSE_METADATA_KEY]: 'manual-gemini-diagnostic',
-            [MODEL_TASK_ROLE_METADATA_KEY]: 'analysis',
-            preferred_model_id: modelId,
-          },
-        );
-      logger.info(
-        `[GeminiDiag] Model resolved providerMode=${modelWithOptions.providerMode} contextWindow=${modelWithOptions.contextWindowSize}`,
-      );
-
-      const minimalPassed = await runCase('minimal-no-tools', (abortSignal) =>
-        generateText({
-          model: modelWithOptions.model,
-          headers: modelWithOptions.headers,
-          abortSignal,
-          messages: [
-            {
-              role: 'user',
-              content: 'Reply exactly: GEMINI_OK',
-            },
-          ],
-          temperature: 0,
-          maxOutputTokens: 32,
-          maxRetries: 0,
-        }),
-      );
-
-      const providerOptionsPassed = await runCase(
-        'provider-options-no-tools',
-        (abortSignal) =>
-          generateText({
-            model: modelWithOptions.model,
-            providerOptions: modelWithOptions.providerOptions,
-            headers: modelWithOptions.headers,
-            abortSignal,
-            messages: [
-              {
-                role: 'user',
-                content: 'Reply exactly: GEMINI_OPTIONS_OK',
-              },
-            ],
-            temperature: 0,
-            maxOutputTokens: 32,
-            maxRetries: 0,
-          }),
-      );
-
-      const toolsPassed = await runCase('required-tool-call', (abortSignal) =>
-        generateText({
-          model: modelWithOptions.model,
-          providerOptions: modelWithOptions.providerOptions,
-          headers: modelWithOptions.headers,
-          abortSignal,
-          messages: [
-            {
-              role: 'user',
-              content:
-                'Call the echo diagnostic tool with value "GEMINI_TOOL_OK", then reply with the returned value.',
-            },
-          ],
-          temperature: 0,
-          maxOutputTokens: 96,
-          maxRetries: 0,
-          tools: {
-            echo: tool({
-              description:
-                'Diagnostic echo tool. Use it when the user asks for a Gemini tool-call test.',
-              inputSchema: z.object({
-                value: z.string(),
-              }),
-              execute: async ({ value }) => ({ value }),
-            }),
-          },
-          toolChoice: 'required',
-          stopWhen: stepCountIs(2),
-        }),
-      );
-
-      logger.info(
-        `[GeminiDiag] Summary minimal=${minimalPassed ? 'PASS' : 'FAIL'} providerOptions=${providerOptionsPassed ? 'PASS' : 'FAIL'} tools=${toolsPassed ? 'PASS' : 'FAIL'}`,
-      );
-    } catch (error) {
-      logger.error(
-        `[GeminiDiag] Setup failed: ${truncate(getErrorSearchText(error))}`,
-      );
-    }
-  };
-
-  // Wire the model-provider into the toolbox so the shell tool can run the
-  // smart-approval classifier on demand. Done here because
-  // `ModelProviderService` depends on `preferencesService`, which is
-  // constructed after the toolbox itself.
-  toolboxService.setModelProviderService(modelProviderService);
-
-  const assetCacheService = await AssetCacheService.create(
-    () => (isClodexCloudEnabled() ? authService.accessToken : undefined),
-    logger,
-    {
-      dataProtection,
-      readFile: async (filePath) => {
-        const relative = path.relative(hostPaths.agentsDir(), filePath);
-        const parts = relative.split(path.sep);
-        if (
-          !relative.startsWith(`..${path.sep}`) &&
-          parts.length === 3 &&
-          parts[0] &&
-          parts[1] === 'data-attachments' &&
-          parts[2]
-        ) {
-          return attachments.read(parts[0], parts[2]);
-        }
-        return readFsFile(filePath);
-      },
-    },
-  );
 
   const processedImageCacheService = persistence.processedImageCache;
 
