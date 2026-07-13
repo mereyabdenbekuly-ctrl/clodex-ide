@@ -90,6 +90,7 @@ export class FaviconService {
     pageUrl: string,
     faviconUrl: string,
     iconType: number = IconType.FAVICON,
+    allowNetworkFetch = true,
   ): Promise<void> {
     const now = toWebKitTimestamp(new Date());
 
@@ -107,7 +108,7 @@ export class FaviconService {
       width: number;
       height: number;
     } | null = null;
-    if (!existingFavicon) {
+    if (!existingFavicon && allowNetworkFetch) {
       try {
         imageData = await this.fetchFaviconImage(faviconUrl);
       } catch (_err) {
@@ -178,12 +179,21 @@ export class FaviconService {
    * Store multiple favicons for a page URL (Chrome can have multiple).
    * Uses the first valid one.
    */
-  async storeFavicons(pageUrl: string, faviconUrls: string[]): Promise<void> {
+  async storeFavicons(
+    pageUrl: string,
+    faviconUrls: string[],
+    allowNetworkFetch = true,
+  ): Promise<void> {
     if (faviconUrls.length === 0) return;
 
     // Store the first favicon URL (typically the best one)
     // Chrome prioritizes: 32x32 > 16x16 > others
-    await this.storeFavicon(pageUrl, faviconUrls[0]);
+    await this.storeFavicon(
+      pageUrl,
+      faviconUrls[0],
+      IconType.FAVICON,
+      allowNetworkFetch,
+    );
   }
 
   // =================================================================

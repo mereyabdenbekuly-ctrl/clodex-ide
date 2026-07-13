@@ -20,6 +20,19 @@ export type ProxyAuthenticationHandler = (
 
 export interface ControlledBrowserTabEgressOptions {
   proxyAuthenticationHandler?: ProxyAuthenticationHandler;
+  allowFaviconNetworkFetch?: boolean;
+}
+
+export function createControlledBrowserTabEgressOptions(
+  proxyAuthenticationHandler?: ProxyAuthenticationHandler,
+): ControlledBrowserTabEgressOptions {
+  return {
+    proxyAuthenticationHandler,
+    // FaviconService uses Electron's default session rather than the
+    // controlled browser partition. Never permit that duplicate fetch to
+    // escape the managed proxy boundary.
+    allowFaviconNetworkFetch: false,
+  };
 }
 
 interface BrowserSessionProxyTarget {

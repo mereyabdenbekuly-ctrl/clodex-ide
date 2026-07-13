@@ -145,6 +145,7 @@ import {
   CONTROLLED_BROWSER_PRINCIPAL_ID,
   ControlledBrowserEgressSession,
   createControlledBrowserNetworkPolicy,
+  createControlledBrowserTabEgressOptions,
   parseControlledBrowserAllowedHosts,
 } from './services/network-policy/controlled-browser';
 import { NetworkEgressControlCenterService } from './services/network-policy/control-center';
@@ -565,10 +566,9 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     attachments,
     telemetryService,
     controlledBrowserEgressEnabled
-      ? {
-          proxyAuthenticationHandler:
-            controlledBrowserEgressSession?.handleProxyAuthentication,
-        }
+      ? createControlledBrowserTabEgressOptions(
+          controlledBrowserEgressSession?.handleProxyAuthentication,
+        )
       : undefined,
   );
   const uiKarton = windowLayoutService.uiKarton;

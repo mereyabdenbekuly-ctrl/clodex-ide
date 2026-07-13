@@ -8,6 +8,7 @@ vi.mock('electron', () => ({
 import {
   ControlledBrowserEgressSession,
   createControlledBrowserNetworkPolicy,
+  createControlledBrowserTabEgressOptions,
   enforceControlledBrowserWebRtcPolicy,
   parseControlledBrowserAllowedHosts,
 } from './controlled-browser';
@@ -121,6 +122,17 @@ describe('ControlledBrowserEgressSession', () => {
 });
 
 describe('controlled browser policy', () => {
+  it('disables default-session favicon fetches for controlled tabs', () => {
+    const proxyAuthenticationHandler = vi.fn(() => false);
+
+    expect(
+      createControlledBrowserTabEgressOptions(proxyAuthenticationHandler),
+    ).toEqual({
+      proxyAuthenticationHandler,
+      allowFaviconNetworkFetch: false,
+    });
+  });
+
   it('disables WebRTC UDP paths that cannot traverse the managed proxy', () => {
     const setWebRTCIPHandlingPolicy = vi.fn();
     enforceControlledBrowserWebRtcPolicy({ setWebRTCIPHandlingPolicy });

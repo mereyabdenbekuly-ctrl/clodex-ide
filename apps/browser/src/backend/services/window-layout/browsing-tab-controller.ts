@@ -1586,7 +1586,11 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
       // Store favicon in database for history view
       if (faviconUrls.length > 0 && this.currentState.url) {
         this.faviconService
-          .storeFavicons(this.currentState.url, faviconUrls)
+          .storeFavicons(
+            this.currentState.url,
+            faviconUrls,
+            this.controlledBrowserEgress?.allowFaviconNetworkFetch ?? true,
+          )
           .catch((err) => {
             this.logger.debug(
               `[TabController] Failed to store favicon: ${err}`,
