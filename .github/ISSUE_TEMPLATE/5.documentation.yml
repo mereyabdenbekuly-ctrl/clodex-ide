@@ -1,0 +1,71 @@
+name: Documentation
+description: Report missing, incorrect, outdated, or unclear documentation
+title: "[Docs]: "
+labels:
+  - documentation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for documentation work that needs discussion or maintainer confirmation. A focused pull request is welcome for a straightforward typo or clearly incorrect link.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched existing issues for the same documentation problem.
+          required: true
+        - label: I verified that the documentation is missing, incorrect, outdated, or unclear in the current repository.
+          required: true
+
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: Documentation issue type
+      options:
+        - Missing documentation
+        - Incorrect documentation
+        - Outdated documentation
+        - Unclear documentation
+        - Missing example or tutorial
+        - Broken link or navigation
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Page, file, or section
+      description: Link the affected page or provide the repository path and heading.
+      placeholder: "docs/developer/local-development.md — Installation"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing?
+      description: Explain what a reader cannot understand or would incorrectly conclude.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_change
+    attributes:
+      label: Proposed documentation change
+      description: Suggest corrected wording, a structure, an example, or authoritative source material where possible.
+
+  - type: input
+    id: relevant_version
+    attributes:
+      label: Relevant version or commit
+      description: Provide this when the documentation mismatch is version-specific.
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to submit a focused documentation pull request.

@@ -15,7 +15,7 @@ export const metadata: Metadata = {
     title: 'Meet the new clodex · clodex',
     description:
       'The clodex extension is retired. Download the standalone clodex IDE for a more powerful experience — no extension required.',
-    creator: '@clodex_io',
+    creator: '@CLODEx_lab',
   },
   category: 'technology',
 };

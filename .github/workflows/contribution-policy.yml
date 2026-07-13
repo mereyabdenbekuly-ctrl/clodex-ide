@@ -1,0 +1,121 @@
+name: Contribution policy
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  NPM_CONFIG_IGNORE_PNPMFILE: "true"
+
+jobs:
+  dco:
+    name: DCO
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pull request history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify commit sign-offs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+
+          missing=0
+          while IFS= read -r commit; do
+            author_name="$(git show -s --format='%an' "$commit")"
+            author_email="$(git show -s --format='%ae' "$commit")"
+            message="$(git show -s --format='%B' "$commit")"
+
+            expected_signoff="Signed-off-by: $author_name <$author_email>"
+            trailers="$(git interpret-trailers --parse <<< "$message")"
+
+            if grep -Fxiq -- "$expected_signoff" <<< "$trailers"; then
+              continue
+            fi
+
+            dependabot_signoff='Signed-off-by: dependabot[bot] <support@github.com>'
+            final_message_line="$(sed '/^[[:space:]]*$/d' <<< "$message" | tail -n 1)"
+            if [[ "$PR_AUTHOR" == 'dependabot[bot]' ]] && \
+               [[ "$author_name" == 'dependabot[bot]' ]] && \
+               [[ "$author_email" == '49699333+dependabot[bot]@users.noreply.github.com' ]] && \
+               [[ "$final_message_line" == "$dependabot_signoff" ]]; then
+              read -r api_author verified < <(
+                gh api "repos/${GH_REPO}/commits/${commit}" \
+                  --jq '[.author.login // "", (.commit.verification.verified | tostring)] | @tsv'
+              )
+              if [[ "$api_author" == 'dependabot[bot]' && "$verified" == 'true' ]]; then
+                echo "Accepted verified Dependabot sign-off for $commit."
+                continue
+              fi
+            fi
+
+            echo "::error::Commit $commit is missing the author-matching trailer: $expected_signoff"
+            missing=1
+          done < <(git rev-list --reverse "${BASE_SHA}..${HEAD_SHA}")
+
+          if [[ "$missing" -ne 0 ]]; then
+            echo "Add the trailer with: git commit --amend --no-edit --signoff"
+            exit 1
+          fi
+
+          echo "All contributor commits include a DCO sign-off."
+
+  provenance:
+    name: Provenance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Verify attribution and legal-identity guards
+        run: node scripts/ci/check-provenance.mjs
+
+  architecture-boundaries:
+    name: Architecture boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate pnpm bootstrap policy
+        run: node scripts/ci/check-pnpm-bootstrap.mjs
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: ".node-version"
+          cache: "pnpm"
+
+      - name: Install checker dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile
+
+      - name: Test boundary checker
+        run: pnpm test:boundaries
+
+      - name: Enforce Clodex package boundaries
+        run: pnpm check:boundaries

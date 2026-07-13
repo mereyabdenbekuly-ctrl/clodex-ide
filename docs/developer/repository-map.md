@@ -44,6 +44,12 @@ Provider-neutral agent runtime: agents, AgentManager, prompt composition,
 mounts, persistence, Context Ledger, Model Fabric, runner routing, toolbox,
 plans, logs, attachments, and diff history.
 
+### `packages/clodex-contracts`
+
+Stage 0 shell-independent contracts for the hybrid strangler migration. This
+package must not depend on Electron, Karton, `stage-ui`, browser code, or other
+Clodex runtime packages.
+
 ### `packages/agent-shell`
 
 PTY and shell execution: sessions, command framing, terminal logging, shell

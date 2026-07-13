@@ -13,11 +13,14 @@
 ![Node](https://img.shields.io/badge/node-22.23.1-43853d?style=flat-square)
 ![pnpm](https://img.shields.io/badge/pnpm-10.30.3-f69220?style=flat-square)
 [![X](https://img.shields.io/badge/X-@CLODEx__lab-111111?style=flat-square)](https://x.com/CLODEx_lab)
-[![Donate USDT](https://img.shields.io/badge/donate-USDT-26A17B?style=flat-square)](#donations)
 
 Clodex is an open-source agentic development environment that combines
 persistent AI tasks, code, terminal, browser, Git, models, memory, and
 controlled execution in one Electron workspace.
+
+It is an early-stage, solo-led research and engineering project. The current
+Technical Preview is intended to validate architecture and real workflows; it
+is not presented as a production-mature IDE or an established community.
 
 It is built around a simple principle:
 
@@ -38,11 +41,29 @@ until their live promotion evidence and manual sign-off are complete.
 | Navigate the engineering documentation  | [Developer documentation index](./docs/developer/README.md)                                   |
 | Review the architecture                 | [Architecture](./docs/developer/architecture.md)                                              |
 | Review security and data handling       | [Security and data](./docs/developer/security-and-data.md) · [Security policy](./SECURITY.md) |
+| Understand project lineage              | [Clodex and Stagewise upstream](./CLODEX_VS_UPSTREAM.md)                                     |
+| Contribute or collaborate               | [Contributing](./CONTRIBUTING.md) · [Collaboration paths](./COLLABORATE.md)                   |
+| Understand project governance           | [Governance](./GOVERNANCE.md) · [Code of conduct](./CODE_OF_CONDUCT.md)                      |
+| Follow the independent-kernel migration | [Hybrid strangler plan](./docs/migration/README.md)                                           |
 | Explore the live project                | [ide.clodex.xyz](https://ide.clodex.xyz)                                                      |
 
 <p align="center">
   <img src="./apps/website/public/product/current/workspace.png" alt="Clodex persistent task workspace" width="100%">
 </p>
+
+## Project lineage
+
+Clodex began as a modified version of the open-source Stagewise codebase and
+has since diverged into an independently maintained project focused on
+governed execution, evidence, policy enforcement, model routing, runner
+isolation, and session continuity.
+
+The exact upstream base commit, reproducible diff method, Clodex-specific
+systems, and continuing upstream-derived areas are documented in
+[`CLODEX_VS_UPSTREAM.md`](./CLODEX_VS_UPSTREAM.md). Upstream copyright and
+license notices are preserved in
+[`THIRD-PARTY-NOTICES.md`](./THIRD-PARTY-NOTICES.md). Clodex is not affiliated
+with or endorsed by Stagewise.
 
 ## Why Clodex
 
@@ -110,6 +131,7 @@ apps/website/                 Public project website
 agent/runtime-node/           Isolated Node.js agent runtime
 packages/agent-core/          Agent lifecycle, memory, routing, and policy
 packages/agent-shell/         Shell and execution contracts
+packages/clodex-contracts/    Shell-independent Stage 0 kernel contracts
 packages/mcp-runtime/         MCP transport and protocol runtime
 packages/runner-sdk/          External runner integration SDK
 packages/karton/              Typed state and RPC transport
@@ -256,34 +278,29 @@ Contributions should be scoped, testable, and reviewable.
 5. Include focused tests for changed behavior.
 
 Use the repository issue templates for bugs, feature proposals, documentation,
-and agent-runtime problems.
+installation and provider problems, security questions, and independent tester
+reports. Use GitHub Discussions for design questions and community proposals.
 
-## Built by an independent researcher
+The contributor trust ladder, maintainer responsibilities, and access policy
+are defined in [`GOVERNANCE.md`](./GOVERNANCE.md). Scoped compute grants and
+longer-term collaboration paths are described in
+[`COLLABORATE.md`](./COLLABORATE.md).
 
-> Solo scientist building Zero-Trust AI infrastructure. Open to core
-> engineering and research engineering roles at frontier AI labs, including
-> Google DeepMind, xAI, OpenAI, Anthropic, Meta, and NVIDIA.
+## Maintainers and community
 
-Follow the project on [X · @CLODEx_lab](https://x.com/CLODEx_lab).
+Clodex is currently maintained independently by
+[Merey Abdenbekuly](https://github.com/mereyabdenbekuly-ctrl) and welcomes
+external contributors, testers, security reviewers, research collaborators,
+and integration partners. Current roles and upstream credits are listed in
+[`CONTRIBUTORS.md`](./CONTRIBUTORS.md).
 
-## Donations
+Follow project updates on [X · @CLODEx_lab](https://x.com/CLODEx_lab).
 
-If Clodex is useful to you, you can support independent development with
-USDT. Send funds only through the network shown for the selected address.
+## Support independent development
 
-| Network           | USDT address                                       |
-| ----------------- | -------------------------------------------------- |
-| BNB Chain         | `0xecE224461627a13118982Fa28202Eb9768678AFD`       |
-| TRON              | `TAM5uVRpQexgn7gzAhWR7DZyHmyLgRRakP`               |
-| Ethereum          | `0xecE224461627a13118982Fa28202Eb9768678AFD`       |
-| Avalanche C-Chain | `0xecE224461627a13118982Fa28202Eb9768678AFD`       |
-| Polygon           | `0xecE224461627a13118982Fa28202Eb9768678AFD`       |
-| TON               | `UQBE4RXHqPAY8Xft2G9kP_6bbfXbY-gRwR0NVvx-_qWsIeD3` |
-| Solana            | `DNhzLgaFMZgLynwPxNyh6Znp9evRozbNprFm9BUXr94Z`     |
-
-The same network-aware donation interface with copy buttons is available on
-the [Clodex website](https://ide.clodex.xyz/#support). Blockchain transfers
-are irreversible, so verify both the network and address before sending.
+If Clodex is useful to you, the current support options and their terms are
+listed on the [Clodex website](https://ide.clodex.xyz/#support). Financial
+support does not buy roadmap priority, repository access, or merge decisions.
 
 ## License
 

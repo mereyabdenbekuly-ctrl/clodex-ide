@@ -11,8 +11,8 @@ ${DIM}${line}${RESET}
   The clodex CLI has been replaced by the clodex
   desktop app — a much more powerful way to use clodex.
 
-  ${BOLD}Download:${RESET}  ${CYAN}https://clodex.io/download${RESET}
-  ${BOLD}Docs:${RESET}      ${CYAN}https://docs.clodex.io${RESET}
+  ${BOLD}Download:${RESET}  ${CYAN}https://ide.clodex.xyz/download${RESET}
+  ${BOLD}Source:${RESET}    ${CYAN}https://github.com/mereyabdenbekuly-ctrl/clodex-ide${RESET}
 
 ${DIM}${line}${RESET}
 `);

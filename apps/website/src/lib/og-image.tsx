@@ -169,7 +169,7 @@ export function generateNewsPostOgImage({
     label: 'Newsroom',
     title: postTitle,
     subtitle,
-    bottomUrl: 'clodex.io/news',
+    bottomUrl: 'ide.clodex.xyz/news',
     geistFont,
   });
 }
@@ -187,7 +187,7 @@ export function generateJobOgImage({
     label: 'Career',
     title: jobTitle,
     subtitle: jobLocation,
-    bottomUrl: 'clodex.io/careers',
+    bottomUrl: 'ide.clodex.xyz/careers',
     geistFont,
   });
 }
@@ -234,7 +234,7 @@ export function generateOgImage({
             fontFamily: 'Geist',
           }}
         >
-          {`clodex.io/${pageSlug ?? pageName?.toLowerCase()}`}
+          {`ide.clodex.xyz/${pageSlug ?? pageName?.toLowerCase()}`}
         </div>
       )}
       {pageName && (

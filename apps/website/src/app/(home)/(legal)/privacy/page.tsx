@@ -17,11 +17,11 @@ export const metadata: Metadata = {
     title: 'Privacy Policy · clodex',
     description:
       'Read the clodex Privacy Policy and learn how we collect, use, and protect your data.',
-    creator: '@clodex_io',
+    creator: '@CLODEx_lab',
   },
   category: 'legal',
   alternates: {
-    canonical: 'https://clodex.io/privacy',
+    canonical: 'https://ide.clodex.xyz/privacy',
   },
   robots: { index: true, follow: true },
 };

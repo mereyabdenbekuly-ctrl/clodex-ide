@@ -1,0 +1,86 @@
+name: Tester report
+description: Submit structured results from a preview build, release candidate, test plan, or exploratory session
+title: "[Test report]: "
+labels:
+  - "tester report"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for structured testing feedback across one or more scenarios. For a single repeatable defect with a minimal reproduction, use the **Reproducible bug** form instead.
+
+        Do not attach secrets, credentials, private repository content, customer data, or unredacted logs.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I identified the exact build, version, artifact, or commit that I tested.
+          required: true
+        - label: I removed secrets, credentials, private data, and sensitive content from the report and evidence.
+          required: true
+
+  - type: input
+    id: build
+    attributes:
+      label: Tested build, version, artifact, or commit
+      placeholder: "Release candidate, workflow artifact, build identifier, or commit SHA"
+    validations:
+      required: true
+
+  - type: input
+    id: test_source
+    attributes:
+      label: Test plan or request
+      description: Link the issue, pull request, release checklist, test plan, or maintainer request that prompted this testing, if one exists.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Test environment
+      description: Include OS, architecture, install path, execution mode, relevant provider or model, and any non-secret configuration that affects the result.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: overall_result
+    attributes:
+      label: Overall result
+      options:
+        - Passed
+        - Passed with observations
+        - Failed
+        - Blocked
+    validations:
+      required: true
+
+  - type: textarea
+    id: scenarios
+    attributes:
+      label: Scenarios and results
+      description: List each scenario, the steps performed, expected result, actual result, and pass/fail/blocked status.
+      placeholder: |
+        | Scenario | Steps | Expected | Actual | Result |
+        | --- | --- | --- | --- | --- |
+        | Fresh install | ... | ... | ... | Pass |
+    validations:
+      required: true
+
+  - type: textarea
+    id: regressions
+    attributes:
+      label: Regressions or unexpected observations
+      description: Identify anything that changed from the comparison build, even if it did not fully block the test.
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted user evidence
+      description: Attach screenshots, recordings, logs, timing data, or other evidence and explain what each item demonstrates.
+
+  - type: textarea
+    id: follow_up
+    attributes:
+      label: Suggested follow-up
+      description: List separate reproducible bug reports, retest needs, documentation gaps, or release concerns discovered during testing.

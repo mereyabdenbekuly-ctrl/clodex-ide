@@ -1,7 +1,7 @@
 'use client';
 
 const COOKIE_NAME = 'clodex-cookie-consent';
-const COOKIE_DOMAIN = '.clodex.io';
+const COOKIE_DOMAIN = '.clodex.xyz';
 const COOKIE_MAX_AGE = 31536000; // 1 year in seconds
 
 export type ConsentStatus = 'accepted' | 'denied' | null;
@@ -28,10 +28,10 @@ export function getCookieConsent(): ConsentStatus {
 export function setCookieConsent(status: 'accepted' | 'denied'): void {
   if (typeof window === 'undefined') return;
 
-  // Only add domain attribute for actual clodex.io domains
+  // Only add domain attribute for actual clodex.xyz domains
   const domainAttribute =
-    window.location.hostname === 'clodex.io' ||
-    window.location.hostname.endsWith('.clodex.io')
+    window.location.hostname === 'clodex.xyz' ||
+    window.location.hostname.endsWith('.clodex.xyz')
       ? `; domain=${COOKIE_DOMAIN}`
       : '';
 
@@ -49,10 +49,10 @@ export function setCookieConsent(status: 'accepted' | 'denied'): void {
 export function removeCookieConsent(): void {
   if (typeof window === 'undefined') return;
 
-  // Only add domain attribute for actual clodex.io domains
+  // Only add domain attribute for actual clodex.xyz domains
   const domainAttribute =
-    window.location.hostname === 'clodex.io' ||
-    window.location.hostname.endsWith('.clodex.io')
+    window.location.hostname === 'clodex.xyz' ||
+    window.location.hostname.endsWith('.clodex.xyz')
       ? `; domain=${COOKIE_DOMAIN}`
       : '';
 

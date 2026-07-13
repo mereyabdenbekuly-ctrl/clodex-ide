@@ -17,11 +17,15 @@
     "dev:toolbar": "turbo watch dev --filter='./toolbar/*' --concurrency 20",
     "dev:plugins": "turbo watch dev --filter='./plugins/*' --concurrency 20",
     "check": "biome check .",
+    "check:boundaries": "node scripts/ci/check-clodex-boundaries.mjs",
     "check:fix": "biome check . --write",
+    "check:governance": "pnpm test:boundaries && pnpm check:boundaries && pnpm check:provenance",
+    "check:provenance": "node scripts/ci/check-provenance.mjs",
     "sherif": "pnpm dlx sherif --fix",
     "typecheck": "turbo run typecheck",
     "typecheck:scripts": "tsc --project scripts/release/tsconfig.json --noEmit",
     "test": "turbo run test",
+    "test:boundaries": "node --test scripts/ci/check-clodex-boundaries.test.mjs scripts/ci/check-pnpm-bootstrap.test.mjs",
     "copy-readme": "ts-node --esm scripts/copy-readme.ts",
     "version:clodex": "tsx scripts/release/index.ts --package clodex",
     "version:clodex:alpha": "tsx scripts/release/index.ts --package clodex --channel alpha",
@@ -53,7 +57,8 @@
     "semver": "^7.8.0",
     "ts-node": "10.9.2",
     "turbo": "^2.9.12",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "yaml": "^2.8.2"
   },
   "packageManager": "pnpm@10.30.3",
   "engines": {

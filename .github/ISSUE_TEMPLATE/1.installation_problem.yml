@@ -1,0 +1,101 @@
+name: Installation problem
+description: Report a problem installing, updating, launching, or completing first-time setup
+title: "[Installation]: "
+labels:
+  - "area: installation"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for installation, update, launch, dependency, or first-time setup failures.
+
+        Before filing, review the [operations and troubleshooting guide](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/blob/main/docs/developer/operations-and-troubleshooting.md). Never include API keys, tokens, credentials, private repository content, or unredacted personal data.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched existing issues and did not find the same installation problem.
+          required: true
+        - label: I reviewed the troubleshooting guide and the problem still occurs.
+          required: true
+        - label: I removed secrets, credentials, private data, and sensitive paths from this report.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Clodex version or commit
+      description: Provide the release version, build identifier, or commit SHA you attempted to use.
+      placeholder: "v0.1.0, build 2026-07-13, or commit abc1234"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installation_path
+    attributes:
+      label: Installation or launch path
+      options:
+        - Packaged Electron desktop application
+        - Source checkout with pnpm
+        - Clodex CLI
+        - Updating an existing installation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS and version, CPU architecture, Node.js and pnpm versions when relevant, and whether this is a local, container, VM, or remote environment.
+      placeholder: |
+        OS: macOS 15.5
+        Architecture: arm64
+        Node.js: 22.23.1
+        pnpm: 10.30.3
+        Environment: local workstation
+    validations:
+      required: true
+
+  - type: textarea
+    id: attempted_steps
+    attributes:
+      label: Exact steps and commands
+      description: Starting from a clean state where possible, list the exact steps and commands that lead to the failure.
+      placeholder: |
+        1. Cloned the repository at commit ...
+        2. Ran `pnpm install --frozen-lockfile`
+        3. Ran ...
+        4. The failure occurred at ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed_result
+    attributes:
+      label: Observed result
+      description: Describe what happened and include the complete redacted error message or log excerpt.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_result
+    attributes:
+      label: Expected result
+      description: Describe what you expected to happen instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: troubleshooting
+    attributes:
+      label: Troubleshooting already attempted
+      description: List the relevant troubleshooting steps you tried and whether any of them changed the result.
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional context
+      description: Add redacted screenshots, logs, or other details that may help diagnose the setup failure.

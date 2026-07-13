@@ -898,7 +898,7 @@ export function SecuritySection({ locale }: { locale: LandingLocale }) {
                   {copy.description}
                 </p>
                 <a
-                  href="mailto:security@clodex.io"
+                  href="https://github.com/mereyabdenbekuly-ctrl/clodex-ide/security/advisories/new"
                   className={cn(
                     buttonVariants({ size: 'lg', variant: 'primary' }),
                     'mt-8',
@@ -1068,7 +1068,7 @@ export function FinalCta({ locale }: { locale: LandingLocale }) {
             <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <DownloadButtons locale={locale} className="w-full sm:w-auto" />
               <a
-                href="mailto:sales@clodex.io"
+                href="mailto:support@clodex.xyz"
                 className={cn(
                   buttonVariants({ size: 'lg', variant: 'secondary' }),
                   'w-full sm:w-auto',

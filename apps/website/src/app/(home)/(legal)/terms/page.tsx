@@ -17,11 +17,11 @@ export const metadata: Metadata = {
     title: 'Terms of Service · clodex',
     description:
       'Read the clodex Terms of Service for using the website, product, and related services.',
-    creator: '@clodex_io',
+    creator: '@CLODEx_lab',
   },
   category: 'legal',
   alternates: {
-    canonical: 'https://clodex.io/terms',
+    canonical: 'https://ide.clodex.xyz/terms',
   },
   robots: { index: true, follow: true },
 };

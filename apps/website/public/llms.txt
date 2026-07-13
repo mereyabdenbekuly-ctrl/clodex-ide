@@ -88,7 +88,7 @@ inference inside one Agent OS.
 
 ## Pages
 
-- Homepage: https://clodex.io/
-- Download: https://clodex.io/download
-- Documentation: https://docs.clodex.io
-- Contact: sales@clodex.io
+- Homepage: https://ide.clodex.xyz/
+- Download: https://ide.clodex.xyz/download
+- Documentation: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/tree/main/docs
+- Contact: support@clodex.xyz
