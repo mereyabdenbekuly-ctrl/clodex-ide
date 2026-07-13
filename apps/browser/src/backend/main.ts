@@ -53,7 +53,6 @@ import type { MountPermission } from '@shared/karton-contracts/ui/agent/metadata
 import type { UserPreferences } from '@shared/karton-contracts/ui/shared-types';
 import { AutoUpdateService } from './services/auto-update';
 import { WorktreeSetupSettingsService } from './services/worktree-setup-settings';
-import type { WorktreeSetupScriptVariant } from '@shared/worktree-setup';
 import { DevToolAPIService } from './services/dev-tool-api';
 import { OmniboxSuggestionsService } from './services/omnibox-suggestions';
 import { ensureRipgrepInstalled } from '@clodex/agent-runtime-node';
@@ -83,11 +82,11 @@ import { McpHostSupervisor } from './mcp-host';
 import { McpOAuthService } from './services/mcp/oauth';
 import { discoverPluginMcpServers } from './services/mcp/plugin-bridge';
 import { McpSettingsService } from './services/mcp/settings';
-import type { CredentialTypeId } from '@shared/credential-types';
 import { ModelProviderService } from './agents/model-provider';
 import { wirePagesRuntime } from './wiring/pages-runtime';
 import { wireFileTreeSwarmRpc } from './wiring/file-tree-swarm-rpc';
 import { wireSettingsBrowserRpc } from './wiring/settings-browser-rpc';
+import { wireWorkspaceCredentialsRpc } from './wiring/workspace-credentials-rpc';
 import {
   ensureDataDirectories,
   getNetworkPolicyAuditPath,
@@ -3779,67 +3778,13 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     logger,
   });
 
-  // toolbox.getContextFiles / toolbox.generateWorkspaceMdForPath
-  uiKarton.registerServerProcedureHandler(
-    'toolbox.getContextFiles',
-    async (_cid: string) => {
-      return toolboxService.getContextFilesForAllWorkspaces();
-    },
-  );
-  uiKarton.registerServerProcedureHandler(
-    'toolbox.generateWorkspaceMdForPath',
-    async (_cid: string, workspacePath: string) => {
-      await agentManagerService.generateWorkspaceMdForPath(workspacePath);
-    },
-  );
-
-  // toolbox worktree setup settings procedures
-  uiKarton.registerServerProcedureHandler(
-    'toolbox.listWorktreeSetupRepositories',
-    async () => worktreeSetupSettingsService.listRepositories(),
-  );
-  uiKarton.registerServerProcedureHandler(
-    'toolbox.saveWorktreeSetupScript',
-    async (
-      _cid: string,
-      mainWorktreePath: string,
-      variant: WorktreeSetupScriptVariant,
-      content: string,
-    ) =>
-      worktreeSetupSettingsService.saveScript(
-        mainWorktreePath,
-        variant,
-        content,
-      ),
-  );
-  uiKarton.registerServerProcedureHandler(
-    'toolbox.deleteWorktreeSetupWorktree',
-    async (_cid: string, worktreePath: string) =>
-      worktreeSetupSettingsService.deleteManagedWorktree(worktreePath),
-  );
-
-  // credentials.set / credentials.delete / credentials.getConfiguredIds
-  uiKarton.registerServerProcedureHandler(
-    'credentials.set',
-    async (_cid: string, typeId: string, data: Record<string, string>) => {
-      await credentialsService.set(
-        typeId as CredentialTypeId,
-        data as Parameters<typeof credentialsService.set>[1],
-      );
-    },
-  );
-  uiKarton.registerServerProcedureHandler(
-    'credentials.delete',
-    async (_cid: string, typeId: string) => {
-      await credentialsService.delete(typeId as CredentialTypeId);
-    },
-  );
-  uiKarton.registerServerProcedureHandler(
-    'credentials.getConfiguredIds',
-    async (_cid: string) => {
-      return credentialsService.listConfigured();
-    },
-  );
+  wireWorkspaceCredentialsRpc({
+    uiKarton,
+    toolboxService,
+    agentManagerService,
+    worktreeSetupSettingsService,
+    credentialsService,
+  });
 
   logger.debug('[Main] Normal operation services bootstrapped');
 
