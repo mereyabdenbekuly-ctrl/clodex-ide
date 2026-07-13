@@ -15,18 +15,11 @@ import { AgentManagerService } from './services/agent-manager';
 import { enrichHistoryEntryWorkspaces } from './services/agent-manager/history-workspace-enrichment';
 import { UserExperienceService } from './services/experience';
 import { FilePickerService } from './services/file-picker';
-import { FileTreeService } from './services/file-tree';
 import { AppMenuService } from './services/app-menu';
 import { URIHandlerService } from './services/uri-handler';
 import { Logger } from './services/logger';
 import { createMainShutdownCoordinator } from './services/shutdown-coordinator';
 import { isUIEventName, parseUIEventProperties } from './services/telemetry';
-import { GlobalConfigService } from './services/global-config';
-import { NotificationService } from './services/notification';
-import { PagesService } from './services/pages';
-import { NotificationSoundsService } from './services/notification-sounds';
-import { WindowLayoutService } from './services/window-layout';
-import { HistoryService } from './services/history';
 import { AgentCorePersistence } from '@clodex/agent-core/persistence';
 import {
   ChatPersistenceService,
@@ -51,13 +44,9 @@ import {
 import { AgentTypes } from '@shared/karton-contracts/ui/agent';
 import type { MountPermission } from '@shared/karton-contracts/ui/agent/metadata';
 import type { UserPreferences } from '@shared/karton-contracts/ui/shared-types';
-import { AutoUpdateService } from './services/auto-update';
 import { WorktreeSetupSettingsService } from './services/worktree-setup-settings';
 import { DevToolAPIService } from './services/dev-tool-api';
-import { OmniboxSuggestionsService } from './services/omnibox-suggestions';
-import { ensureRipgrepInstalled } from '@clodex/agent-runtime-node';
 import { ToolboxService } from './services/toolbox';
-import { GitService } from './services/git';
 import {
   createAgentCoreSeam,
   attachAgentCoreBridge,
@@ -93,7 +82,6 @@ import {
   getInstalledPluginsDir,
   getPluginsPath,
   getBuiltinSkillsPath,
-  getRipgrepBasePath,
 } from './utils/paths';
 import { migrateLegacyPaths } from './utils/migrate-legacy-paths';
 import { readPersistedDataSync } from './utils/persisted-data';
@@ -111,7 +99,6 @@ import {
   isEvidenceMemoryInjectionDisabled,
 } from '@shared/evidence-memory-rollout';
 import { AssetCacheService } from './services/asset-cache';
-import { detectShell, resolveShellEnv } from '@clodex/agent-shell';
 import { NetworkEgressControlCenterService } from './services/network-policy/control-center';
 import { initializeGuardianEgressStartup } from './services/network-policy/startup';
 import path from 'node:path';
@@ -120,7 +107,9 @@ import {
   createCloudTaskRuntime,
   type CloudTaskRuntimeResult,
 } from './startup/phases/cloud-task-runtime';
-import { handleCommandLineUrls, setupUrlHandlers } from './startup/url-routing';
+import { handleCommandLineUrls } from './startup/url-routing';
+import { runBrowserUiServicesPhase } from './startup/phases/browser-ui-services';
+import { runNotificationRuntimePhase } from './startup/phases/notification-runtime';
 import { AgentPowerSaveBlockerService } from './services/agent-power-save-blocker';
 import { AgentRuntimeRecoveryService } from './services/agent-runtime-recovery';
 import { MacOSClosedLidSleepService } from './services/macos-closed-lid-sleep';
@@ -279,94 +268,28 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     });
   });
 
-  // HistoryService depends on WebDataService (created above) + telemetry.
-  const historyService = await HistoryService.create(
+  const {
+    historyService,
+    pagesService,
+    windowLayoutService,
+    uiKarton,
+    fileTreeService,
+    detectedShell,
+    resolvedEnvPromise,
+    gitService,
+    startSearchEngineSync,
+  } = await runBrowserUiServicesPhase({
     logger,
+    verbose,
     webDataService,
     telemetryService,
-  );
-
-  // Create PagesService early so it can be passed to WindowLayoutService
-  const pagesService = await PagesService.create(
-    logger,
-    historyService,
     faviconService,
-    telemetryService,
-  );
-
-  // Create WindowLayoutService with all dependencies including PreferencesService
-  // This also applies the startup page preference during initialization
-  const windowLayoutService = await WindowLayoutService.create(
-    logger,
-    historyService,
-    faviconService,
-    pagesService,
     preferencesService,
     attachments,
-    telemetryService,
-    guardianEgressStartup.controlledBrowserTabEgressOptions,
-  );
-  const uiKarton = windowLayoutService.uiKarton;
-  const fileTreeService = await FileTreeService.create(logger, uiKarton);
-  fileTreeService.setOpenFileTabHandler(
-    async (metadata, agentInstanceId, options) => {
-      const tabId = await windowLayoutService.openFileTab(
-        metadata,
-        agentInstanceId,
-        options,
-      );
-      // Read-only, agent-internal files (e.g. `att/` attachment blobs) are
-      // not part of any listed workspace tree, so revealing them would only
-      // force the panel open on a non-existent workspace. Skip the reveal.
-      if (!metadata.readOnly) {
-        fileTreeService.revealInFileTree(
-          metadata.workspaceKey,
-          metadata.relativePath,
-        );
-      }
-      return tabId;
-    },
-  );
-  // Let the file-tree service resolve a given agent's attachment blob
-  // directory so it can open `att/` blobs as read-only tabs.
-  fileTreeService.setAttachmentDirResolver((agentId) =>
-    attachments.agentBlobDir(agentId),
-  );
-  fileTreeService.setAttachmentReader(
-    (attachmentDir) => {
-      const normalized = path.resolve(attachmentDir);
-      if (path.basename(normalized) !== 'data-attachments') return null;
-      const agentId = path.basename(path.dirname(normalized));
-      return agentId || null;
-    },
-    (agentId, attachmentId) => attachments.read(agentId, attachmentId),
-  );
-
-  const detectedShell = detectShell();
-  const resolvedEnvPromise = detectedShell
-    ? resolveShellEnv(detectedShell)
-    : Promise.resolve(null);
-  const gitService = await GitService.create({
-    logger,
-    telemetryService,
-    resolvedEnvPromise,
+    controlledBrowserEgress:
+      guardianEgressStartup.controlledBrowserTabEgressOptions,
   });
-
-  // Push search engine definitions to UI karton state.
-  webDataService
-    .getSearchEngines()
-    .then((engines) => {
-      uiKarton.setState((draft) => {
-        draft.searchEngines = engines;
-      });
-      if (verbose)
-        logger.debug(
-          `[Main] Pushed ${engines.length} search engines to UI karton`,
-        );
-    })
-    .catch((error) => {
-      logger.warn('[Main] Failed to load search engines', error);
-    });
+  startSearchEngineSync();
 
   // Phase 3a: build the agent-core seam (store + controllers + registry)
   // early so services that consume store-canonical state — currently
@@ -628,130 +551,30 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
         ).enabled,
     });
 
-  // Create OmniboxSuggestionsService for omnibox autocomplete
-  const _omniboxSuggestionsService = await OmniboxSuggestionsService.create(
+  const {
+    omniboxSuggestionsService: _omniboxSuggestionsService,
+    registerAuthCallbackHandler,
+    registerMcpOAuthCallbackHandler,
+    registerSkillInstallHandler,
+    notificationService,
+    autoUpdateService,
+    globalConfigService,
+    notificationSoundsService,
+    syncAvailableSoundPacks,
+    startNotificationBackgroundWork,
+  } = await runNotificationRuntimePhase({
     logger,
+    verbose,
     uiKarton,
     historyService,
     webDataService,
     faviconService,
     localPortsScannerService,
-  );
-
-  // Set up URL handlers, capturing the auth callback registration function
-  const {
-    registerAuthCallbackHandler,
-    registerMcpOAuthCallbackHandler,
-    registerSkillInstallHandler,
-  } = setupUrlHandlers(windowLayoutService, logger);
-
-  const notificationService = await NotificationService.create(
-    logger,
-    uiKarton,
-  );
-
-  // Initialize auto-update service (only runs on macOS and Windows, skipped for dev builds)
-  const autoUpdateService = await AutoUpdateService.create(
-    logger,
-    notificationService,
+    windowLayoutService,
     telemetryService,
     preferencesService,
-    uiKarton,
-  );
-
-  const globalConfigService = await GlobalConfigService.create(
-    logger,
-    uiKarton,
-  );
-
-  // Resolve the sounds directory.
-  // Packaged: extraResource copies leaf dirs directly into Resources/.
-  // So ./assets/sounds → Resources/sounds/, NOT Resources/assets/sounds/.
-  // Dev: app.getAppPath() = project root where assets/sounds/ exists.
-  const soundsDir = app.isPackaged
-    ? path.join(process.resourcesPath!, 'sounds')
-    : path.join(app.getAppPath(), 'assets', 'sounds');
-  const importedPacksDir = path.join(
-    app.getPath('userData'),
-    'imported-sound-packs',
-  );
-
-  const notificationSoundsService = await NotificationSoundsService.create(
-    logger,
-    uiKarton,
-    soundsDir,
-    importedPacksDir,
-    globalConfigService.get(),
-  );
-
-  notificationSoundsService.setWindowRef(() =>
-    windowLayoutService.getBaseWindow(),
-  );
-  notificationSoundsService.setWebContentsRef(() =>
-    windowLayoutService.getUIWebContents(),
-  );
-
-  const notificationSoundsConfigListener: Parameters<
-    typeof globalConfigService.addConfigUpdatedListener
-  >[0] = (newConfig) => {
-    notificationSoundsService.onConfigUpdated(newConfig);
-  };
-  globalConfigService.addConfigUpdatedListener(
-    notificationSoundsConfigListener,
-  );
-
-  const syncAvailableSoundPacks = async (
-    selectedPack?: string,
-  ): Promise<void> => {
-    const packs = notificationSoundsService.listPacks();
-    const displayNames = notificationSoundsService.getPackDisplayNames();
-
-    uiKarton.setState((draft) => {
-      draft.notificationSoundPacks = {
-        available: packs,
-        displayNames,
-      };
-    });
-
-    if (selectedPack) {
-      await globalConfigService.set({
-        ...globalConfigService.get(),
-        notificationSoundPack: selectedPack,
-      });
-    }
-  };
-
-  void syncAvailableSoundPacks().catch((err) => {
-    logger.error('[Main] Failed to save discovered sound packs', err);
   });
-
-  ensureRipgrepInstalled({
-    rgBinaryBasePath: getRipgrepBasePath(),
-    onLog: logger.debug,
-  })
-    .then((result) => {
-      if (!result.success) {
-        telemetryService.captureException(
-          new Error(result.error ?? 'Unknown error'),
-          { service: 'main', operation: 'ensureRipgrep' },
-        );
-        logger.warn(
-          `Ripgrep installation failed: ${result.error}. Grep/glob operations will use slower Node.js implementations.`,
-        );
-      } else {
-        if (verbose)
-          logger.debug('Ripgrep is available for grep/glob operations');
-      }
-    })
-    .catch((error) => {
-      logger.warn(
-        `Ripgrep installation failed: ${error}. Grep/glob operations will use slower Node.js implementations.`,
-      );
-      telemetryService.captureException(error as Error, {
-        service: 'main',
-        operation: 'ensureRipgrep',
-      });
-    });
+  startNotificationBackgroundWork();
 
   logger.debug('[Main] Global services bootstrapped');
 
