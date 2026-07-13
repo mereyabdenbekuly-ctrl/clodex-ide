@@ -37,6 +37,7 @@
     "build:agent-host": "vite build --config vite.agent-host.config.ts",
     "build:mcp-host": "vite build --config vite.mcp-host.config.ts",
     "smoke:mcp-host": "pnpm -F @clodex/mcp-runtime build && pnpm build:mcp-host && vite build --config vite.mcp-host-smoke.config.ts && electron dist/mcp-host-smoke.mjs",
+    "acceptance:mcp-packaged": "tsx --tsconfig tsconfig.backend.json scripts/mcp-packaged-acceptance.ts",
     "sign:publisher-attestation": "tsx scripts/sign-plugin-publisher-attestation.ts",
     "policy:publication": "tsx --tsconfig tsconfig.backend.json scripts/model-fabric-policy-publication.ts",
     "collect:isolated-agent-runtime-evidence": "tsx scripts/collect-isolated-agent-runtime-evidence.ts",

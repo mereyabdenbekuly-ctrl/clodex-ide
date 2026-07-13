@@ -18,6 +18,9 @@ import {
 // uninstall/update events are handled cleanly without touching native code.
 
 const isSmokeTest = process.argv.includes('--smoke-test');
+const isMcpPackagedAcceptanceRequested = process.argv.includes(
+  '--mcp-packaged-acceptance-local',
+);
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
@@ -64,6 +67,11 @@ installStartupOpenFileListener();
 // Keep the channel-specific userData path by default, while honoring Electron's
 // standard override for isolated smoke profiles and managed deployments.
 const userDataOverride = app.commandLine.getSwitchValue('user-data-dir').trim();
+const isMcpPackagedAcceptance =
+  isMcpPackagedAcceptanceRequested &&
+  app.isPackaged &&
+  userDataOverride.length > 0 &&
+  isPathInside(app.getPath('temp'), path.resolve(userDataOverride));
 app.setPath(
   'userData',
   userDataOverride
@@ -128,7 +136,8 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-const singleInstanceLock = app.requestSingleInstanceLock();
+const singleInstanceLock =
+  isMcpPackagedAcceptanceRequested || app.requestSingleInstanceLock();
 
 if (!singleInstanceLock) {
   app.quit();
@@ -148,6 +157,14 @@ void app
     // machines without system-wide VC++ redistributable.
     if (started) return;
 
+    if (isMcpPackagedAcceptanceRequested && !isMcpPackagedAcceptance) {
+      console.error(
+        'MCP_PACKAGED_ACCEPTANCE status=failed reason=local-mode-denied',
+      );
+      app.exit(1);
+      return;
+    }
+
     if (isSmokeTest) {
       // Validate the full import tree is intact, then exit.
       await import('./main');
@@ -156,10 +173,36 @@ void app
       return;
     }
 
+    if (isMcpPackagedAcceptance) {
+      const [{ runPackagedMcpAcceptance }, { MCP_PACKAGED_ACCEPTANCE_MARKER }] =
+        await Promise.all([
+          import('./mcp-acceptance/run'),
+          import('../shared/mcp-packaged-acceptance'),
+        ]);
+      const report = await runPackagedMcpAcceptance({
+        nodeExecutable: app.commandLine
+          .getSwitchValue('mcp-acceptance-node')
+          .trim(),
+        fixturePath: app.commandLine
+          .getSwitchValue('mcp-acceptance-fixture')
+          .trim(),
+      });
+      console.log(`${MCP_PACKAGED_ACCEPTANCE_MARKER}${JSON.stringify(report)}`);
+      app.exit(report.status === 'passed' ? 0 : 1);
+      return;
+    }
+
     const { main } = await import('./main');
     await main({ launchOptions: { verbose: true } });
   })
   .catch((error: unknown) => {
+    if (isMcpPackagedAcceptanceRequested) {
+      console.error(
+        'MCP_PACKAGED_ACCEPTANCE status=failed reason=startup-failed',
+      );
+      app.exit(1);
+      return;
+    }
     const message =
       error instanceof Error ? error.message : 'Unknown startup failure';
     console.error('[Clodex] Startup failed', error);
@@ -179,3 +222,13 @@ app.on('window-all-closed', () => {
 });
 
 app.on('activate', () => {});
+
+function isPathInside(parentPath: string, candidatePath: string): boolean {
+  const relative = path.relative(path.resolve(parentPath), candidatePath);
+  return (
+    relative.length > 0 &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}

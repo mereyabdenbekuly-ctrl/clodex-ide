@@ -20,6 +20,7 @@
     "scripts/check-main-plan-readiness.ts",
     "scripts/collect-cloud-task-release-evidence.ts",
     "scripts/model-fabric-policy-publication.ts",
+    "scripts/mcp-packaged-acceptance.ts",
     "scripts/run-agentic-app-runtime-evaluation.ts",
     "scripts/runner-paired-replay-docker-dogfood.ts",
     "forge.env.d.ts",
