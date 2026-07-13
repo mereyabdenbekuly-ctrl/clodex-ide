@@ -18,6 +18,7 @@
     "src/backend",
     "src/types",
     "scripts/check-main-plan-readiness.ts",
+    "scripts/browser-egress-packaged-acceptance.ts",
     "scripts/collect-cloud-task-release-evidence.ts",
     "scripts/model-fabric-policy-publication.ts",
     "scripts/mcp-packaged-acceptance.ts",

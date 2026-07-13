@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import type { NetworkPolicy } from '@shared/network-policy';
 import { afterEach, describe, expect, it } from 'vitest';
 import { NetworkPolicyEngine } from '.';
+import { parseNetworkPolicyAuditRecords } from './audit-ledger';
 import {
   type EgressProxyCapability,
   TransparentEgressProxy,
@@ -67,6 +68,88 @@ describe('TransparentEgressProxy', () => {
     });
   });
 
+  it('allows only an exact loopback grant and denies a second local port without connecting', async () => {
+    const allowedBody = 'allowed-private-response';
+    let allowedRequests = 0;
+    const allowed = http.createServer((_request, response) => {
+      allowedRequests += 1;
+      response.end(allowedBody);
+    });
+    const allowedPort = await listen(allowed);
+
+    let deniedConnections = 0;
+    let deniedRequests = 0;
+    let deniedBodyBytes = 0;
+    const denied = http.createServer((request, response) => {
+      deniedRequests += 1;
+      request.on('data', (chunk: Buffer) => {
+        deniedBodyBytes += chunk.length;
+      });
+      response.end('denied-private-response');
+    });
+    denied.on('connection', () => {
+      deniedConnections += 1;
+    });
+    const deniedPort = await listen(denied);
+
+    const { capability, auditPath } = await makeProxy(allowedPort, {
+      id: 'exact-loopback-grant-test',
+      version: 1,
+      mode: 'allowlist',
+      allowedHosts: [],
+      allowedPorts: [],
+      allowedDestinations: [
+        { protocol: 'http', hostname: '127.0.0.1', port: allowedPort },
+      ],
+      allowPrivateNetworks: false,
+      allowLoopback: false,
+      allowIpLiterals: false,
+    });
+    const allowedDestination = `http://127.0.0.1:${allowedPort}/allowed-private?token=allow-secret`;
+    const deniedDestination = `http://127.0.0.1:${deniedPort}/denied-private?token=deny-secret`;
+
+    await expect(proxyRequest(capability, allowedDestination)).resolves.toEqual(
+      { status: 200, body: allowedBody },
+    );
+    await expect(proxyRequest(capability, deniedDestination)).resolves.toEqual({
+      status: 403,
+      body: '',
+    });
+    expect(allowedRequests).toBe(1);
+    expect(deniedConnections).toBe(0);
+    expect(deniedRequests).toBe(0);
+    expect(deniedBodyBytes).toBe(0);
+
+    const auditContent = await fs.readFile(auditPath, 'utf8');
+    expect(parseNetworkPolicyAuditRecords(auditContent)).toEqual([
+      expect.objectContaining({
+        destinationPort: allowedPort,
+        protocol: 'http',
+        decision: 'allow',
+        reason: 'exact-destination-grant',
+      }),
+      expect.objectContaining({
+        destinationPort: deniedPort,
+        protocol: 'http',
+        decision: 'deny',
+        reason: 'loopback-denied',
+      }),
+    ]);
+    for (const rawValue of [
+      allowedDestination,
+      deniedDestination,
+      '127.0.0.1',
+      '/allowed-private',
+      '/denied-private',
+      'allow-secret',
+      'deny-secret',
+      allowedBody,
+      'denied-private-response',
+    ]) {
+      expect(auditContent).not.toContain(rawValue);
+    }
+  });
+
   it('establishes CONNECT tunnels to the DNS-pinned socket', async () => {
     const upstream = net.createServer((socket) => {
       socket.on('data', (chunk) => socket.write(`echo:${chunk.toString()}`));
@@ -93,24 +176,31 @@ describe('TransparentEgressProxy', () => {
   });
 });
 
-async function makeProxy(port: number): Promise<{
+async function makeProxy(
+  port: number,
+  policyOverride?: NetworkPolicy,
+): Promise<{
   proxy: TransparentEgressProxy;
   capability: EgressProxyCapability;
+  auditPath: string;
 }> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'clodex-proxy-'));
-  const policy: NetworkPolicy = {
-    id: 'proxy-test',
-    version: 1,
-    mode: 'allowlist',
-    allowedHosts: ['service.test'],
-    allowedPorts: [port],
-    allowedDestinations: [],
-    allowPrivateNetworks: true,
-    allowLoopback: true,
-    allowIpLiterals: false,
-  };
+  const auditPath = path.join(directory, 'audit.jsonl');
+  const policy: NetworkPolicy =
+    policyOverride ??
+    ({
+      id: 'proxy-test',
+      version: 1,
+      mode: 'allowlist',
+      allowedHosts: ['service.test'],
+      allowedPorts: [port],
+      allowedDestinations: [],
+      allowPrivateNetworks: true,
+      allowLoopback: true,
+      allowIpLiterals: false,
+    } satisfies NetworkPolicy);
   const engine = await NetworkPolicyEngine.create({
-    auditPath: path.join(directory, 'audit.jsonl'),
+    auditPath,
     resolvePolicy: () => policy,
     resolveDns: async () => [{ address: '127.0.0.1', family: 4 }],
   });
@@ -121,6 +211,7 @@ async function makeProxy(port: number): Promise<{
   });
   return {
     proxy,
+    auditPath,
     capability: proxy.issueCapability({
       principalKind: 'mcp',
       principalId: 'test-server',
