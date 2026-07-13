@@ -3,6 +3,7 @@
  */
 
 import { app, powerMonitor } from 'electron';
+import { generateText } from 'ai';
 import { AgentManagerService } from './services/agent-manager';
 import { enrichHistoryEntryWorkspaces } from './services/agent-manager/history-workspace-enrichment';
 import { Logger } from './services/logger';
