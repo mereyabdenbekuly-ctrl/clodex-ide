@@ -112,26 +112,8 @@ import {
 } from '@shared/evidence-memory-rollout';
 import { AssetCacheService } from './services/asset-cache';
 import { detectShell, resolveShellEnv } from '@clodex/agent-shell';
-import { NetworkPolicyEngine } from './services/network-policy';
-import {
-  type EgressProxyCapability,
-  TransparentEgressProxy,
-} from './services/network-policy/transparent-proxy';
-import { createRemoteMcpNetworkPolicy } from './services/network-policy/mcp-policy';
-import {
-  CONTROLLED_BROWSER_PRINCIPAL_ID,
-  ControlledBrowserEgressSession,
-  createControlledBrowserNetworkPolicy,
-  createControlledBrowserTabEgressOptions,
-  parseControlledBrowserAllowedHosts,
-} from './services/network-policy/controlled-browser';
 import { NetworkEgressControlCenterService } from './services/network-policy/control-center';
-import {
-  DEFAULT_DENY_NETWORK_POLICY,
-  type NetworkPolicy,
-  type NetworkPolicyEvaluator,
-} from '@shared/network-policy';
-import { toNetworkPolicyDestinationGrant } from '@shared/network-egress-control';
+import { initializeGuardianEgressStartup } from './services/network-policy/startup';
 import path from 'node:path';
 import { readFile as readFsFile } from 'node:fs/promises';
 import {
@@ -258,124 +240,15 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     logger,
     releaseChannel: __APP_RELEASE_CHANNEL__,
   });
-  const networkPolicies = new Map<string, NetworkPolicy>();
-  let networkPolicyEngine: NetworkPolicyEngine | null = null;
-  let networkPolicyEvaluator: NetworkPolicyEvaluator | null = null;
-  let transparentEgressProxy: TransparentEgressProxy | null = null;
-  let controlledBrowserEgressSession: ControlledBrowserEgressSession | null =
-    null;
-  let controlledBrowserCapability: EgressProxyCapability | null = null;
-  let controlledBrowserPolicyVersion = 1;
-  const egressPolicyEnabled = startupFeatureEnabled('egress-policy-engine');
-  const remoteMcpProxyEnabled = startupFeatureEnabled(
-    'egress-transparent-proxy',
-  );
-  const controlledBrowserEgressEnabled = startupFeatureEnabled(
-    'egress-controlled-browser',
-  );
-  const egressControlCenterEnabled = startupFeatureEnabled(
-    'egress-control-center',
-  );
-  const controlledBrowserAllowedHosts = parseControlledBrowserAllowedHosts(
-    process.env.CLODEX_BROWSER_EGRESS_ALLOWED_HOSTS,
-  );
-  const initialControlledBrowserGrants = egressControlCenterEnabled
-    ? preferencesService
-        .get()
-        .networkEgress.browserGrants.filter(
-          (grant) => grant.expiresAt === null || grant.expiresAt > Date.now(),
-        )
-        .map(toNetworkPolicyDestinationGrant)
-    : [];
-  if (egressPolicyEnabled) {
-    try {
-      networkPolicyEngine = await NetworkPolicyEngine.create({
-        auditPath: getNetworkPolicyAuditPath(),
-        resolvePolicy: (scope) =>
-          networkPolicies.get(scope.principalId) ?? DEFAULT_DENY_NETWORK_POLICY,
-      });
-      networkPolicyEvaluator = networkPolicyEngine;
-    } catch (error) {
-      logger.error(
-        '[NetworkPolicyEngine] Initialization failed; managed network egress will fail closed',
-        error,
-      );
-      networkPolicyEvaluator = {
-        evaluate: async () => {
-          throw new Error(
-            'Network policy engine is unavailable; managed network egress blocked',
-          );
-        },
-      };
-    }
-  }
-  if (remoteMcpProxyEnabled || controlledBrowserEgressEnabled) {
-    if (!networkPolicyEngine) {
-      logger.error(
-        '[TransparentEgressProxy] Policy engine is unavailable; controlled runtimes will fail closed',
-      );
-    } else {
-      try {
-        transparentEgressProxy = await TransparentEgressProxy.create({
-          engine: networkPolicyEngine,
-        });
-      } catch (error) {
-        logger.error(
-          '[TransparentEgressProxy] Initialization failed; controlled runtimes will fail closed',
-          error,
-        );
-      }
-    }
-  }
-  if (controlledBrowserEgressEnabled) {
-    if (transparentEgressProxy) {
-      networkPolicies.set(
-        CONTROLLED_BROWSER_PRINCIPAL_ID,
-        createControlledBrowserNetworkPolicy(
-          controlledBrowserAllowedHosts,
-          initialControlledBrowserGrants,
-          controlledBrowserPolicyVersion,
-        ),
-      );
-      try {
-        controlledBrowserCapability = transparentEgressProxy.issueCapability({
-          principalKind: 'browser',
-          principalId: CONTROLLED_BROWSER_PRINCIPAL_ID,
-        });
-      } catch (error) {
-        networkPolicies.delete(CONTROLLED_BROWSER_PRINCIPAL_ID);
-        logger.error(
-          '[ControlledBrowserEgress] Capability issuance failed; browser networking will fail closed',
-          error,
-        );
-      }
-    }
-    try {
-      controlledBrowserEgressSession =
-        await ControlledBrowserEgressSession.create({
-          capability: controlledBrowserCapability,
-        });
-      if (controlledBrowserCapability) {
-        logger.debug(
-          `[ControlledBrowserEgress] Browser session routed through managed proxy (${controlledBrowserAllowedHosts.length > 0 ? `${controlledBrowserAllowedHosts.length} allowed host pattern(s)` : 'public web ports 80/443'})`,
-        );
-      } else {
-        logger.warn(
-          '[ControlledBrowserEgress] Managed proxy unavailable; browser networking is fail closed',
-        );
-      }
-    } catch (error) {
-      if (controlledBrowserCapability) {
-        transparentEgressProxy?.revokeCapability(controlledBrowserCapability);
-        controlledBrowserCapability = null;
-        networkPolicies.delete(CONTROLLED_BROWSER_PRINCIPAL_ID);
-      }
-      logger.error(
-        '[ControlledBrowserEgress] Session proxy configuration failed; browser networking remains fail closed',
-        error,
-      );
-    }
-  }
+  const guardianEgressStartup = await initializeGuardianEgressStartup({
+    logger,
+    isFeatureEnabled: startupFeatureEnabled,
+    getBrowserGrants: () =>
+      preferencesService.get().networkEgress.browserGrants,
+    getAuditPath: getNetworkPolicyAuditPath,
+    controlledBrowserAllowedHosts:
+      process.env.CLODEX_BROWSER_EGRESS_ALLOWED_HOSTS,
+  });
 
   // Start launch telemetry without blocking startup. TelemetryService keeps
   // track of the pending capture so shutdown can wait for it before emitting
@@ -436,11 +309,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     preferencesService,
     attachments,
     telemetryService,
-    controlledBrowserEgressEnabled
-      ? createControlledBrowserTabEgressOptions(
-          controlledBrowserEgressSession?.handleProxyAuthentication,
-        )
-      : undefined,
+    guardianEgressStartup.controlledBrowserTabEgressOptions,
   );
   const uiKarton = windowLayoutService.uiKarton;
   const fileTreeService = await FileTreeService.create(logger, uiKarton);
@@ -710,7 +579,8 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
   preferencesService.connectKarton(uiKarton, pagesService);
   let networkEgressControlService: NetworkEgressControlCenterService | null =
     null;
-  if (egressControlCenterEnabled) {
+  const guardianEgressControlCenter = guardianEgressStartup.controlCenter;
+  if (guardianEgressControlCenter.enabled) {
     try {
       networkEgressControlService =
         await NetworkEgressControlCenterService.create({
@@ -719,48 +589,9 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
           preferences: preferencesService,
           auditPath: getNetworkPolicyAuditPath(),
           isFeatureEnabled: startupFeatureEnabled,
-          getRuntimeStatus: () => ({
-            policyEngineEnabled: egressPolicyEnabled,
-            policyEngineAvailable: networkPolicyEngine !== null,
-            proxyRequired:
-              remoteMcpProxyEnabled || controlledBrowserEgressEnabled,
-            proxyAvailable: transparentEgressProxy !== null,
-            controlledBrowserEnabled: controlledBrowserEgressEnabled,
-            controlledBrowserActive:
-              controlledBrowserCapability !== null &&
-              controlledBrowserEgressSession?.managedProxyActive === true,
-          }),
-          getBrowserPolicy: () =>
-            networkPolicies.get(CONTROLLED_BROWSER_PRINCIPAL_ID) ?? null,
-          applyBrowserGrants: async (grants) => {
-            if (!controlledBrowserEgressEnabled) return;
-            controlledBrowserPolicyVersion++;
-            networkPolicies.set(
-              CONTROLLED_BROWSER_PRINCIPAL_ID,
-              createControlledBrowserNetworkPolicy(
-                controlledBrowserAllowedHosts,
-                grants,
-                controlledBrowserPolicyVersion,
-              ),
-            );
-            if (!controlledBrowserEgressSession) return;
-            try {
-              await controlledBrowserEgressSession.refreshNetworkBoundary();
-            } catch (error) {
-              logger.error(
-                '[ControlledBrowserEgress] Policy refresh failed; engaging fail-closed routing',
-                error,
-              );
-              if (controlledBrowserCapability) {
-                transparentEgressProxy?.revokeCapability(
-                  controlledBrowserCapability,
-                );
-                controlledBrowserCapability = null;
-              }
-              await controlledBrowserEgressSession.engageFailClosed();
-              throw error;
-            }
-          },
+          getRuntimeStatus: guardianEgressControlCenter.getRuntimeStatus,
+          getBrowserPolicy: guardianEgressControlCenter.getBrowserPolicy,
+          applyBrowserGrants: guardianEgressControlCenter.applyBrowserGrants,
         });
     } catch (error) {
       logger.error(
@@ -1013,41 +844,18 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       Boolean(authService.accessToken),
     );
   const mcpOAuthService = await McpOAuthService.create({ logger });
+  const guardianEgressRemoteMcp = guardianEgressStartup.remoteMcp;
   const mcpRegistryService = await McpRegistryService.create({
     logger,
     credentialsService,
     oauthService: mcpOAuthService,
-    ...(remoteMcpProxyEnabled
+    ...(guardianEgressRemoteMcp.enabled
       ? {
           createHost: async (hostOptions) =>
             await McpHostSupervisor.create(logger, {
               ...hostOptions,
-              resolveNetworkProxy: (serverId, transport) => {
-                if (transport.type === 'stdio') return undefined;
-                if (!transparentEgressProxy) {
-                  throw new Error(
-                    'Transparent egress proxy is unavailable; remote MCP connection blocked',
-                  );
-                }
-                const principalId = `mcp:${serverId}`;
-                networkPolicies.set(
-                  principalId,
-                  createRemoteMcpNetworkPolicy(serverId, transport),
-                );
-                try {
-                  return transparentEgressProxy.issueCapability({
-                    principalKind: 'mcp',
-                    principalId,
-                  });
-                } catch (error) {
-                  networkPolicies.delete(principalId);
-                  throw error;
-                }
-              },
-              revokeNetworkProxy: (serverId, proxy) => {
-                transparentEgressProxy?.revokeCapability(proxy);
-                networkPolicies.delete(`mcp:${serverId}`);
-              },
+              resolveNetworkProxy: guardianEgressRemoteMcp.resolveNetworkProxy,
+              revokeNetworkProxy: guardianEgressRemoteMcp.revokeNetworkProxy,
             }),
         }
       : {}),
@@ -1155,7 +963,9 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     agentHostProcessService,
     protectedFiles,
   );
-  toolboxService.setNetworkPolicyEvaluator(networkPolicyEvaluator);
+  toolboxService.setNetworkPolicyEvaluator(
+    guardianEgressStartup.networkPolicyEvaluator,
+  );
   toolboxServiceForMarketplace = toolboxService;
   mcpRegistryService.setElicitationHandler(
     async (serverId, agentInstanceId, request, signal) =>
@@ -4430,8 +4240,9 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       mcpSettingsService,
       mcpRegistryService,
       networkEgressControlService,
-      controlledBrowserEgressSession,
-      transparentEgressProxy,
+      controlledBrowserEgressSession:
+        guardianEgressStartup.controlledBrowserEgressSession,
+      transparentEgressProxy: guardianEgressStartup.transparentEgressProxy,
       mcpOAuthService,
       toolboxService,
       telemetryService,
