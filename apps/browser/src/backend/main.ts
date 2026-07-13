@@ -18,23 +18,15 @@ import { FilePickerService } from './services/file-picker';
 import { FileTreeService } from './services/file-tree';
 import { AppMenuService } from './services/app-menu';
 import { URIHandlerService } from './services/uri-handler';
-import { IdentifierService } from './services/identifier';
 import { Logger } from './services/logger';
 import { createMainShutdownCoordinator } from './services/shutdown-coordinator';
-import {
-  isUIEventName,
-  parseUIEventProperties,
-  TelemetryService,
-} from './services/telemetry';
+import { isUIEventName, parseUIEventProperties } from './services/telemetry';
 import { GlobalConfigService } from './services/global-config';
-import { PreferencesService } from './services/preferences';
 import { NotificationService } from './services/notification';
 import { PagesService } from './services/pages';
 import { NotificationSoundsService } from './services/notification-sounds';
 import { WindowLayoutService } from './services/window-layout';
 import { HistoryService } from './services/history';
-import { FaviconService } from './services/favicon';
-import { WebDataService } from './services/webdata';
 import { AgentCorePersistence } from '@clodex/agent-core/persistence';
 import {
   ChatPersistenceService,
@@ -60,7 +52,6 @@ import { AgentTypes } from '@shared/karton-contracts/ui/agent';
 import type { MountPermission } from '@shared/karton-contracts/ui/agent/metadata';
 import type { UserPreferences } from '@shared/karton-contracts/ui/shared-types';
 import { AutoUpdateService } from './services/auto-update';
-import { LocalPortsScannerService } from './services/local-ports-scanner';
 import { WorktreeSetupSettingsService } from './services/worktree-setup-settings';
 import type { WorktreeSetupScriptVariant } from '@shared/worktree-setup';
 import { DevToolAPIService } from './services/dev-tool-api';
@@ -107,6 +98,7 @@ import {
 import { migrateLegacyPaths } from './utils/migrate-legacy-paths';
 import { readPersistedDataSync } from './utils/persisted-data';
 import { z } from 'zod';
+import { runFoundationalServicesPhase } from './startup/phases/foundational-services';
 import { discoverPlugins } from './utils/discover-plugins';
 import { discoverSkills } from './agents/shared/prompts/utils/get-skills';
 import type { Skill } from './agents/shared/prompts/utils/get-skills';
@@ -276,43 +268,18 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     attachments,
   } = await prepareProtectedStorage(logger);
 
-  // Bootstrap every service that has no inter-dependencies in parallel.
-  // These were previously awaited one-by-one, serializing independent
-  // disk/DB I/O and needlessly delaying the first window paint. They all
-  // only need `logger`, so they can be created concurrently. Services with
-  // dependencies are created in level order just below.
-  const [
+  const {
     preferencesService,
     identifierService,
     webDataService,
     faviconService,
     localPortsScannerService,
-  ] = await Promise.all([
-    PreferencesService.create(logger),
-    IdentifierService.create(logger),
-    // WebDataService must exist before HistoryService (history keyword IDs
-    // reference the keywords table owned by WebDataService).
-    WebDataService.create(logger),
-    FaviconService.create(logger),
-    // LocalPortsScannerService discovers local dev servers.
-    LocalPortsScannerService.create(logger),
-  ]);
-
-  // TelemetryService depends on identifier + preferences.
-  const telemetryService = new TelemetryService(
-    identifierService,
-    preferencesService,
+    telemetryService,
+    startupFeatureEnabled,
+  } = await runFoundationalServicesPhase({
     logger,
-  );
-
-  const startupFeatureEnabled = (
-    feature: Parameters<typeof resolveFeatureGate>[0],
-  ) =>
-    resolveFeatureGate(
-      feature,
-      preferencesService.get().featureGates.overrides,
-      __APP_RELEASE_CHANNEL__,
-    ).enabled;
+    releaseChannel: __APP_RELEASE_CHANNEL__,
+  });
   const networkPolicies = new Map<string, NetworkPolicy>();
   let networkPolicyEngine: NetworkPolicyEngine | null = null;
   let networkPolicyEvaluator: NetworkPolicyEvaluator | null = null;
