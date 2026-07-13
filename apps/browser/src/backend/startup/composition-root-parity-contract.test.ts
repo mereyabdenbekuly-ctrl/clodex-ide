@@ -30,6 +30,11 @@ type InvocationOccurrence = {
 const startupDirectory = path.dirname(fileURLToPath(import.meta.url));
 const backendDirectory = path.dirname(startupDirectory);
 const wiringDirectory = path.join(backendDirectory, 'wiring');
+const swarmRuntimeDirectory = path.join(
+  backendDirectory,
+  'services',
+  'swarm-runtime',
+);
 
 function listProductionTypeScriptFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true })
@@ -49,6 +54,7 @@ const compositionSourceFiles = [
   path.join(backendDirectory, 'main.ts'),
   ...listProductionTypeScriptFiles(startupDirectory),
   ...listProductionTypeScriptFiles(wiringDirectory),
+  ...listProductionTypeScriptFiles(swarmRuntimeDirectory),
 ];
 
 function collectImportBindings(sourceFile: ts.SourceFile): ImportBindings {
