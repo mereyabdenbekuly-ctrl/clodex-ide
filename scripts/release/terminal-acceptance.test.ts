@@ -16,9 +16,8 @@ import {
 import {
   acquirePackagedAcceptanceLock,
   AppLogObserver,
-  hasExactTerminalRow,
+  hasExactOutputLine,
   inspectablePageWebSocketUrls,
-  normalizeTerminalRow,
   parseDevToolsVersion,
   parseTerminalAcceptanceArguments,
   seedIsolatedProfile,
@@ -115,18 +114,16 @@ describe('packaged terminal acceptance', () => {
     ).toEqual(['ws://main', 'ws://view']);
   });
 
-  it('requires the exact rendered output row, not an echoed command', () => {
+  it('requires an exact output receipt line, not an echoed command', () => {
     expect(TERMINAL_COMMAND).toBe("printf 'CLODEX_TERMINAL_OK\\n'");
     expect(
-      hasExactTerminalRow([
-        "$ printf 'CLODEX_TERMINAL_OK\\n'",
-        'CLODEX_TERMINAL_OK\u00a0\u00a0',
-      ]),
+      hasExactOutputLine(
+        "$ printf 'CLODEX_TERMINAL_OK\\n'\nCLODEX_TERMINAL_OK\n$ ",
+      ),
     ).toBe(true);
-    expect(hasExactTerminalRow(["$ printf 'CLODEX_TERMINAL_OK\\n'"])).toBe(
+    expect(hasExactOutputLine("$ printf 'CLODEX_TERMINAL_OK\\n'\n")).toBe(
       false,
     );
-    expect(normalizeTerminalRow('ok\u00a0  ')).toBe('ok');
   });
 
   it('recognizes split terminal lifecycle and shutdown log records', () => {

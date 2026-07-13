@@ -25,7 +25,6 @@ export const PACKAGED_ACCEPTANCE_LOCK_PATH =
 export const TERMINAL_COMMAND = "printf 'CLODEX_TERMINAL_OK\\n'";
 
 const OUTPUT_MARKER = 'CLODEX_TERMINAL_OK';
-const READY_TITLE = 'CLODEX_TERMINAL_ACCEPTANCE_READY';
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_LOCK_TIMEOUT_MS = 10 * 60_000;
 const POLL_INTERVAL_MS = 100;
@@ -706,28 +705,15 @@ async function enterTerminalLine(
   await dispatchEnter(connection);
 }
 
-export function normalizeTerminalRow(value: string): string {
-  return value.replaceAll('\u00a0', ' ').trimEnd();
-}
-
-export function hasExactTerminalRow(
-  rows: readonly string[],
+export function hasExactOutputLine(
+  output: string,
   marker = OUTPUT_MARKER,
 ): boolean {
-  return rows.some((row) => normalizeTerminalRow(row) === marker);
+  return output.split(/\r?\n/u).some((line) => line === marker);
 }
 
-async function rendererHasExactOutputRow(
-  connection: CdpConnection,
-): Promise<boolean> {
-  return runtimeEvaluate<boolean>(
-    connection,
-    `Array.from(document.querySelectorAll('.xterm-rows > div')).some(
-      (row) => (row.textContent ?? '').replaceAll('\\u00a0', ' ').trimEnd() === ${JSON.stringify(
-        OUTPUT_MARKER,
-      )}
-    )`,
-  );
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function createProcessExitPromise(child: ChildProcess): Promise<ProcessExit> {
@@ -950,15 +936,7 @@ export async function runTerminalAcceptance(
       { reasonCode: 'terminal-create-timeout', timeoutMs: options.timeoutMs },
     );
     const terminalCenter = await waitForCondition(
-      async () => {
-        const rowsReady = await runtimeEvaluate<boolean>(
-          connection!,
-          `Boolean(document.querySelector('.xterm-rows'))`,
-        );
-        return rowsReady
-          ? visibleElementCenter(connection!, '.xterm-screen')
-          : null;
-      },
+      () => visibleElementCenter(connection!, '.xterm-screen'),
       { reasonCode: 'terminal-renderer-timeout', timeoutMs: options.timeoutMs },
     );
     await dispatchTrustedClick(connection, terminalCenter);
@@ -981,32 +959,40 @@ export async function runTerminalAcceptance(
     };
 
     const commandStartedAt = performance.now();
+    const receiptPath = path.join(temporaryDirectory, 'terminal.out');
+    const pipePath = path.join(temporaryDirectory, 'terminal.pipe');
+    const quotedReceiptPath = shellSingleQuote(receiptPath);
+    const quotedPipePath = shellSingleQuote(pipePath);
     await enterTerminalLine(
       connection,
-      `stty -echo; printf '\\033]0;${READY_TITLE}\\007'`,
+      [
+        '/bin/stty -echo',
+        'exec 3>&1',
+        `/usr/bin/mkfifo ${quotedPipePath}`,
+        `/usr/bin/tee ${quotedReceiptPath} < ${quotedPipePath} >&3 & CLODEX_TERMINAL_TEE_PID=$!`,
+        `exec > ${quotedPipePath} 2>&1`,
+      ].join('; '),
     );
-    await waitForCondition(
-      () =>
-        runtimeEvaluate<boolean>(
-          connection!,
-          `Array.from(document.querySelectorAll('[role="tab"]')).some(
-            (tab) => (tab.textContent ?? '').trim() === ${JSON.stringify(
-              READY_TITLE,
-            )}
-          )`,
-        ),
-      {
-        reasonCode: 'terminal-echo-disable-timeout',
-        timeoutMs: options.timeoutMs,
-      },
-    );
+    await waitForCondition(() => existsSync(receiptPath), {
+      reasonCode: 'terminal-output-receipt-setup-timeout',
+      timeoutMs: options.timeoutMs,
+    });
 
     await enterTerminalLine(connection, TERMINAL_COMMAND);
     manifest.checks.command.enteredViaUi = true;
-    await waitForCondition(() => rendererHasExactOutputRow(connection!), {
-      reasonCode: 'terminal-output-timeout',
-      timeoutMs: options.timeoutMs,
-    });
+    await waitForCondition(
+      () => {
+        try {
+          return hasExactOutputLine(readFileSync(receiptPath, 'utf8'));
+        } catch {
+          return false;
+        }
+      },
+      {
+        reasonCode: 'terminal-output-timeout',
+        timeoutMs: options.timeoutMs,
+      },
+    );
     manifest.checks.command = {
       durationMs: durationSince(commandStartedAt),
       enteredViaUi: true,
@@ -1015,7 +1001,10 @@ export async function runTerminalAcceptance(
     };
 
     const exitStartedAt = performance.now();
-    await enterTerminalLine(connection, 'stty echo; exit 0');
+    await enterTerminalLine(
+      connection,
+      'exec >&3 2>&1; wait "$CLODEX_TERMINAL_TEE_PID"; code=$?; exec 3>&-; /bin/stty echo; exit "$code"',
+    );
     const exitCode = await waitForCondition(
       () => {
         const code = logObserver.exitCode(terminalId);
@@ -1028,12 +1017,7 @@ export async function runTerminalAcceptance(
         try {
           return await runtimeEvaluate<boolean>(
             connection!,
-            `!document.querySelector('.xterm-helper-textarea') &&
-              !Array.from(document.querySelectorAll('[role="tab"]')).some(
-                (tab) => (tab.textContent ?? '').trim() === ${JSON.stringify(
-                  READY_TITLE,
-                )}
-              )`,
+            `!document.querySelector('.xterm-helper-textarea')`,
           );
         } catch {
           return false;
