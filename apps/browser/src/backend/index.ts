@@ -137,7 +137,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const singleInstanceLock =
-  isMcpPackagedAcceptanceRequested || app.requestSingleInstanceLock();
+  isMcpPackagedAcceptance || app.requestSingleInstanceLock();
 
 if (!singleInstanceLock) {
   app.quit();
