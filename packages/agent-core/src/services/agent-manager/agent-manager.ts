@@ -9,7 +9,10 @@ import { toAgentsMap, type AgentsMap } from '../../agents/agents-map';
 import type { AgentHost } from '../../host/host';
 import type { CommandRegistry } from '../../commands/command-registry';
 import type { Logger } from '../../host/logger';
-import type { AgentPersistenceDB } from '../agent-persistence/db';
+import type {
+  AgentPersistenceDB,
+  StoreAgentInstanceOptions,
+} from '../agent-persistence/db';
 import { ChatPersistenceService, type ChatProject } from '../chat-persistence';
 import type { AttachmentsService } from '../attachments';
 import type { ProcessedImageCacheService } from '../processed-image-cache';
@@ -426,6 +429,15 @@ export class AgentManager extends DisposableService {
     const flushed = await live.prepareSessionCheckpoint();
     await this.agentStore.whenSettled();
 
+    // Normal background persistence remains best-effort so a transient write
+    // failure cannot break unrelated UI flows. A checkpoint, however, must
+    // prove that the current task state reached durable storage before a
+    // caller is allowed to teleport or restart the session.
+    await this.persistAgentState(instanceId, undefined, {
+      throwOnError: true,
+    });
+    const agentStateFlushedAt = new Date().toISOString();
+
     const state =
       this.agentStore.get().agents.instances[instanceId]?.state ?? null;
     if (!state) {
@@ -435,7 +447,7 @@ export class AgentManager extends DisposableService {
       isWorking: state.isWorking,
       pendingApprovalCount: Object.keys(state.pendingApprovals).length,
     });
-    return { ...flushed, wasLive: true };
+    return { ...flushed, agentStateFlushedAt, wasLive: true };
   }
 
   public async replayRecoveredUiChunk(
@@ -1538,6 +1550,7 @@ export class AgentManager extends DisposableService {
   private async persistAgentState(
     instanceId: string,
     dirtyMessageIndices?: number[],
+    options?: StoreAgentInstanceOptions,
   ) {
     // Store agent state into DB.
     const agent = this.activeAgents.get(instanceId);
@@ -1580,6 +1593,7 @@ export class AgentManager extends DisposableService {
       },
       agentState.history,
       dirtyMessageIndices,
+      options,
     );
   }
 

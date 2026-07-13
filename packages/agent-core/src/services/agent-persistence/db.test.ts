@@ -587,8 +587,35 @@ describe('AgentPersistenceDB task lifecycle', () => {
       persistence.storeAgentInstance(
         { ...stored!, title: 'Must not report success' },
         stored!.history,
+        undefined,
+        { throwOnError: true },
       ),
     ).rejects.toThrow('simulated transaction failure');
+  });
+
+  it('keeps ordinary background persistence best-effort on failure', async () => {
+    await insertAgentInstance(db, {
+      id: 'best-effort-flush-task',
+      title: 'Before best-effort flush',
+    });
+    const stored = await persistence.getStoredAgentInstanceById(
+      'best-effort-flush-task',
+    );
+    expect(stored).not.toBeNull();
+
+    (persistence as unknown as { _db: { transaction(): Promise<never> } })._db =
+      {
+        transaction: async () => {
+          throw new Error('simulated background transaction failure');
+        },
+      };
+
+    await expect(
+      persistence.storeAgentInstance(
+        { ...stored!, title: 'Best-effort update' },
+        stored!.history,
+      ),
+    ).resolves.toBeUndefined();
   });
 });
 

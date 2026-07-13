@@ -41,6 +41,10 @@ export interface AgentPersistenceDBDeps {
   dataProtection?: DataProtection;
 }
 
+export interface StoreAgentInstanceOptions {
+  throwOnError?: boolean;
+}
+
 type WorkspaceUsageRow = {
   lastMessageAt: Date;
   mountedWorkspaces?: Array<{ path: string }> | null;
@@ -402,6 +406,7 @@ export class AgentPersistenceDB {
     agentInstance: Omit<schema.NewStoredAgentInstance, 'history'>,
     history: TMessage[],
     dirtyMessageIndices?: number[],
+    options: StoreAgentInstanceOptions = {},
   ): Promise<void> {
     const id = agentInstance.id;
     this._logger.debug(`[AgentPersistenceDB] Storing agent instance: ${id}`);
@@ -557,7 +562,7 @@ export class AgentPersistenceDB {
       this._logger.error(
         `[AgentPersistenceDB] Failed to store agent instance: ${(error as Error).message}, ${(error as Error).stack}`,
       );
-      throw error;
+      if (options.throwOnError) throw error;
     }
   }
 
