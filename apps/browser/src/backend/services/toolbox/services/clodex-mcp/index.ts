@@ -67,7 +67,12 @@ export interface ClodexMcpServiceDeps {
   assessGuardian?: GuardianPolicyChecker;
   claimApprovalAuthority?: (
     input: ClaimTrustedMcpApprovalInput,
+    approvalLifecycleEpoch: number,
   ) => Promise<TrustedMcpFinalAuthority | null>;
+  assertApprovalLifecycleCurrent?: (
+    agentInstanceId: string,
+    approvalLifecycleEpoch: number,
+  ) => void;
   stageApproval?: (input: StageTrustedMcpApprovalInput) => Promise<void>;
   stageApprovalAtEpoch?: (
     input: StageTrustedMcpApprovalInput,
@@ -98,6 +103,9 @@ export class ClodexMcpService {
   private readonly assessGuardian: GuardianPolicyChecker | undefined;
   private readonly claimApprovalAuthority:
     | ClodexMcpServiceDeps['claimApprovalAuthority']
+    | undefined;
+  private readonly assertApprovalLifecycleCurrent:
+    | ClodexMcpServiceDeps['assertApprovalLifecycleCurrent']
     | undefined;
   private readonly stageApproval:
     | ClodexMcpServiceDeps['stageApproval']
@@ -131,6 +139,7 @@ export class ClodexMcpService {
     this.recordPendingApprovalAtEpoch = deps.recordPendingApprovalAtEpoch;
     this.assessGuardian = deps.assessGuardian;
     this.claimApprovalAuthority = deps.claimApprovalAuthority;
+    this.assertApprovalLifecycleCurrent = deps.assertApprovalLifecycleCurrent;
     this.stageApproval = deps.stageApproval;
     this.stageApprovalAtEpoch = deps.stageApprovalAtEpoch;
   }
@@ -373,7 +382,13 @@ export class ClodexMcpService {
     expected: ClodexMcpDispatchSnapshot,
     reviewedDescriptor: TrustedMcpDescriptorCommitment,
     authorization: TrustedMcpDispatchAuthorization,
+    agentInstanceId: string,
+    approvalLifecycleEpoch: number,
   ): void {
+    this.assertApprovalLifecycleCurrent?.(
+      agentInstanceId,
+      approvalLifecycleEpoch,
+    );
     authorization.prepareFinalCheck();
     if (!this.isEnabled()) {
       throw new Error('Clodex MCP dispatch was disabled after authorization');
@@ -405,6 +420,10 @@ export class ClodexMcpService {
       descriptor,
     );
     assertTrustedMcpDescriptorCommitment(reviewedDescriptor, currentDescriptor);
+    this.assertApprovalLifecycleCurrent?.(
+      agentInstanceId,
+      approvalLifecycleEpoch,
+    );
     authorization.assertCurrent(
       createTrustedMcpDispatchCommitment(
         currentDescriptor,
@@ -541,14 +560,17 @@ export class ClodexMcpService {
         )?.toolCallId;
         const finalAuthority =
           toolCallId && this.claimApprovalAuthority
-            ? ((await this.claimApprovalAuthority({
-                agentInstanceId,
-                toolCallId,
-                aiToolName,
-                arguments: args,
-                descriptor: reviewedDescriptor,
-                approvalContextDigest: reviewedDispatch.digest,
-              })) ?? undefined)
+            ? ((await this.claimApprovalAuthority(
+                {
+                  agentInstanceId,
+                  toolCallId,
+                  aiToolName,
+                  arguments: args,
+                  descriptor: reviewedDescriptor,
+                  approvalContextDigest: reviewedDispatch.digest,
+                },
+                approvalLifecycleEpoch,
+              )) ?? undefined)
             : undefined;
         try {
           const token = await this.requireModelAccessToken();
@@ -589,6 +611,8 @@ export class ClodexMcpService {
             dispatchSnapshot,
             reviewedDescriptor,
             authorization,
+            agentInstanceId,
+            approvalLifecycleEpoch,
           );
 
           // No await is permitted between the final synchronous fence and the

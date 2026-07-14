@@ -24,7 +24,14 @@ import { createKartonShellStreamSink } from './services/shell/karton-stream-sink
 import { ClodexMcpService } from './services/clodex-mcp';
 import { isClodexCloudSelected } from '@shared/provider-consent';
 import type { McpRegistryService } from '../mcp';
-import { TrustedMcpApprovalBroker } from '../mcp/approval-broker';
+import {
+  type ClaimTrustedMcpApprovalInput,
+  TrustedMcpApprovalBroker,
+} from '../mcp/approval-broker';
+import {
+  bindTrustedMcpFinalAuthorityToFence,
+  type TrustedMcpFinalAuthority,
+} from '../mcp/trusted-dispatch-gateway';
 import type {
   McpElicitationRequest,
   McpElicitationResult,
@@ -648,7 +655,16 @@ export class ToolboxService
         (await this.guardianPolicyChecker?.(request)) ?? null,
       stageApprovalAtEpoch: (input, approvalLifecycleEpoch) =>
         this.stageMcpApprovalAtEpoch(input, approvalLifecycleEpoch),
-      claimApprovalAuthority: (input) => this.mcpApprovalBroker.claim(input),
+      claimApprovalAuthority: (input, approvalLifecycleEpoch) =>
+        this.claimMcpApprovalAtEpoch(input, approvalLifecycleEpoch),
+      assertApprovalLifecycleCurrent: (
+        agentInstanceId,
+        approvalLifecycleEpoch,
+      ) =>
+        this.assertToolApprovalLifecycleEpoch(
+          agentInstanceId,
+          approvalLifecycleEpoch,
+        ),
     });
     this.detectedShell = detectedShell;
     this.resolvedEnvPromise = resolvedEnvPromise;
@@ -1094,6 +1110,25 @@ export class ToolboxService
     throw staleStageError;
   }
 
+  private async claimMcpApprovalAtEpoch(
+    input: ClaimTrustedMcpApprovalInput,
+    expectedEpoch: number,
+  ): Promise<TrustedMcpFinalAuthority | null> {
+    const assertCurrent = () =>
+      this.assertToolApprovalLifecycleEpoch(
+        input.agentInstanceId,
+        expectedEpoch,
+      );
+    assertCurrent();
+    const authority = await this.mcpApprovalBroker.claim(input);
+    // If cancellation won while the durable CLAIMED tombstone was being
+    // persisted, keep the tombstone burned but never return its capability.
+    assertCurrent();
+    return authority
+      ? bindTrustedMcpFinalAuthorityToFence(authority, assertCurrent)
+      : null;
+  }
+
   private recordPendingToolApprovalAtEpoch(
     agentInstanceId: string,
     toolCallId: string,
@@ -1130,7 +1165,13 @@ export class ToolboxService
         },
         stageApproval: (input) =>
           this.stageMcpApprovalAtEpoch(input, approvalLifecycleEpoch),
-        claimApprovalAuthority: (input) => this.mcpApprovalBroker.claim(input),
+        claimApprovalAuthority: (input) =>
+          this.claimMcpApprovalAtEpoch(input, approvalLifecycleEpoch),
+        assertApprovalLifecycleCurrent: () =>
+          this.assertToolApprovalLifecycleEpoch(
+            agentInstanceId,
+            approvalLifecycleEpoch,
+          ),
       }),
       Promise.resolve(
         this.remoteConnectionsService?.getAgentTools({

@@ -1,19 +1,67 @@
 # P0 Zero-Trust testing handoff
 
-- **Status:** `FOCUSED_LOCAL_PASS_BROAD_CI_PENDING`
+- **Status:** `LOCAL_FULL_PASS_GITHUB_CI_AND_CROSS_PLATFORM_PENDING`
 - **Date:** July 15, 2026
 - **Owner:** PR #16 remediation handoff to root reviewer and independent CI
 - **Worktree:** branch `security/p0-durable-mcp-approval-20260714`, based on
-  commit `94eadfadeb172898308136b95700aca75a8cbfd6`, with the remediation diff
-  still uncommitted at evidence capture time. The intended next step is root
-  review followed by a DCO-signed follow-up commit; no final commit SHA is
-  claimed here.
-- **Current claim:** focused source regression and typecheck evidence passed on
-  one local macOS arm64 host. Nothing in this handoff upgrades a manifest row
-  to `ENFORCED`, and nothing below claims packaged, Linux, Windows, native
-  helper, container, LSM, crash/power-loss, or external-effect coverage.
+  commit `2d62341c1382ab8139c4ca76a415d1f41c1e822e`, with the lifecycle-race
+  remediation diff still uncommitted at evidence capture time. The intended
+  next step is a DCO-signed follow-up commit and GitHub CI; no final commit SHA
+  is claimed here.
+- **Current claim:** focused lifecycle regressions, the complete local browser
+  test suite, root test/build/typecheck tasks, governance, Biome, secret scan,
+  and diff validation passed on one local macOS arm64 host. Nothing in this
+  handoff upgrades a manifest row to `ENFORCED`, and nothing below claims the
+  not-yet-run post-push GitHub CI, packaged, Linux, Windows, native helper,
+  container, LSM, crash/power-loss, or external-effect coverage.
 
-## PR #16 focused remediation evidence
+## PR #16 lifecycle-race remediation
+
+The remediation closes the cancellation race between durable MCP approval
+claim and final external dispatch:
+
+1. `ToolboxService` captures the agent approval-lifecycle epoch and checks it
+   immediately before and after the asynchronous durable broker claim.
+2. If cancellation advances the epoch while `claim()` persists `CLAIMED`, the
+   durable tombstone remains irreversible, but no usable capability is
+   returned.
+3. A returned authority is wrapped in a host-owned one-shot lifecycle fence.
+   Any failed or out-of-order check burns the wrapper.
+4. Registry MCP passes a synchronous `beforeDispatch` fence through the
+   registry and host boundary. It runs after host readiness and immediately
+   before the host IPC dispatch fence consumes authority.
+5. Clodex-cloud MCP rechecks the lifecycle synchronously during final
+   authorization, with no `await` between the final fence and the SDK
+   `callTool()` invocation.
+6. `new-user-message` remains only the early probe. The serialized priority
+   queue flush/stop path that advances the lifecycle epoch is the cancellation
+   linearization point.
+
+The invariant is: **after an agent lifecycle cancellation has linearized, an
+approval claimed by the superseded lifecycle cannot authorize a new MCP
+dispatch**. A stale claim may survive only as a fail-closed `CLAIMED` replay
+tombstone.
+
+Changed enforcement seams:
+
+- `apps/browser/src/backend/services/toolbox/index.ts` — pre/post-claim epoch
+  checks and lifecycle-bound authority;
+- `apps/browser/src/backend/services/mcp/trusted-dispatch-gateway.ts` —
+  one-shot synchronous lifecycle-fence wrapper;
+- `apps/browser/src/backend/services/mcp/tools.ts` — registry
+  `beforeDispatch` propagation;
+- `apps/browser/src/backend/services/toolbox/services/clodex-mcp/index.ts` —
+  epoch-aware claim and final no-await cloud dispatch fence.
+
+An independent read-only review reported no release-blocking findings. It
+confirmed that the updated registry tests close the eight `tools.test.ts`
+failures visible in the previous PR #16 CI run and that the core race
+invariants above are sound. One non-blocking coverage debt remains: add a
+direct `ToolboxService`-level test of the private
+`claimMcpApprovalAtEpoch`/`invalidateOpen` wiring instead of proving those
+seams only through mocks.
+
+## Local validation evidence
 
 Environment: Darwin 24.6.0 arm64, pinned Node.js `v22.23.1` from
 `/private/tmp/clodex-toolchains/node-v22.23.1-darwin-arm64/bin`, pnpm
@@ -25,46 +73,72 @@ worktree described above:
 ```sh
 export PATH=/private/tmp/clodex-toolchains/node-v22.23.1-darwin-arm64/bin:$PATH
 
-pnpm -F @clodex/agent-core exec vitest run \
-  src/services/agent-manager/state-mutations/approvals.test.ts
-# 1 file, 4 tests passed
-
 pnpm -F clodex exec vitest run \
-  src/backend/agent-host/openmanus-runtime.test.ts \
-  src/backend/services/toolbox/tools/agents/run-openmanus.test.ts \
-  src/backend/agent-host/supervisor.test.ts \
-  src/backend/startup/phases/platform-integration-services.test.ts \
-  src/backend/services/automations/index.test.ts \
-  src/backend/agent-host/browser-agent-step-executor.test.ts \
-  src/backend/agent-host/execution-target-router.test.ts \
-  src/backend/services/swarm-runtime/index.test.ts \
-  src/backend/services/toolbox/services/clodex-mcp/index.test.ts \
-  src/backend/services/mcp/index.test.ts \
+  src/backend/services/mcp/approval-broker.test.ts \
+  src/backend/services/mcp/tools.test.ts \
   src/backend/services/mcp/trusted-dispatch-gateway.test.ts \
-  src/backend/services/artifact-bridge/index.test.ts \
-  src/backend/services/artifact-bridge/session4-adversarial.test.ts \
-  src/backend/services/artifact-bridge/host-session.test.ts \
-  src/backend/services/artifact-bridge/async-operation-final-dispatch.test.ts \
-  src/backend/services/artifact-bridge/effect-wal-integration.test.ts
-# 16 files, 211 tests passed
+  src/backend/services/toolbox/services/clodex-mcp/index.test.ts
+# 4 files, 30 tests passed
 
-pnpm -F @clodex/agent-core typecheck
-# passed
+pnpm -F clodex test
+# 279 files, 2,277 tests passed
 
-pnpm -F clodex typecheck
-# agent-core and agent-shell builds plus ui/pages/backend/preload/storybook/visual
-# TypeScript projects all passed
+pnpm test
+# 32/32 workspace tasks passed
+
+pnpm build
+# 11/11 workspace tasks passed
+
+pnpm typecheck
+# 31/31 workspace tasks passed
 
 pnpm check
-# exited 0 with three pre-existing website warnings; no Biome errors
+# exited 0 with three pre-existing website warnings and no Biome errors
+
+pnpm check:governance
+# passed; includes pnpm test:boundaries (38/38), pnpm check:boundaries,
+# and pnpm check:provenance
+
+pnpm security:secrets
+# passed
 
 git diff --check
 # passed
 ```
 
-This is **215 focused unit tests**, not the repository-wide test matrix. GitHub
-CI, the full repository test command, Windows, Linux, packaged Electron, and
-native/adversarial batches remain required independent evidence.
+These results are local evidence from one macOS arm64 worktree. GitHub CI has
+not yet evaluated the remediation commit, and Windows, Linux, packaged
+Electron, native/adversarial, fault-injection, and crash/power-loss batches
+remain deferred independent evidence.
+
+### Deferred lifecycle-race and bulk verification
+
+The later testing model must preserve these open tasks rather than treating
+the local pass as release evidence:
+
+1. Add a direct `ToolboxService` race test that pauses the durable broker
+   `claim()`, advances the approval lifecycle through the real priority
+   stop/queue-flush invalidation path, resumes the claim, and proves all three
+   properties together: the record remains `CLAIMED`, no authority escapes,
+   and retry is rejected as already durably claimed.
+2. Exercise the same cancellation boundary through registry MCP and
+   Clodex-cloud MCP without seam-only mocks; prove that neither host IPC nor
+   SDK `callTool()` starts after the cancellation linearization point.
+3. Re-run the focused command and the root `test`, `build`, `typecheck`,
+   `check`, governance, secret-scan, and diff-check commands above from the
+   clean signed commit.
+4. Require the post-push GitHub CI matrix to pass before merge. In particular,
+   do not infer Windows or Linux success from the local macOS run.
+5. Continue with the packaged/native/adversarial and fault-injection batches
+   defined below; the lifecycle-race patch does not close those broader P0
+   evidence gaps.
+
+After the signed commit is pushed, the handoff owner can monitor the exact PR
+matrix with:
+
+```sh
+gh pr checks 16 --watch
+```
 
 ## Required testing principles
 

@@ -27,6 +27,7 @@ export interface CreateRegistryMcpToolsOptions {
     input: ClaimTrustedMcpApprovalInput,
   ) => Promise<TrustedMcpFinalAuthority | null>;
   stageApproval?: (input: StageTrustedMcpApprovalInput) => Promise<void>;
+  assertApprovalLifecycleCurrent?: () => void;
 }
 
 export async function createRegistryMcpTools(
@@ -179,6 +180,9 @@ function toAiTool(
             expectedDispatchCommitment: expectedDispatch,
             ...(toolCallId ? { toolCallId } : {}),
             ...(finalAuthority ? { finalAuthority } : {}),
+            ...(options.assertApprovalLifecycleCurrent
+              ? { beforeDispatch: options.assertApprovalLifecycleCurrent }
+              : {}),
           },
         );
         const capped = capToolOutput({

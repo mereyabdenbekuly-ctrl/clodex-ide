@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthService } from '@/services/auth';
 import type { Logger } from '@/services/logger';
 import type { GuardianAssessment } from '@shared/guardian';
+import {
+  bindTrustedMcpFinalAuthorityToFence,
+  createTrustedMcpFenceAuthority,
+} from '@/services/mcp/trusted-dispatch-gateway';
 
 const connectMock = vi.fn();
 const listToolsMock = vi.fn();
@@ -305,6 +309,59 @@ describe('ClodexMcpService', () => {
     );
     expect(result.message).toBe('Clodex cloud tool tcp_check completed.');
     expect(result.result.content).toEqual(['tcp open']);
+  });
+
+  it('blocks cloud dispatch when the approval lifecycle advances after claim', async () => {
+    listToolsMock.mockResolvedValueOnce({
+      tools: [
+        {
+          name: 'tcp_check',
+          description: 'Check a TCP port from Clodex cloud.',
+          inputSchema: objectSchema,
+          annotations: { readOnlyHint: true },
+        },
+      ],
+    });
+    let lifecycleCurrent = true;
+    const assertCurrent = vi.fn(
+      (_agentInstanceId: string, approvalLifecycleEpoch: number) => {
+        if (!lifecycleCurrent || approvalLifecycleEpoch !== 7) {
+          throw new Error('approval lifecycle superseded');
+        }
+      },
+    );
+    const claimApprovalAuthority = vi.fn(async () => {
+      const authority = bindTrustedMcpFinalAuthorityToFence(
+        createTrustedMcpFenceAuthority(() => undefined),
+        () => assertCurrent('agent-1', 7),
+      );
+      lifecycleCurrent = false;
+      return authority;
+    });
+    const service = new ClodexMcpService({
+      authService: makeAuthService(),
+      logger: makeLogger(),
+      gatewayUrl: 'https://clodex.xyz/tools-gateway/mcp',
+      claimApprovalAuthority,
+      assertApprovalLifecycleCurrent: assertCurrent,
+    });
+
+    const tools = await service.getTools('agent-1', 7);
+    await expect(
+      (tools.mcp_clodex_tcp_check as any).execute(
+        { host: 'clodex.xyz' },
+        { toolCallId: 'tc_1' },
+      ),
+    ).rejects.toThrow('approval lifecycle superseded');
+
+    expect(claimApprovalAuthority).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentInstanceId: 'agent-1',
+        toolCallId: 'tc_1',
+      }),
+      7,
+    );
+    expect(callToolMock).not.toHaveBeenCalled();
   });
 
   it('caches listed tools for the active Clodex token', async () => {

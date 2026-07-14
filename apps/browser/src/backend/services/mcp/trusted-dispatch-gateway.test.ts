@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  bindTrustedMcpFinalAuthorityToFence,
   createTrustedMcpApprovalAuthority,
   createTrustedMcpDescriptorCommitment,
   createTrustedMcpFenceAuthority,
@@ -72,5 +73,43 @@ describe('trusted MCP final-authority clocks', () => {
 
     expect(() => authority.prepareFinalCheck()).toThrow('clock is invalid');
     expect(fence).not.toHaveBeenCalled();
+  });
+
+  it('rechecks a bound lifecycle fence immediately before consumption', () => {
+    let epoch = 1;
+    const delegatedFence = vi.fn();
+    const onConsumed = vi.fn();
+    const authority = bindTrustedMcpFinalAuthorityToFence(
+      createTrustedMcpFenceAuthority(delegatedFence, { onConsumed }),
+      () => {
+        if (epoch !== 1) throw new Error('lifecycle superseded');
+      },
+    );
+
+    authority.prepareFinalCheck();
+    epoch = 2;
+
+    expect(() => authority.assertAndConsume({ descriptor, effect })).toThrow(
+      'lifecycle superseded',
+    );
+    expect(delegatedFence).toHaveBeenCalledTimes(1);
+    expect(onConsumed).not.toHaveBeenCalled();
+    expect(() => authority.assertAndConsume({ descriptor, effect })).toThrow(
+      'already consumed',
+    );
+  });
+
+  it('burns a bound authority when its lifecycle is stale before preparation', () => {
+    const delegatedFence = vi.fn();
+    const authority = bindTrustedMcpFinalAuthorityToFence(
+      createTrustedMcpFenceAuthority(delegatedFence),
+      () => {
+        throw new Error('lifecycle superseded');
+      },
+    );
+
+    expect(() => authority.prepareFinalCheck()).toThrow('lifecycle superseded');
+    expect(delegatedFence).not.toHaveBeenCalled();
+    expect(() => authority.prepareFinalCheck()).toThrow('already consumed');
   });
 });

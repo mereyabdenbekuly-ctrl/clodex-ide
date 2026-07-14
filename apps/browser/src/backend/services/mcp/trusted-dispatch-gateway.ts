@@ -295,6 +295,54 @@ export function createTrustedMcpFenceAuthority(
   });
 }
 
+/**
+ * Adds a synchronous host-owned revocation fence to an existing authority.
+ * Any failed or out-of-order check burns the wrapper, so a stale authority
+ * cannot be retried after the owning lifecycle has advanced.
+ */
+export function bindTrustedMcpFinalAuthorityToFence(
+  authority: TrustedMcpFinalAuthority,
+  assertCurrent: () => void,
+): TrustedMcpFinalAuthority {
+  let state: 'fresh' | 'prepared' | 'consumed' = 'fresh';
+
+  return Object.freeze({
+    [trustedMcpFinalAuthorityBrand]: true as const,
+    prepareFinalCheck(): void {
+      if (state === 'consumed') {
+        throw new Error('MCP bound final authority was already consumed');
+      }
+      if (state === 'prepared') {
+        state = 'consumed';
+        throw new Error('MCP bound final authority was already prepared');
+      }
+
+      // Burn first. A throwing lifecycle fence or delegated preparation must
+      // never leave a retryable capability behind.
+      state = 'consumed';
+      assertCurrent();
+      authority.prepareFinalCheck();
+      state = 'prepared';
+    },
+    assertAndConsume(
+      current: Parameters<TrustedMcpFinalAuthority['assertAndConsume']>[0],
+    ): void {
+      if (state === 'consumed') {
+        throw new Error('MCP bound final authority was already consumed');
+      }
+      if (state !== 'prepared') {
+        state = 'consumed';
+        throw new Error('MCP bound final authority fence was not prepared');
+      }
+
+      // There is no await between this recheck and delegated consumption.
+      state = 'consumed';
+      assertCurrent();
+      authority.assertAndConsume(current);
+    },
+  });
+}
+
 function readFinalAuthorityNow(now: () => number): number {
   const value = now();
   if (!Number.isSafeInteger(value) || value < 0) {

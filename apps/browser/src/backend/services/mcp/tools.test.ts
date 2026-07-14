@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { McpServerConfig } from '@clodex/mcp-runtime';
+import type { McpServerConfig, McpToolDescriptor } from '@clodex/mcp-runtime';
 import type { McpRegistryService } from './index';
+import {
+  bindTrustedMcpFinalAuthorityToFence,
+  createTrustedMcpDispatchCommitment,
+  createTrustedMcpFenceAuthority,
+  createTrustedRegistryMcpDescriptorCommitment,
+} from './trusted-dispatch-gateway';
 import { createRegistryMcpTools } from './tools';
 
 function makeRegistry({
@@ -14,36 +20,57 @@ function makeRegistry({
   annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
   source?: McpServerConfig['source'];
 }) {
+  const policyTools: Record<string, 'allow' | 'ask' | 'deny'> = toolOverride
+    ? { read_data: toolOverride }
+    : {};
+  const server = {
+    id: 'custom',
+    displayName: 'Custom MCP',
+    enabled: true,
+    source,
+    transport: {
+      type: 'stdio' as const,
+      command: '/usr/local/bin/example-mcp',
+      args: [],
+      env: {},
+    },
+    policy: {
+      default: defaultPolicy,
+      tools: policyTools,
+    },
+  } satisfies McpServerConfig;
+  const descriptor = {
+    name: 'read_data',
+    description: 'Read data',
+    inputSchema: { type: 'object' },
+    annotations,
+  } satisfies McpToolDescriptor;
+
   return {
     snapshot: () => ({
       schemaVersion: 1 as const,
       servers: {
-        custom: {
-          id: 'custom',
-          displayName: 'Custom MCP',
-          enabled: true,
-          source,
-          transport: {
-            type: 'stdio' as const,
-            command: '/usr/local/bin/example-mcp',
-            args: [],
-            env: {},
-          },
-          policy: {
-            default: defaultPolicy,
-            tools: toolOverride ? { read_data: toolOverride } : {},
-          },
-        },
+        custom: server,
       },
     }),
-    listTools: vi.fn(async () => [
-      {
-        name: 'read_data',
-        description: 'Read data',
-        inputSchema: { type: 'object' },
-        annotations,
-      },
-    ]),
+    listTools: vi.fn(async () => [descriptor]),
+    getToolDispatchCommitment: vi.fn((serverId: string, toolName: string) => {
+      if (serverId !== server.id || toolName !== descriptor.name) {
+        throw new Error('Unexpected MCP test commitment request');
+      }
+      const reviewed = createTrustedRegistryMcpDescriptorCommitment(
+        server,
+        descriptor,
+      );
+      if (reviewed.evaluation.policy.decision === 'deny') {
+        throw new Error('MCP test policy denied the committed tool');
+      }
+      return createTrustedMcpDispatchCommitment(reviewed.descriptor, {
+        connectionGeneration: 1,
+        guardianPolicyRevision: 1,
+        serverId,
+      });
+    }),
     listResources: vi.fn(async () => []),
     listResourceTemplates: vi.fn(async () => []),
     listPrompts: vi.fn(async () => []),
@@ -63,6 +90,7 @@ function makeRegistry({
     })),
   } as unknown as McpRegistryService & {
     listTools: ReturnType<typeof vi.fn>;
+    getToolDispatchCommitment: ReturnType<typeof vi.fn>;
     listResources: ReturnType<typeof vi.fn>;
     listPrompts: ReturnType<typeof vi.fn>;
     callTool: ReturnType<typeof vi.fn>;
@@ -73,10 +101,12 @@ describe('registry MCP tools', () => {
   it('requires approval for custom tools even when the server claims read-only', async () => {
     const registry = makeRegistry({});
     const recordPendingApproval = vi.fn();
+    const stageApproval = vi.fn(async () => undefined);
     const tools = await createRegistryMcpTools({
       registry,
       agentInstanceId: 'agent-1',
       recordPendingApproval,
+      stageApproval,
     });
     const registered = Object.values(tools);
 
@@ -87,6 +117,13 @@ describe('registry MCP tools', () => {
     expect(recordPendingApproval).toHaveBeenCalledWith(
       'tool-call-1',
       expect.stringContaining('Custom MCP/read_data'),
+    );
+    expect(stageApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentInstanceId: 'agent-1',
+        aiToolName: expect.stringMatching(/^mcp_custom_read_data_/),
+        toolCallId: 'tool-call-1',
+      }),
     );
   });
 
@@ -113,6 +150,7 @@ describe('registry MCP tools', () => {
     const tools = await createRegistryMcpTools({
       registry,
       agentInstanceId: 'agent-1',
+      stageApproval: vi.fn(async () => undefined),
     });
 
     await expect(
@@ -148,72 +186,74 @@ describe('registry MCP tools', () => {
       {
         query: 'test',
       },
-      {
+      expect.objectContaining({
         agentInstanceId: 'agent-1',
-      },
+        expectedDescriptorCommitment: expect.objectContaining({
+          toolName: 'read_data',
+        }),
+        expectedDispatchCommitment: expect.any(Object),
+      }),
     );
     expect(result.message).toContain('Custom MCP/read_data completed');
   });
 
-  it('exposes resources and prompts as approval-gated context tools', async () => {
+  it('blocks final registry dispatch when the approval lifecycle advances after claim', async () => {
     const registry = makeRegistry({ toolOverride: 'allow' });
-    registry.listResources.mockResolvedValue([
-      { uri: 'file:///README.md', name: 'README' },
-    ]);
-    registry.listPrompts.mockResolvedValue([
-      {
-        name: 'review',
-        arguments: [{ name: 'focus', required: false }],
+    let lifecycleCurrent = true;
+    let effectDispatched = false;
+    const assertLifecycleCurrent = () => {
+      if (!lifecycleCurrent) throw new Error('approval lifecycle superseded');
+    };
+    const claimApprovalAuthority = vi.fn(async () => {
+      const authority = bindTrustedMcpFinalAuthorityToFence(
+        createTrustedMcpFenceAuthority(() => undefined),
+        assertLifecycleCurrent,
+      );
+      lifecycleCurrent = false;
+      return authority;
+    });
+    registry.callTool.mockImplementationOnce(
+      async (
+        _serverId: string,
+        _toolName: string,
+        _args: Record<string, unknown>,
+        options: { beforeDispatch?: () => void },
+      ) => {
+        options.beforeDispatch?.();
+        effectDispatched = true;
+        return { content: [{ type: 'text', text: 'unexpected' }] };
       },
-    ]);
-    const tools = await createRegistryMcpTools({
-      registry,
-      agentInstanceId: 'agent-1',
-    });
-    const contextTools = Object.values(tools).slice(1) as any[];
-
-    expect(contextTools).toHaveLength(2);
-    expect(contextTools[0].needsApproval).toBe(true);
-    expect(contextTools[1].needsApproval).toBe(true);
-    await contextTools[0].execute({ uri: 'file:///README.md' });
-    await contextTools[1].execute({
-      name: 'review',
-      arguments: { focus: 'security' },
-    });
-    expect(registry.readResource).toHaveBeenCalledWith(
-      'custom',
-      'file:///README.md',
     );
-    expect(registry.getPrompt).toHaveBeenCalledWith('custom', 'review', {
-      focus: 'security',
-    });
-  });
-
-  it('requires approval for imported resource and prompt context', async () => {
-    const registry = makeRegistry({
-      toolOverride: 'allow',
-      source: {
-        kind: 'imported',
-        importer: 'claude-desktop',
-        importedAt: Date.now(),
-      },
-    });
-    registry.listResources.mockResolvedValue([
-      { uri: 'file:///README.md', name: 'README' },
-    ]);
-    registry.listPrompts.mockResolvedValue([{ name: 'review' }]);
-
     const tools = await createRegistryMcpTools({
       registry,
       agentInstanceId: 'agent-1',
+      claimApprovalAuthority,
+      assertApprovalLifecycleCurrent: assertLifecycleCurrent,
     });
-    const contextTools = Object.values(tools).slice(1) as any[];
 
-    expect(contextTools[0].needsApproval).toBe(true);
-    expect(contextTools[1].needsApproval).toBe(true);
+    await expect(
+      (Object.values(tools)[0] as any).execute(
+        { query: 'test' },
+        { toolCallId: 'tool-call-1' },
+      ),
+    ).rejects.toThrow('approval lifecycle superseded');
+    expect(claimApprovalAuthority).toHaveBeenCalledOnce();
+    expect(effectDispatched).toBe(false);
   });
 
   it.each([
+    {
+      label: 'user',
+      source: { kind: 'user' } as const,
+    },
+    {
+      label: 'imported',
+      source: {
+        kind: 'imported',
+        importer: 'claude-desktop',
+        importedAt: 1,
+      } as const,
+    },
     {
       label: 'builtin',
       source: { kind: 'builtin', builtinId: 'clodex-gateway' } as const,
@@ -226,7 +266,7 @@ describe('registry MCP tools', () => {
         pluginVersion: '1.0.0',
       } as const,
     },
-  ])('does not add redundant context approval for $label servers', async ({
+  ])('does not expose resource or prompt context for $label servers', async ({
     source,
   }) => {
     const registry = makeRegistry({
@@ -242,9 +282,10 @@ describe('registry MCP tools', () => {
       registry,
       agentInstanceId: 'agent-1',
     });
-    const contextTools = Object.values(tools).slice(1) as any[];
-
-    expect(contextTools[0].needsApproval).toBe(false);
-    expect(contextTools[1].needsApproval).toBe(false);
+    expect(Object.values(tools)).toHaveLength(1);
+    expect(registry.listResources).not.toHaveBeenCalled();
+    expect(registry.listPrompts).not.toHaveBeenCalled();
+    expect(registry.readResource).not.toHaveBeenCalled();
+    expect(registry.getPrompt).not.toHaveBeenCalled();
   });
 });
