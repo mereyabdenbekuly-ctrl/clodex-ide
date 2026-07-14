@@ -1,6 +1,5 @@
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
 import https from 'node:https';
 import util from 'node:util';
 import url from 'node:url';
@@ -9,13 +8,12 @@ import child_process from 'node:child_process';
 import proxy_from_env from 'proxy-from-env';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import yauzl from 'yauzl'; // use yauzl ^2.9.2 because vscode already ships with it.
-const tmpDir = path.join(os.tmpdir(), `vscode-ripgrep-cache-${'1.0.0'}`);
 
 const fsUnlink = util.promisify(fs.unlink);
 const fsExists = util.promisify(fs.exists);
 const fsMkdir = util.promisify(fs.mkdir);
 
-const isWindows = os.platform() === 'win32';
+const isWindows = process.platform === 'win32';
 
 const REPO = 'microsoft/ripgrep-prebuilt';
 
@@ -55,7 +53,6 @@ function download(
 
   return new Promise((resolve, reject) => {
     onLog?.(`Download options: ${JSON.stringify(opts)}`);
-    const outFile = fs.createWriteStream(dest);
     const mergedOpts = {
       ...url.parse(_url),
       ...opts,
@@ -63,7 +60,10 @@ function download(
     https
       .get(mergedOpts, (response) => {
         onLog?.(`statusCode: ${response.statusCode}`);
-        if (response.statusCode === 302) {
+        if (
+          [301, 302, 303, 307, 308].includes(response.statusCode ?? 0) &&
+          response.headers.location
+        ) {
           response.resume();
           onLog?.(`Following redirect to: ${response.headers.location}`);
           return download(response.headers.location!, dest, opts, onLog).then(
@@ -71,17 +71,32 @@ function download(
             reject,
           );
         } else if (response.statusCode !== 200) {
+          response.resume();
           reject(new Error(`Download failed with ${response.statusCode}`));
           return;
         }
 
+        const outFile = fs.createWriteStream(dest);
         response.pipe(outFile);
         outFile.on('finish', () => {
-          resolve(undefined);
+          outFile.close(() => resolve(undefined));
+        });
+        outFile.on('error', async (error) => {
+          response.destroy();
+          try {
+            await fsUnlink(dest);
+          } catch {
+            // The failed stream may not have created a file.
+          }
+          reject(error);
         });
       })
       .on('error', async (err) => {
-        await fsUnlink(dest);
+        try {
+          await fsUnlink(dest);
+        } catch {
+          // The request may fail before the destination file is created.
+        }
         reject(err);
       });
   });
@@ -91,57 +106,22 @@ function download(
  * @param {string} _url
  * @param {any} opts
  */
-function get(
-  _url: string,
-  _opts: Record<string, any>,
-  onLog?: (message: string) => void,
-) {
-  onLog?.(`GET ${_url}`);
-
-  const proxy = proxy_from_env.getProxyForUrl(url.parse(_url));
-  let opts: Record<string, any>;
-  if (proxy !== '') {
-    opts = {
-      ..._opts,
-      agent: new HttpsProxyAgent(proxy),
-    };
-  } else {
-    opts = _opts;
-  }
-
-  return new Promise((resolve, reject) => {
-    let result = '';
-    opts = {
-      ...url.parse(_url),
-      ...opts,
-    };
-    https
-      .get(opts, (response) => {
-        if (response.statusCode !== 200) {
-          reject(new Error(`Request failed: ${response.statusCode}`));
-        }
-
-        response.on('data', (d) => {
-          result += d.toString();
-        });
-
-        response.on('end', () => {
-          resolve(result);
-        });
-
-        response.on('error', (e) => {
-          reject(e);
-        });
-      })
-      .on('error', (e) => reject(e));
-  });
+export function getRipgrepReleaseAssetUrl(
+  version: string,
+  assetName: string,
+): string {
+  return `https://github.com/${REPO}/releases/download/${encodeURIComponent(version)}/${encodeURIComponent(assetName)}`;
 }
 
-function getApiUrl(repo: string, tag: string) {
-  return `https://api.github.com/repos/${repo}/releases/tags/${tag}`;
+export function getRipgrepDownloadCacheDir(destinationDir: string): string {
+  return path.join(
+    path.dirname(path.dirname(destinationDir)),
+    '.cache',
+    'ripgrep',
+  );
 }
 
-async function getAssetFromGithubApi(
+async function getAssetFromGithubRelease(
   opts: DownloadRipgrepOptions,
   assetName: string,
   downloadFolder: string,
@@ -161,33 +141,10 @@ async function getAssetFromGithubApi(
     },
   };
 
-  if (opts.token) downloadOpts.headers.authorization = `token ${opts.token}`;
-
-  onLog?.(`Finding release for ${opts.version}`);
-  const release = await get(getApiUrl(REPO, opts.version), downloadOpts, onLog);
-  let jsonRelease: Record<string, any>;
-  try {
-    jsonRelease = JSON.parse(release as string);
-  } catch (e) {
-    throw new Error(`Malformed API response: ${(e as Error).stack}`);
-  }
-
-  if (!jsonRelease.assets) {
-    throw new Error(`Bad API response: ${JSON.stringify(release)}`);
-  }
-
-  const asset = jsonRelease.assets.find(
-    (a: Record<string, any>) => a.name === assetName,
-  );
-  if (!asset) {
-    throw new Error(`Asset not found with name: ${assetName}`);
-  }
-
-  onLog?.(`Downloading from ${asset.url}`);
+  const assetUrl = getRipgrepReleaseAssetUrl(opts.version, assetName);
+  onLog?.(`Downloading from ${assetUrl}`);
   onLog?.(`Downloading to ${assetDownloadPath}`);
-
-  downloadOpts.headers.accept = 'application/octet-stream';
-  await download(asset.url, assetDownloadPath, downloadOpts, onLog);
+  await download(assetUrl, assetDownloadPath, downloadOpts, onLog);
 }
 
 /**
@@ -341,13 +298,19 @@ export async function downloadRipgrep(opts: DownloadRipgrepOptions) {
   const assetName =
     ['ripgrep', opts.version, opts.target].join('-') + extension;
 
-  if (!(await fsExists(tmpDir))) {
-    await fsMkdir(tmpDir);
+  const downloadCacheDir = getRipgrepDownloadCacheDir(opts.destDir);
+  if (!(await fsExists(downloadCacheDir))) {
+    await fsMkdir(downloadCacheDir, { recursive: true });
   }
 
-  const assetDownloadPath = path.join(tmpDir, assetName);
+  const assetDownloadPath = path.join(downloadCacheDir, assetName);
   try {
-    await getAssetFromGithubApi(opts, assetName, tmpDir, opts.onLog);
+    await getAssetFromGithubRelease(
+      opts,
+      assetName,
+      downloadCacheDir,
+      opts.onLog,
+    );
   } catch (e) {
     opts.onLog?.('Deleting invalid download cache');
     try {
