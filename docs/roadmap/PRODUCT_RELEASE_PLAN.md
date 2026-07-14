@@ -13,25 +13,32 @@ signing, or operational gate.
 CLODEx has two parallel but separate delivery tracks:
 
 1. **Local secure IDE track:** finish the P0 security closure, ship the next
-   preview candidate, then promote a stable local-first `1.16.0`.
+   preview candidate, then promote a stable local-first `clodex@1.16.0`.
 2. **Open-protocol/private-service track:** audit provenance, define public
    Protocol v0, enforce the dependency boundary, and only then build a private
    managed Gateway toward `1.17.0`.
 
 The Gateway is not a prerequisite for the stable local IDE. It must not delay
-`1.16.0`, and it must not be rushed into the public monorepo.
+`clodex@1.16.0`, and it must not be rushed into the public monorepo.
 
 Version ownership is separated by artifact:
 
 | Artifact | Repository/visibility | Version owner |
 | --- | --- | --- |
-| CLODEx IDE and local security core | This public repository | Public Git tags such as `v1.16.0` and `v1.17.0-alpha.1` |
+| CLODEx IDE and local security core | This public repository | Current release identifiers: stable `clodex@1.16.0`; standard prereleases such as `clodex@1.17.0-alpha001` and `clodex@1.17.0-beta001` |
 | Protocol schemas/conformance corpus | Public incubator here, then a separately approved public package/repository | Its own `0.x` schema/package version after provenance approval |
 | Managed Agent Gateway and enterprise service | Separate private repositories only | Private build/service version; never created, tagged, or packaged from this repository |
 
 Later `1.17`/`1.18` milestones below name the public IDE/client compatibility
 line and a product channel. They do not grant the private service the same Git
 tag or authorize private artifacts in this repository.
+
+The current standard prerelease contract uses `clodex@<version>-alphaNNN` and
+`clodex@<version>-betaNNN`, with a three-digit sequence and no dot before the
+sequence. Technical-preview tags remain on their existing
+`v1.16.0-preview.N` contract. An `rc` channel is not currently supported; any
+future public RC tag requires an explicit tag-policy and release-tooling
+migration with tests before it can be planned or minted.
 
 Repository version metadata, source completion, and product promotion are
 different states. The presence of `1.16.0` metadata does not mean the stable
@@ -105,7 +112,7 @@ missing evidence.
 ### M2 — Stable local secure IDE
 
 **Target window:** 2026-08-10 through 2026-08-14
-**Version:** `v1.16.0`
+**Version:** `clodex@1.16.0`
 
 Release promise:
 
@@ -146,7 +153,7 @@ implementation around the failed gate.
 ### M3 — Protocol/Gateway alpha
 
 **Target window:** 2026-10-12 through 2026-10-16
-**Public IDE/client version:** `v1.17.0-alpha.1`
+**Public IDE/client version:** `clodex@1.17.0-alpha001`
 **Private service version:** separately assigned in the private repository
 
 Public scope:
@@ -174,7 +181,7 @@ Required gates:
 ### M4 — Design-partner beta
 
 **Target window:** 2026-12-07 through 2026-12-11
-**Public IDE/client version:** `v1.17.0-beta.1`
+**Public IDE/client version:** `clodex@1.17.0-beta001`
 **Private service version:** separately assigned in the private repository
 
 Scope:
@@ -198,9 +205,11 @@ Beta is a controlled pilot, not general availability.
 
 ### M5 — `1.17.0` release candidate and limited availability
 
-**RC target:** 2027-02-01 through 2027-02-05 (`v1.17.0-rc.1`)
+**RC evidence target:** 2027-02-01 through 2027-02-05. A public RC identifier is
+future and unapproved; do not mint an `rc` tag unless an explicit tag-policy
+and release-tooling migration has landed with tests.
 **Limited-availability target:** 2027-03-15 through 2027-03-19 (public
-IDE/client compatibility line `v1.17.0`; private service version remains
+IDE/client compatibility line `clodex@1.17.0`; private service version remains
 separate)
 
 Scope:
@@ -221,15 +230,15 @@ Required gates:
 - controlled pilot observation meets reliability and security SLOs;
 - unit economics and support readiness approved.
 
-The public `v1.17.0` client is the compatibility release for this channel. The
-separately versioned managed service remains limited availability for approved
-tenants; it is not broad enterprise GA merely because the public client version
-is stable.
+The public `clodex@1.17.0` client is the compatibility release for this
+channel. The separately versioned managed service remains limited availability
+for approved tenants; it is not broad enterprise GA merely because the public
+client version is stable.
 
 ### M6 — Enterprise GA
 
 **Target window:** 2027-06-14 through 2027-06-18
-**Public IDE/client version target:** `v1.18.0`
+**Public IDE/client version target:** `clodex@1.18.0`
 **Private service version:** separately assigned in the private repository
 
 GA requires evidence from the limited-availability period, a closed critical
@@ -268,7 +277,7 @@ local `1.16` release.
    verification model and CI;
 3. close desktop attribution gate `OCB-006` on final artifacts;
 4. promote preview, acceptance, canary, signing/notarization, then stable
-   `v1.16.0`.
+   `clodex@1.16.0`.
 
 **Track B — public Protocol/private managed service:**
 
