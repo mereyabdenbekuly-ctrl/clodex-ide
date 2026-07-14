@@ -1,236 +1,113 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import type {
   OpenManusExecutionRequest,
   OpenManusExecutionResult,
 } from './protocol';
 
-const OUTPUT_MAX_CHARS = 24_000;
-const FORCE_KILL_DELAY_MS = 2_000;
+export const OPENMANUS_OS_CONFINED_ADAPTER_PROFILE = Object.freeze({
+  kind: 'clodex.openmanus-os-confined-adapter',
+  version: 1,
+  workspaceAuthority: 'trusted-object-capability',
+  credentialAuthority: 'brokered-no-raw-secret',
+  networkAuthority: 'adapter-owned-deny-by-default',
+  hostWorkspaceAccess: false,
+  hostProcessExecution: false,
+} as const);
+
+export class OpenManusConfinementUnavailableError extends Error {
+  public constructor(
+    message = 'OpenManus execution is disabled until an OS-confined, brokered adapter is installed',
+  ) {
+    super(message);
+    this.name = 'OpenManusConfinementUnavailableError';
+  }
+}
+
+/**
+ * Trusted execution boundary for OpenManus.
+ *
+ * The adapter owns workspace capability resolution, credential brokering,
+ * network policy, executable/image identity, resource limits, and final
+ * dispatch fencing. None of those authorities may be selected through the IPC
+ * request. In particular, raw credentials, host paths, argv, environment, or
+ * network endpoints are intentionally absent from `OpenManusExecutionRequest`.
+ */
+export interface OpenManusOsConfinedAdapter {
+  readonly profile: typeof OPENMANUS_OS_CONFINED_ADAPTER_PROFILE;
+  execute(
+    request: OpenManusExecutionRequest,
+    options: { signal?: AbortSignal },
+  ): Promise<OpenManusExecutionResult>;
+}
 
 export interface OpenManusRuntimeOptions {
   signal?: AbortSignal;
-  spawnProcess?: typeof spawn;
+  confinedAdapter?: OpenManusOsConfinedAdapter;
 }
 
+/**
+ * Execute only through a trusted OS-confined adapter.
+ *
+ * The former host `spawn()` path deliberately no longer exists. A plain
+ * Electron utility process is a fault boundary, not an OS sandbox, and must
+ * never receive a raw API key or a host-workspace path. Production currently
+ * injects no confined adapter, so this function fails closed.
+ */
 export async function executeOpenManusRequest(
   request: OpenManusExecutionRequest,
   options: OpenManusRuntimeOptions = {},
 ): Promise<OpenManusExecutionResult> {
   throwIfAborted(options.signal);
+  validateRequest(request);
 
-  const spawnProcess = options.spawnProcess ?? spawn;
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'clodex-openmanus-'));
-  const configPath = path.join(tmpDir, 'config.toml');
-
-  try {
-    await fs.writeFile(configPath, createOpenManusConfig(request), {
-      mode: 0o600,
-    });
-
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
-    const prompt = [
-      `Clodex workspace root: ${request.workspacePath}`,
-      `Workspace mount prefix: ${request.mountPrefix}`,
-      'Operate only inside this workspace. Do not modify files unless the user explicitly asked for changes.',
-      '',
-      request.prompt,
-    ].join('\n');
-
-    const result = await waitForOpenManusProcess({
-      spawnProcess,
-      request,
-      prompt,
-      configPath,
-      signal: options.signal,
-      onStdout: (chunk) => {
-        stdout = appendCapped(stdout, chunk);
-      },
-      onStderr: (chunk) => {
-        stderr = appendCapped(stderr, chunk);
-      },
-      onTimeout: () => {
-        timedOut = true;
-      },
-    });
-
-    const status = timedOut
-      ? 'timed out'
-      : result.exitCode === 0
-        ? 'completed'
-        : 'failed';
-
-    return {
-      message: `OpenManus ${status}.`,
-      exitCode: result.exitCode,
-      signal: result.signal ?? undefined,
-      timedOut,
-      workspacePath: request.workspacePath,
-      openManusHome: request.openManusHome,
-      stdout: redactSecrets(stdout, [request.apiKey]),
-      stderr: redactSecrets(stderr, [request.apiKey]),
-    };
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+  const adapter = options.confinedAdapter;
+  if (!adapter || adapter.profile !== OPENMANUS_OS_CONFINED_ADAPTER_PROFILE) {
+    throw new OpenManusConfinementUnavailableError();
   }
-}
 
-async function waitForOpenManusProcess({
-  spawnProcess,
-  request,
-  prompt,
-  configPath,
-  signal,
-  onStdout,
-  onStderr,
-  onTimeout,
-}: {
-  spawnProcess: typeof spawn;
-  request: OpenManusExecutionRequest;
-  prompt: string;
-  configPath: string;
-  signal?: AbortSignal;
-  onStdout: (chunk: Buffer) => void;
-  onStderr: (chunk: Buffer) => void;
-  onTimeout: () => void;
-}): Promise<{
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-}> {
-  throwIfAborted(signal);
-
-  return await new Promise((resolve, reject) => {
-    let child: ChildProcessWithoutNullStreams;
-    let settled = false;
-    let forceKillTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    const cleanup = () => {
-      clearTimeout(timeout);
-      if (forceKillTimeout) clearTimeout(forceKillTimeout);
-      signal?.removeEventListener('abort', handleAbort);
-    };
-    const finish = (callback: () => void) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      callback();
-    };
-    const terminate = () => {
-      if (child.kill('SIGTERM')) {
-        forceKillTimeout = setTimeout(() => {
-          child.kill('SIGKILL');
-        }, FORCE_KILL_DELAY_MS);
-        forceKillTimeout.unref?.();
-      }
-    };
-    const handleAbort = () => {
-      terminate();
-    };
-    const timeout = setTimeout(() => {
-      onTimeout();
-      terminate();
-    }, request.timeoutMs);
-    timeout.unref?.();
-
-    try {
-      child = spawnProcess(
-        request.pythonExecutable,
-        ['main.py', '--prompt', prompt],
-        {
-          cwd: request.openManusHome,
-          env: {
-            ...request.environment,
-            WORKSPACE_ROOT: request.workspacePath,
-            OPENMANUS_WORKSPACE_ROOT: request.workspacePath,
-            OPENMANUS_CONFIG_PATH: configPath,
-          },
-          shell: false,
-        },
-      ) as ChildProcessWithoutNullStreams;
-    } catch (error) {
-      finish(() => reject(error));
-      return;
-    }
-
-    child.stdout.on('data', onStdout);
-    child.stderr.on('data', onStderr);
-    child.on('error', (error) => {
-      finish(() => reject(error));
-    });
-    child.on('close', (exitCode, closeSignal) => {
-      if (signal?.aborted) {
-        finish(() => reject(createAbortError()));
-        return;
-      }
-      finish(() => resolve({ exitCode, signal: closeSignal }));
-    });
-
-    signal?.addEventListener('abort', handleAbort, { once: true });
-    if (signal?.aborted) handleAbort();
+  return await adapter.execute(Object.freeze({ ...request }), {
+    signal: options.signal,
   });
 }
 
-function createOpenManusConfig(request: OpenManusExecutionRequest): string {
-  return [
-    '# Generated by Clodex IDE for a single OpenManus run.',
-    '[llm]',
-    `model = ${tomlString(request.modelId)}`,
-    `base_url = ${tomlString(request.baseUrl)}`,
-    `api_key = ${tomlString(request.apiKey)}`,
-    `max_tokens = ${request.maxTokens}`,
-    'temperature = 0.0',
-    'api_type = "openai"',
-    'api_version = ""',
-    '',
-    '[llm.vision]',
-    `model = ${tomlString(request.modelId)}`,
-    `base_url = ${tomlString(request.baseUrl)}`,
-    `api_key = ${tomlString(request.apiKey)}`,
-    `max_tokens = ${request.maxTokens}`,
-    'temperature = 0.0',
-    'api_type = "openai"',
-    'api_version = ""',
-    '',
-    '[daytona]',
-    'daytona_api_key = ""',
-    '',
-    '[mcp]',
-    'server_reference = "app.mcp.server"',
-    '',
-    '[runflow]',
-    'use_data_analysis_agent = false',
-    '',
-  ].join('\n');
-}
-
-function appendCapped(current: string, chunk: Buffer): string {
-  const next = current + chunk.toString('utf8');
-  if (next.length <= OUTPUT_MAX_CHARS) return next;
-  return next.slice(next.length - OUTPUT_MAX_CHARS);
-}
-
-function redactSecrets(
-  value: string,
-  secrets: readonly (string | undefined)[],
-): string {
-  return secrets.reduce<string>((current, secret) => {
-    if (!secret) return current;
-    return current.split(secret).join('[REDACTED]');
-  }, value);
-}
-
-function tomlString(value: string): string {
-  return JSON.stringify(value);
+function validateRequest(request: OpenManusExecutionRequest): void {
+  if (
+    !request ||
+    typeof request !== 'object' ||
+    Object.getPrototypeOf(request) !== Object.prototype ||
+    Object.getOwnPropertySymbols(request).length !== 0
+  ) {
+    throw new OpenManusConfinementUnavailableError(
+      'OpenManus request must be a closed data object',
+    );
+  }
+  const keys = Object.keys(request).sort();
+  const expected = ['maxTokens', 'mountPrefix', 'prompt', 'timeoutMs'];
+  if (
+    keys.length !== expected.length ||
+    keys.some((key, index) => key !== expected[index])
+  ) {
+    throw new OpenManusConfinementUnavailableError(
+      'OpenManus request contains ambient host authority',
+    );
+  }
+  if (
+    typeof request.prompt !== 'string' ||
+    request.prompt.length === 0 ||
+    typeof request.mountPrefix !== 'string' ||
+    request.mountPrefix.length === 0 ||
+    !Number.isSafeInteger(request.timeoutMs) ||
+    request.timeoutMs <= 0 ||
+    !Number.isSafeInteger(request.maxTokens) ||
+    request.maxTokens <= 0
+  ) {
+    throw new OpenManusConfinementUnavailableError(
+      'OpenManus request is invalid',
+    );
+  }
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw createAbortError();
-}
-
-function createAbortError(): Error {
-  return new DOMException('OpenManus execution was aborted', 'AbortError');
+  if (signal?.aborted) {
+    throw new DOMException('OpenManus execution was aborted', 'AbortError');
+  }
 }

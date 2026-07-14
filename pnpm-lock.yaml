@@ -330,6 +330,9 @@ importers:
       '@clodex/mcp-runtime':
         specifier: workspace:*
         version: link:../../packages/mcp-runtime
+      '@clodex/production':
+        specifier: workspace:*
+        version: link:../../packages/clodex-production
       '@clodex/stage-ui':
         specifier: workspace:*
         version: link:../../packages/stage-ui
@@ -1024,6 +1027,25 @@ importers:
         specifier: ^3.2.4
         version: 3.2.6(@types/debug@4.1.12)(@types/node@24.10.9)(jiti@2.7.0)(jsdom@26.1.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
+  packages/clodex-adapters-node:
+    dependencies:
+      '@clodex/adapters':
+        specifier: workspace:*
+        version: link:../clodex-adapters
+    devDependencies:
+      '@clodex/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.15.2
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.12)(@types/node@22.15.2)(jiti@2.7.0)(jsdom@26.1.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
+
   packages/clodex-approval:
     dependencies:
       '@clodex/contracts':
@@ -1051,6 +1073,44 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.6(@types/debug@4.1.12)(@types/node@24.10.9)(jiti@2.7.0)(jsdom@26.1.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/clodex-control-plane:
+    dependencies:
+      '@clodex/contracts':
+        specifier: workspace:*
+        version: link:../clodex-contracts
+    devDependencies:
+      '@clodex/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.12)(@types/node@24.10.9)(jiti@2.7.0)(jsdom@26.1.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/clodex-control-plane-node:
+    dependencies:
+      '@clodex/contracts':
+        specifier: workspace:*
+        version: link:../clodex-contracts
+      '@clodex/control-plane':
+        specifier: workspace:*
+        version: link:../clodex-control-plane
+    devDependencies:
+      '@clodex/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.15.2
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.12)(@types/node@22.15.2)(jiti@2.7.0)(jsdom@26.1.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
   packages/clodex-evidence:
     dependencies:
@@ -1153,6 +1213,72 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.6(@types/debug@4.1.12)(@types/node@24.10.9)(jiti@2.7.0)(jsdom@26.1.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/clodex-production:
+    dependencies:
+      '@clodex/adapters':
+        specifier: workspace:*
+        version: link:../clodex-adapters
+      '@clodex/contracts':
+        specifier: workspace:*
+        version: link:../clodex-contracts
+      '@clodex/control-plane':
+        specifier: workspace:*
+        version: link:../clodex-control-plane
+      '@clodex/guardian':
+        specifier: workspace:*
+        version: link:../clodex-guardian
+      '@clodex/promotion':
+        specifier: workspace:*
+        version: link:../clodex-promotion
+      '@clodex/registry':
+        specifier: workspace:*
+        version: link:../clodex-registry
+    devDependencies:
+      '@clodex/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+
+  packages/clodex-registry:
+    dependencies:
+      '@clodex/contracts':
+        specifier: workspace:*
+        version: link:../clodex-contracts
+    devDependencies:
+      '@clodex/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.12)(@types/node@24.10.9)(jiti@2.7.0)(jsdom@26.1.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/clodex-registry-node:
+    dependencies:
+      '@clodex/contracts':
+        specifier: workspace:*
+        version: link:../clodex-contracts
+      '@clodex/registry':
+        specifier: workspace:*
+        version: link:../clodex-registry
+    devDependencies:
+      '@clodex/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: 22.15.2
+        version: 22.15.2
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.12)(@types/node@22.15.2)(jiti@2.7.0)(jsdom@26.1.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
   packages/clodex-runtime:
     dependencies:

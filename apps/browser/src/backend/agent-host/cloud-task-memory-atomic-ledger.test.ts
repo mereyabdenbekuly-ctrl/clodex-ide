@@ -33,12 +33,17 @@ const ledgers: SqliteCloudTaskMemoryAtomicLedger[] = [];
 const directories: string[] = [];
 
 afterEach(async () => {
-  for (const ledger of ledgers.splice(0)) ledger.close();
+  await Promise.all(ledgers.splice(0).map((ledger) => ledger.close()));
   await Promise.all(services.splice(0).map((service) => service.teardown()));
   await Promise.all(
-    directories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
+    directories.splice(0).map((directory) =>
+      fs.rm(directory, {
+        recursive: true,
+        force: true,
+        maxRetries: process.platform === 'win32' ? 10 : 0,
+        retryDelay: 100,
+      }),
+    ),
   );
 });
 
@@ -51,7 +56,7 @@ describe('SqliteCloudTaskMemoryAtomicLedger', () => {
 
     const committed = await first.commit(request);
     expect(committed.replayed).toBe(false);
-    first.close();
+    await first.close();
     ledgers.splice(ledgers.indexOf(first), 1);
 
     const restarted = await createLedger(url);

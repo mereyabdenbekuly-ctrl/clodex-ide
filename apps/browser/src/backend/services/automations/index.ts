@@ -18,6 +18,15 @@ import type { Logger } from '../logger';
 import type { KartonService } from '../karton';
 import type { NotificationService } from '../notification';
 import { DisposableService } from '../disposable';
+import {
+  AutomationDispatchWal,
+  type AutomationDispatchWalPersistence,
+  type AutomationDispatchWalRecord,
+  type AutomationDispatchPreparation,
+  type AutomationDispatchTrigger,
+  createAutomationDispatchCommitments,
+  PersistedAutomationDispatchWal,
+} from './dispatch-wal';
 import { getNextAutomationRunAt } from './schedule';
 
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
@@ -55,7 +64,7 @@ export interface AutomationBeforeDispatchInput extends AutomationDispatchInput {
 export interface AutomationManualRunOptions {
   /** Synchronous final authority check; it runs with no await before dispatch. */
   beforeDispatch?: (input: AutomationBeforeDispatchInput) => void;
-  /** Artifact Bridge must use no-blind-retry for effects with ambiguous errors. */
+  /** @deprecated Every automation dispatch is now one-shot and never retries. */
   retryMode?: 'configured' | 'no-blind-retry';
   /** Artifact Bridge propagates adapter failure after run state is recorded. */
   failureMode?: 'record' | 'propagate';
@@ -79,11 +88,13 @@ export interface AutomationServiceOptions {
     input: AutomationDispatchInput,
   ) => Promise<AutomationDispatchResult>;
   persistence?: AutomationPersistence;
+  dispatchWalPersistence?: AutomationDispatchWalPersistence;
   wakeSource?: AutomationWakeSource;
   nativeWakeScheduler?: AutomationNativeWakeScheduler;
   now?: () => number;
   setTimer?: (handler: () => void, delayMs: number) => AutomationTimerHandle;
   clearTimer?: (timer: AutomationTimerHandle) => void;
+  /** @deprecated Automation effects are never retried or delayed in-process. */
   sleep?: (delayMs: number) => Promise<void>;
 }
 
@@ -112,12 +123,12 @@ class PersistedAutomationStore implements AutomationPersistence {
 export class AutomationService extends DisposableService {
   private data: AutomationStoreData = structuredClone(emptyAutomationStore);
   private readonly persistence: AutomationPersistence;
+  private dispatchWal!: AutomationDispatchWal;
   private readonly now: () => number;
   private readonly setTimer: NonNullable<AutomationServiceOptions['setTimer']>;
   private readonly clearTimer: NonNullable<
     AutomationServiceOptions['clearTimer']
   >;
-  private readonly sleep: NonNullable<AutomationServiceOptions['sleep']>;
   private timer: AutomationTimerHandle | null = null;
   private removeWakeListener: (() => void) | null = null;
   private mutation = Promise.resolve();
@@ -130,11 +141,6 @@ export class AutomationService extends DisposableService {
     this.now = options.now ?? Date.now;
     this.setTimer = options.setTimer ?? setTimeout;
     this.clearTimer = options.clearTimer ?? clearTimeout;
-    this.sleep =
-      options.sleep ??
-      (async (delayMs) => {
-        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-      });
   }
 
   public static async create(
@@ -143,6 +149,10 @@ export class AutomationService extends DisposableService {
     const service = new AutomationService(options);
     service.data = automationStoreSchema.parse(
       await service.persistence.load(),
+    );
+    service.dispatchWal = await AutomationDispatchWal.create(
+      options.dispatchWalPersistence ?? new PersistedAutomationDispatchWal(),
+      service.now,
     );
     service.registerProcedures();
     service.removeWakeListener =
@@ -177,6 +187,17 @@ export class AutomationService extends DisposableService {
           'Native wake scheduler is not configured; runs reconcile after resume.',
       },
     };
+  }
+
+  /**
+   * Returns the exact definition that a serialized manual dispatch will use.
+   * Artifact Bridge commits this snapshot before entering the composite
+   * create-agent -> send-message adapter and compares it with the clone passed
+   * to the synchronous final-dispatch callback.
+   */
+  public getDefinitionForDispatch(id: string): AutomationDefinition {
+    this.assertEnabled();
+    return structuredClone(this.getAutomation(id));
   }
 
   private assertEnabled(): void {
@@ -319,7 +340,7 @@ export class AutomationService extends DisposableService {
     this.assertEnabled();
     const manualRunOptions: AutomationManualRunOptions = {
       beforeDispatch: options.beforeDispatch,
-      retryMode: options.retryMode ?? 'configured',
+      retryMode: 'no-blind-retry',
       failureMode: options.failureMode ?? 'record',
     };
     return await this.serialize(async () => {
@@ -330,6 +351,7 @@ export class AutomationService extends DisposableService {
         await this.executeAutomation(
           automation,
           this.now(),
+          'manual',
           false,
           manualRunOptions,
         );
@@ -347,18 +369,32 @@ export class AutomationService extends DisposableService {
     if (this.shuttingDown || !this.options.isFeatureEnabled()) return;
     await this.serialize(async () => {
       const now = this.now();
-      let changed = false;
+      let changed = this.reconcileWalRunSummaries();
       for (const automation of this.data.automations) {
         if (!automation.enabled || !automation.nextRunAt) continue;
         const scheduledFor = Date.parse(automation.nextRunAt);
         if (!Number.isFinite(scheduledFor) || scheduledFor > now) continue;
         changed = true;
+        const durableOccurrence = this.dispatchWal.findScheduledOccurrence(
+          automation.id,
+          automation.nextRunAt,
+        );
+        if (durableOccurrence) {
+          this.applyWalRecordToRun(durableOccurrence);
+          automation.lastRunAt = durableOccurrence.createdAt;
+          this.advanceSchedule(automation, now);
+          continue;
+        }
         if (automation.missedRunPolicy === 'skip') {
           this.recordSkippedRun(automation, scheduledFor, 'missed-run-policy');
           this.advanceSchedule(automation, now);
           continue;
         }
-        await this.executeAutomation(automation, scheduledFor);
+        await this.executeAutomation(
+          automation,
+          scheduledFor,
+          'startup-reconcile',
+        );
       }
       if (changed) await this.persistence.save(this.data);
     });
@@ -417,7 +453,7 @@ export class AutomationService extends DisposableService {
           this.advanceSchedule(automation, now);
           continue;
         }
-        await this.executeAutomation(automation, scheduledFor);
+        await this.executeAutomation(automation, scheduledFor, reason);
       }
       if (due.length > 0) await this.persistence.save(this.data);
       this.scheduleNextTimer();
@@ -428,25 +464,38 @@ export class AutomationService extends DisposableService {
   private async executeAutomation(
     automation: AutomationDefinition,
     scheduledFor: number,
+    trigger: AutomationDispatchTrigger,
     advanceSchedule = true,
     manualRunOptions?: AutomationManualRunOptions,
   ): Promise<void> {
+    const scheduledForIso = new Date(scheduledFor).toISOString();
+    if (advanceSchedule) {
+      const durableOccurrence = this.dispatchWal.findScheduledOccurrence(
+        automation.id,
+        scheduledForIso,
+      );
+      if (durableOccurrence) {
+        this.applyWalRecordToRun(durableOccurrence);
+        automation.lastRunAt = durableOccurrence.createdAt;
+        this.advanceSchedule(automation, this.now());
+        return;
+      }
+    }
     if (this.runningAutomationIds.has(automation.id)) {
       this.recordSkippedRun(automation, scheduledFor, 'already-running');
       if (advanceSchedule) this.advanceSchedule(automation, this.now());
       return;
     }
-    this.assertGrantAllowsMode(automation);
     this.runningAutomationIds.add(automation.id);
 
     const run: AutomationRun = {
       id: randomUUID(),
       automationId: automation.id,
-      scheduledFor: new Date(scheduledFor).toISOString(),
+      scheduledFor: scheduledForIso,
       startedAt: new Date(this.now()).toISOString(),
       finishedAt: null,
       status: 'running',
-      attemptCount: 0,
+      attemptCount: 1,
       agentId: null,
       reason: null,
     };
@@ -454,71 +503,122 @@ export class AutomationService extends DisposableService {
 
     let propagateFailure = false;
     let propagatedError: unknown;
+    let prepared = false;
+    let adapterEntered = false;
+    let finalDispatchInvoked = false;
+    let finalDispatchPassed = false;
     try {
-      let lastError: unknown;
-      let succeeded = false;
-      const maxAttempts =
-        manualRunOptions?.retryMode === 'no-blind-retry'
-          ? 1
-          : automation.retryPolicy.maxAttempts;
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        run.attemptCount = attempt;
-        try {
-          let finalDispatchPassed = false;
-          const dispatchAutomation = structuredClone(automation);
-          const dispatchInput: AutomationDispatchInput = {
-            automation: dispatchAutomation,
-            prompt: automation.prompt,
-            beforeDispatch: () => {
-              if (finalDispatchPassed) {
-                throw new Error(
-                  'Automation final dispatch fence was already consumed',
-                );
-              }
-              this.assertEnabled();
-              manualRunOptions?.beforeDispatch?.({
-                automation: dispatchAutomation,
-                prompt: automation.prompt,
-                attempt,
-              });
-              finalDispatchPassed = true;
-            },
-          };
-          const result = await this.options.dispatch(dispatchInput);
-          if (!finalDispatchPassed) {
-            throw new Error(
-              'Automation adapter did not enforce the final dispatch fence',
-            );
-          }
-          run.agentId = result.agentId;
-          run.status = 'succeeded';
-          succeeded = true;
-          break;
-        } catch (error) {
-          lastError = error;
-          if (attempt >= maxAttempts) break;
-          const delay = Math.min(
-            automation.retryPolicy.initialBackoffMs * 2 ** (attempt - 1),
-            automation.retryPolicy.maxBackoffMs,
+      const dispatchAutomation = structuredClone(automation);
+      const dispatchInput: AutomationDispatchInput = {
+        automation: dispatchAutomation,
+        prompt: dispatchAutomation.prompt,
+      };
+      const commitments = createAutomationDispatchCommitments({
+        runId: run.id,
+        trigger,
+        scheduledFor: scheduledForIso,
+        automation: dispatchInput.automation,
+        prompt: dispatchInput.prompt,
+      });
+      const preparation: AutomationDispatchPreparation = {
+        runId: run.id,
+        automationId: dispatchAutomation.id,
+        trigger,
+        scheduledFor: scheduledForIso,
+        attempt: 1,
+        ...commitments,
+      };
+      await this.dispatchWal.prepare(preparation);
+      prepared = true;
+
+      // The UI run record is made durable after PREPARED and before the
+      // adapter can enter DISPATCHING. A crash in either window is recovered
+      // from the WAL and the occurrence is never replayed.
+      await this.persistence.save(this.data);
+      await this.dispatchWal.beginDispatch(preparation);
+
+      dispatchInput.beforeDispatch = () => {
+        if (finalDispatchInvoked) {
+          throw new Error(
+            'Automation final dispatch fence was already consumed',
           );
-          await this.sleep(delay);
+        }
+        finalDispatchInvoked = true;
+        this.assertEnabled();
+        const finalCommitments = createAutomationDispatchCommitments({
+          runId: run.id,
+          trigger,
+          scheduledFor: scheduledForIso,
+          automation: dispatchInput.automation,
+          prompt: dispatchInput.prompt,
+        });
+        if (
+          finalCommitments.definitionHash !== preparation.definitionHash ||
+          finalCommitments.occurrenceHash !== preparation.occurrenceHash ||
+          finalCommitments.attemptHash !== preparation.attemptHash
+        ) {
+          throw new Error(
+            'Automation definition or attempt changed before final dispatch',
+          );
+        }
+        this.assertGrantAllowsMode(dispatchInput.automation);
+        manualRunOptions?.beforeDispatch?.({
+          automation: dispatchInput.automation,
+          prompt: dispatchInput.prompt,
+          attempt: 1,
+        });
+        finalDispatchPassed = true;
+      };
+
+      deepFreeze(dispatchInput);
+      adapterEntered = true;
+      const result = await this.options.dispatch(dispatchInput);
+      if (!finalDispatchPassed) {
+        throw new Error(
+          'Automation adapter returned without enforcing the final dispatch fence',
+        );
+      }
+      if (typeof result.agentId !== 'string' || result.agentId.length === 0) {
+        throw new Error('Automation adapter returned no agent identifier');
+      }
+      await this.dispatchWal.markSucceeded(run.id, {
+        agentId: result.agentId,
+      });
+      run.agentId = result.agentId;
+      run.status = 'succeeded';
+    } catch (error) {
+      const diagnostic = this.errorDiagnostic(error);
+      const failedAtFinalFence =
+        adapterEntered && finalDispatchInvoked && !finalDispatchPassed;
+      const uncertain = adapterEntered && !failedAtFinalFence;
+      if (prepared) {
+        try {
+          if (uncertain) {
+            await this.dispatchWal.markUncertain(run.id, diagnostic);
+          } else {
+            await this.dispatchWal.markFailedPreEffect(run.id, diagnostic);
+          }
+        } catch (walError) {
+          this.options.logger.error(
+            '[AutomationService] Failed to close automation dispatch WAL record',
+            walError,
+          );
         }
       }
-      if (!succeeded) {
-        run.status = 'failed';
-        run.reason =
-          lastError instanceof Error ? lastError.message : String(lastError);
-        this.options.notifications.showNotification({
-          title: `Automation failed: ${automation.title}`,
-          message: run.reason,
-          type: 'error',
-          duration: 12_000,
-          actions: [],
-        });
-        if (manualRunOptions?.failureMode === 'propagate') {
-          propagateFailure = true;
-          propagatedError = lastError;
-        }
+      run.status = uncertain ? 'uncertain' : 'failed';
+      run.reason = uncertain
+        ? `UNCERTAIN: ${diagnostic}`
+        : `FAILED_PRE_EFFECT: ${diagnostic}`;
+      this.options.notifications.showNotification({
+        title: `Automation failed: ${automation.title}`,
+        message: run.reason,
+        type: 'error',
+        duration: 12_000,
+        actions: [],
+      });
+      if (manualRunOptions?.failureMode === 'propagate') {
+        propagateFailure = true;
+        propagatedError = error;
       }
     } finally {
       run.finishedAt = new Date(this.now()).toISOString();
@@ -527,6 +627,72 @@ export class AutomationService extends DisposableService {
       this.runningAutomationIds.delete(automation.id);
     }
     if (propagateFailure) throw propagatedError;
+  }
+
+  private reconcileWalRunSummaries(): boolean {
+    const walByRunId = new Map(
+      this.dispatchWal.list().map((record) => [record.runId, record]),
+    );
+    let changed = false;
+    for (const run of this.data.runs) {
+      const record = walByRunId.get(run.id);
+      if (record) {
+        this.applyWalRecordToRun(record);
+        changed = true;
+      } else if (run.status === 'running') {
+        run.status = 'failed';
+        run.finishedAt = new Date(this.now()).toISOString();
+        run.reason =
+          'FAILED_PRE_EFFECT: Process stopped before durable dispatch preparation; no effect was replayed';
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  private applyWalRecordToRun(record: AutomationDispatchWalRecord): void {
+    let run = this.data.runs.find((candidate) => candidate.id === record.runId);
+    if (!run) {
+      run = {
+        id: record.runId,
+        automationId: record.automationId,
+        scheduledFor: record.scheduledFor,
+        startedAt: record.createdAt,
+        finishedAt: null,
+        status: 'running',
+        attemptCount: 1,
+        agentId: null,
+        reason: null,
+      };
+      this.unshiftRun(run);
+    }
+    run.attemptCount = 1;
+    run.finishedAt = record.terminalAt ?? record.updatedAt;
+    if (record.state === 'SUCCEEDED') {
+      run.status = 'succeeded';
+      run.reason = null;
+      return;
+    }
+    const diagnostic =
+      record.error ?? 'Automation dispatch outcome unavailable';
+    if (record.state === 'FAILED_PRE_EFFECT') {
+      run.status = 'failed';
+      run.reason = `FAILED_PRE_EFFECT: ${diagnostic}`;
+      return;
+    }
+    run.status = 'uncertain';
+    run.reason = `UNCERTAIN: ${diagnostic}`;
+  }
+
+  private errorDiagnostic(error: unknown): string {
+    let message: string;
+    try {
+      message = error instanceof Error ? error.message : String(error);
+    } catch {
+      message = 'Automation dispatch failed with an unreadable error';
+    }
+    const normalized = message.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+    return (normalized || 'Automation dispatch failed').slice(0, 500);
   }
 
   private assertGrantAllowsMode(automation: AutomationDefinition): void {
@@ -637,6 +803,7 @@ export class AutomationService extends DisposableService {
       this.options.karton.removeServerProcedureHandler(procedure);
     }
     await this.mutation;
+    await this.dispatchWal.flush();
   }
 }
 
@@ -654,4 +821,13 @@ export function createAutomationAgentMessage(
       executionTarget: automation.executionTarget,
     },
   };
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const field of Object.values(value)) deepFreeze(field);
+  Object.freeze(value);
+  return value;
 }

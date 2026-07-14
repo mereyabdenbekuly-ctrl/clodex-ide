@@ -1,7 +1,5 @@
 import vm from 'node:vm';
-import { createWorkerIPC, NON_WORKSPACE_PREFIXES } from './ipc';
-import type { MountDescriptor } from './ipc';
-import { createIsolatedFs } from './utils/isolated-fs';
+import { createWorkerIPC } from './ipc';
 import {
   createCredentialFetch,
   type SecretMapEntry,
@@ -9,8 +7,6 @@ import {
 import type { Attachment } from '@shared/karton-contracts/ui/agent/metadata';
 
 const contexts = new Map<string, vm.Context>();
-/** Per-agent cache of URL-imported modules (resolved via data: URL imports). */
-const urlModuleCaches = new Map<string, Map<string, any>>();
 const pendingCdp = new Map<
   string,
   { resolve: (value: unknown) => void; reject: (reason: unknown) => void }
@@ -40,21 +36,12 @@ const pendingCredential = new Map<
 >();
 const ipc = createWorkerIPC();
 
-/** Per-agent mount descriptors, updated via `update-mounts` IPC. */
-const agentMounts = new Map<string, MountDescriptor[]>();
-
 /**
  * Per-agent accumulated secret maps (placeholder -> value + allowed origins).
  * Populated by `API.getCredential()` responses and consumed by the
  * fetch proxy to perform origin-gated substitution at network time.
  */
 const agentSecretMaps = new Map<string, Map<string, SecretMapEntry>>();
-
-/** Per-agent isolated fs instances, recreated when mounts change. */
-const agentIsolatedFs = new Map<
-  string,
-  { fs: Record<string, any>; fsPromises: Record<string, any> }
->();
 
 /**
  * Per-agent collection of file attachments accumulated during the current
@@ -96,10 +83,10 @@ const ALLOWED_NODE_MODULES = new Set([
  * Modules that are provided as sandboxed/isolated versions rather than
  * the real Node.js built-in. Resolved via the `require()` shim.
  */
-const SANDBOXED_NODE_MODULES = new Set(['fs', 'fs/promises']);
-
 /** Node.js built-in modules that must be blocked for sandbox security. */
 const BLOCKED_NODE_MODULES = new Set([
+  'fs',
+  'fs/promises',
   'net',
   'http',
   'https',
@@ -129,96 +116,6 @@ const preloadedModules = new Map<string, any>();
 async function preloadAllowedModules() {
   for (const name of ALLOWED_NODE_MODULES)
     preloadedModules.set(name, await import(`node:${name}`));
-}
-
-/**
- * Fetch an ESM module from a URL (e.g. esm.sh), evaluate it in the worker
- * process via a data: URL import, and return the module namespace object.
- *
- * esm.sh entry points are thin wrappers that re-export from a versioned
- * bundle path (e.g. `export * from "/pkg@1.0.0/node/pkg.bundle.mjs"`).
- * We detect these wrappers, resolve the target URL, and fetch the actual
- * self-contained bundle before importing via data: URL.
- */
-async function importFromUrl(
-  url: string,
-  cache: Map<string, any>,
-): Promise<any> {
-  const cached = cache.get(url);
-  if (cached) return cached;
-
-  const source = await fetchResolvedSource(url);
-  const dataUrl = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
-  const mod = await import(dataUrl);
-  cache.set(url, mod);
-  return mod;
-}
-
-/**
- * Fetch ESM source from a URL, following esm.sh redirect wrappers.
- * esm.sh entry points are typically 1-3 lines of re-exports pointing to
- * the actual bundle. We detect these, resolve the paths against the
- * original URL, and fetch the real bundle instead.
- */
-async function fetchResolvedSource(url: string, depth = 0): Promise<string> {
-  if (depth > 5) throw new Error(`Too many redirects resolving module: ${url}`);
-
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch module: ${url} (HTTP ${response.status})`);
-  }
-
-  const source = await response.text();
-
-  // Strip comments, then check if all remaining lines are just re-exports.
-  // esm.sh wrappers look like:
-  //   export * from "/pkg@1.0.0/node/pkg.bundle.mjs";
-  //   export { default } from "/pkg@1.0.0/node/pkg.bundle.mjs";
-  const codeLines = source
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(
-      (l) =>
-        l && !l.startsWith('/*') && !l.startsWith('*') && !l.startsWith('//'),
-    );
-
-  if (codeLines.length > 0 && codeLines.length <= 5) {
-    const reExportPattern =
-      /^export\s+(?:\*|{[^}]*})\s+from\s+["']([^"']+)["']\s*;?\s*$/;
-    const targets = codeLines.map((l) => reExportPattern.exec(l));
-
-    if (targets.every((m) => m !== null)) {
-      // All code lines are re-exports — follow the first target
-      // (they typically all point to the same base module)
-      const targetPath = targets[0]![1];
-      const resolvedUrl = new URL(targetPath, url).href;
-      return fetchResolvedSource(resolvedUrl, depth + 1);
-    }
-  }
-
-  return source;
-}
-
-/**
- * Ensure esm.sh URLs include `?bundle` so sub-modules are inlined,
- * and add `?target=node` if no target is specified.
- */
-function ensureBundleParam(url: string): string {
-  try {
-    const u = new URL(url);
-    if (u.hostname === 'esm.sh') {
-      if (
-        !u.searchParams.has('bundle') &&
-        !u.searchParams.has('raw') &&
-        !u.searchParams.has('standalone')
-      ) {
-        u.searchParams.set('bundle', '');
-      }
-    }
-    return u.href;
-  } catch {
-    return url;
-  }
 }
 
 let cdpReqId = 0;
@@ -264,46 +161,6 @@ const agentCdpListeners = new Map<
 
 function messageListenerKey(appId: string, pluginId?: string): string {
   return `${appId}\0${pluginId ?? ''}`;
-}
-
-/**
- * Create or update the isolated fs instances for an agent based on its
- * current mounts.
- */
-function refreshIsolatedFs(agentId: string) {
-  const mounts = agentMounts.get(agentId) ?? [];
-  const nonWorkspaceMounts = mounts.filter((m) =>
-    NON_WORKSPACE_PREFIXES.has(m.prefix),
-  );
-
-  const notifyDiff = (
-    absolutePath: string,
-    before: string | null,
-    after: string | null,
-    isExternal: boolean,
-    bytesWritten: number,
-  ) => {
-    if (nonWorkspaceMounts.some((m) => absolutePath.startsWith(m.absolutePath)))
-      return;
-    ipc.send({
-      type: 'file-diff-notification',
-      agentId,
-      absolutePath,
-      before,
-      after,
-      isExternal,
-      bytesWritten,
-    });
-  };
-
-  const { isolatedFs, isolatedFsPromises } = createIsolatedFs(
-    mounts,
-    notifyDiff,
-  );
-  agentIsolatedFs.set(agentId, {
-    fs: isolatedFs,
-    fsPromises: isolatedFsPromises,
-  });
 }
 
 function getSandboxAPI(agentId: string) {
@@ -542,15 +399,6 @@ function getContextGlobals(agentId: string) {
 
     require(specifier: string) {
       const name = specifier.replace(/^node:/, '');
-      if (SANDBOXED_NODE_MODULES.has(name)) {
-        const isolated = agentIsolatedFs.get(agentId);
-        if (!isolated) {
-          throw new Error(
-            'No workspaces mounted. Mount a workspace before using fs.',
-          );
-        }
-        return name === 'fs/promises' ? isolated.fsPromises : isolated.fs;
-      }
       if (BLOCKED_NODE_MODULES.has(name)) {
         throw new Error(
           `"${specifier}" is not available in the sandbox for security reasons.`,
@@ -558,10 +406,7 @@ function getContextGlobals(agentId: string) {
       }
       const mod = preloadedModules.get(name);
       if (!mod) {
-        const allowed = [
-          ...ALLOWED_NODE_MODULES,
-          ...SANDBOXED_NODE_MODULES,
-        ].join(', ');
+        const allowed = [...ALLOWED_NODE_MODULES].join(', ');
         throw new Error(
           `"${specifier}" is not a recognised allowed module. Allowed: ${allowed}`,
         );
@@ -576,10 +421,9 @@ function getContextGlobals(agentId: string) {
             'For Node.js built-ins, use require() instead.',
         );
       }
-      const resolved = ensureBundleParam(url);
-      const cache = urlModuleCaches.get(agentId) ?? new Map();
-      if (!urlModuleCaches.has(agentId)) urlModuleCaches.set(agentId, cache);
-      return importFromUrl(resolved, cache);
+      throw new Error(
+        'Remote module imports are disabled because fetched JavaScript cannot execute inside the host worker authority boundary. Use bundled sandbox APIs instead.',
+      );
     },
   };
 
@@ -602,43 +446,30 @@ ipc.onMessage(async (msg) => {
         ...getContextGlobals(msg.agentId),
       });
 
-      const agentId = msg.agentId;
       Object.defineProperty(ctx, 'fs', {
         get() {
-          const isolated = agentIsolatedFs.get(agentId);
-          if (!isolated) {
-            throw new Error(
-              'No workspaces mounted. Mount a workspace before using fs.',
-            );
-          }
-          return isolated.fs;
+          throw new Error(
+            'Host filesystem access is disabled in the JavaScript sandbox. Use mediated Clodex file tools.',
+          );
         },
         enumerable: true,
         configurable: true,
       });
       Object.defineProperty(ctx, 'fsPromises', {
         get() {
-          const isolated = agentIsolatedFs.get(agentId);
-          if (!isolated) {
-            throw new Error(
-              'No workspaces mounted. Mount a workspace before using fs.',
-            );
-          }
-          return isolated.fsPromises;
+          throw new Error(
+            'Host filesystem access is disabled in the JavaScript sandbox. Use mediated Clodex file tools.',
+          );
         },
         enumerable: true,
         configurable: true,
       });
 
       contexts.set(msg.agentId, ctx);
-      urlModuleCaches.set(msg.agentId, new Map());
       break;
     }
     case 'destroy-context': {
       contexts.delete(msg.agentId);
-      urlModuleCaches.delete(msg.agentId);
-      agentMounts.delete(msg.agentId);
-      agentIsolatedFs.delete(msg.agentId);
       agentSecretMaps.delete(msg.agentId);
       agentMessageListeners.delete(msg.agentId);
       agentCdpListeners.delete(msg.agentId);
@@ -646,8 +477,8 @@ ipc.onMessage(async (msg) => {
       break;
     }
     case 'update-mounts': {
-      agentMounts.set(msg.agentId, msg.mounts);
-      refreshIsolatedFs(msg.agentId);
+      // Mount metadata is intentionally not converted into ambient filesystem
+      // authority. Host files remain reachable only through mediated tools.
       break;
     }
     case 'execute': {

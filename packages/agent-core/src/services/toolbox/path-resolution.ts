@@ -115,9 +115,19 @@ export function resolveToolPath(
   const { prefix, relativePath } = splitMountPath(inputPath);
 
   const staticMount = getStaticMounts(deps).find((m) => m.prefix === prefix);
-  const workspaceRoot = deps.mountManager?.getWorkspacePathForPrefix(prefix);
+  const delegatedWorkspacePrefixes =
+    deps.mountManager?.getMountPrefixes(deps.agentInstanceId) ?? [];
+  const workspaceRoot = delegatedWorkspacePrefixes.includes(prefix)
+    ? deps.mountManager?.getWorkspacePathForPrefix(prefix)
+    : undefined;
   const mountRoot = staticMount?.absolutePath ?? workspaceRoot;
-  const permissions = staticMount?.permissions ?? FULL_PERMISSIONS;
+  const permissions =
+    staticMount?.permissions ??
+    deps.mountManager?.getMountPermissionsForPrefix?.(
+      deps.agentInstanceId,
+      prefix,
+    ) ??
+    READ_ONLY_PERMISSIONS;
 
   if (!mountRoot) {
     throw new Error(

@@ -1,0 +1,27 @@
+{
+  "name": "@clodex/control-plane",
+  "version": "0.1.0",
+  "description": "Fail-closed atomic local execution control-plane coordinator for Clodex.",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "check": "biome check .",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clodex/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@clodex/typescript-config": "workspace:*",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

@@ -10,7 +10,7 @@ import {
   type EvidenceMemorySyncBatch,
   type EvidenceMemorySyncCursor,
 } from '@clodex/agent-core/evidence-memory';
-import { createClient, type Client, type Transaction } from '@libsql/client';
+import { createClient, type Client } from '@libsql/client';
 import {
   CloudTaskMemoryCompareAndSwapError,
   sameCloudTaskMemoryCheckpoint,
@@ -43,7 +43,9 @@ export interface CloudTaskMemoryAtomicCommitAuthority {
  * this class.
  */
 export class SqliteCloudTaskMemoryAtomicLedger {
-  private writeQueue: Promise<void> = Promise.resolve();
+  private operationQueue: Promise<void> = Promise.resolve();
+  private closed = false;
+  private closePromise: Promise<void> | undefined;
 
   private constructor(
     private readonly client: Client,
@@ -73,33 +75,42 @@ export class SqliteCloudTaskMemoryAtomicLedger {
       throw new Error('Atomic memory receipt retention is invalid');
     }
     const client = createClient({ url });
-    await client.executeMultiple(`
-      PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS cloud_task_memory_events (
-        task_id TEXT NOT NULL,
-        event_id TEXT NOT NULL,
-        event_timestamp INTEGER NOT NULL,
-        event_json TEXT NOT NULL,
-        PRIMARY KEY (task_id, event_id)
-      );
-      CREATE INDEX IF NOT EXISTS cloud_task_memory_events_order
-        ON cloud_task_memory_events(task_id, event_timestamp, event_id);
-      CREATE TABLE IF NOT EXISTS cloud_task_memory_receipts (
-        task_id TEXT NOT NULL,
-        mutation_id TEXT NOT NULL,
-        request_hash TEXT NOT NULL,
-        receipt_json TEXT NOT NULL,
-        committed_at INTEGER NOT NULL,
-        PRIMARY KEY (task_id, mutation_id)
-      );
-      CREATE INDEX IF NOT EXISTS cloud_task_memory_receipts_retention
-        ON cloud_task_memory_receipts(committed_at);
-      CREATE TABLE IF NOT EXISTS cloud_task_memory_authority (
-        task_id TEXT PRIMARY KEY,
-        epoch INTEGER NOT NULL,
-        fencing_token_hash TEXT NOT NULL
-      );
-    `);
+    if (client.protocol !== 'file') {
+      client.close();
+      throw new Error('Atomic memory SQLite ledger requires a file URL');
+    }
+    try {
+      await client.executeMultiple(`
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE IF NOT EXISTS cloud_task_memory_events (
+          task_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          event_timestamp INTEGER NOT NULL,
+          event_json TEXT NOT NULL,
+          PRIMARY KEY (task_id, event_id)
+        );
+        CREATE INDEX IF NOT EXISTS cloud_task_memory_events_order
+          ON cloud_task_memory_events(task_id, event_timestamp, event_id);
+        CREATE TABLE IF NOT EXISTS cloud_task_memory_receipts (
+          task_id TEXT NOT NULL,
+          mutation_id TEXT NOT NULL,
+          request_hash TEXT NOT NULL,
+          receipt_json TEXT NOT NULL,
+          committed_at INTEGER NOT NULL,
+          PRIMARY KEY (task_id, mutation_id)
+        );
+        CREATE INDEX IF NOT EXISTS cloud_task_memory_receipts_retention
+          ON cloud_task_memory_receipts(committed_at);
+        CREATE TABLE IF NOT EXISTS cloud_task_memory_authority (
+          task_id TEXT PRIMARY KEY,
+          epoch INTEGER NOT NULL,
+          fencing_token_hash TEXT NOT NULL
+        );
+      `);
+    } catch (error) {
+      client.close();
+      throw error;
+    }
     return new SqliteCloudTaskMemoryAtomicLedger(
       client,
       options.now ?? Date.now,
@@ -112,7 +123,7 @@ export class SqliteCloudTaskMemoryAtomicLedger {
     taskId: string,
     authority: CloudTaskMemoryAtomicCommitAuthority,
   ): Promise<void> {
-    await this.enqueueWrite(
+    await this.enqueueOperation(
       async () => await this.activateAuthorityTransaction(taskId, authority),
     );
   }
@@ -123,7 +134,7 @@ export class SqliteCloudTaskMemoryAtomicLedger {
   ): Promise<void> {
     validateTaskId(taskId);
     validateAuthority(authority);
-    const transaction = await this.client.transaction('write');
+    const transaction = await beginWriteTransaction(this.client);
     try {
       const current = await readAuthority(transaction, taskId);
       if (current) {
@@ -148,12 +159,10 @@ export class SqliteCloudTaskMemoryAtomicLedger {
         `,
         args: [taskId, authority.epoch, authority.fencingTokenHash],
       });
-      await transaction.commit();
+      await transaction.execute('COMMIT');
     } catch (error) {
       await rollbackQuietly(transaction);
       throw error;
-    } finally {
-      transaction.close();
     }
   }
 
@@ -161,7 +170,7 @@ export class SqliteCloudTaskMemoryAtomicLedger {
     request: CloudTaskMemoryAtomicMergeRequest,
     authority?: CloudTaskMemoryAtomicCommitAuthority,
   ): Promise<CloudTaskMemoryAtomicMergeReceipt> {
-    return await this.enqueueWrite(
+    return await this.enqueueOperation(
       async () => await this.commitTransaction(request, authority),
     );
   }
@@ -173,7 +182,7 @@ export class SqliteCloudTaskMemoryAtomicLedger {
     const normalized = normalizeAtomicRequest(request);
     if (authority) validateAuthority(authority);
     const requestHash = hashAtomicRequest(normalized);
-    const transaction = await this.client.transaction('write');
+    const transaction = await beginWriteTransaction(this.client);
     try {
       await assertAuthority(transaction, normalized.taskId, authority);
       const replay = await readReceipt(
@@ -187,7 +196,7 @@ export class SqliteCloudTaskMemoryAtomicLedger {
             normalized.mutationId,
           );
         }
-        await transaction.rollback();
+        await transaction.execute('ROLLBACK');
         return { ...replay.receipt, replayed: true };
       }
 
@@ -241,8 +250,8 @@ export class SqliteCloudTaskMemoryAtomicLedger {
       }
 
       if (imported.length > 0) {
-        await transaction.batch(
-          imported.map((event) => ({
+        for (const event of imported) {
+          await transaction.execute({
             sql: `
               INSERT INTO cloud_task_memory_events (
                 task_id, event_id, event_timestamp, event_json
@@ -254,8 +263,8 @@ export class SqliteCloudTaskMemoryAtomicLedger {
               event.timestamp,
               JSON.stringify(event),
             ],
-          })),
-        );
+          });
+        }
       }
       await this.faultInjector?.('after-events-before-receipt');
       const committedAt = this.now();
@@ -287,13 +296,11 @@ export class SqliteCloudTaskMemoryAtomicLedger {
         sql: 'DELETE FROM cloud_task_memory_receipts WHERE committed_at < ?',
         args: [committedAt - this.receiptRetentionMs],
       });
-      await transaction.commit();
+      await transaction.execute('COMMIT');
       return receipt;
     } catch (error) {
       await rollbackQuietly(transaction);
       throw error;
-    } finally {
-      transaction.close();
     }
   }
 
@@ -307,7 +314,9 @@ export class SqliteCloudTaskMemoryAtomicLedger {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
       throw new Error('Atomic memory pull limit is invalid');
     }
-    const events = await this.readAllEvents(input.taskId);
+    const events = await this.enqueueOperation(
+      async () => await this.readAllEvents(input.taskId),
+    );
     const eligible = input.cursor
       ? events.filter(
           (event) =>
@@ -354,18 +363,20 @@ export class SqliteCloudTaskMemoryAtomicLedger {
     taskId: string,
   ): Promise<CloudTaskMemoryCheckpointIdentity> {
     validateTaskId(taskId);
-    return toCheckpointIdentity(
-      buildEvidenceMemoryCheckpoint(
-        taskId,
-        await this.readAllEvents(taskId),
-        this.now(),
+    return await this.enqueueOperation(async () =>
+      toCheckpointIdentity(
+        buildEvidenceMemoryCheckpoint(
+          taskId,
+          await this.readAllEvents(taskId),
+          this.now(),
+        ),
       ),
     );
   }
 
   public async clearTask(taskId: string): Promise<void> {
     validateTaskId(taskId);
-    await this.enqueueWrite(
+    await this.enqueueOperation(
       async () =>
         await this.client.batch(
           [
@@ -383,8 +394,13 @@ export class SqliteCloudTaskMemoryAtomicLedger {
     );
   }
 
-  public close(): void {
-    this.client.close();
+  public async close(): Promise<void> {
+    if (this.closePromise) return await this.closePromise;
+    this.closed = true;
+    this.closePromise = this.operationQueue.then(() => {
+      this.client.close();
+    });
+    await this.closePromise;
   }
 
   private async readAllEvents(taskId: string): Promise<EvidenceMemoryEvent[]> {
@@ -402,9 +418,12 @@ export class SqliteCloudTaskMemoryAtomicLedger {
     );
   }
 
-  private async enqueueWrite<T>(action: () => Promise<T>): Promise<T> {
-    const result = this.writeQueue.then(action);
-    this.writeQueue = result.then(
+  private async enqueueOperation<T>(action: () => Promise<T>): Promise<T> {
+    if (this.closed) {
+      throw new Error('Atomic memory ledger is closed');
+    }
+    const result = this.operationQueue.then(action);
+    this.operationQueue = result.then(
       () => {},
       () => {},
     );
@@ -474,7 +493,7 @@ function normalizeAtomicRequest(request: CloudTaskMemoryAtomicMergeRequest): {
 }
 
 async function readEvents(
-  transaction: Transaction,
+  transaction: Client,
   taskId: string,
 ): Promise<EvidenceMemoryEvent[]> {
   const result = await transaction.execute({
@@ -492,7 +511,7 @@ async function readEvents(
 }
 
 async function readReceipt(
-  transaction: Transaction,
+  transaction: Client,
   taskId: string,
   mutationId: string,
 ): Promise<{
@@ -516,7 +535,7 @@ async function readReceipt(
 }
 
 async function readAuthority(
-  transaction: Transaction,
+  transaction: Client,
   taskId: string,
 ): Promise<CloudTaskMemoryAtomicCommitAuthority | null> {
   const result = await transaction.execute({
@@ -536,7 +555,7 @@ async function readAuthority(
 }
 
 async function assertAuthority(
-  transaction: Transaction,
+  transaction: Client,
   taskId: string,
   supplied: CloudTaskMemoryAtomicCommitAuthority | undefined,
 ): Promise<void> {
@@ -634,10 +653,19 @@ function toCheckpointIdentity(
   };
 }
 
-async function rollbackQuietly(transaction: Transaction): Promise<void> {
+async function rollbackQuietly(transaction: Client): Promise<void> {
   try {
-    await transaction.rollback();
+    await transaction.execute('ROLLBACK');
   } catch {
     // The transaction may already be closed after a successful rollback.
   }
+}
+
+async function beginWriteTransaction(client: Client): Promise<Client> {
+  // Keep the transaction on the client-owned connection so close() releases
+  // the SQLite file handle deterministically on Windows. The local libSQL
+  // interactive transaction object retains its detached connection after
+  // commit until garbage collection.
+  await client.execute('BEGIN IMMEDIATE');
+  return client;
 }

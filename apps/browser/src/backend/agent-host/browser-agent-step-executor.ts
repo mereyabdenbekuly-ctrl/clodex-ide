@@ -68,6 +68,7 @@ export interface BrowserAgentStepExecutorOptions {
   logger: Pick<Logger, 'debug' | 'warn'>;
   isEnabled: () => boolean;
   isKillSwitchActive?: () => boolean;
+  assertLocalExecutionAllowed?: (agentInstanceId: string) => void;
   telemetry?: AgentStepRuntimeTelemetrySink;
   circuitBreaker?: Partial<IsolatedAgentRuntimeCircuitBreakerOptions>;
   localExecutor?: AgentStepExecutor;
@@ -103,6 +104,9 @@ export class BrowserAgentStepExecutor implements AgentStepExecutor {
   private readonly logger: Pick<Logger, 'debug' | 'warn'>;
   private readonly isEnabled: () => boolean;
   private readonly isKillSwitchActive: () => boolean;
+  private readonly assertLocalExecutionAllowed: (
+    agentInstanceId: string,
+  ) => void;
   private readonly telemetry: AgentStepRuntimeTelemetrySink | undefined;
   private readonly circuitBreaker: IsolatedAgentRuntimeCircuitBreaker;
   private readonly localExecutor: AgentStepExecutor;
@@ -113,6 +117,9 @@ export class BrowserAgentStepExecutor implements AgentStepExecutor {
     logger,
     isEnabled,
     isKillSwitchActive = () => false,
+    assertLocalExecutionAllowed = () => {
+      throw new Error('Local-execution ownership fence is unavailable');
+    },
     telemetry,
     circuitBreaker,
     localExecutor = localAgentStepExecutor,
@@ -122,6 +129,7 @@ export class BrowserAgentStepExecutor implements AgentStepExecutor {
     this.logger = logger;
     this.isEnabled = isEnabled;
     this.isKillSwitchActive = isKillSwitchActive;
+    this.assertLocalExecutionAllowed = assertLocalExecutionAllowed;
     this.telemetry = telemetry;
     this.circuitBreaker = new IsolatedAgentRuntimeCircuitBreaker({
       failureThreshold:
@@ -176,7 +184,11 @@ export class BrowserAgentStepExecutor implements AgentStepExecutor {
     }
 
     try {
-      const prepared = await prepareRemoteStep(request, this.streamTextFn);
+      const prepared = await prepareRemoteStep(
+        request,
+        this.streamTextFn,
+        this.assertLocalExecutionAllowed,
+      );
       const acquisition = this.circuitBreaker.tryAcquire();
       if (!acquisition) {
         return await this.executeLocal(
@@ -199,6 +211,7 @@ export class BrowserAgentStepExecutor implements AgentStepExecutor {
         this.process,
         request,
         prepared,
+        this.assertLocalExecutionAllowed,
         (eventName, properties) => this.captureTelemetry(eventName, properties),
         (outcome) => this.recordRemoteOutcome(acquisition.admission, outcome),
       );
@@ -230,6 +243,7 @@ export class BrowserAgentStepExecutor implements AgentStepExecutor {
     reason: AgentStepRuntimeSelectionReason,
     preparationStartedAt: number,
   ): Promise<AgentStepExecution> {
+    this.assertLocalExecutionAllowed(request.context.agentInstanceId);
     this.captureTelemetry('agent-step-runtime-selected', {
       agent_type: request.context.agentType,
       model_id: request.context.resolvedModelId,
@@ -237,7 +251,9 @@ export class BrowserAgentStepExecutor implements AgentStepExecutor {
       reason,
       preparation_duration_ms: elapsedMs(preparationStartedAt),
     });
-    return await this.localExecutor.execute(request);
+    return await this.localExecutor.execute(
+      fenceLocalToolExecutors(request, this.assertLocalExecutionAllowed),
+    );
   }
 
   private captureTelemetry<T extends keyof AgentStepRuntimeTelemetryEvents>(
@@ -274,6 +290,38 @@ export class BrowserAgentStepExecutor implements AgentStepExecutor {
   }
 }
 
+function fenceLocalToolExecutors(
+  request: AgentStepExecutionRequest,
+  assertLocalExecutionAllowed: (agentInstanceId: string) => void,
+): AgentStepExecutionRequest {
+  const tools = request.options.tools as ToolSet | undefined;
+  if (!tools) return request;
+
+  const fencedTools: ToolSet = {};
+  for (const [name, resolvedTool] of Object.entries(tools)) {
+    const execute = resolvedTool.execute;
+    if (typeof execute !== 'function') {
+      fencedTools[name] = resolvedTool;
+      continue;
+    }
+    fencedTools[name] = {
+      ...resolvedTool,
+      execute(input, options) {
+        assertLocalExecutionAllowed(request.context.agentInstanceId);
+        return execute(input, options);
+      },
+    } as ToolSet[string];
+  }
+
+  return {
+    ...request,
+    options: {
+      ...request.options,
+      tools: fencedTools,
+    },
+  };
+}
+
 export function createBrowserAgentStepExecutor(
   options: BrowserAgentStepExecutorOptions,
 ): AgentStepExecutor {
@@ -289,6 +337,9 @@ class RemoteAgentStepExecution implements AgentStepExecution {
     private readonly process: IsolatedAgentTurnProcess,
     private readonly executionRequest: AgentStepExecutionRequest,
     private readonly prepared: PreparedRemoteStep,
+    private readonly assertLocalExecutionAllowed: (
+      agentInstanceId: string,
+    ) => void,
     private readonly captureTelemetry: <
       T extends keyof AgentStepRuntimeTelemetryEvents,
     >(
@@ -373,6 +424,9 @@ class RemoteAgentStepExecution implements AgentStepExecution {
         } as InferUIMessageChunk<UI_MESSAGE>);
       }
 
+      this.assertLocalExecutionAllowed(
+        this.executionRequest.context.agentInstanceId,
+      );
       const result = await this.process.executeAgentTurn(
         this.prepared.request,
         {
@@ -468,6 +522,9 @@ interface StreamedStepState {
 async function prepareRemoteStep(
   executionRequest: AgentStepExecutionRequest,
   streamTextFn: typeof streamText,
+  assertLocalExecutionAllowed: (agentInstanceId: string) => void = () => {
+    throw new Error('Local-execution ownership fence is unavailable');
+  },
 ): Promise<PreparedRemoteStep> {
   const options = executionRequest.options;
   if (
@@ -535,6 +592,7 @@ async function prepareRemoteStep(
     modelTools,
     tools,
     streamTextFn,
+    assertLocalExecutionAllowed,
   });
   return { request, handlers };
 }
@@ -555,11 +613,13 @@ function createPerTurnHandlers({
   modelTools,
   tools,
   streamTextFn,
+  assertLocalExecutionAllowed,
 }: {
   executionRequest: AgentStepExecutionRequest;
   modelTools: ToolSet;
   tools: ToolSet;
   streamTextFn: typeof streamText;
+  assertLocalExecutionAllowed: (agentInstanceId: string) => void;
 }): AgentTurnHostHandlers {
   const originalOptions = executionRequest.options;
   const toolMessages = (originalOptions.messages as ModelMessage[]).filter(
@@ -576,6 +636,7 @@ function createPerTurnHandlers({
         abortSignal: originalSignal,
         ...modelOptions
       } = originalOptions;
+      assertLocalExecutionAllowed(executionRequest.context.agentInstanceId);
       const result = streamTextFn({
         ...modelOptions,
         tools: modelTools,
@@ -642,6 +703,7 @@ function createPerTurnHandlers({
     },
 
     async callTool(request, { signal }) {
+      assertLocalExecutionAllowed(executionRequest.context.agentInstanceId);
       const resolvedTool = tools[request.call.toolName] as Tool | undefined;
       if (!resolvedTool?.execute) {
         return {
@@ -682,6 +744,7 @@ function createPerTurnHandlers({
           };
         }
 
+        assertLocalExecutionAllowed(executionRequest.context.agentInstanceId);
         const output = await collectToolOutput(
           resolvedTool.execute(request.call.input, executionOptions),
         );

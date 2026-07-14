@@ -1,10 +1,15 @@
 # CLODEx Security Guarantee Manifest
 
-- **Version:** 0.9
+- **Version:** 0.11
 - **Date:** July 14, 2026
 - **Rule:** only ENFORCED claims may be described as runtime guarantees.
 - **Source specification:** ../INTENT_CONTRACT_SPEC.md
 - **Implementation plan:** ../developer/ZERO_TRUST_EXECUTION_5_SESSION_PLAN.md
+- **Current working-tree verification:** `UNEXECUTED`. GitHub CI is green at
+  commit `1ad58e67`, but that commit is the pre-tranche baseline only. Existing
+  `ENFORCED` and `TESTED` rows are not a re-attestation of changed code paths in
+  the later P0 working tree. Any changed path must be treated as
+  `IMPLEMENTED_UNVERIFIED` until the independent testing handoff passes.
 
 ## Status values
 
@@ -12,6 +17,7 @@
 | -------------- | -------------------------------------------------------------------------------------------- |
 | ENFORCED       | runtime boundary exists and required tests pass                                              |
 | TESTED         | a schema or isolated component property is tested, but complete mediation is not established |
+| IMPLEMENTED_UNVERIFIED | implementation exists, but the current code tranche was intentionally not tested or validated |
 | IN_PROGRESS    | code is being integrated in the current session                                              |
 | SPEC_ONLY      | normative design exists without runtime enforcement                                          |
 | BLOCKED        | a confirmed production gap prevents the claim                                                |
@@ -37,25 +43,33 @@
 | INV-EGRESS-001        | Isolated generated apps cannot use ambient external network or popup/OS-protocol egress              | browser session/navigation       | ENFORCED  | CSP/bootstrap, session request guard, frame-navigation guard, fail-closed window-open helper, and nine popup tests including source-inspection failure                          | Same-app and explicitly allowed local data/blob assets remain available; no packaged Electron smoke                                                       |
 | INV-REVIEW-001        | Canonical approval binds exact app identity, manifest, policy, and selected authority                | approval UI/registry             | ENFORCED  | canonical review schemas, one-shot registry, manifest-derived UI model, submit revalidation, and integration tests                                                              | Current read, ask-agent, and automation profile only; write and ephemeral-gate promotion are not claimed                                                  |
 | INV-REVIEW-002        | Reviewer authority cannot be spoofed by a renderer-selected caller string                            | trusted UI transport             | ENFORCED  | dedicated `ui-main` channel, exact current WebContents/main-frame admission, generic-role exclusion, and transport tests                                                        | No packaged Electron smoke is claimed                                                                                                                     |
-| INV-READ-FENCE-001    | Suspended or replaced host session cannot start direct read-only MCP dispatch after descriptor await | Artifact Bridge current read     | ENFORCED  | exact grant/document commitment plus supervisor-side callback after `ensureReady()` and immediately before IPC dispatch, with adversarial races                                 | Supported local-agent profile only; no packaged Electron smoke                                                                                            |
-| INV-REV-001           | Revocation before final dispatch prevents every modeled effect                                       | current Artifact Bridge adapters | ENFORCED  | grant revision fences, exact host generation, MCP supervisor callback, ask-agent callback, automation serialized callback, operation-local one-shot fences, and races           | Package/plugin authority remains disabled; no packaged Electron smoke                                                                                     |
-| INV-DESC-001          | Reviewed MCP descriptor matches the current local dispatch snapshot immediately before IPC dispatch  | Artifact Bridge MCP effects      | ENFORCED  | full local server/runtime/descriptor/classification/adapter/argument/policy commitment recomputed at final MCP dispatch, with endpoint/schema/annotation/generation drift tests | The MCP call protocol carries no descriptor version/hash accepted by the remote server; remote execution semantics are therefore not claimed identical    |
-| INV-RETRY-001         | Result processing failure cannot replay a committed effect                                           | all Artifact Bridge effects      | BLOCKED   | reviewed MCP write/sensitive paths use terminal WAL states and one-shot tokens; async operations preserve in-process `uncertain` evidence                                       | Direct ask-agent, automation, and ordinary async MCP effects do not yet have universal durable replay closure                                             |
-| INV-WAL-001           | Every irreversible effect has a durable PREPARED/COMMITTED write-ahead record                        | effect ledger                    | BLOCKED   | encrypted durable WAL and startup recovery are enforced for reviewed MCP write and sensitive calls                                                                              | WAL is not yet universal for ask-agent, direct automation, ordinary async MCP, and every asynchronous effect                                              |
-| INV-ATOMIC-001        | Authorization remains exact through the final dispatch boundary for every effect                     | effect adapters                  | BLOCKED   | current Artifact Bridge adapters expose final-dispatch fences; the Session 5 reference runtime owns prepare/revalidate/assert/permit/execute ordering                           | Automation definition/model-adapter identity, composite create-agent→mount/message closure, and universal durable effect closure remain incomplete        |
+| INV-READ-FENCE-001    | Suspended or replaced host session cannot start direct read-only MCP dispatch after descriptor await | Artifact Bridge current read     | IMPLEMENTED_UNVERIFIED | the previously tested supervisor-side callback remains, while the changed registry path now also enters the unexecuted central commitment/final-fence gateway                   | Current MCP source changed after green baseline `1ad58e67`; supported local-agent profile only; no packaged Electron smoke                                 |
+| INV-REV-001           | Revocation before final dispatch prevents every modeled effect                                       | current Artifact Bridge adapters | IMPLEMENTED_UNVERIFIED | historical grant/session/adapter fences remain in source and new cloud/MCP/automation fences narrow additional dispatch paths                                                     | Current adapter, WAL, MCP, and ownership paths changed after the green baseline and were intentionally not revalidated                                     |
+| INV-DESC-001          | Reviewed MCP descriptor matches the current local dispatch snapshot immediately before IPC dispatch  | Artifact Bridge MCP effects      | IMPLEMENTED_UNVERIFIED | changed source recomputes exact descriptor, authority, classification, runtime, Guardian revision, argument, and policy commitments at final dispatch                              | Central MCP integration and approval authority are unexecuted; remote MCP still does not accept a descriptor digest, so remote semantics are not claimed   |
+| INV-RETRY-001         | Result processing failure cannot replay a committed effect                                           | modeled browser effects          | IMPLEMENTED_UNVERIFIED | universal Artifact Bridge WAL covers direct ask-agent, automation, reviewed/ordinary async MCP; AutomationService adds one-shot manual/timer/resume/startup occurrence closure and never replays `DISPATCHING` | Current changes were intentionally not tested; external-provider atomicity and protected WAL anti-rollback remain outside the claim                        |
+| INV-WAL-001           | Every modeled irreversible browser effect has a durable preparation/dispatch/terminal record         | effect ledgers                   | IMPLEMENTED_UNVERIFIED | encrypted Artifact Bridge WAL classes include `agent-ask`, `automation`, and `mcp-read-async`; AutomationService adds `PREPARED → DISPATCHING → SUCCEEDED/FAILED_PRE_EFFECT/UNCERTAIN` for every scheduled/manual entry path | Current changes were intentionally not tested; synchronous read-MCP external semantics and effects outside modeled paths are not universally covered      |
+| INV-ATOMIC-001        | Authorization remains exact through the final dispatch boundary for every effect                     | effect adapters                  | IMPLEMENTED_UNVERIFIED | final commitments bind ask model/adapter inputs, complete automation definition/composite state, cloud ownership state, and MCP descriptor/runtime state; partial composite failure closes `UNCERTAIN` | No transaction is atomic with the external model provider, MCP target, or agent store; current implementation and prepared tests are unexecuted            |
 | INV-TICKET-001        | Execution Ticket is short-lived, exact-action, and single-use                                        | independent control-plane slice  | TESTED    | closed ticket validation, Guardian issuance/revalidation, kernel registration and synchronous one-shot `COMMIT_PERMIT`, plus focused contracts/Guardian/kernel/runtime tests    | Recording-only and memory-only; runner registry digest is bound, but concrete runner membership is not verified                                           |
 | INV-REF-CLOSURE-001   | The recording-only runtime owns PREPARE, final authority, permit, and one post-permit execute        | Session 5 reference runtime      | TESTED    | closed prepared-effect/permit shapes; accessors are not evaluated; prototype/symbol/non-enumerable/extra permit drift closes `UNCERTAIN` before execute                         | Non-durable reference only; PREPARE is trusted inert behavior, with no host effect, crash-safe transaction, cross-process commit, or production promotion |
 | INV-APPROVAL-REF-001  | Canonical approval binds only machine-readable authority and current commitments                     | independent approval reference   | TESTED    | canonical render model/artifact, DSSE verification, trusted reviewer snapshot, final trust/commitment fences, and one-shot replay tests                                         | No production UI, key custody, signing service, or durable replay store                                                                                   |
 | INV-LEDGER-REF-001    | Ticket, effect attempt, evidence expectation, and evidence outbox share one CAS record               | independent ledger reference     | TESTED    | closed transitions, reachable revisions, global identity reservations, verified admission receipts, recovery tests, and POSIX snapshot adapter                                  | Not atomically linked to kernel/effect/evidence systems; no protected anti-rollback head                                                                  |
 | INV-EVIDENCE-REF-001  | Signed evidence chain detects bounded replay, fork, rollback, and trust drift                        | independent evidence reference   | TESTED    | executor/observer signatures, trust epoch/registry binding, final synchronous signer-set fence, idempotency registry, chain/checkpoint tests                                    | Default ledger/checkpoint adapters are memory-only; no atomic protected checkpoint/trust transaction                                                      |
-| INV-ADAPTER-SCOPE-001 | Reference adapters reject cross-workspace/task confused-deputy use before any capability port        | independent adapter reference    | TESTED    | immutable workspace/task/root scope, ticket-audience fence, scope propagation, mixed-scope registry rejection, and accessor/adversarial tests                                   | Signed scoped registry manifest and real OS-confined filesystem/Git/test implementations are absent                                                       |
+| INV-CONTROL-PLANE-001 | Ticket reservation, permit consumption, effect attempt, ledger projection, and evidence outbox advance in one local CAS | independent control plane | IMPLEMENTED_UNVERIFIED | `@clodex/control-plane` and POSIX adapter implement one closed record, one-shot in-flight transition, terminal outbox, conservative restart recovery, and no effect replay | 35 prepared scenarios are unexecuted; external effect and independently stored trust/evidence systems are not part of the local transaction; no protected head |
+| INV-REGISTRY-001      | Adapter, runner, and effect membership is resolved only from an exact signed workspace/task/root-scoped manifest and monotonic head | independent registry | IMPLEMENTED_UNVERIFIED | `@clodex/registry` implements canonical signed manifests, exact membership, immutable signer snapshot, final synchronous trust/time/head fences, and monotonic predecessor CAS | 18 prepared scenarios are unexecuted; production crypto/key custody/trust registry and an independently protected linearizable head are absent            |
+| INV-ADAPTER-SCOPE-001 | Reference adapters reject cross-workspace/task confused-deputy use before any capability port        | independent adapter reference    | TESTED    | immutable workspace/task/root scope, ticket-audience fence, scope propagation, mixed-scope registry rejection, and accessor/adversarial tests                                   | Signed registry and Linux implementation source now exist but are separately unverified and not production-deployed                                       |
+| INV-OS-ADAPTER-001    | Fixed filesystem/Git/test capabilities are confined by descriptor-relative resolution and a digest-pinned OS sandbox | Linux Node adapters | IMPLEMENTED_UNVERIFIED | `@clodex/adapters-node` adds a pinned ELF/openat2 helper, fixed create/mkdir/replace, deterministic tree commitments, digest-pinned read-only/networkless Git and test containers, limits, seccomp and AppArmor inputs | Native helper/container/LSM code was not compiled or tested; strict namespace CAS, daemon-socket protection, deployment profile enforcement, and production wiring are not yet proven |
 | INV-PROMOTION-001     | Promotion assessment cannot itself enable a feature gate                                             | independent promotion reference  | TESTED    | exact environment/build/config/policy/evidence bindings, trusted clock/hash/final fence, and fail-closed eligibility tests                                                      | Eligibility is not production promotion; reviewed release control remains external                                                                        |
+| INV-PRODUCTION-BOOTSTRAP-001 | Production execution authority is absent unless registry, protected head, confinement, recovery, promotion, and reviewed gate evidence all pass | production composition | IMPLEMENTED_UNVERIFIED | `@clodex/production` returns `authority: null` on any gap; browser `SafeCodingProductionAuthorityService` is wired from `main.ts` with `provider: null`, exposes only fixed callbacks, and stops admission/drains before dependent teardown | Package/browser composition are untested; real protected head, key custody, deployment attestation, recovery reconciler, trusted non-null provider, reviewed decision, and packaged smoke are external requirements |
+| INV-SHELL-001         | Production shell dispatch requires a brokered, auditable object capability                           | browser shell tools              | IMPLEMENTED_UNVERIFIED | platform integration constructs `ShellCapabilityBroker` with a dedicated audit path; PTY creation and command/stdin/kill/poll bind exact action state and consume one-shot authority immediately before the shell effect | Source-only wiring was not tested; OS process confinement, audit durability/anti-rollback, denial races, and packaged behavior are not established         |
+| INV-JS-SANDBOX-001    | Agent JavaScript cannot gain host filesystem authority or execute remotely fetched modules           | browser JavaScript sandbox       | IMPLEMENTED_UNVERIFIED | remote/data module import fails closed; `fs`, `fsPromises`, `require('fs')`, and mount-to-filesystem authority are removed from the worker                                      | Source was not tested against aliases, caches, alternate loaders, process escapes, or packaged Electron behavior                                           |
+| INV-OPENMANUS-001     | OpenManus receives no raw secret, host path, endpoint, argv/environment, or ambient host process authority | OpenManus agent host          | IMPLEMENTED_UNVERIFIED | protocol v4 removes ambient authority and the old host-spawn path; execution requires a trusted `OpenManusOsConfinedAdapter`, which production does not install                | The brokered adapter and target-OS confinement do not yet exist as verified production evidence; OpenManus is intentionally disabled                       |
+| INV-MOUNT-001         | Missing or ambient workspace state cannot mint delegated write authority                             | Toolbox mounts / Swarm           | IMPLEMENTED_UNVERIFIED | exact per-agent permissions are exposed; an attached mount with absent metadata defaults read-only; guessed cross-agent prefixes deny; Swarm no longer auto-mounts ambient workspaces | Source was not tested; this is narrowing only, not a complete deterministic Guardian subset evaluator or aggregate-budget system                           |
 | INV-DELEG-001         | Child authority is a deterministic subset of parent authority                                        | multi-agent                      | SPEC_ONLY | planned Guardian subset evaluator                                                                                                                                               | Current capabilities are coarse and aggregate budgets are absent                                                                                          |
-| INV-EFFECT-001        | Every modeled effect reaches one durable terminal closure state                                      | effect adapters                  | BLOCKED   | isolated ledger/evidence/runtime references and reviewed-MCP WAL prove narrower closure properties                                                                              | No atomic universal production linkage among authorization, effect, ledger, evidence, checkpoint, and trust state                                         |
+| INV-EFFECT-001        | Every modeled effect reaches one durable terminal closure state                                      | effect adapters                  | BLOCKED   | tested isolated ledger/evidence/runtime references plus unverified universal Artifact Bridge WAL and atomic local control-plane implementations narrow the gap | External effects, independently stored trust/evidence/checkpoints, protected heads, and packaged production wiring still do not share one atomic authority/effect transaction |
 | INV-MEM-001           | Memory cannot mint authority                                                                         | memory/control plane             | SPEC_ONLY | Intent Contract authority model                                                                                                                                                 | Complete semantic lineage and universal runtime mediation are not claimed                                                                                 |
-| INV-SANDBOX-001       | Test execution has no host filesystem, credential, or network escape                                 | sandbox/test adapter             | BLOCKED   | digest-pinned reference profile and capability-scoped adapter protocol                                                                                                          | No Docker/VM/OS runner currently enforces the descriptor; confirmed sandbox and isolated-fs bypasses must be fixed                                        |
-| INV-MCP-001           | Every MCP invocation is mediated at the registry boundary                                            | MCP                              | BLOCKED   | planned centralized gateway                                                                                                                                                     | Current policy is wrapper-specific                                                                                                                        |
-| INV-CLOUD-001         | Stale local owner cannot execute after cloud handoff                                                 | execution lanes                  | BLOCKED   | planned final lane fence                                                                                                                                                        | Ownership fence is not wired at every dispatch boundary                                                                                                   |
+| INV-SANDBOX-001       | Test execution has no host filesystem, credential, or network escape                                 | sandbox/test adapter             | BLOCKED   | reference profile plus unverified `@clodex/adapters-node` implementation require digest-only images, `--pull=never`, no network/credentials, read-only workspace/root, disposable scratch, dropped capabilities, LSM/seccomp and limits | No target-platform execution evidence exists; daemon endpoint protection, loaded LSM state, container escape testing, and packaged production wiring remain blocking |
+| INV-MCP-001           | Every agent-reachable MCP tool call is mediated by exact descriptor/runtime commitment, approval authority, Guardian policy, and a final fence | MCP tool dispatch | IMPLEMENTED_UNVERIFIED | registry and Clodex-cloud agent tools now use the central trusted-dispatch gateway; Toolbox wires an approval broker that stages intent but claims authority only from one exact affirmative AgentStore record | Source was not tested; pending/claimed approval state is process-memory only, durable reuse prevention across restart is absent, and resource/prompt agent tools remain disabled/settings-only |
+| INV-CLOUD-001         | Stale local owner cannot execute after cloud handoff                                                 | execution lanes                  | IMPLEMENTED_UNVERIFIED | router/browser-executor omission defaults deny; final checks cover local/remote turn, host model/tool, wrapped local tool, and intended Swarm model/tool/history dispatches        | Source-only changes were not tested across lease races, awaits, Swarm direct paths, restart, or packaged execution                                          |
 
 ## Session 1 evidence
 
@@ -222,17 +236,26 @@
   agent-core typechecks; MCP host build; targeted Biome; **98** bundled assets;
   and `git diff --check` pass. The approval-audit/WAL regression subset passes
   **94/94 tests across 4 files**.
-- Remaining Session 4 blockers: universal WAL/replay closure for direct
-  ask-agent, automation, and ordinary async MCP effects; review-bound
-  automation definition plus model-adapter commitment; and durable closure or
-  compensation for the composite create-agent→mount/message effect.
-  Package/plugin authority, write defaults, and ephemeral-grant defaults remain
-  unpromoted. A packaged Electron smoke run is not claimed.
-- Production main wires and verifies the durable audit ledger, but deliberately
-  omits every Session 4 authority-promotion callback (write, sensitive egress,
-  async operations, runtime quotas, lifecycle events, inspector, ephemeral
-  grants, and package capabilities). The corresponding feature-gate catalog
-  entries are not evidence that those runtime authorities can be enabled.
+- **P0 browser closure source — intentionally unexecuted:** universal Artifact
+  Bridge WAL/replay closure, exact automation/model commitments, and composite
+  uncertainty are supplemented by a durable AutomationService WAL for manual,
+  timer, system-resume, and startup-reconciliation occurrences. Recovery burns
+  `PREPARED` as `FAILED_PRE_EFFECT` and `DISPATCHING` as `UNCERTAIN`; no startup
+  path replays an occurrence.
+- The same source tranche adds the central MCP commitment/final-fence gateway
+  and exact approval-broker design; ShellCapabilityBroker production wiring;
+  removal of remote module import and ambient filesystem authority from the JS
+  sandbox; fail-closed OpenManus without an OS-confined brokered adapter;
+  cloud-ownership checks at model/tool/turn/local dispatch boundaries; exact
+  per-agent mount permission lookup; and removal of Swarm ambient workspace
+  auto-mounting. `INV-MCP-001` is `IMPLEMENTED_UNVERIFIED`: source now wires
+  the broker for registry and Clodex-cloud tools, but executable evidence must
+  still prove every path claims authority only from exact affirmative approval.
+- None of those later changes was tested, typechecked, linted, built, packaged,
+  or smoke-tested. The green CI head `1ad58e67` is the pre-tranche baseline
+  only. Package/plugin authority, write defaults, and ephemeral-grant defaults
+  remain unpromoted. External-effect atomicity, protected heads, target-OS
+  confinement evidence, and packaged Electron smoke remain non-claims.
 
 ## Session 5 checkpoint evidence
 
@@ -312,14 +335,33 @@ preparedEffect.execute`. The prepared effect is pinned and invoked once only
   independent boundary tests pass **38/38**; targeted Biome and
   `git diff --check` pass. Complete browser regression passes **2215/2215 tests
   across 269 files**, and all six browser typecheck targets pass.
-- Claim boundary: Session 5 remains `IN_PROGRESS`. Independent audit found no
-  remaining P0/P1 issue inside the stated reference boundaries. Production
-  guarantees remain blocked by the lack of atomic kernel/effect/ledger/evidence/
-  checkpoint/trust persistence, protected anti-rollback heads, production key
-  custody and registries, a signed scoped adapter-registry manifest, real
-  `openat2`/Git/sandbox implementations, production browser wiring, and packaged
-  Electron validation. No feature-gate default or authority-promotion callback
-  changed. `INV-EFFECT-001` and `INV-SANDBOX-001` remain non-enforced.
+- **P0 closure implementation tranche — intentionally unexecuted:** subsequent
+  code adds universal Artifact Bridge WAL coverage for ask-agent, automation,
+  and ordinary async MCP, plus universal scheduled/manual AutomationService
+  WAL; `@clodex/control-plane` plus its POSIX adapter;
+  `@clodex/registry` plus its honest non-protected POSIX head; and
+  `@clodex/adapters-node` with Linux openat2 and digest-pinned container
+  capability implementations; plus `@clodex/production`, a fail-closed
+  authority-null bootstrap requiring protected heads, recovery admission,
+  promotion evidence, and a separate reviewed gate decision. Browser source
+  composes it through `SafeCodingProductionAuthorityService` with
+  `provider: null`; shutdown stops admission and drains it before dependent
+  teardown. Prepared tests and the complete required command list are recorded in
+  [P0_TESTING_HANDOFF.md](../developer/P0_TESTING_HANDOFF.md). Per explicit
+  instruction, no test, typecheck, lint, native compilation, container smoke,
+  install, or validation command was run after these changes. The historical
+  counts above do not validate this tranche; green GitHub CI at `1ad58e67` is
+  the pre-tranche baseline only.
+- Claim boundary: Session 5 source is `IMPLEMENTED_UNVERIFIED` and remains
+  unpromoted. Independent audit found no remaining P0/P1 issue inside the
+  previously tested reference boundaries. New P0 implementation source is
+  **not** a tested or deployed guarantee.
+  Production remains blocked by external-effect/cross-store atomicity,
+  independently protected anti-rollback heads, production crypto/key custody
+  and signer trust, verified native/container/LSM confinement, protected daemon
+  identity, a trusted non-null production provider, and packaged Electron
+  validation. No feature-gate default or authority-promotion callback changed.
+  `INV-EFFECT-001` and `INV-SANDBOX-001` remain non-enforced.
 
 ## Promotion rule
 
@@ -338,6 +380,19 @@ of these guarantees is not ENFORCED:
 - INV-RETRY-001;
 - INV-WAL-001;
 - INV-ATOMIC-001.
+
+Safe Coding production authority and any shell/OpenManus/cloud-owned execution
+gate MUST also remain default-off while any of these rows is not `ENFORCED`:
+
+- INV-PRODUCTION-BOOTSTRAP-001;
+- INV-MCP-001;
+- INV-CLOUD-001;
+- INV-SHELL-001;
+- INV-JS-SANDBOX-001;
+- INV-OPENMANUS-001;
+- INV-MOUNT-001;
+- INV-EFFECT-001;
+- INV-SANDBOX-001.
 
 A documentation change cannot upgrade a status. Status changes require links to
 the exact enforcement code and passing executable tests.

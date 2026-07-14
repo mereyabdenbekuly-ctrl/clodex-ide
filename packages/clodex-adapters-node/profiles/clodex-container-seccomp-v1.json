@@ -1,0 +1,199 @@
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "defaultErrnoRet": 1,
+  "archMap": [
+    {
+      "architecture": "SCMP_ARCH_X86_64",
+      "subArchitectures": ["SCMP_ARCH_X86", "SCMP_ARCH_X32"]
+    },
+    {
+      "architecture": "SCMP_ARCH_AARCH64",
+      "subArchitectures": ["SCMP_ARCH_ARM"]
+    }
+  ],
+  "syscalls": [
+    {
+      "names": [
+        "_sysctl",
+        "acct",
+        "add_key",
+        "bpf",
+        "clock_settime",
+        "create_module",
+        "delete_module",
+        "finit_module",
+        "fsconfig",
+        "fsmount",
+        "fsopen",
+        "fspick",
+        "init_module",
+        "io_pgetevents",
+        "io_setup",
+        "io_submit",
+        "io_uring_enter",
+        "io_uring_register",
+        "io_uring_setup",
+        "ioperm",
+        "iopl",
+        "kcmp",
+        "kexec_file_load",
+        "kexec_load",
+        "keyctl",
+        "lookup_dcookie",
+        "mount",
+        "mount_setattr",
+        "move_mount",
+        "name_to_handle_at",
+        "nfsservctl",
+        "open_by_handle_at",
+        "open_tree",
+        "perf_event_open",
+        "pidfd_getfd",
+        "pivot_root",
+        "process_madvise",
+        "process_vm_readv",
+        "process_vm_writev",
+        "ptrace",
+        "quotactl",
+        "reboot",
+        "request_key",
+        "setdomainname",
+        "sethostname",
+        "setns",
+        "swapoff",
+        "swapon",
+        "sysfs",
+        "umount",
+        "umount2",
+        "unshare",
+        "uselib",
+        "userfaultfd",
+        "vhangup"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "names": ["clone3"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 38
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        {
+          "index": 0,
+          "value": 128,
+          "valueTwo": 128,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        {
+          "index": 0,
+          "value": 131072,
+          "valueTwo": 131072,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        {
+          "index": 0,
+          "value": 33554432,
+          "valueTwo": 33554432,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        {
+          "index": 0,
+          "value": 67108864,
+          "valueTwo": 67108864,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        {
+          "index": 0,
+          "value": 134217728,
+          "valueTwo": 134217728,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        {
+          "index": 0,
+          "value": 268435456,
+          "valueTwo": 268435456,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        {
+          "index": 0,
+          "value": 536870912,
+          "valueTwo": 536870912,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["clone"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "args": [
+        {
+          "index": 0,
+          "value": 1073741824,
+          "valueTwo": 1073741824,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": ["socket", "socketpair"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 97,
+      "args": [
+        {
+          "index": 0,
+          "value": 1,
+          "valueTwo": 0,
+          "op": "SCMP_CMP_NE"
+        }
+      ]
+    }
+  ]
+}

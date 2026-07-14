@@ -7,6 +7,9 @@ import {
 const effectId = '00000000-0000-4000-8000-000000000001';
 const commitmentHash = 'a'.repeat(64);
 const ticketHash = 'b'.repeat(64);
+const actionHash = 'c'.repeat(64);
+const definitionHash = 'd'.repeat(64);
+const adapterHash = 'e'.repeat(64);
 
 function persistence(initial: unknown = { version: 1, records: {} }) {
   let store = structuredClone(initial);
@@ -122,6 +125,66 @@ describe('ArtifactBridgeEffectWal', () => {
       state: 'UNCERTAIN',
       terminalAt: '2026-07-14T00:01:00.000Z',
     });
+  });
+
+  it('binds the exact universal action, definition, and adapter hashes', async () => {
+    const persisted = persistence();
+    const wal = await ArtifactBridgeEffectWal.create(persisted.adapter);
+    await wal.prepare({
+      effectId,
+      kind: 'agent-ask',
+      commitmentHash,
+      ticketHash,
+      actionHash,
+      definitionHash,
+      adapterHash,
+    });
+    await expect(
+      wal.prepare({
+        effectId,
+        kind: 'agent-ask',
+        commitmentHash,
+        ticketHash,
+        actionHash,
+        definitionHash: 'f'.repeat(64),
+        adapterHash,
+      }),
+    ).rejects.toThrow('mismatch');
+  });
+
+  it('burns orphaned universal PREPARED records on startup without replay', async () => {
+    const persisted = persistence({
+      version: 1,
+      records: {
+        [effectId]: {
+          version: 1,
+          effectId,
+          kind: 'automation',
+          commitmentHash,
+          ticketHash,
+          actionHash,
+          definitionHash,
+          adapterHash,
+          state: 'PREPARED',
+          createdAt: '2026-07-14T00:00:00.000Z',
+          updatedAt: '2026-07-14T00:00:00.000Z',
+          dispatchStartedAt: null,
+          terminalAt: null,
+          resultHash: null,
+          error: null,
+        },
+      },
+    });
+    const wal = await ArtifactBridgeEffectWal.create(persisted.adapter, () =>
+      Date.parse('2026-07-14T00:01:00.000Z'),
+    );
+    expect(wal.get(effectId)).toMatchObject({
+      state: 'FAILED_PRE_EFFECT',
+      terminalAt: '2026-07-14T00:01:00.000Z',
+    });
+    await expect(
+      wal.beginDispatch({ effectId, commitmentHash, ticketHash }),
+    ).rejects.toThrow('FAILED_PRE_EFFECT -> DISPATCHING');
   });
 
   it('does not publish an in-memory transition when persistence fails', async () => {

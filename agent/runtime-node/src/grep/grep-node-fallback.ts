@@ -20,6 +20,7 @@ export async function grepNodeFallback(
     const matches: GrepMatch[] = [];
     let filesSearched = 0;
     let totalOutputSize = 0;
+    let outputLimitReached = false;
     const MAX_OUTPUT_SIZE = 1 * 1024 * 1024; // 1MB limit for total output
     // Use absoluteSearchPath if provided, otherwise use current working directory
     const basePath =
@@ -29,7 +30,10 @@ export async function grepNodeFallback(
       if (options?.maxMatches && matches.length >= options.maxMatches) return;
 
       // Check if we've exceeded the output size limit before reading the file
-      if (totalOutputSize >= MAX_OUTPUT_SIZE) return;
+      if (outputLimitReached || totalOutputSize >= MAX_OUTPUT_SIZE) {
+        outputLimitReached = true;
+        return;
+      }
 
       try {
         // Check for binary files unless explicitly told to search them
@@ -93,10 +97,17 @@ export async function grepNodeFallback(
 
             // Check if adding this match would exceed the output size limit
             // Stop collecting matches if we're about to exceed the size limit
-            if (totalOutputSize + estimatedSize > MAX_OUTPUT_SIZE) return;
+            if (totalOutputSize + estimatedSize > MAX_OUTPUT_SIZE) {
+              outputLimitReached = true;
+              return;
+            }
 
             matches.push(matchEntry);
             totalOutputSize += estimatedSize;
+            if (totalOutputSize >= MAX_OUTPUT_SIZE) {
+              outputLimitReached = true;
+              return;
+            }
           }
         }
       } catch (_error) {
@@ -106,10 +117,13 @@ export async function grepNodeFallback(
 
     const searchDirectory = async (dirPath: string, depth: number) => {
       if (options?.maxDepth !== undefined && depth > options.maxDepth) return;
+      if (outputLimitReached || totalOutputSize >= MAX_OUTPUT_SIZE) return;
 
       const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
       for (const entry of entries) {
+        if (outputLimitReached || totalOutputSize >= MAX_OUTPUT_SIZE) return;
+
         const fullPath = path.join(dirPath, entry.name);
         const relativePath = path.relative(basePath, fullPath);
 
@@ -144,7 +158,8 @@ export async function grepNodeFallback(
     else await searchFile(basePath);
 
     // Check if we potentially truncated results due to size
-    const wasTruncatedBySize = totalOutputSize >= MAX_OUTPUT_SIZE;
+    const wasTruncatedBySize =
+      outputLimitReached || totalOutputSize >= MAX_OUTPUT_SIZE;
     const wasTruncatedByCount =
       options?.maxMatches && matches.length >= options.maxMatches;
 

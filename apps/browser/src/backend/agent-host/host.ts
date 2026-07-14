@@ -241,7 +241,7 @@ function startOpenManusExecution(
         type: 'execution-error',
         launchId,
         requestId: message.requestId,
-        error: serializeError(error, message.request.apiKey),
+        error: serializeError(error),
       });
     })
     .finally(() => {
@@ -492,16 +492,11 @@ async function handleShutdown(
   setImmediate(() => process.exit(0));
 }
 
-function serializeError(
-  error: unknown,
-  secret?: string,
-): { message: string; stack?: string } {
+function serializeError(error: unknown): { message: string; stack?: string } {
   const value = error instanceof Error ? error : new Error(String(error));
-  const redact = (text: string | undefined) =>
-    secret && text ? text.split(secret).join('[REDACTED]') : text;
   return {
-    message: redact(value.message) ?? 'Unknown execution error',
-    stack: redact(value.stack),
+    message: value.message || 'Unknown execution error',
+    stack: value.stack,
   };
 }
 

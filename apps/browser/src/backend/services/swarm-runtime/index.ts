@@ -13,16 +13,13 @@ import {
   type ModelTaskRole,
   type SwarmTaskRole,
 } from '@clodex/agent-core';
-import type { AgentPersistenceDB } from '@clodex/agent-core/agent-persistence';
 import type { AttachmentsService } from '@clodex/agent-core/attachments';
 import { generateText, stepCountIs, type ModelMessage, type ToolSet } from 'ai';
-import type { MountPermission } from '@shared/karton-contracts/ui/agent/metadata';
 import type { AgentManagerService } from '../agent-manager';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import { BrowserSwarmStore } from '../swarm-orchestrator';
 import type { ToolboxService } from '../toolbox';
-import type { UserExperienceService } from '../experience';
 
 export type SwarmRunMode = 'standard' | 'battle';
 
@@ -32,26 +29,10 @@ export interface SwarmRuntimeDependencies {
   models: Pick<HostModels, 'getWithOptions' | 'selectModelForTask'>;
   attachments: Pick<AttachmentsService, 'read'>;
   logger: Pick<Logger, 'debug' | 'warn' | 'error'>;
-  toolboxService: Pick<
-    ToolboxService,
-    | 'getTool'
-    | 'getWorkspaceSnapshot'
-    | 'getAllMountedPaths'
-    | 'resolveNewAgentMountPath'
-    | 'handleMountWorkspace'
-  >;
-  agentDb: Pick<
-    AgentPersistenceDB,
-    | 'getStoredAgentInstanceById'
-    | 'getLastNonEmptyChatWorkspacePaths'
-    | 'getLastChatWorkspacePaths'
-  >;
-  userExperienceService: Pick<
-    UserExperienceService,
-    'getRecentlyOpenedWorkspaces'
-  >;
+  toolboxService: Pick<ToolboxService, 'getTool' | 'getWorkspaceSnapshot'>;
   pendingEditService: PendingEditService;
   agentManagerService: Pick<AgentManagerService, 'setSwarmSubmitHandler'>;
+  assertLocalExecutionAllowed?: (agentInstanceId: string) => void;
 }
 
 export interface SwarmRuntime {
@@ -184,19 +165,20 @@ export function createSwarmRuntime({
   attachments,
   logger,
   toolboxService,
-  agentDb,
-  userExperienceService,
   pendingEditService,
   agentManagerService,
+  assertLocalExecutionAllowed = () => {
+    throw new Error('Swarm local-execution ownership fence is unavailable');
+  },
 }: SwarmRuntimeDependencies): SwarmRuntime {
   const agentCoreSeam = { store: agentStore };
   const agentCoreHost = { models };
-  const persistence = { agentDb };
   const browserSwarmStore = new BrowserSwarmStore(uiKarton);
   const appendSwarmMessage = (
     agentInstanceId: string,
     message: AgentMessage,
   ): void => {
+    assertLocalExecutionAllowed(agentInstanceId);
     updateAgentInstanceState(agentCoreSeam.store, agentInstanceId, (state) => {
       state.history.push(message);
     });
@@ -428,6 +410,7 @@ export function createSwarmRuntime({
     const reporterMounts =
       toolboxService.getWorkspaceSnapshot(agentInstanceId).mounts;
 
+    assertLocalExecutionAllowed(agentInstanceId);
     const reporter = await generateText({
       model: modelWithOptions.model,
       providerOptions: modelWithOptions.providerOptions,
@@ -483,7 +466,22 @@ export function createSwarmRuntime({
     const availableEntries = entries.filter(
       (entry): entry is readonly [string, ToolSet[string]] => entry !== null,
     );
-    return Object.fromEntries(availableEntries) as ToolSet;
+    return Object.fromEntries(
+      availableEntries.map(([toolName, resolvedTool]) => {
+        const execute = resolvedTool.execute;
+        if (typeof execute !== 'function') return [toolName, resolvedTool];
+        return [
+          toolName,
+          {
+            ...resolvedTool,
+            execute(input, options) {
+              assertLocalExecutionAllowed(agentInstanceId);
+              return execute(input, options);
+            },
+          } as ToolSet[string],
+        ];
+      }),
+    ) as ToolSet;
   };
   const waitForSwarmWorkspaceMounts = async (
     agentInstanceId: string,
@@ -521,86 +519,15 @@ export function createSwarmRuntime({
 
     return mounts;
   };
-  const collectSwarmFallbackWorkspacePaths = async (
-    agentInstanceId: string,
-  ): Promise<Array<{ path: string; permissions?: MountPermission[] }>> => {
-    const candidates: Array<{ path: string; permissions?: MountPermission[] }> =
-      [];
-    const addCandidate = (
-      pathValue: string | null | undefined,
-      permissions?: MountPermission[],
-    ) => {
-      if (!pathValue) return;
-      if (candidates.some((candidate) => candidate.path === pathValue)) return;
-      candidates.push({ path: pathValue, permissions });
-    };
-
-    const storedAgent =
-      await persistence.agentDb.getStoredAgentInstanceById(agentInstanceId);
-    for (const workspace of storedAgent?.mountedWorkspaces ?? []) {
-      addCandidate(workspace.path, workspace.permissions);
-    }
-
-    for (const mountPath of toolboxService.getAllMountedPaths()) {
-      addCandidate(mountPath);
-    }
-
-    const lastWorkspaces =
-      (await persistence.agentDb.getLastNonEmptyChatWorkspacePaths()) ??
-      (await persistence.agentDb.getLastChatWorkspacePaths());
-    for (const workspace of lastWorkspaces ?? []) {
-      addCandidate(workspace.path, workspace.permissions);
-    }
-
-    const recentWorkspaces = await userExperienceService
-      .getRecentlyOpenedWorkspaces()
-      .catch((error) => {
-        logger.warn('[SwarmRun] Failed to read recent workspaces', { error });
-        return [];
-      });
-    for (const workspace of recentWorkspaces) {
-      addCandidate(workspace.path);
-    }
-
-    return candidates;
-  };
   const ensureSwarmWorkspaceMounts = async (
     agentInstanceId: string,
   ): Promise<
     ReturnType<typeof toolboxService.getWorkspaceSnapshot>['mounts']
   > => {
-    let mounts = await waitForSwarmWorkspaceMounts(agentInstanceId);
-    if (mounts.length > 0) return mounts;
-
-    const fallbackPaths =
-      await collectSwarmFallbackWorkspacePaths(agentInstanceId);
-    for (const candidate of fallbackPaths) {
-      try {
-        const mountPath = await toolboxService.resolveNewAgentMountPath(
-          candidate.path,
-        );
-        logger.debug('[SwarmRun] Auto-mounting fallback workspace', {
-          agentInstanceId,
-          path: candidate.path,
-          mountPath,
-        });
-        await toolboxService.handleMountWorkspace(
-          agentInstanceId,
-          mountPath,
-          candidate.permissions,
-        );
-        mounts = await waitForSwarmWorkspaceMounts(agentInstanceId, 1_500);
-        if (mounts.length > 0) return mounts;
-      } catch (error) {
-        logger.warn('[SwarmRun] Failed to auto-mount fallback workspace', {
-          agentInstanceId,
-          path: candidate.path,
-          error,
-        });
-      }
-    }
-
-    return mounts;
+    // A swarm may inherit only mounts already attached to its owning agent.
+    // Recent/global workspaces are ambient host state, not delegated
+    // authority, so an empty scope remains empty and fails closed.
+    return await waitForSwarmWorkspaceMounts(agentInstanceId);
   };
   const formatSwarmWorkspaceMountContext = (
     mounts: ReturnType<typeof toolboxService.getWorkspaceSnapshot>['mounts'],
@@ -620,7 +547,7 @@ export function createSwarmRuntime({
         const permissions =
           mount.permissions && mount.permissions.length > 0
             ? mount.permissions.join(',')
-            : 'read,write';
+            : 'read';
         return `- ${mount.prefix}/ -> ${mount.path} (${permissions})`;
       }),
       'Example: call read/ls/grepSearch with paths under "<prefix>/relative/path".',
@@ -722,6 +649,7 @@ export function createSwarmRuntime({
   }): boolean =>
     result.text.trim().length === 0 || result.finishReason === 'tool-calls';
   const generateSwarmWorkerFinalSummary = async ({
+    agentInstanceId,
     modelWithOptions,
     headers,
     context,
@@ -729,6 +657,7 @@ export function createSwarmRuntime({
     responseMessages,
     abortSignal,
   }: {
+    agentInstanceId: string;
     modelWithOptions: Awaited<
       ReturnType<typeof resolveSwarmModel>
     >['modelWithOptions'];
@@ -752,6 +681,7 @@ export function createSwarmRuntime({
     };
     finishReason: string;
   }> => {
+    assertLocalExecutionAllowed(agentInstanceId);
     const summary = await generateText({
       model: modelWithOptions.model,
       providerOptions: modelWithOptions.providerOptions,
@@ -797,6 +727,7 @@ export function createSwarmRuntime({
     prompt: string,
     mode: SwarmRunMode = 'standard',
   ): Promise<string> => {
+    assertLocalExecutionAllowed(agentInstanceId);
     logger.debug(
       `[SwarmRun] Starting DynamicSwarmOrchestrator for agent ${agentInstanceId} (${mode})`,
     );
@@ -845,6 +776,7 @@ export function createSwarmRuntime({
         logger.debug(
           `[SwarmRun] Calling LLM triage with model ${resolvedModelId}`,
         );
+        assertLocalExecutionAllowed(agentInstanceId);
         const result = await generateText({
           model: modelWithOptions.model,
           providerOptions: modelWithOptions.providerOptions,
@@ -941,8 +873,9 @@ export function createSwarmRuntime({
         ];
 
         try {
-          const runWorkerAttempt = () =>
-            generateText({
+          const runWorkerAttempt = () => {
+            assertLocalExecutionAllowed(agentInstanceId);
+            return generateText({
               model: modelWithOptions.model,
               providerOptions: modelWithOptions.providerOptions,
               headers: modelWithOptions.headers,
@@ -998,6 +931,7 @@ export function createSwarmRuntime({
                 }
               },
             });
+          };
 
           const runGeminiNoToolsProbe = async (
             includeProviderOptions: boolean,
@@ -1008,6 +942,7 @@ export function createSwarmRuntime({
               45_000,
             );
             try {
+              assertLocalExecutionAllowed(agentInstanceId);
               return await generateText({
                 model: modelWithOptions.model,
                 providerOptions: includeProviderOptions
@@ -1265,6 +1200,7 @@ export function createSwarmRuntime({
               `[SwarmRun] Requesting no-tools final summary for ${context.task.name} after finishReason=${result.finishReason}`,
             );
             const summary = await generateSwarmWorkerFinalSummary({
+              agentInstanceId,
               modelWithOptions,
               headers: modelWithOptions.headers,
               context,

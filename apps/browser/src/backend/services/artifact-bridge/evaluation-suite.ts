@@ -39,6 +39,28 @@ const PACKAGE_CONTEXT = {
   appId: 'dashboard',
 } as const satisfies ArtifactBridgeContext;
 const AUTOMATION_ID = '8d581719-6d3b-46c2-826b-262fe746cdbf';
+const AUTOMATION_DEFINITION = {
+  id: AUTOMATION_ID,
+  title: 'Evaluation automation',
+  prompt: 'Run the evaluation automation',
+  enabled: true,
+  schedule: { kind: 'interval' as const, everyMs: 60_000 },
+  missedRunPolicy: 'run-on-wake' as const,
+  retryPolicy: {
+    maxAttempts: 1,
+    initialBackoffMs: 5_000,
+    maxBackoffMs: 5_000,
+  },
+  executionTarget: 'local' as const,
+  workspacePaths: [],
+  modelId: null,
+  approvalMode: 'alwaysAsk' as const,
+  grant: { capabilities: [], expiresAt: null },
+  createdAt: '2026-07-14T00:00:00.000Z',
+  updatedAt: '2026-07-14T00:00:00.000Z',
+  nextRunAt: '2026-07-14T00:01:00.000Z',
+  lastRunAt: null,
+};
 
 type CountMetric = { attempts: number; violations: number };
 type EvaluationCounters = {
@@ -842,7 +864,15 @@ async function createEvaluationHarness(options?: {
     areWritesEnabled: () => true,
     getPolicy: () => DEFAULT_ARTIFACT_BRIDGE_POLICY,
     askAgent: async () => 'unused',
-    runAutomation: async () => ({ ok: true }),
+    resolveAutomationDefinition: () => structuredClone(AUTOMATION_DEFINITION),
+    runAutomation: async (_automationId, automationOptions) => {
+      automationOptions?.beforeDispatch?.({
+        automation: structuredClone(AUTOMATION_DEFINITION),
+        prompt: AUTOMATION_DEFINITION.prompt,
+        attempt: 1,
+      });
+      return { ok: true };
+    },
     resolveApp: async (context) => {
       if (
         context.kind === 'package' &&

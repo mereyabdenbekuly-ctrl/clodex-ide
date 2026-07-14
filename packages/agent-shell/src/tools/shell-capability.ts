@@ -1,6 +1,14 @@
-import type { ExecuteShellCommandToolInput } from '../schemas';
+import type {
+  CreateShellSessionToolInput,
+  ExecuteShellCommandToolInput,
+} from '../schemas';
 
-export type ShellCapabilityOperation = 'command' | 'stdin' | 'kill' | 'poll';
+export type ShellCapabilityOperation =
+  | 'create'
+  | 'command'
+  | 'stdin'
+  | 'kill'
+  | 'poll';
 
 /**
  * Canonical, content-bearing shell action used only inside the trusted host.
@@ -11,6 +19,8 @@ export interface ShellCapabilityAction {
   sessionId: string;
   command: string;
   cwdPrefix: string;
+  /** Exact host path committed for a `create` action. Never exposed to agents. */
+  resolvedCwd?: string;
   waitUntil: {
     timeoutMs: number | null;
     exited: boolean | null;
@@ -36,12 +46,31 @@ export interface ConsumeShellCapabilityInput {
 
 /**
  * Trusted host-side capability broker. When configured, every shell
- * execution must first be staged during `needsApproval` and consumed exactly
- * once immediately before the PTY receives bytes.
+ * effect must first be staged during `needsApproval` and consumed exactly
+ * once immediately before a PTY is spawned or receives bytes.
  */
 export interface ShellCapabilitySecurityDeps {
   stage(input: StageShellCapabilityInput): void | Promise<void>;
   consume(input: ConsumeShellCapabilityInput): void | Promise<void>;
+}
+
+export function createShellSessionCapabilityAction(
+  input: CreateShellSessionToolInput,
+  resolvedCwd: string,
+): ShellCapabilityAction {
+  return {
+    operation: 'create',
+    sessionId: '',
+    command: '',
+    cwdPrefix: input.cwd,
+    resolvedCwd,
+    waitUntil: {
+      timeoutMs: null,
+      exited: null,
+      outputPattern: null,
+      idleMs: null,
+    },
+  };
 }
 
 export function createShellCapabilityAction(

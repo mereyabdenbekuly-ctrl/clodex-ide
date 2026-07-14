@@ -53,6 +53,7 @@ export type JsonName =
   | 'experience-founder-call-survey'
   | 'generated-app-library'
   | 'automations'
+  | 'automation-dispatch-wal'
   | 'artifact-capability-grants'
   | 'artifact-effect-wal'
   | 'generated-app-package-trust'
@@ -140,6 +141,9 @@ export const getNetworkPolicyAuditPath = (): string =>
 
 export const getArtifactBridgeAuditPath = (): string =>
   path.join(getAgentOsDir(), 'audit', 'artifact-bridge.jsonl');
+
+export const getShellCapabilityAuditPath = (): string =>
+  path.join(getAgentOsDir(), 'audit', 'shell-capabilities.jsonl');
 
 export const getRemoteControlSecretsPath = (): string =>
   path.join(getRemoteControlDir(), 'clients.json');

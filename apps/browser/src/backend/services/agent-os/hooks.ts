@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import path from 'node:path';
 import {
   AGENT_OS_LIMITS,
   hookDefinitionSchema,
@@ -20,6 +21,9 @@ export type HookRunContext = {
   values?: Record<string, unknown>;
 };
 
+const TASKKILL_WATCHDOG_MS = 2_000;
+const TERMINATION_FALLBACK_MS = 3_000;
+
 function createSafeEnv(): NodeJS.ProcessEnv {
   const allowed = [
     'PATH',
@@ -36,6 +40,9 @@ function createSafeEnv(): NodeJS.ProcessEnv {
     'TEMP',
     'TMP',
   ];
+  if (process.platform === 'win32') {
+    allowed.push('SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'COMSPEC', 'PATHEXT');
+  }
   return Object.fromEntries(
     allowed
       .map((key) => [key, process.env[key]])
@@ -54,6 +61,82 @@ function appendCapped(current: string, chunk: Buffer | string): string {
   return Buffer.from(next)
     .subarray(0, AGENT_OS_LIMITS.maxHookOutputBytes)
     .toString('utf-8');
+}
+
+function killDirectChild(child: ChildProcess): void {
+  try {
+    child.kill('SIGKILL');
+  } catch {
+    // The process already exited or can no longer be signalled.
+  }
+}
+
+function hasChildExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function terminateOwnedProcessTree(child: ChildProcess): Promise<void> {
+  const pid = child.pid;
+  if (pid === undefined) {
+    killDirectChild(child);
+    return;
+  }
+
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      killDirectChild(child);
+    }
+    return;
+  }
+
+  if (hasChildExited(child)) return;
+
+  const systemRoot = process.env.SYSTEMROOT ?? process.env.WINDIR;
+  const taskkill =
+    systemRoot && path.win32.isAbsolute(systemRoot)
+      ? path.win32.join(systemRoot, 'System32', 'taskkill.exe')
+      : 'taskkill.exe';
+
+  await new Promise<void>((resolve) => {
+    // Node does not expose a Job Object handle here. Re-check the process
+    // handle immediately before taskkill to reduce the best-effort PID reuse
+    // window, then bound taskkill itself so timeout handling cannot hang.
+    if (hasChildExited(child)) {
+      resolve();
+      return;
+    }
+
+    let killer: ChildProcess;
+    try {
+      killer = spawn(taskkill, ['/pid', String(pid), '/t', '/f'], {
+        env: createSafeEnv(),
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      killDirectChild(child);
+      resolve();
+      return;
+    }
+
+    let finished = false;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const finish = (fallbackToDirectKill: boolean): void => {
+      if (finished) return;
+      finished = true;
+      if (watchdog) clearTimeout(watchdog);
+      if (fallbackToDirectKill) killDirectChild(child);
+      resolve();
+    };
+    watchdog = setTimeout(() => {
+      killDirectChild(killer);
+      finish(true);
+    }, TASKKILL_WATCHDOG_MS);
+    killer.once('error', () => finish(true));
+    killer.once('close', (code) => finish(code !== 0));
+  });
 }
 
 export class HooksService {
@@ -204,25 +287,93 @@ export class HooksService {
     workspacePath?: string,
   ): Promise<string> {
     return await new Promise<string>((resolve, reject) => {
-      const command =
-        process.platform === 'win32'
-          ? (process.env.COMSPEC ?? 'cmd.exe')
-          : '/bin/sh';
-      const args =
-        process.platform === 'win32'
-          ? ['/d', '/s', '/c', hook.body]
-          : ['-lc', hook.body];
+      const isWindows = process.platform === 'win32';
+      const command = isWindows
+        ? (process.env.COMSPEC ?? 'cmd.exe')
+        : '/bin/sh';
+      // cmd /s needs an outer quote pair around the complete command. Letting
+      // libuv quote it again makes a quoted executable name a literal token.
+      const args = isWindows
+        ? ['/d', '/s', '/c', `"${hook.body}"`]
+        : ['-lc', hook.body];
       const child = spawn(command, args, {
         cwd: workspacePath,
+        detached: !isWindows,
         env: createSafeEnv(),
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
+        windowsVerbatimArguments: isWindows,
       });
       let stdout = '';
       let stderr = '';
+      let settled = false;
+      let timedOut = false;
+      let terminationFinished = true;
+      let terminationFallback: ReturnType<typeof setTimeout> | undefined;
+      let spawnError: Error | undefined;
+      let closeResult:
+        | { code: number | null; signal: NodeJS.Signals | null }
+        | undefined;
+
+      const settle = (): void => {
+        if (
+          settled ||
+          closeResult === undefined ||
+          (timedOut && !terminationFinished)
+        ) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        if (terminationFallback) clearTimeout(terminationFallback);
+        if (timedOut) {
+          reject(new Error(`Hook timed out after ${hook.timeoutMs}ms`));
+          return;
+        }
+        if (spawnError) {
+          reject(spawnError);
+          return;
+        }
+        if (closeResult.code === 0) {
+          resolve(stdout.trim());
+          return;
+        }
+        reject(
+          new Error(
+            `Hook exited with ${closeResult.signal ?? closeResult.code ?? 'unknown'}${
+              stderr.trim() ? `: ${stderr.trim()}` : ''
+            }`,
+          ),
+        );
+      };
+
       const timeout = setTimeout(() => {
-        child.kill('SIGKILL');
-        reject(new Error(`Hook timed out after ${hook.timeoutMs}ms`));
+        if (settled || timedOut) return;
+        timedOut = true;
+        terminationFinished = false;
+        terminationFallback = setTimeout(() => {
+          if (settled) return;
+          // Without a Windows Job Object there is no stronger terminal fence.
+          // Bound the best-effort cleanup and release our pipes so a missing
+          // child `close` event cannot hang the hook runner indefinitely.
+          killDirectChild(child);
+          child.stdout.destroy();
+          child.stderr.destroy();
+          terminationFinished = true;
+          closeResult ??= {
+            code: child.exitCode,
+            signal: child.signalCode,
+          };
+          settle();
+        }, TERMINATION_FALLBACK_MS);
+        const finishTermination = (): void => {
+          terminationFinished = true;
+          settle();
+        };
+        void terminateOwnedProcessTree(child).then(
+          finishTermination,
+          finishTermination,
+        );
       }, hook.timeoutMs);
 
       child.stdout.on('data', (chunk: Buffer) => {
@@ -232,22 +383,12 @@ export class HooksService {
         stderr = appendCapped(stderr, chunk);
       });
       child.on('error', (error) => {
-        clearTimeout(timeout);
-        reject(error);
+        spawnError = error;
       });
-      child.on('exit', (code, signal) => {
+      child.on('close', (code, signal) => {
         clearTimeout(timeout);
-        if (code === 0) {
-          resolve(stdout.trim());
-          return;
-        }
-        reject(
-          new Error(
-            `Hook exited with ${signal ?? code ?? 'unknown'}${
-              stderr.trim() ? `: ${stderr.trim()}` : ''
-            }`,
-          ),
-        );
+        closeResult = { code, signal };
+        settle();
       });
     });
   }

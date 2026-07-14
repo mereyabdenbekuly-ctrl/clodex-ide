@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import type { McpRegistryService } from '../mcp';
+import { createArtifactBridgeAgentAskModelAdapterIdentity } from './effect-commitment';
 import { ArtifactBridgeService, type ArtifactBridgePersistence } from './index';
 
 const context: ArtifactBridgeContext = {
@@ -121,12 +122,67 @@ function createHarness(
     }),
     callTool,
   } as unknown as McpRegistryService;
-  const askAgent = vi.fn(async () => 'bounded answer');
-  const runAutomation = vi.fn(async () => ({ ok: true }));
+  const resolveAgentAskModelAdapterIdentity = vi.fn(() =>
+    createArtifactBridgeAgentAskModelAdapterIdentity('test/model'),
+  );
+  const askAgent = vi.fn(
+    async (
+      _context: ArtifactBridgeContext,
+      _prompt: string,
+      options?: { beforeDispatch?: () => void },
+    ) => {
+      options?.beforeDispatch?.();
+      return 'bounded answer';
+    },
+  );
   const emitLifecycleEvent = vi.fn(
     async (_event: ArtifactBridgeLifecycleEvent) => undefined,
   );
   const automationId = '1cbd31a0-af7b-4b5a-948d-e782dea80d82';
+  const automationDefinition = {
+    id: automationId,
+    title: 'Approved report',
+    prompt: 'Run the approved report',
+    enabled: true,
+    schedule: { kind: 'interval' as const, everyMs: 60_000 },
+    missedRunPolicy: 'run-on-wake' as const,
+    retryPolicy: {
+      maxAttempts: 1,
+      initialBackoffMs: 5_000,
+      maxBackoffMs: 5_000,
+    },
+    executionTarget: 'local' as const,
+    workspacePaths: [],
+    modelId: 'test/model',
+    approvalMode: 'alwaysAsk' as const,
+    grant: { capabilities: [], expiresAt: null },
+    createdAt: '2026-07-14T00:00:00.000Z',
+    updatedAt: '2026-07-14T00:00:00.000Z',
+    nextRunAt: '2026-07-14T00:01:00.000Z',
+    lastRunAt: null,
+  };
+  const resolveAutomationDefinition = vi.fn(() =>
+    structuredClone(automationDefinition),
+  );
+  const runAutomation = vi.fn(
+    async (
+      _automationId: string,
+      options?: {
+        beforeDispatch?: (input: {
+          automation: unknown;
+          prompt: string;
+          attempt: number;
+        }) => void;
+      },
+    ) => {
+      options?.beforeDispatch?.({
+        automation: structuredClone(automationDefinition),
+        prompt: automationDefinition.prompt,
+        attempt: 1,
+      });
+      return { ok: true };
+    },
+  );
   const identity = {
     manifestSchemaVersion: 1 as const,
     appVersion: '1.0.0',
@@ -176,6 +232,7 @@ function createHarness(
 
   return {
     askAgent,
+    resolveAgentAskModelAdapterIdentity,
     automationId,
     callTool,
     emitLifecycleEvent,
@@ -188,6 +245,7 @@ function createHarness(
     persistence,
     readTool,
     resolveApp,
+    resolveAutomationDefinition,
     runAutomation,
     writeTool,
     async createService() {
@@ -204,7 +262,9 @@ function createHarness(
         areLifecycleEventsEnabled: () => features.lifecycleEvents ?? false,
         emitLifecycleEvent,
         askAgent,
+        resolveAgentAskModelAdapterIdentity,
         runAutomation,
+        resolveAutomationDefinition,
         resolveApp,
       });
     },

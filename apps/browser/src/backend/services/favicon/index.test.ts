@@ -18,8 +18,10 @@ import { FaviconService } from '.';
 
 describe('FaviconService network policy', () => {
   let root: string;
+  let service: FaviconService | undefined;
 
   beforeEach(async () => {
+    service = undefined;
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'clodex-favicon-policy-'));
     electron.userDataPath = root;
     electron.fetch.mockReset();
@@ -27,11 +29,17 @@ describe('FaviconService network policy', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
+    service?.teardown();
+    await fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === 'win32' ? 10 : 0,
+      retryDelay: 100,
+    });
   });
 
   it('stores a controlled-browser favicon mapping without a default-session fetch', async () => {
-    const service = await FaviconService.create({
+    service = await FaviconService.create({
       debug: vi.fn(),
       error: vi.fn(),
     } as unknown as Logger);

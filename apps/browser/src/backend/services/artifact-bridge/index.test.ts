@@ -4,12 +4,14 @@ import type { Logger } from '../logger';
 import type { McpRegistryService } from '../mcp';
 import {
   DEFAULT_ARTIFACT_BRIDGE_POLICY,
+  type ArtifactBridgeContext,
   type ArtifactBridgeLifecycleEvent,
   type ArtifactBridgeWriteProposal,
 } from '@shared/artifact-bridge';
 import type { ArtifactBridgeAuditRecorder } from './audit-ledger';
 import { ArtifactBridgeService, type ArtifactBridgePersistence } from './index';
 import { TRUSTED_UI_REVIEWER_CONNECTION_ID } from '../trusted-ui-karton-transport';
+import { createArtifactBridgeAgentAskModelAdapterIdentity } from './effect-commitment';
 
 function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
   let store: unknown = structuredClone(initialStore);
@@ -104,8 +106,19 @@ function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
     }),
     callTool,
   } as unknown as McpRegistryService;
-  const askAgent = vi.fn(async () => 'bounded answer');
-  const runAutomation = vi.fn(async () => ({ ok: true }));
+  const resolveAgentAskModelAdapterIdentity = vi.fn(() =>
+    createArtifactBridgeAgentAskModelAdapterIdentity('test/model'),
+  );
+  const askAgent = vi.fn(
+    async (
+      _context: ArtifactBridgeContext,
+      _prompt: string,
+      options?: { beforeDispatch?: () => void },
+    ) => {
+      options?.beforeDispatch?.();
+      return 'bounded answer';
+    },
+  );
   const identity = {
     manifestSchemaVersion: 1 as const,
     appVersion: '1.0.0',
@@ -114,6 +127,54 @@ function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
     assetHash: 'c'.repeat(64),
   };
   const automationId = '1cbd31a0-af7b-4b5a-948d-e782dea80d82';
+  const automationDefinition = {
+    id: automationId,
+    title: 'Approved report',
+    prompt: 'Run the approved report',
+    enabled: true,
+    schedule: {
+      kind: 'interval' as const,
+      everyMs: 60_000,
+      anchorAt: '2026-07-14T00:00:00.000Z',
+    },
+    missedRunPolicy: 'run-on-wake' as const,
+    retryPolicy: {
+      maxAttempts: 1,
+      initialBackoffMs: 5_000,
+      maxBackoffMs: 5_000,
+    },
+    executionTarget: 'local' as const,
+    workspacePaths: [],
+    modelId: 'test/model',
+    approvalMode: 'alwaysAsk' as const,
+    grant: { capabilities: [], expiresAt: null },
+    createdAt: '2026-07-14T00:00:00.000Z',
+    updatedAt: '2026-07-14T00:00:00.000Z',
+    nextRunAt: '2026-07-14T00:01:00.000Z',
+    lastRunAt: null,
+  };
+  const resolveAutomationDefinition = vi.fn(() =>
+    structuredClone(automationDefinition),
+  );
+  const runAutomation = vi.fn(
+    async (
+      _automationId: string,
+      options?: {
+        beforeDispatch?: (input: {
+          automation: unknown;
+          prompt: string;
+          attempt: number;
+        }) => void;
+      },
+    ) => {
+      options?.beforeDispatch?.({
+        automation: structuredClone(automationDefinition),
+        prompt: automationDefinition.prompt,
+        attempt: 1,
+      });
+      return { ok: true };
+    },
+  );
   const manifest = {
     schemaVersion: 1 as const,
     id: 'dashboard',
@@ -148,12 +209,15 @@ function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
     handlers,
     karton,
     persistence,
+    resolveAgentAskModelAdapterIdentity,
+    resolveAutomationDefinition,
     mcpRegistry,
     callTool,
     askAgent,
     runAutomation,
     identity,
     automationId,
+    automationDefinition,
     manifest,
     resolveApp,
     savedStores,
@@ -182,7 +246,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => false,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -214,7 +281,10 @@ describe('ArtifactBridgeService', () => {
       isRuntimeInspectorEnabled: () => true,
       captureDogfoodTelemetry,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     const sessionId = '5ae5fe8d-8437-4ac5-aa30-80852bc66102';
@@ -258,7 +328,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -300,7 +373,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -346,7 +422,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -382,7 +461,10 @@ describe('ArtifactBridgeService', () => {
       isSensitiveEgressEnabled: () => true,
       auditRecorder: { record },
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -463,7 +545,10 @@ describe('ArtifactBridgeService', () => {
       isSensitiveEgressEnabled: () => true,
       auditRecorder: { record },
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -507,7 +592,10 @@ describe('ArtifactBridgeService', () => {
         deniedSensitiveMcpTools: ['docs/search'],
       }),
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -551,7 +639,10 @@ describe('ArtifactBridgeService', () => {
       isSensitiveEgressEnabled: () => true,
       auditRecorder: { record },
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -607,7 +698,10 @@ describe('ArtifactBridgeService', () => {
       areWritesEnabled: () => true,
       isSensitiveEgressEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -673,7 +767,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -707,10 +804,12 @@ describe('ArtifactBridgeService', () => {
     const harness = createHarness();
     let finishAsk!: (value: string) => void;
     harness.askAgent.mockImplementationOnce(
-      async () =>
-        await new Promise<string>((resolve) => {
+      async (_context, _prompt, options) => {
+        options?.beforeDispatch?.();
+        return await new Promise<string>((resolve) => {
           finishAsk = resolve;
-        }),
+        });
+      },
     );
     const service = await ArtifactBridgeService.create({
       logger: {} as Logger,
@@ -724,7 +823,10 @@ describe('ArtifactBridgeService', () => {
         maxConcurrentInvocations: 1,
       }),
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -771,7 +873,10 @@ describe('ArtifactBridgeService', () => {
         events.push(event);
       },
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     service.registerSession(context, sessionId);
@@ -873,7 +978,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       areAsyncOperationsEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -929,7 +1037,10 @@ describe('ArtifactBridgeService', () => {
       isSensitiveEgressEnabled: () => true,
       areAsyncOperationsEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -1014,7 +1125,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       areAsyncOperationsEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     service.registerSession(context, sessionId);
@@ -1087,7 +1201,10 @@ describe('ArtifactBridgeService', () => {
         maxConcurrentAsyncOperations: 1,
       }),
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -1157,7 +1274,10 @@ describe('ArtifactBridgeService', () => {
         isFeatureEnabled: () => true,
         areAsyncOperationsEnabled: () => true,
         askAgent: harness.askAgent,
+        resolveAgentAskModelAdapterIdentity:
+          harness.resolveAgentAskModelAdapterIdentity,
         runAutomation: harness.runAutomation,
+        resolveAutomationDefinition: harness.resolveAutomationDefinition,
         resolveApp: harness.resolveApp,
       });
       await service.setGrant({
@@ -1209,10 +1329,16 @@ describe('ArtifactBridgeService', () => {
     const harness = createHarness();
     let finishAutomation!: () => void;
     harness.runAutomation.mockImplementationOnce(
-      async () =>
-        await new Promise((resolve) => {
+      async (_automationId, options) => {
+        options?.beforeDispatch?.({
+          automation: structuredClone(harness.automationDefinition),
+          prompt: harness.automationDefinition.prompt,
+          attempt: 1,
+        });
+        return await new Promise((resolve) => {
           finishAutomation = () => resolve({ ok: true });
-        }),
+        });
+      },
     );
     const service = await ArtifactBridgeService.create({
       logger: {} as Logger,
@@ -1222,7 +1348,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       areAsyncOperationsEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -1302,7 +1431,10 @@ describe('ArtifactBridgeService', () => {
       isRuntimeInspectorEnabled: () => true,
       auditReader,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     expect(service.registerSession(context, sessionId)).toBe(true);
@@ -1435,7 +1567,10 @@ describe('ArtifactBridgeService', () => {
       persistence: disabledHarness.persistence,
       isFeatureEnabled: () => true,
       askAgent: disabledHarness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        disabledHarness.resolveAgentAskModelAdapterIdentity,
       runAutomation: disabledHarness.runAutomation,
+      resolveAutomationDefinition: disabledHarness.resolveAutomationDefinition,
       resolveApp: disabledHarness.resolveApp,
     });
     await expect(disabled.getRuntimeInspector(context)).rejects.toThrow(
@@ -1452,7 +1587,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       isRuntimeInspectorEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await expect(
@@ -1489,7 +1627,10 @@ describe('ArtifactBridgeService', () => {
         maxAutomationRunsPerHour: 1,
       }),
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -1561,7 +1702,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -1600,7 +1744,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -1649,7 +1796,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -1670,7 +1820,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -1714,7 +1867,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -1763,7 +1919,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -1807,7 +1966,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -1830,7 +1992,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       arePackageCapabilitiesEnabled: () => false,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -1851,7 +2016,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       arePackageCapabilitiesEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -1937,7 +2105,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       arePackageCapabilitiesEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -1962,7 +2133,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       arePackageCapabilitiesEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -2008,7 +2182,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       areWritesEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -2105,7 +2282,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       areWritesEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -2170,7 +2350,10 @@ describe('ArtifactBridgeService', () => {
       }),
       now: () => now,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -2210,7 +2393,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       areWritesEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -2296,7 +2482,10 @@ describe('ArtifactBridgeService', () => {
         writeProposalTtlSeconds: 60,
       }),
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -2348,7 +2537,10 @@ describe('ArtifactBridgeService', () => {
       areWritesEnabled: () => true,
       auditRecorder: { record },
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({
@@ -2399,7 +2591,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -2441,7 +2636,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       areWritesEnabled: () => false,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await expect(
@@ -2482,7 +2680,10 @@ describe('ArtifactBridgeService', () => {
         writeProposalTtlSeconds: 60,
       }),
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -2516,7 +2717,10 @@ describe('ArtifactBridgeService', () => {
       persistence: harness.persistence,
       isFeatureEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
 
@@ -2544,7 +2748,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       areEphemeralGrantsEnabled: () => false,
       askAgent: disabledHarness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        disabledHarness.resolveAgentAskModelAdapterIdentity,
       runAutomation: disabledHarness.runAutomation,
+      resolveAutomationDefinition: disabledHarness.resolveAutomationDefinition,
       resolveApp: disabledHarness.resolveApp,
     });
     const disabledSessionId = crypto.randomUUID();
@@ -2574,7 +2781,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       areEphemeralGrantsEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     const grantedSessionId = crypto.randomUUID();
@@ -2685,7 +2895,10 @@ describe('ArtifactBridgeService', () => {
       isFeatureEnabled: () => true,
       areEphemeralGrantsEnabled: () => true,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     const sessionId = crypto.randomUUID();
@@ -2714,7 +2927,10 @@ describe('ArtifactBridgeService', () => {
       areLifecycleEventsEnabled: () => lifecycleEnabled,
       emitLifecycleEvent,
       askAgent: harness.askAgent,
+      resolveAgentAskModelAdapterIdentity:
+        harness.resolveAgentAskModelAdapterIdentity,
       runAutomation: harness.runAutomation,
+      resolveAutomationDefinition: harness.resolveAutomationDefinition,
       resolveApp: harness.resolveApp,
     });
     await service.setGrant({

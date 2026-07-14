@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createWorkspaceMaterialization } from './workspace-materialization';
 
@@ -51,9 +52,17 @@ describe('workspace materialization', () => {
       readFile(path.join(extractionRoot, 'workspace/scripts/check.sh')),
     ).resolves.toEqual(executable);
     expect(
-      (await stat(path.join(extractionRoot, 'workspace/scripts/check.sh')))
-        .mode & 0o777,
+      readArchiveEntryMode(
+        materialization.archive!,
+        'workspace/scripts/check.sh',
+      ),
     ).toBe(0o755);
+    if (process.platform !== 'win32') {
+      expect(
+        (await stat(path.join(extractionRoot, 'workspace/scripts/check.sh')))
+          .mode & 0o777,
+      ).toBe(0o755);
+    }
   });
 
   it('hashes actual bytes and file mode deterministically', () => {
@@ -102,4 +111,34 @@ function run(command: string, args: readonly string[]): Promise<void> {
       else resolve();
     });
   });
+}
+
+function readArchiveEntryMode(
+  archive: Uint8Array,
+  expectedPath: string,
+): number | undefined {
+  const tar = gunzipSync(archive);
+  for (let offset = 0; offset + 512 <= tar.byteLength; ) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) return undefined;
+
+    const name = readTarString(header, 0, 100);
+    const prefix = readTarString(header, 345, 155);
+    const entryPath = prefix ? `${prefix}/${name}` : name;
+    const mode = Number.parseInt(readTarString(header, 100, 8), 8);
+    const size = Number.parseInt(readTarString(header, 124, 12), 8);
+    if (entryPath === expectedPath) return mode & 0o777;
+
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  return undefined;
+}
+
+function readTarString(header: Buffer, offset: number, length: number): string {
+  const field = header.subarray(offset, offset + length);
+  const terminator = field.indexOf(0);
+  return field
+    .subarray(0, terminator >= 0 ? terminator : field.byteLength)
+    .toString('utf8')
+    .trim();
 }

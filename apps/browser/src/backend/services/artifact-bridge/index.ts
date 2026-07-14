@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { evaluateMcpToolPolicy } from '@clodex/mcp-runtime';
 import {
   DEFAULT_ARTIFACT_BRIDGE_POLICY,
   artifactBridgeContextSchema,
@@ -47,10 +46,18 @@ import type {
   ArtifactBridgeGrantReviewSubmission,
 } from '@shared/artifact-bridge-grant-review';
 import type { AgenticAppRuntimeDogfoodTelemetry } from '@shared/agentic-app-runtime-telemetry';
+import {
+  automationDefinitionSchema,
+  type AutomationDefinition,
+} from '@shared/automations';
 import { z } from 'zod';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import type { McpRegistryService } from '../mcp';
+import {
+  createTrustedMcpFenceAuthority,
+  evaluateTrustedRegistryMcpTool,
+} from '../mcp/trusted-dispatch-gateway';
 import { DisposableService } from '../disposable';
 import { TRUSTED_UI_REVIEWER_CONNECTION_ID } from '../trusted-ui-karton-transport';
 import {
@@ -71,20 +78,41 @@ import {
 } from './sensitive-egress';
 import { ArtifactBridgeGrantReviewRegistry } from './grant-review-registry';
 import {
+  ARTIFACT_BRIDGE_AUTOMATION_ADAPTER_IDENTITY,
+  ARTIFACT_BRIDGE_MCP_ADAPTER_ID,
+  ARTIFACT_BRIDGE_MCP_ADAPTER_VERSION,
+  artifactBridgeUniversalCommitmentsEqual,
   artifactBridgeMcpCommitmentsEqual,
+  createArtifactBridgeUniversalEffectCommitment,
   createArtifactBridgeMcpEffectCommitment,
+  type ArtifactBridgeAgentAskModelAdapterIdentity,
   type ArtifactBridgeMcpEffectCommitment,
   type ArtifactBridgeTrustedMcpClassification,
+  type ArtifactBridgeUniversalEffectCommitment,
+  type ArtifactBridgeUniversalEffectCommitmentInput,
 } from './effect-commitment';
 import {
   ArtifactBridgeEffectWal,
   MemoryArtifactBridgeEffectWal,
   PersistedArtifactBridgeEffectWal,
   type ArtifactBridgeEffectWalPersistence,
+  type ArtifactBridgeEffectWalRecord,
 } from './effect-wal';
 
 const MAX_RESULT_BYTES = 1_000_000;
 const MAX_CALLS_PER_MINUTE = 30;
+const agentAskModelAdapterIdentitySchema = z
+  .object({
+    modelId: z.string().trim().min(1).max(256),
+    resolvedProviderId: z.string().trim().min(1).max(256),
+    resolvedModelId: z.string().trim().min(1).max(256),
+    adapterId: z.literal('clodex.artifact-bridge.ai-sdk.generate-text'),
+    adapterVersion: z.literal(1),
+    maxOutputTokens: z.literal(1_024),
+    timeoutMs: z.literal(30_000),
+    maxRetries: z.literal(0),
+  })
+  .strict();
 type ParsedArtifactBridgeGrantInput = z.output<
   typeof artifactBridgeGrantInputSchema
 >;
@@ -230,8 +258,21 @@ export interface ArtifactBridgeServiceOptions {
   askAgent: (
     context: ArtifactBridgeContext,
     prompt: string,
-    options?: { beforeDispatch?: () => void },
+    options?: {
+      modelAdapterIdentity: ArtifactBridgeAgentAskModelAdapterIdentity;
+      beforeDispatch?: () => void;
+    },
   ) => Promise<string>;
+  resolveAgentAskModelAdapterIdentity?: (
+    context: ArtifactBridgeContext,
+  ) => ArtifactBridgeAgentAskModelAdapterIdentity;
+  prepareAgentAsk?: (context: ArtifactBridgeContext) => Promise<{
+    modelAdapterIdentity: ArtifactBridgeAgentAskModelAdapterIdentity;
+    execute: (
+      prompt: string,
+      options: { beforeDispatch: () => void },
+    ) => Promise<string>;
+  }>;
   runAutomation: (
     automationId: string,
     options?: {
@@ -244,6 +285,7 @@ export interface ArtifactBridgeServiceOptions {
       failureMode?: 'record' | 'propagate';
     },
   ) => Promise<unknown>;
+  resolveAutomationDefinition?: (automationId: string) => AutomationDefinition;
   resolveApp: (context: ArtifactBridgeContext) => Promise<{
     identity: GeneratedAppIdentity;
     manifest: GeneratedAppManifest;
@@ -306,6 +348,11 @@ export class ArtifactBridgeService extends DisposableService {
     PreparedSensitiveMcpCall
   >();
   private readonly operations = new Map<string, ArtifactBridgeOperation>();
+  private readonly universalEffectExecutions = new Map<
+    string,
+    Promise<unknown>
+  >();
+  private readonly pendingUniversalEffectClosures = new Set<Promise<void>>();
   private readonly lifecycleInvalidationSignals = new Set<string>();
   private readonly activeSessions = new Map<
     string,
@@ -589,6 +636,8 @@ export class ArtifactBridgeService extends DisposableService {
       ? z.string().uuid().parse(rawSessionId)
       : undefined;
     let enteredInvocation = false;
+    let completedDirectEffectId: string | null = null;
+    let startedAsyncEffectId: string | null = null;
 
     try {
       this.enforceRateLimit(context);
@@ -659,25 +708,35 @@ export class ArtifactBridgeService extends DisposableService {
             this.assertAsyncOperationsEnabled();
             assertCapabilityAllowedByPolicy(policy, 'mcp:call');
             this.requireCapability(grant, 'mcp:call');
-            result = await this.startMcpOperation(
-              context,
-              grant,
-              request.params,
-              sessionId,
-              exactHostBinding,
-            );
+            {
+              const operation = await this.startMcpOperation(
+                context,
+                grant,
+                request.params,
+                request.id,
+                sessionId,
+                exactHostBinding,
+              );
+              result = operation;
+              startedAsyncEffectId = operation.id;
+            }
             break;
           case 'startAutomationOperation':
             this.assertAsyncOperationsEnabled();
             assertCapabilityAllowedByPolicy(policy, 'automation:run');
             this.requireCapability(grant, 'automation:run');
-            result = await this.startAutomationOperation(
-              context,
-              grant,
-              request.params,
-              sessionId,
-              exactHostBinding,
-            );
+            {
+              const operation = await this.startAutomationOperation(
+                context,
+                grant,
+                request.params,
+                request.id,
+                sessionId,
+                exactHostBinding,
+              );
+              result = operation;
+              startedAsyncEffectId = operation.id;
+            }
             break;
           case 'getOperation':
             this.assertAsyncOperationsEnabled();
@@ -743,22 +802,14 @@ export class ArtifactBridgeService extends DisposableService {
               'agent:ask',
               policy.maxAgentAsksPerHour,
             );
-            this.requireExactHostSessionBinding(context, exactHostBinding);
-            result = this.protectResult({
-              text: await this.options.askAgent(
+            ({ result, effectId: completedDirectEffectId } =
+              await this.executeAgentAskEffect({
                 context,
-                request.params.prompt,
-                {
-                  beforeDispatch: () => {
-                    this.requireGrantDispatchBinding(context, grantBinding);
-                    this.requireExactHostSessionBinding(
-                      context,
-                      exactHostBinding,
-                    );
-                  },
-                },
-              ),
-            });
+                requestId: request.id,
+                prompt: request.params.prompt,
+                grantBinding,
+                exactHostBinding,
+              }));
             break;
           case 'runAutomation':
             assertCapabilityAllowedByPolicy(policy, 'automation:run');
@@ -774,21 +825,15 @@ export class ArtifactBridgeService extends DisposableService {
               policy.maxAutomationRunsPerHour,
             );
             try {
-              this.requireExactHostSessionBinding(context, exactHostBinding);
-              await this.options.runAutomation(request.params.automationId, {
-                beforeDispatch: () => {
-                  this.requireGrantDispatchBinding(context, grantBinding);
-                  this.requireExactHostSessionBinding(
-                    context,
-                    exactHostBinding,
-                  );
-                },
-                retryMode: 'no-blind-retry',
-                failureMode: 'propagate',
-              });
-              // AutomationService returns its complete control-plane snapshot.
-              // Never forward that cross-principal data to a generated app.
-              result = this.protectResult({ ok: true });
+              ({ result, effectId: completedDirectEffectId } =
+                await this.executeAutomationEffect({
+                  context,
+                  requestId: request.id,
+                  method: 'runAutomation',
+                  automationId: request.params.automationId,
+                  grantBinding,
+                  exactHostBinding,
+                }));
               await this.emitLifecycleEvent({
                 type: 'automationCompleted',
                 context,
@@ -824,6 +869,18 @@ export class ArtifactBridgeService extends DisposableService {
       });
       return result;
     } catch (error) {
+      if (completedDirectEffectId) {
+        await this.markCommittedEffectResultUnavailable(
+          completedDirectEffectId,
+          'Effect completed but the invocation result was not delivered',
+        );
+      }
+      if (startedAsyncEffectId) {
+        await this.closeUndeliveredUniversalOperation(
+          startedAsyncEffectId,
+          'Async operation was accepted but its start result was not delivered',
+        );
+      }
       const rawErrorMessage =
         error instanceof Error
           ? error.message
@@ -856,6 +913,9 @@ export class ArtifactBridgeService extends DisposableService {
       throw new Error(sanitizedErrorMessage);
     } finally {
       if (enteredInvocation) this.leaveInvocation(context);
+      if (completedDirectEffectId) {
+        this.releaseUniversalEffectExecution(completedDirectEffectId);
+      }
     }
   }
 
@@ -1969,6 +2029,7 @@ export class ArtifactBridgeService extends DisposableService {
       arguments: Record<string, unknown>;
       timeoutMs?: number;
     },
+    requestId: string,
     sessionId?: string,
     exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
   ): Promise<ArtifactBridgeOperationSnapshot> {
@@ -2020,43 +2081,124 @@ export class ArtifactBridgeService extends DisposableService {
       arguments: request.arguments,
       classification,
     });
-    this.requireExactHostSessionBinding(context, exactHostBinding);
-    this.requireGrantDispatchBinding(context, grantBinding);
-    return await this.createOperation({
+    const effectPlan = this.createUniversalEffectPlan({
       context,
-      sessionId,
-      exactHostBinding,
-      grantBinding,
-      kind: 'mcp',
-      label: `${request.serverId}/${request.toolName}`,
-      timeoutMs: request.timeoutMs,
-      cancellableWhenRunning: true,
-      execute: async (signal, timeoutMs, beforeDispatch) =>
-        this.protectResult(
-          await this.executeMcpTool(
-            context,
-            request.serverId,
-            request.toolName,
-            request.arguments,
-            signal,
-            timeoutMs,
-            exactHostBinding,
-            grantBinding,
-            effectCommitment,
-            classification,
-            () => {
-              this.assertAsyncOperationsEnabled();
-              beforeDispatch();
-            },
-          ),
-        ),
+      requestId,
+      kind: 'mcp-read-async',
+      commitment: this.createUniversalEffectCommitment({
+        context,
+        grantBinding,
+        exactHostBinding,
+        action: {
+          method: 'startMcpOperation',
+          requestId,
+          serverId: request.serverId,
+          toolName: request.toolName,
+        },
+        definition: {
+          arguments: request.arguments,
+          classification,
+          timeoutMs: request.timeoutMs ?? null,
+          mcpCommitmentHash: effectCommitment.hash,
+        },
+        adapter: {
+          adapterId: ARTIFACT_BRIDGE_MCP_ADAPTER_ID,
+          adapterVersion: ARTIFACT_BRIDGE_MCP_ADAPTER_VERSION,
+          mcpAdapterHash: effectCommitment.adapterHash,
+        },
+      }),
     });
+    await this.prepareUniversalEffect(effectPlan);
+    try {
+      this.requireExactHostSessionBinding(context, exactHostBinding);
+      this.requireGrantDispatchBinding(context, grantBinding);
+      return await this.createOperation({
+        context,
+        sessionId,
+        exactHostBinding,
+        grantBinding,
+        kind: 'mcp',
+        label: `${request.serverId}/${request.toolName}`,
+        timeoutMs: request.timeoutMs,
+        cancellableWhenRunning: true,
+        effectPlan,
+        execute: async (signal, timeoutMs, beforeDispatch) =>
+          await this.executeUniversalEffect({
+            plan: effectPlan,
+            execute: async (authorizeDispatch) =>
+              await this.executeMcpTool(
+                context,
+                request.serverId,
+                request.toolName,
+                request.arguments,
+                signal,
+                timeoutMs,
+                exactHostBinding,
+                grantBinding,
+                effectCommitment,
+                classification,
+                () => authorizeDispatch(),
+              ),
+            revalidate: () => {
+              this.assertAsyncOperationsEnabled();
+              const currentMcpCommitment =
+                this.createCurrentMcpEffectCommitment({
+                  context,
+                  grantBinding,
+                  exactHostBinding,
+                  serverId: request.serverId,
+                  toolName: request.toolName,
+                  arguments: request.arguments,
+                  classification,
+                });
+              return this.createUniversalEffectCommitment({
+                context,
+                grantBinding,
+                exactHostBinding,
+                action: {
+                  method: 'startMcpOperation',
+                  requestId,
+                  serverId: request.serverId,
+                  toolName: request.toolName,
+                },
+                definition: {
+                  arguments: request.arguments,
+                  classification,
+                  timeoutMs: request.timeoutMs ?? null,
+                  mcpCommitmentHash: currentMcpCommitment.hash,
+                },
+                adapter: {
+                  adapterId: ARTIFACT_BRIDGE_MCP_ADAPTER_ID,
+                  adapterVersion: ARTIFACT_BRIDGE_MCP_ADAPTER_VERSION,
+                  mcpAdapterHash: currentMcpCommitment.adapterHash,
+                },
+              });
+            },
+            onFinalDispatch: beforeDispatch,
+            acceptResult: () =>
+              !signal.aborted &&
+              this.canAcceptUniversalEffectResult(
+                context,
+                grantBinding,
+                exactHostBinding,
+              ),
+            finalize: (rawResult) => this.protectResult(rawResult),
+          }),
+      });
+    } catch (error) {
+      await this.terminalizeUniversalEffectResultLoss(
+        effectPlan.effectId,
+        'Async MCP operation failed before its start result was published',
+      );
+      throw error;
+    }
   }
 
   private async startAutomationOperation(
     context: ArtifactBridgeContext,
     grant: ArtifactBridgeGrant,
     request: { automationId: string; timeoutMs?: number },
+    requestId: string,
     sessionId?: string,
     exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
   ): Promise<ArtifactBridgeOperationSnapshot> {
@@ -2072,48 +2214,774 @@ export class ArtifactBridgeService extends DisposableService {
     );
     this.requireExactHostSessionBinding(context, exactHostBinding);
     this.requireGrantDispatchBinding(context, grantBinding);
-    return await this.createOperation({
+    const effectPlan = this.createAutomationEffectPlan({
       context,
-      sessionId,
-      exactHostBinding,
-      grantBinding,
-      kind: 'automation',
-      label: `automation:${request.automationId}`,
+      requestId,
+      method: 'startAutomationOperation',
+      automationId: request.automationId,
       timeoutMs: request.timeoutMs,
-      cancellableWhenRunning: false,
-      execute: async (_signal, _timeoutMs, beforeDispatch) => {
-        try {
-          this.requireExactHostSessionBinding(context, exactHostBinding);
-          this.requireGrantDispatchBinding(context, grantBinding);
-          await this.options.runAutomation(request.automationId, {
-            beforeDispatch: () => {
-              this.assertAsyncOperationsEnabled();
-              this.requireGrantDispatchBinding(context, grantBinding);
-              this.requireExactHostSessionBinding(context, exactHostBinding);
-              beforeDispatch();
-            },
-            retryMode: 'no-blind-retry',
-            failureMode: 'propagate',
-          });
-          const result = this.protectResult({ ok: true });
-          await this.emitLifecycleEvent({
-            type: 'automationCompleted',
-            context,
-            automationId: request.automationId,
-            outcome: 'success',
-          });
-          return result;
-        } catch (error) {
-          await this.emitLifecycleEvent({
-            type: 'automationCompleted',
-            context,
-            automationId: request.automationId,
-            outcome: 'error',
-          });
-          throw error;
-        }
-      },
+      grantBinding,
+      exactHostBinding,
     });
+    await this.prepareUniversalEffect(effectPlan);
+    try {
+      return await this.createOperation({
+        context,
+        sessionId,
+        exactHostBinding,
+        grantBinding,
+        kind: 'automation',
+        label: `automation:${request.automationId}`,
+        timeoutMs: request.timeoutMs,
+        cancellableWhenRunning: false,
+        effectPlan,
+        execute: async (signal, _timeoutMs, beforeDispatch) => {
+          try {
+            const result = await this.dispatchAutomationEffect({
+              plan: effectPlan,
+              context,
+              requestId,
+              method: 'startAutomationOperation',
+              automationId: request.automationId,
+              timeoutMs: request.timeoutMs,
+              grantBinding,
+              exactHostBinding,
+              onFinalDispatch: beforeDispatch,
+              acceptResult: () => !signal.aborted,
+            });
+            await this.emitLifecycleEvent({
+              type: 'automationCompleted',
+              context,
+              automationId: request.automationId,
+              outcome: 'success',
+            });
+            return result;
+          } catch (error) {
+            await this.emitLifecycleEvent({
+              type: 'automationCompleted',
+              context,
+              automationId: request.automationId,
+              outcome: 'error',
+            });
+            throw error;
+          }
+        },
+      });
+    } catch (error) {
+      await this.terminalizeUniversalEffectResultLoss(
+        effectPlan.effectId,
+        'Async automation failed before its start result was published',
+      );
+      throw error;
+    }
+  }
+
+  private async executeAgentAskEffect(input: {
+    context: ArtifactBridgeContext;
+    requestId: string;
+    prompt: string;
+    grantBinding: ValidatedGrantBinding;
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding;
+  }): Promise<{ effectId: string; result: unknown }> {
+    const preparedAdapter = await this.prepareAgentAskAdapter(input.context);
+    const modelAdapterIdentity = preparedAdapter.modelAdapterIdentity;
+    const action = {
+      method: 'askAgent',
+      requestId: input.requestId,
+    } as const;
+    const definition = { prompt: input.prompt };
+    const plan = this.createUniversalEffectPlan({
+      context: input.context,
+      requestId: input.requestId,
+      kind: 'agent-ask',
+      commitment: this.createUniversalEffectCommitment({
+        context: input.context,
+        grantBinding: input.grantBinding,
+        exactHostBinding: input.exactHostBinding,
+        action,
+        definition,
+        adapter: modelAdapterIdentity,
+      }),
+    });
+    const result = await this.executeUniversalEffect({
+      plan,
+      execute: async (authorizeDispatch) => ({
+        text: await preparedAdapter.execute(input.prompt, {
+          beforeDispatch: () => authorizeDispatch(),
+        }),
+      }),
+      revalidate: () => {
+        const currentIdentity = this.resolveAgentAskModelAdapterIdentity(
+          input.context,
+        );
+        if (currentIdentity.modelId !== modelAdapterIdentity.modelId) {
+          throw new Error('Agent ask model changed before final dispatch');
+        }
+        return this.createUniversalEffectCommitment({
+          context: input.context,
+          grantBinding: input.grantBinding,
+          exactHostBinding: input.exactHostBinding,
+          action,
+          definition,
+          adapter: modelAdapterIdentity,
+        });
+      },
+      acceptResult: () =>
+        this.canAcceptUniversalEffectResult(
+          input.context,
+          input.grantBinding,
+          input.exactHostBinding,
+        ),
+      retainExecution: true,
+      finalize: (rawResult) => this.protectResult(rawResult),
+    });
+    return { effectId: plan.effectId, result };
+  }
+
+  private createAutomationEffectPlan(input: {
+    context: ArtifactBridgeContext;
+    requestId: string;
+    method: 'runAutomation' | 'startAutomationOperation';
+    automationId: string;
+    timeoutMs?: number;
+    grantBinding: ValidatedGrantBinding;
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding;
+  }): UniversalEffectPlan {
+    const definition = this.resolveAutomationDefinition(input.automationId);
+    return this.createUniversalEffectPlan({
+      context: input.context,
+      requestId: input.requestId,
+      kind: 'automation',
+      commitment: this.createUniversalEffectCommitment({
+        context: input.context,
+        grantBinding: input.grantBinding,
+        exactHostBinding: input.exactHostBinding,
+        action: {
+          method: input.method,
+          requestId: input.requestId,
+          automationId: input.automationId,
+        },
+        definition: {
+          automation: definition,
+          timeoutMs: input.timeoutMs ?? null,
+        },
+        adapter: ARTIFACT_BRIDGE_AUTOMATION_ADAPTER_IDENTITY,
+      }),
+    });
+  }
+
+  private async executeAutomationEffect(input: {
+    context: ArtifactBridgeContext;
+    requestId: string;
+    method: 'runAutomation';
+    automationId: string;
+    grantBinding: ValidatedGrantBinding;
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding;
+  }): Promise<{ effectId: string; result: unknown }> {
+    const plan = this.createAutomationEffectPlan(input);
+    const result = await this.dispatchAutomationEffect({
+      ...input,
+      plan,
+      retainExecution: true,
+    });
+    return { effectId: plan.effectId, result };
+  }
+
+  private async dispatchAutomationEffect(input: {
+    plan: UniversalEffectPlan;
+    context: ArtifactBridgeContext;
+    requestId: string;
+    method: 'runAutomation' | 'startAutomationOperation';
+    automationId: string;
+    timeoutMs?: number;
+    grantBinding: ValidatedGrantBinding;
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding;
+    onFinalDispatch?: () => void;
+    acceptResult?: () => boolean;
+    retainExecution?: boolean;
+  }): Promise<unknown> {
+    return await this.executeUniversalEffect({
+      plan: input.plan,
+      execute: async (authorizeDispatch) => {
+        await this.options.runAutomation(input.automationId, {
+          beforeDispatch: (binding) => authorizeDispatch(binding),
+          retryMode: 'no-blind-retry',
+          failureMode: 'propagate',
+        });
+        // AutomationService returns its complete control-plane snapshot.
+        // Never forward that cross-principal data to a generated app.
+        return { ok: true };
+      },
+      revalidate: (rawBinding) => {
+        if (input.method === 'startAutomationOperation') {
+          this.assertAsyncOperationsEnabled();
+        }
+        const binding = z
+          .object({
+            automation: automationDefinitionSchema,
+            prompt: z.string().max(100_000),
+            attempt: z.literal(1),
+          })
+          .strict()
+          .parse(rawBinding);
+        if (
+          binding.automation.id !== input.automationId ||
+          binding.prompt !== binding.automation.prompt
+        ) {
+          throw new Error(
+            'Automation final dispatch definition does not match its action',
+          );
+        }
+        const currentDefinition = this.resolveAutomationDefinition(
+          input.automationId,
+        );
+        const action = {
+          method: input.method,
+          requestId: input.requestId,
+          automationId: input.automationId,
+        } as const;
+        const currentCommitment = this.createUniversalEffectCommitment({
+          context: input.context,
+          grantBinding: input.grantBinding,
+          exactHostBinding: input.exactHostBinding,
+          action,
+          definition: {
+            automation: currentDefinition,
+            timeoutMs: input.timeoutMs ?? null,
+          },
+          adapter: ARTIFACT_BRIDGE_AUTOMATION_ADAPTER_IDENTITY,
+        });
+        const callbackCommitment = this.createUniversalEffectCommitment({
+          context: input.context,
+          grantBinding: input.grantBinding,
+          exactHostBinding: input.exactHostBinding,
+          action,
+          definition: {
+            automation: binding.automation,
+            timeoutMs: input.timeoutMs ?? null,
+          },
+          adapter: ARTIFACT_BRIDGE_AUTOMATION_ADAPTER_IDENTITY,
+        });
+        if (
+          !artifactBridgeUniversalCommitmentsEqual(
+            currentCommitment,
+            callbackCommitment,
+          )
+        ) {
+          throw new Error(
+            'Automation definition changed before final dispatch',
+          );
+        }
+        return currentCommitment;
+      },
+      onFinalDispatch: input.onFinalDispatch,
+      acceptResult: () =>
+        (input.acceptResult?.() ?? true) &&
+        this.canAcceptUniversalEffectResult(
+          input.context,
+          input.grantBinding,
+          input.exactHostBinding,
+        ),
+      retainExecution: input.retainExecution,
+      finalize: (rawResult) => this.protectResult(rawResult),
+    });
+  }
+
+  private resolveAgentAskModelAdapterIdentity(
+    context: ArtifactBridgeContext,
+  ): ArtifactBridgeAgentAskModelAdapterIdentity {
+    const resolver = this.options.resolveAgentAskModelAdapterIdentity;
+    if (!resolver) {
+      throw new Error(
+        'Agent ask model-adapter identity resolver is unavailable',
+      );
+    }
+    return agentAskModelAdapterIdentitySchema.parse(resolver(context));
+  }
+
+  private async prepareAgentAskAdapter(
+    context: ArtifactBridgeContext,
+  ): Promise<{
+    modelAdapterIdentity: ArtifactBridgeAgentAskModelAdapterIdentity;
+    execute: (
+      prompt: string,
+      options: { beforeDispatch: () => void },
+    ) => Promise<string>;
+  }> {
+    const prepared = this.options.prepareAgentAsk
+      ? await this.options.prepareAgentAsk(context)
+      : this.prepareInjectedAgentAskAdapter(context);
+    if (typeof prepared.execute !== 'function') {
+      throw new Error('Prepared agent ask adapter is unavailable');
+    }
+    return {
+      modelAdapterIdentity: agentAskModelAdapterIdentitySchema.parse(
+        prepared.modelAdapterIdentity,
+      ),
+      execute: prepared.execute.bind(prepared),
+    };
+  }
+
+  private prepareInjectedAgentAskAdapter(context: ArtifactBridgeContext): {
+    modelAdapterIdentity: ArtifactBridgeAgentAskModelAdapterIdentity;
+    execute: (
+      prompt: string,
+      options: { beforeDispatch: () => void },
+    ) => Promise<string>;
+  } {
+    // Resolve once and use the exact same identity both for the commitment and
+    // for the injected adapter call. Re-resolving here would let a provider or
+    // resolved-model change hide behind the same logical model ID between
+    // preparation and the adapter's synchronous final-dispatch fence.
+    const modelAdapterIdentity =
+      this.resolveAgentAskModelAdapterIdentity(context);
+    return {
+      modelAdapterIdentity,
+      execute: async (prompt, options) =>
+        await this.options.askAgent(context, prompt, {
+          modelAdapterIdentity,
+          beforeDispatch: options.beforeDispatch,
+        }),
+    };
+  }
+
+  private resolveAutomationDefinition(
+    automationId: string,
+  ): AutomationDefinition {
+    const resolver = this.options.resolveAutomationDefinition;
+    if (!resolver) {
+      throw new Error('Automation definition resolver is unavailable');
+    }
+    return automationDefinitionSchema.parse(resolver(automationId));
+  }
+
+  private createUniversalEffectCommitment(input: {
+    context: ArtifactBridgeContext;
+    grantBinding: ValidatedGrantBinding;
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding;
+    action: unknown;
+    definition: unknown;
+    adapter: unknown;
+  }): ArtifactBridgeUniversalEffectCommitment {
+    this.assertEnabled();
+    this.assertContextEnabled(input.context);
+    this.requireGrantDispatchBinding(input.context, input.grantBinding);
+    this.requireExactHostSessionBinding(input.context, input.exactHostBinding);
+    const policy = this.getPolicy(input.context);
+    assertPolicyEnabled(policy);
+    const commitmentInput: ArtifactBridgeUniversalEffectCommitmentInput = {
+      authority: {
+        context: input.context,
+        identity: input.grantBinding.grant.identity,
+        session: input.exactHostBinding
+          ? {
+              sessionId: input.exactHostBinding.sessionId,
+              navigationEpoch: input.exactHostBinding.navigationEpoch,
+              documentSlotId: input.exactHostBinding.documentSlotId,
+              hostGenerationId:
+                input.exactHostBinding.dispatchFence.generationId,
+            }
+          : null,
+        grant: {
+          grantId: input.grantBinding.dispatchFence.grantId,
+          revision: input.grantBinding.dispatchFence.revision,
+        },
+        policy,
+      },
+      action: input.action,
+      definition: input.definition,
+      adapter: input.adapter,
+    };
+    return createArtifactBridgeUniversalEffectCommitment(commitmentInput);
+  }
+
+  private canAcceptUniversalEffectResult(
+    context: ArtifactBridgeContext,
+    grantBinding: ValidatedGrantBinding,
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
+  ): boolean {
+    try {
+      // Dispatch authorization is not permission to deliver a result forever.
+      // Re-check the exact caller authority after the adapter completes so a
+      // navigation, revocation, expiry, policy change, or kill switch cannot
+      // turn a completed effect into cross-lineage result delivery.
+      this.requireGrantDispatchBinding(context, grantBinding);
+      this.requireExactHostSessionBinding(context, exactHostBinding);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private createUniversalEffectPlan(input: {
+    context: ArtifactBridgeContext;
+    requestId: string;
+    kind: UniversalEffectPlan['kind'];
+    commitment: ArtifactBridgeUniversalEffectCommitment;
+  }): UniversalEffectPlan {
+    const effectId = universalEffectId(input.context, input.requestId);
+    return {
+      effectId,
+      kind: input.kind,
+      commitment: input.commitment,
+      ticketHash: universalEffectTicketHash(effectId, input.commitment.hash),
+    };
+  }
+
+  private async prepareUniversalEffect(
+    plan: UniversalEffectPlan,
+  ): Promise<ArtifactBridgeEffectWalRecord> {
+    return await this.effectWal.prepare({
+      effectId: plan.effectId,
+      kind: plan.kind,
+      commitmentHash: plan.commitment.hash,
+      ticketHash: plan.ticketHash,
+      actionHash: plan.commitment.actionHash,
+      definitionHash: plan.commitment.definitionHash,
+      adapterHash: plan.commitment.adapterHash,
+    });
+  }
+
+  private async requireUniversalEffectDispatchable(
+    plan: UniversalEffectPlan,
+  ): Promise<void> {
+    const record = this.effectWal.get(plan.effectId);
+    switch (record?.state) {
+      case 'PREPARED':
+        return;
+      case 'COMMITTED':
+        await this.markCommittedEffectResultUnavailable(
+          plan.effectId,
+          'Effect was already committed; its prior result cannot be replayed',
+        );
+        throw new Error(
+          'Effect completed but its result is unavailable; retry is forbidden',
+        );
+      case 'RESULT_UNAVAILABLE':
+        throw new Error(
+          'Effect completed but its result is unavailable; retry is forbidden',
+        );
+      case 'DISPATCHING':
+      case 'UNCERTAIN':
+        throw new Error('Effect outcome is uncertain; retry is forbidden');
+      case 'FAILED_PRE_EFFECT':
+        throw new Error(
+          'Effect request is no longer dispatchable; a fresh request ID is required',
+        );
+      case undefined:
+        throw new Error('Universal effect WAL record is absent');
+    }
+  }
+
+  private async executeUniversalEffect<T>(input: {
+    plan: UniversalEffectPlan;
+    execute: (
+      authorizeDispatch: (binding?: unknown) => void,
+    ) => Promise<unknown>;
+    revalidate: (binding?: unknown) => ArtifactBridgeUniversalEffectCommitment;
+    onFinalDispatch?: () => void;
+    acceptResult?: () => boolean;
+    retainExecution?: boolean;
+    finalize: (rawResult: unknown) => T;
+  }): Promise<T> {
+    await this.prepareUniversalEffect(input.plan);
+    const existing = this.universalEffectExecutions.get(input.plan.effectId);
+    if (existing) return structuredClone((await existing) as T);
+    await this.requireUniversalEffectDispatchable(input.plan);
+
+    const execution = this.dispatchUniversalEffect(input);
+    this.universalEffectExecutions.set(input.plan.effectId, execution);
+    let completed = false;
+    try {
+      const result = structuredClone((await execution) as T);
+      completed = true;
+      return result;
+    } finally {
+      if (
+        (!input.retainExecution || !completed) &&
+        this.universalEffectExecutions.get(input.plan.effectId) === execution
+      ) {
+        this.universalEffectExecutions.delete(input.plan.effectId);
+      }
+    }
+  }
+
+  private async dispatchUniversalEffect<T>(input: {
+    plan: UniversalEffectPlan;
+    execute: (
+      authorizeDispatch: (binding?: unknown) => void,
+    ) => Promise<unknown>;
+    revalidate: (binding?: unknown) => ArtifactBridgeUniversalEffectCommitment;
+    onFinalDispatch?: () => void;
+    acceptResult?: () => boolean;
+    finalize: (rawResult: unknown) => T;
+  }): Promise<T> {
+    let finalFenceAttempted = false;
+    let dispatchAuthorized = false;
+    try {
+      await this.effectWal.beginDispatch({
+        effectId: input.plan.effectId,
+        commitmentHash: input.plan.commitment.hash,
+        ticketHash: input.plan.ticketHash,
+        actionHash: input.plan.commitment.actionHash,
+        definitionHash: input.plan.commitment.definitionHash,
+        adapterHash: input.plan.commitment.adapterHash,
+      });
+      const rawResult = await input.execute((binding) => {
+        if (finalFenceAttempted) {
+          throw new Error('Universal effect final dispatch fence was reused');
+        }
+        finalFenceAttempted = true;
+        const current = input.revalidate(binding);
+        if (
+          !artifactBridgeUniversalCommitmentsEqual(
+            input.plan.commitment,
+            current,
+          )
+        ) {
+          throw new Error(
+            'Universal effect commitment changed before final dispatch',
+          );
+        }
+        input.onFinalDispatch?.();
+        dispatchAuthorized = true;
+      });
+      if (!dispatchAuthorized) {
+        throw new Error(
+          'Effect adapter did not enforce the universal final dispatch fence',
+        );
+      }
+      if (input.acceptResult && !input.acceptResult()) {
+        await this.effectWal.markResultUnavailable(
+          input.plan.effectId,
+          'Effect completed after its caller stopped accepting a result',
+        );
+        throw new Error(
+          'Effect completed but its result is unavailable; retry is forbidden',
+        );
+      }
+      let result: T;
+      let storedResult: T;
+      let resultHash: string;
+      try {
+        result = input.finalize(rawResult);
+        storedResult = structuredClone(result);
+        resultHash = hashArtifactBridgeJson(
+          'clodex.artifact-bridge.effect-result.v1',
+          storedResult,
+        );
+      } catch (error) {
+        await this.effectWal.markResultUnavailable(
+          input.plan.effectId,
+          'Effect completed but its result was unavailable',
+        );
+        throw error;
+      }
+      await this.effectWal.markCommitted(input.plan.effectId, resultHash);
+      return storedResult;
+    } catch (error) {
+      await this.settleUniversalEffectFailure(
+        input.plan.effectId,
+        finalFenceAttempted,
+        dispatchAuthorized,
+      );
+      throw error;
+    }
+  }
+
+  private releaseUniversalEffectExecution(effectId: string): void {
+    this.universalEffectExecutions.delete(effectId);
+  }
+
+  private async settleUniversalEffectFailure(
+    effectId: string,
+    finalFenceAttempted: boolean,
+    dispatchAuthorized: boolean,
+  ): Promise<void> {
+    const record = this.effectWal.get(effectId);
+    try {
+      if (record?.state === 'PREPARED') {
+        await this.effectWal.markFailedPreEffect(
+          effectId,
+          'Effect failed before its adapter was entered',
+        );
+      } else if (record?.state === 'DISPATCHING') {
+        if (finalFenceAttempted && !dispatchAuthorized) {
+          await this.effectWal.markFailedPreEffect(
+            effectId,
+            'Final authority check rejected effect dispatch',
+          );
+        } else {
+          await this.effectWal.markUncertain(
+            effectId,
+            dispatchAuthorized
+              ? 'Adapter result unavailable after final dispatch'
+              : 'Adapter did not prove whether final dispatch occurred',
+          );
+        }
+      }
+    } catch (settlementError) {
+      this.options.logger.warn(
+        '[ArtifactBridge] Failed to terminalize a universal effect',
+        { effectId, settlementError },
+      );
+    }
+  }
+
+  private async markUniversalEffectFailedPreDispatch(
+    effectId: string,
+    reason: string,
+  ): Promise<void> {
+    if (this.effectWal.get(effectId)?.state !== 'PREPARED') return;
+    try {
+      await this.effectWal.markFailedPreEffect(effectId, reason.slice(0, 500));
+    } catch (error) {
+      this.options.logger.warn(
+        '[ArtifactBridge] Failed to close a universal effect before dispatch',
+        { effectId, error },
+      );
+    }
+  }
+
+  private async markCommittedEffectResultUnavailable(
+    effectId: string,
+    reason: string,
+  ): Promise<void> {
+    if (this.effectWal.get(effectId)?.state !== 'COMMITTED') return;
+    try {
+      await this.effectWal.markResultUnavailable(
+        effectId,
+        reason.slice(0, 500),
+      );
+    } catch (error) {
+      this.options.logger.warn(
+        '[ArtifactBridge] Failed to record an unavailable effect result',
+        { effectId, error },
+      );
+    }
+  }
+
+  private async closeUndeliveredUniversalOperation(
+    effectId: string,
+    reason: string,
+  ): Promise<void> {
+    const boundedReason = reason.slice(0, 500);
+    const operation = this.operations.get(effectId);
+    let operationStatus: 'failed' | 'uncertain' | null = null;
+    let completedResultBecameUnavailable = false;
+    if (operation?.active) {
+      // Close the in-memory dispatch fence synchronously before awaiting any
+      // WAL/audit work. Otherwise a queued adapter could cross its final fence
+      // after the start response has already become unavailable.
+      operation.controller.abort();
+      if (!isTerminalOperation(operation.snapshot.status)) {
+        const effectState = this.effectWal.get(effectId)?.state;
+        operationStatus = effectState === 'PREPARED' ? 'failed' : 'uncertain';
+      } else if (operation.snapshot.status === 'completed') {
+        completedResultBecameUnavailable = true;
+      }
+    }
+
+    // `finishOperation` deliberately does not guess at an in-flight adapter's
+    // outcome. The enclosing start invocation, however, has now lost the only
+    // result handle, so durably close every still-open WAL state here.
+    await this.terminalizeUniversalEffectResultLoss(effectId, boundedReason);
+
+    if (operationStatus) {
+      operationStatus =
+        this.effectWal.get(effectId)?.state === 'FAILED_PRE_EFFECT'
+          ? 'failed'
+          : 'uncertain';
+    }
+
+    if (operation && operationStatus) {
+      try {
+        await this.finishOperation(
+          operation,
+          operationStatus,
+          operation.retentionSeconds,
+          undefined,
+          boundedReason,
+        );
+      } catch (error) {
+        this.options.logger.warn(
+          '[ArtifactBridge] Failed to publish undelivered async operation state',
+          { effectId, error },
+        );
+      }
+    } else if (operation && completedResultBecameUnavailable) {
+      // The effect completed before the enclosing invocation failed. Its
+      // operation result is no longer a deliverable success, even though the
+      // in-memory snapshot had briefly reached `completed`.
+      operation.snapshot.status = 'uncertain';
+      operation.snapshot.error = boundedReason;
+      operation.result = undefined;
+      try {
+        await this.emitOperationChanged(operation);
+      } catch (error) {
+        this.options.logger.warn(
+          '[ArtifactBridge] Failed to publish async result unavailability',
+          { effectId, error },
+        );
+      }
+    }
+  }
+
+  private async terminalizeUniversalEffectResultLoss(
+    effectId: string,
+    reason: string,
+  ): Promise<void> {
+    const boundedReason = reason.slice(0, 500);
+    let terminalizationError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const record = this.effectWal.get(effectId);
+      if (
+        !record ||
+        record.state === 'RESULT_UNAVAILABLE' ||
+        record.state === 'UNCERTAIN' ||
+        record.state === 'FAILED_PRE_EFFECT'
+      ) {
+        terminalizationError = undefined;
+        break;
+      }
+      try {
+        if (record.state === 'PREPARED') {
+          await this.effectWal.markFailedPreEffect(effectId, boundedReason);
+        } else if (record.state === 'DISPATCHING') {
+          await this.effectWal.markUncertain(effectId, boundedReason);
+        } else {
+          await this.effectWal.markResultUnavailable(effectId, boundedReason);
+        }
+        terminalizationError = undefined;
+        break;
+      } catch (error) {
+        // A monotonic concurrent transition may have won between `get` and the
+        // serialized mutation. Re-read and close the new state rather than
+        // leaving COMMITTED/DISPATCHING behind after result loss.
+        terminalizationError = error;
+      }
+    }
+    if (terminalizationError) {
+      this.options.logger.warn(
+        '[ArtifactBridge] Failed to terminalize an undelivered async effect',
+        { effectId, error: terminalizationError },
+      );
+    }
+  }
+
+  private trackUniversalEffectClosure(closure: Promise<void>): void {
+    let tracked!: Promise<void>;
+    tracked = closure
+      .catch((error) => {
+        this.options.logger.warn(
+          '[ArtifactBridge] Universal effect closure failed',
+          { error },
+        );
+      })
+      .finally(() => {
+        this.pendingUniversalEffectClosures.delete(tracked);
+      });
+    this.pendingUniversalEffectClosures.add(tracked);
   }
 
   private async createOperation(input: {
@@ -2125,6 +2993,7 @@ export class ArtifactBridgeService extends DisposableService {
     label: string;
     timeoutMs?: number;
     cancellableWhenRunning: boolean;
+    effectPlan?: UniversalEffectPlan;
     execute: (
       signal: AbortSignal,
       timeoutMs: number,
@@ -2132,6 +3001,18 @@ export class ArtifactBridgeService extends DisposableService {
     ) => Promise<unknown>;
   }): Promise<ArtifactBridgeOperationSnapshot> {
     this.cleanupExpiredOperations();
+    if (input.effectPlan) {
+      const existing = this.operations.get(input.effectPlan.effectId);
+      if (
+        existing?.active &&
+        this.contextKey(existing.snapshot.context) ===
+          this.contextKey(input.context) &&
+        existing.sessionId === (input.sessionId ?? null)
+      ) {
+        return structuredClone(existing.snapshot);
+      }
+      await this.requireUniversalEffectDispatchable(input.effectPlan);
+    }
     const policy = this.getPolicy(input.context);
     const activeCount = [...this.operations.values()].filter(
       (operation) =>
@@ -2142,6 +3023,12 @@ export class ArtifactBridgeService extends DisposableService {
           operation.snapshot.status === 'running'),
     ).length;
     if (activeCount >= policy.maxConcurrentAsyncOperations) {
+      if (input.effectPlan) {
+        await this.markUniversalEffectFailedPreDispatch(
+          input.effectPlan.effectId,
+          'Async operation quota rejected dispatch preparation',
+        );
+      }
       throw new Error(
         'Generated app concurrent async operation quota was exceeded',
       );
@@ -2150,6 +3037,12 @@ export class ArtifactBridgeService extends DisposableService {
       this.pruneOldestTerminalOperation();
     }
     if (this.operations.size >= 100) {
+      if (input.effectPlan) {
+        await this.markUniversalEffectFailedPreDispatch(
+          input.effectPlan.effectId,
+          'Async operation registry rejected dispatch preparation',
+        );
+      }
       throw new Error('Generated app async operation registry is full');
     }
     const timeoutMs = Math.min(
@@ -2160,7 +3053,7 @@ export class ArtifactBridgeService extends DisposableService {
     const controller = new AbortController();
     const operation: ArtifactBridgeOperation = {
       snapshot: {
-        id: randomUUID(),
+        id: input.effectPlan?.effectId ?? randomUUID(),
         context: structuredClone(input.context),
         kind: input.kind,
         status: 'queued',
@@ -2184,16 +3077,20 @@ export class ArtifactBridgeService extends DisposableService {
       retentionSeconds: policy.asyncOperationRetentionSeconds,
       result: undefined,
       timeout: null,
+      effectId: input.effectPlan?.effectId ?? null,
     };
-    this.requireExactHostSessionBinding(input.context, input.exactHostBinding);
-    this.requireGrantDispatchBinding(input.context, input.grantBinding);
-    this.operations.set(operation.snapshot.id, operation);
-    this.captureDogfoodTelemetry(input.context, {
-      activity: 'async-operation',
-      outcome: 'started',
-      operation_kind: input.kind,
-    });
     try {
+      this.requireExactHostSessionBinding(
+        input.context,
+        input.exactHostBinding,
+      );
+      this.requireGrantDispatchBinding(input.context, input.grantBinding);
+      this.operations.set(operation.snapshot.id, operation);
+      this.captureDogfoodTelemetry(input.context, {
+        activity: 'async-operation',
+        outcome: 'started',
+        operation_kind: input.kind,
+      });
       await this.audit({
         action: 'operation.started',
         outcome: 'success',
@@ -2244,7 +3141,20 @@ export class ArtifactBridgeService extends DisposableService {
     operation.snapshot.startedAt = new Date(this.now()).toISOString();
     operation.snapshot.progress = { phase: 'running', percent: null };
     operation.snapshot.cancellable = cancellableWhenRunning;
-    await this.emitOperationChanged(operation);
+    try {
+      await this.emitOperationChanged(operation);
+    } catch (error) {
+      await this.finishOperation(
+        operation,
+        'failed',
+        retentionSeconds,
+        undefined,
+        this.sanitizeErrorMessage(
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+      return;
+    }
     if (!operation.active || operation.snapshot.status !== 'running') return;
     if (!this.operationFenceAllowsDispatch(operation)) return;
 
@@ -2366,13 +3276,39 @@ export class ArtifactBridgeService extends DisposableService {
 
   private async finishOperation(
     operation: ArtifactBridgeOperation,
-    status: 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'uncertain',
+    rawStatus: 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'uncertain',
     retentionSeconds: number,
     result?: unknown,
     error?: string,
   ): Promise<void> {
     if (!operation.active || isTerminalOperation(operation.snapshot.status)) {
       return;
+    }
+    let status = rawStatus;
+    let terminalError = error;
+    let storedResult: unknown;
+    if (status === 'completed') {
+      try {
+        storedResult = structuredClone(result);
+      } catch {
+        status = 'uncertain';
+        terminalError =
+          'Effect completed but its async operation result was unavailable';
+      }
+    }
+    if (operation.effectId && status !== 'completed') {
+      const effectState = this.effectWal.get(operation.effectId)?.state;
+      if (effectState === 'PREPARED') {
+        await this.markUniversalEffectFailedPreDispatch(
+          operation.effectId,
+          'Async operation ended before effect dispatch',
+        );
+      } else if (effectState === 'COMMITTED') {
+        await this.markCommittedEffectResultUnavailable(
+          operation.effectId,
+          'Effect completed but its async operation result was unavailable',
+        );
+      }
     }
     if (operation.timeout) clearTimeout(operation.timeout);
     operation.timeout = null;
@@ -2383,9 +3319,8 @@ export class ArtifactBridgeService extends DisposableService {
     operation.snapshot.expiresAt = new Date(
       this.now() + retentionSeconds * 1_000,
     ).toISOString();
-    operation.snapshot.error = error?.slice(0, 500) ?? null;
-    operation.result =
-      status === 'completed' ? structuredClone(result) : undefined;
+    operation.snapshot.error = terminalError?.slice(0, 500) ?? null;
+    operation.result = status === 'completed' ? storedResult : undefined;
     this.captureDogfoodTelemetry(operation.snapshot.context, {
       activity: 'async-operation',
       outcome: status === 'completed' ? 'success' : 'failure',
@@ -2396,8 +3331,10 @@ export class ArtifactBridgeService extends DisposableService {
       outcome: status === 'completed' ? 'success' : 'error',
       context: auditContext(operation.snapshot.context),
       resource: `kind:${operation.snapshot.kind}:status:${status}`,
-      ...(error
-        ? { error: this.sanitizeErrorMessage(error).slice(0, 500) }
+      ...(terminalError
+        ? {
+            error: this.sanitizeErrorMessage(terminalError).slice(0, 500),
+          }
         : {}),
     });
     await this.emitOperationChanged(operation);
@@ -2519,6 +3456,17 @@ export class ArtifactBridgeService extends DisposableService {
       reason?: string;
     } = {},
   ): boolean {
+    if (operation.effectId) {
+      this.trackUniversalEffectClosure(
+        this.terminalizeUniversalEffectResultLoss(
+          operation.effectId,
+          options.reason ??
+            (operation.finalDispatchPassed
+              ? 'Async operation authority or result retention ended after final dispatch'
+              : 'Async operation authority ended before dispatch'),
+        ),
+      );
+    }
     if (
       options.preserveUncertainAfterFinalDispatch &&
       operation.active &&
@@ -3200,15 +4148,8 @@ export class ArtifactBridgeService extends DisposableService {
       await this.options.mcpRegistry.listTools(serverId)
     ).find((tool) => tool.name === toolName);
     if (!descriptor) throw new Error('MCP tool is unavailable');
-    const policy = evaluateMcpToolPolicy(server, {
-      name: descriptor.name,
-      readOnlyHint: descriptor.annotations?.readOnlyHint,
-      destructiveHint: descriptor.annotations?.destructiveHint,
-    });
-    if (
-      policy.decision === 'deny' ||
-      descriptor.annotations?.readOnlyHint === true
-    ) {
+    const trusted = evaluateTrustedRegistryMcpTool(server, descriptor);
+    if (trusted.policy.decision === 'deny' || trusted.classification.readOnly) {
       throw new Error('Generated app write tool is denied or marked read-only');
     }
     return descriptor;
@@ -3222,15 +4163,11 @@ export class ArtifactBridgeService extends DisposableService {
       await this.options.mcpRegistry.listTools(serverId)
     ).find((tool) => tool.name === toolName);
     if (!descriptor) throw new Error('MCP tool is unavailable');
-    const policy = evaluateMcpToolPolicy(server, {
-      name: descriptor.name,
-      readOnlyHint: descriptor.annotations?.readOnlyHint,
-      destructiveHint: descriptor.annotations?.destructiveHint,
-    });
+    const trusted = evaluateTrustedRegistryMcpTool(server, descriptor);
     if (
-      policy.decision !== 'allow' ||
-      descriptor.annotations?.readOnlyHint !== true ||
-      descriptor.annotations?.destructiveHint === true
+      trusted.policy.decision !== 'allow' ||
+      !trusted.classification.readOnly ||
+      trusted.classification.destructive
     ) {
       throw new Error(
         'Generated apps may call only explicitly allowed read-only MCP tools',
@@ -3326,6 +4263,35 @@ export class ArtifactBridgeService extends DisposableService {
       }
       this.requireExactHostSessionBinding(context, exactHostBinding);
       if (grantBinding) this.requireGrantDispatchBinding(context, grantBinding);
+      const finalAuthority =
+        exactHostBinding || grantBinding
+          ? createTrustedMcpFenceAuthority(
+              () => {
+                if (grantBinding) {
+                  this.requireGrantDispatchBinding(context, grantBinding);
+                }
+                this.requireExactHostSessionBinding(context, exactHostBinding);
+                if (effectCommitment && grantBinding && classification) {
+                  this.requireCurrentMcpEffectCommitment(effectCommitment, {
+                    context,
+                    grantBinding,
+                    exactHostBinding,
+                    serverId,
+                    toolName,
+                    arguments: arguments_,
+                    classification,
+                  });
+                }
+              },
+              {
+                // The registry consumes the authority only after its own
+                // descriptor/runtime/policy commitment still matches. Mark
+                // the effect dispatchable only at that last synchronous point,
+                // immediately before the host sends IPC.
+                onConsumed: onBeforeDispatchPassed,
+              },
+            )
+          : undefined;
       return await this.options.mcpRegistry.callTool(
         serverId,
         toolName,
@@ -3334,31 +4300,7 @@ export class ArtifactBridgeService extends DisposableService {
           timeoutMs: timeoutMs ?? 30_000,
           ...(signal ? { signal } : {}),
           agentInstanceId: this.mcpPrincipalId(context),
-          ...(exactHostBinding || grantBinding
-            ? {
-                beforeDispatch: () => {
-                  if (grantBinding) {
-                    this.requireGrantDispatchBinding(context, grantBinding);
-                  }
-                  this.requireExactHostSessionBinding(
-                    context,
-                    exactHostBinding,
-                  );
-                  if (effectCommitment && grantBinding && classification) {
-                    this.requireCurrentMcpEffectCommitment(effectCommitment, {
-                      context,
-                      grantBinding,
-                      exactHostBinding,
-                      serverId,
-                      toolName,
-                      arguments: arguments_,
-                      classification,
-                    });
-                  }
-                  onBeforeDispatchPassed?.();
-                },
-              }
-            : {}),
+          ...(finalAuthority ? { finalAuthority } : {}),
         },
       );
     } catch (error) {
@@ -4701,6 +5643,9 @@ export class ArtifactBridgeService extends DisposableService {
     this.pendingPersistentGrantRevocations.clear();
     this.dirtyPersistentGrantContexts.clear();
     this.lifecycleInvalidationSignals.clear();
+    while (this.pendingUniversalEffectClosures.size > 0) {
+      await Promise.all([...this.pendingUniversalEffectClosures]);
+    }
     await this.effectWal.flush();
   }
 }
@@ -4776,6 +5721,17 @@ type ArtifactBridgeOperation = {
   retentionSeconds: number;
   result: unknown;
   timeout: ReturnType<typeof setTimeout> | null;
+  effectId: string | null;
+};
+
+type UniversalEffectPlan = {
+  effectId: string;
+  kind: Extract<
+    ArtifactBridgeEffectWalRecord['kind'],
+    'agent-ask' | 'automation' | 'mcp-read-async'
+  >;
+  commitment: ArtifactBridgeUniversalEffectCommitment;
+  ticketHash: string;
 };
 
 function isTerminalOperation(
@@ -4977,6 +5933,44 @@ function effectTicketHash(commitToken: string): string {
   return hashArtifactBridgeJson(
     'clodex.artifact-bridge.execution-ticket.v1',
     commitToken,
+  );
+}
+
+function universalEffectId(
+  context: ArtifactBridgeContext,
+  requestId: string,
+): string {
+  // This is deliberately a context-global request-ID reservation. Mutable
+  // authority lineage (session, host generation, grant revision, policy) is
+  // bound by the exact commitment stored under the reservation, not by minting
+  // a new effect ID. Including those values here would let a navigation or
+  // regrant turn the same logical retry into a second dispatch. The preload
+  // generates cryptographically random request IDs, so accidental cross-session
+  // collisions are negligible; an intentional collision fails closed on the
+  // commitment mismatch and cannot cross authority lineages.
+  const digest = hashArtifactBridgeJson(
+    'clodex.artifact-bridge.universal-effect.request-id.v1',
+    { context, requestId },
+  );
+  const variant = ((Number.parseInt(digest[16] ?? '0', 16) & 0x3) | 0x8)
+    .toString(16)
+    .slice(0, 1);
+  return [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    `5${digest.slice(13, 16)}`,
+    `${variant}${digest.slice(17, 20)}`,
+    digest.slice(20, 32),
+  ].join('-');
+}
+
+function universalEffectTicketHash(
+  effectId: string,
+  commitmentHash: string,
+): string {
+  return hashArtifactBridgeJson(
+    'clodex.artifact-bridge.universal-effect.execution-ticket.v1',
+    { effectId, commitmentHash },
   );
 }
 

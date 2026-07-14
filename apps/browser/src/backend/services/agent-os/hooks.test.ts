@@ -22,6 +22,15 @@ describe('HooksService', () => {
   });
 
   afterEach(async () => {
+    if (process.platform === 'win32') {
+      await fs.rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      });
+      return;
+    }
     await fs.rm(root, { recursive: true, force: true });
   });
 

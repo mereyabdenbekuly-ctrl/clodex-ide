@@ -19,6 +19,7 @@ export interface ShutdownCoordinatorOptions {
   logger: ShutdownLogger;
   exitApp: (exitCode: number) => void;
   synchronousTeardowns: readonly ShutdownTask[];
+  preAsynchronousTeardowns?: readonly ShutdownTask[];
   asynchronousTeardowns: readonly ShutdownTask[];
   shutdownBudgetMs?: number;
   scheduleTimeout?: (callback: () => void, delayMs: number) => void;
@@ -61,6 +62,7 @@ export interface MainShutdownCoordinatorOptions {
     cloudTaskArtifactService: TeardownResource | null | undefined;
   };
   asynchronousServices: {
+    safeCodingProductionAuthorityService: TeardownResource;
     automationService: TeardownResource;
     artifactBridgeFrameBroker: TeardownResource;
     artifactBridgeService: TeardownResource;
@@ -100,6 +102,7 @@ export class ShutdownCoordinator {
   private readonly logger: ShutdownLogger;
   private readonly exitApp: (exitCode: number) => void;
   private readonly synchronousTeardowns: readonly ShutdownTask[];
+  private readonly preAsynchronousTeardowns: readonly ShutdownTask[];
   private readonly asynchronousTeardowns: readonly ShutdownTask[];
   private readonly shutdownBudgetMs: number;
   private readonly scheduleTimeout: (
@@ -112,6 +115,7 @@ export class ShutdownCoordinator {
     this.logger = options.logger;
     this.exitApp = options.exitApp;
     this.synchronousTeardowns = options.synchronousTeardowns;
+    this.preAsynchronousTeardowns = options.preAsynchronousTeardowns ?? [];
     this.asynchronousTeardowns = options.asynchronousTeardowns;
     this.shutdownBudgetMs =
       options.shutdownBudgetMs ?? DEFAULT_SHUTDOWN_BUDGET_MS;
@@ -158,9 +162,14 @@ export class ShutdownCoordinator {
             this.logger.warn(`[Main] Failed to teardown ${task.name}`, error);
           });
 
-      const asynchronousTeardowns = Promise.all(
-        this.asynchronousTeardowns.map(runAsynchronousTeardown),
-      );
+      const asynchronousTeardowns = (async () => {
+        for (const task of this.preAsynchronousTeardowns) {
+          await runAsynchronousTeardown(task);
+        }
+        await Promise.all(
+          this.asynchronousTeardowns.map(runAsynchronousTeardown),
+        );
+      })();
 
       void Promise.race([
         asynchronousTeardowns,
@@ -211,6 +220,14 @@ export function createMainShutdownCoordinator(
     logger: options.logger,
     exitApp: options.exitApp,
     shutdownBudgetMs: DEFAULT_SHUTDOWN_BUDGET_MS,
+    preAsynchronousTeardowns: [
+      // Stop admitting production authority operations and drain any active
+      // operation before effect-serving dependencies begin teardown.
+      teardownTask(
+        'safeCodingProductionAuthorityService',
+        asynchronousServices.safeCodingProductionAuthorityService,
+      ),
+    ],
     synchronousTeardowns: [
       {
         name: 'agentBehaviorPreferenceListener',

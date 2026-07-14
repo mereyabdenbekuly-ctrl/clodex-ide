@@ -1,0 +1,30 @@
+{
+  "name": "@clodex/production",
+  "version": "0.1.0",
+  "description": "Fail-closed production admission and composition boundary for Clodex execution authority.",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "check": "biome check .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clodex/adapters": "workspace:*",
+    "@clodex/contracts": "workspace:*",
+    "@clodex/control-plane": "workspace:*",
+    "@clodex/guardian": "workspace:*",
+    "@clodex/promotion": "workspace:*",
+    "@clodex/registry": "workspace:*"
+  },
+  "devDependencies": {
+    "@clodex/typescript-config": "workspace:*",
+    "typescript": "^5.9.2"
+  }
+}

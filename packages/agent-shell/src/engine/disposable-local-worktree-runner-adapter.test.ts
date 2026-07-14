@@ -353,7 +353,7 @@ describe('DisposableLocalWorktreeRunnerAdapter', () => {
       decisionId: '00000000-0000-4000-8000-000000000001',
     });
 
-    expect(replayCommand).toContain('node_modules/.bin');
+    expect(replayCommand).toContain(path.join('node_modules', '.bin'));
     expect(replayCommand).not.toContain(repository);
     expect(replayCommand).toMatch(/vitest run$/);
   });
@@ -646,6 +646,7 @@ async function createRepository(): Promise<string> {
   await writeFile(path.join(root, '.gitignore'), 'node_modules/\n');
   await writeFile(path.join(root, 'src/index.ts'), 'export const value = 1;\n');
   await git(root, ['init']);
+  await git(root, ['config', 'core.autocrlf', 'false']);
   await git(root, ['config', 'user.email', 'runner@example.test']);
   await git(root, ['config', 'user.name', 'Runner Test']);
   await git(root, ['add', '.']);

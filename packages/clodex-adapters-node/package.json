@@ -1,0 +1,28 @@
+{
+  "name": "@clodex/adapters-node",
+  "version": "0.1.0",
+  "description": "Linux openat2 and digest-pinned container capabilities for Clodex safe-coding adapters.",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "check": "biome check .",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clodex/adapters": "workspace:*"
+  },
+  "devDependencies": {
+    "@clodex/typescript-config": "workspace:*",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

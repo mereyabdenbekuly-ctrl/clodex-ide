@@ -146,8 +146,8 @@ export const runOpenManusToolOutputSchema = z.object({
   exitCode: z.number().nullable(),
   signal: z.string().optional(),
   timedOut: z.boolean(),
-  workspacePath: z.string(),
-  openManusHome: z.string().nullable(),
+  mountPrefix: z.string(),
+  runtimeId: z.string(),
   stdout: z.string(),
   stderr: z.string(),
 });

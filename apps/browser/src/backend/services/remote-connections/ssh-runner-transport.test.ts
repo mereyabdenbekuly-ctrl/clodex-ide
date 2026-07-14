@@ -273,62 +273,65 @@ describe('RemoteConnectionSshRunnerTransport', () => {
     ).rejects.toThrow('archive hash mismatch');
   });
 
-  it('rejects a tampered SSH stream before archive extraction', async () => {
-    const remoteTmp = await mkdtemp(
-      path.join(tmpdir(), 'clodex-ssh-runner-tamper-'),
-    );
-    let observedStderr = '';
-    const executeRunnerCommand = vi.fn(
-      async (input: {
-        command: string;
-        stdin?: Uint8Array;
-        connectionId: string;
-      }) => {
-        const result = await runLocalShell(
-          input.command,
-          Buffer.concat([
-            Buffer.from(input.stdin ?? []),
-            Buffer.from('tamper'),
-          ]),
-          remoteTmp,
-        );
-        observedStderr = result.stderr;
-        return {
-          ok: true as const,
-          connectionId: input.connectionId,
-          connectionName: 'Local test runner',
-          ...result,
-          durationMs: 1,
-        };
-      },
-    );
-    const transport = new RemoteConnectionSshRunnerTransport(
-      { executeRunnerCommand } as unknown as RemoteConnectionsService,
-      CONNECTION_ID,
-    );
+  it.runIf(process.platform !== 'win32')(
+    'rejects a tampered SSH stream before archive extraction',
+    async () => {
+      const remoteTmp = await mkdtemp(
+        path.join(tmpdir(), 'clodex-ssh-runner-tamper-'),
+      );
+      let observedStderr = '';
+      const executeRunnerCommand = vi.fn(
+        async (input: {
+          command: string;
+          stdin?: Uint8Array;
+          connectionId: string;
+        }) => {
+          const result = await runLocalShell(
+            input.command,
+            Buffer.concat([
+              Buffer.from(input.stdin ?? []),
+              Buffer.from('tamper'),
+            ]),
+            remoteTmp,
+          );
+          observedStderr = result.stderr;
+          return {
+            ok: true as const,
+            connectionId: input.connectionId,
+            connectionName: 'Local test runner',
+            ...result,
+            durationMs: 1,
+          };
+        },
+      );
+      const transport = new RemoteConnectionSshRunnerTransport(
+        { executeRunnerCommand } as unknown as RemoteConnectionsService,
+        CONNECTION_ID,
+      );
 
-    try {
-      await expect(
-        transport.prepareWorkspace({
-          snapshotHash: SNAPSHOT_HASH,
-          workspaceRoot: '/local/workspace',
-          repositoryRevision: 'abc123',
-          dirtyPatchHash: 'b'.repeat(64),
-          materialization: {
-            version: 1,
-            archiveFormat: 'tar-gzip',
-            archive: ARCHIVE,
-            archiveHash: ARCHIVE_HASH,
-            totalBytes: ARCHIVE.byteLength,
-          },
-        }),
-      ).rejects.toThrow('could not prepare');
-      expect(observedStderr).toContain('CLODEX_ERROR=archive-hash-mismatch');
-      expect(await readdir(remoteTmp)).toEqual([]);
-    } finally {
-      await rm(remoteTmp, { recursive: true, force: true });
-    }
-  });
+      try {
+        await expect(
+          transport.prepareWorkspace({
+            snapshotHash: SNAPSHOT_HASH,
+            workspaceRoot: '/local/workspace',
+            repositoryRevision: 'abc123',
+            dirtyPatchHash: 'b'.repeat(64),
+            materialization: {
+              version: 1,
+              archiveFormat: 'tar-gzip',
+              archive: ARCHIVE,
+              archiveHash: ARCHIVE_HASH,
+              totalBytes: ARCHIVE.byteLength,
+            },
+          }),
+        ).rejects.toThrow('could not prepare');
+        expect(observedStderr).toContain('CLODEX_ERROR=archive-hash-mismatch');
+        expect(await readdir(remoteTmp)).toEqual([]);
+      } finally {
+        await rm(remoteTmp, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('never executes or deletes an unsafe remote workspace handle', async () => {
     const executeRunnerCommand = vi.fn(async () => success('ok\n'));

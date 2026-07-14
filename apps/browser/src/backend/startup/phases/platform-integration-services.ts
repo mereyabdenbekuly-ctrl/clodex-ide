@@ -20,6 +20,7 @@ import { UserExperienceService } from '../../services/experience';
 import { FilePickerService } from '../../services/file-picker';
 import type { GitService } from '../../services/git';
 import { HostedPullRequestService } from '../../services/hosted-pull-request';
+import { ShellCapabilityBroker } from '../../services/guardian/shell-capability-broker';
 import type { IdentifierService } from '../../services/identifier';
 import type { KartonService } from '../../services/karton';
 import type { Logger } from '../../services/logger';
@@ -42,6 +43,7 @@ import type { setupUrlHandlers } from '../url-routing';
 import {
   getBuiltinSkillsPath,
   getInstalledPluginsDir,
+  getShellCapabilityAuditPath,
 } from '../../utils/paths';
 
 type ToolboxCreateParameters = Parameters<typeof ToolboxService.create>;
@@ -279,6 +281,9 @@ export async function runPlatformIntegrationServicesPhase(
     credentialsService,
     gitService,
   });
+  const shellCapabilitySecurity = await ShellCapabilityBroker.create({
+    auditPath: getShellCapabilityAuditPath(),
+  });
   const toolboxService = await ToolboxService.create(
     logger,
     uiKarton,
@@ -299,7 +304,7 @@ export async function runPlatformIntegrationServicesPhase(
     hostAgentStateMutations,
     attachments,
     persistence.memoryNotes,
-    agentHostProcessService,
+    shellCapabilitySecurity,
     protectedFiles,
   );
   toolboxService.setNetworkPolicyEvaluator(

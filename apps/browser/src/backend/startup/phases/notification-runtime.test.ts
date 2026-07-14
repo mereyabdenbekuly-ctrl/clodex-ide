@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { FaviconService } from '../../services/favicon';
 import type { HistoryService } from '../../services/history';
 import type { KartonService } from '../../services/karton';
@@ -329,8 +330,8 @@ describe('runNotificationRuntimePhase', () => {
     expect(mocks.notificationSoundsCreate).toHaveBeenCalledWith(
       logger,
       uiKarton,
-      '/app/assets/sounds',
-      '/user-data/imported-sound-packs',
+      path.join('/app', 'assets', 'sounds'),
+      path.join('/user-data', 'imported-sound-packs'),
       currentConfig,
     );
     expect(mocks.ensureRipgrepInstalled).toHaveBeenCalledWith({
