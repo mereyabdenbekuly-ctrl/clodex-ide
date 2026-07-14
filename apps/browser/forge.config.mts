@@ -79,7 +79,11 @@ const resolvePackagerIconPath = (): string => {
 
 const packagerIconPath = resolvePackagerIconPath();
 
-if (allowUnsignedLocalBuild && process.env.CI) {
+if (
+  allowUnsignedLocalBuild &&
+  process.env.CI &&
+  buildConstants.__APP_RELEASE_CHANNEL__ !== 'dev'
+) {
   throw new Error(
     'CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD is forbidden in CI release builds',
   );

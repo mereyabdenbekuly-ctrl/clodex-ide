@@ -362,6 +362,7 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=8192"
           BUILD_MODE: production
           RELEASE_CHANNEL: dev
+          CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD: ${{ runner.os == 'macOS' && 'true' || 'false' }}
 
       - name: Smoke Test (Linux - install xvfb)
         if: runner.os == 'Linux'
@@ -408,6 +409,8 @@ jobs:
       - name: Dictation Capability Smoke (Linux)
         if: runner.os == 'Linux'
         timeout-minutes: 2
+        env:
+          ELECTRON_DISABLE_SANDBOX: "1"
         run: >-
           xvfb-run --auto-servernum
           pnpm --dir apps/browser smoke:dictation-capabilities --

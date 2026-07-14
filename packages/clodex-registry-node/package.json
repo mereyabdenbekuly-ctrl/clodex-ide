@@ -1,0 +1,28 @@
+{
+  "name": "@clodex/registry-node",
+  "version": "0.1.0",
+  "description": "Honest local POSIX snapshot adapter for Clodex scoped registry heads.",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clodex/contracts": "workspace:*",
+    "@clodex/registry": "workspace:*"
+  },
+  "devDependencies": {
+    "@clodex/typescript-config": "workspace:*",
+    "@types/node": "22.15.2",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

@@ -593,7 +593,9 @@ export function AutomationsSettingsSection() {
   );
   const failedCount = useMemo(
     () =>
-      snapshot?.recentRuns.filter((run) => run.status === 'failed').length ?? 0,
+      snapshot?.recentRuns.filter(
+        (run) => run.status === 'failed' || run.status === 'uncertain',
+      ).length ?? 0,
     [snapshot],
   );
 
@@ -686,7 +688,7 @@ export function AutomationsSettingsSection() {
               icon={<RotateCcwIcon className="size-4" />}
             />
             <SettingsSummaryCard
-              label="recent failed runs"
+              label="recent failed/uncertain runs"
               value={failedCount}
               icon={<CircleAlertIcon className="size-4" />}
             />
@@ -881,7 +883,7 @@ export function AutomationsSettingsSection() {
           <section className="space-y-3">
             <SettingsSectionHeader
               title="Recent runs"
-              description="The local ledger keeps the latest scheduler outcomes and retry details."
+              description="The local ledger keeps the latest one-shot scheduler outcomes."
             />
             <SettingsPanel className="overflow-hidden">
               {snapshot.recentRuns.length === 0 ? (
@@ -902,7 +904,8 @@ export function AutomationsSettingsSection() {
                     >
                       {run.status === 'succeeded' ? (
                         <CheckCircle2Icon className="mt-0.5 size-4 text-success-solid" />
-                      ) : run.status === 'failed' ? (
+                      ) : run.status === 'failed' ||
+                        run.status === 'uncertain' ? (
                         <CircleAlertIcon className="mt-0.5 size-4 text-error-solid" />
                       ) : (
                         <Loader2Icon className="mt-0.5 size-4 text-token-text-tertiary" />

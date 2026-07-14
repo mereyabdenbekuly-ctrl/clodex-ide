@@ -4,6 +4,9 @@
 - **Source specification:** ../INTENT_CONTRACT_SPEC.md
 - **Feature-gate rule:** Artifact Bridge write authority remains disabled until
   Session 5 promotion criteria pass.
+- **Current working-tree verification:** `UNEXECUTED`. GitHub CI is green at
+  commit `1ad58e67`, but that is the pre-tranche baseline and does not validate
+  the current source-only P0 closure.
 
 ## Progress
 
@@ -12,8 +15,8 @@
 | 1. CI and protocol truth                     | COMPLETE    | Pages is in mandatory typecheck; shared v2 protocol scaffolding is tested but is not the production generated-app bridge                                                     |
 | 2. Session and navigation boundary           | COMPLETE    | Document-bound transport is wired fail-closed in main, has ordered teardown, and passed 111/111 focused tests plus all required typechecks                                   |
 | 3. Resolver and canonical authority approval | COMPLETE    | Local-agent resolver, trusted reviewer, canonical current-profile review, exact-byte revision lifecycle, and isolated-app egress controls passed 252/252 tests               |
-| 4. Atomic authorization-to-effect safety     | IN_PROGRESS | Grant epochs, MCP commitments, true adapter fences, reviewed MCP WAL/no-retry closure, and async UNCERTAIN handling pass focused tests; universal effect WAL remains blocked |
-| 5. Safe Coding vertical slice and promotion  | IN_PROGRESS | Ten independent reference packages pass 230/230 tests; atomic production wiring, OS confinement, protected heads, and authority promotion remain blocked                     |
+| 4. Atomic authorization-to-effect safety     | IMPLEMENTED_UNVERIFIED | Universal ask-agent/async-MCP WAL, universal scheduled/manual Automation WAL, central MCP dispatch fencing, shell brokering, sandbox/OpenManus fail-closed changes, cloud lease checks, and mount narrowing are source-complete but intentionally unexecuted; external atomicity and protected heads remain blocked |
+| 5. Safe Coding vertical slice and promotion  | IMPLEMENTED_UNVERIFIED | Tested reference baseline remains historical; atomic control plane, signed registry, Linux adapters, and fail-closed production bootstrap now have browser composition with `provider: null` and ordered admission teardown, but the tranche is unexecuted and gates remain default-off |
 
 ## Session 1 — CI and protocol truth
 
@@ -270,19 +273,50 @@ Implemented and verified:
   browser, MCP runtime, and agent-core typechecks; MCP host build; and
   bundled-asset validation pass.
 
-Session 4 remains `IN_PROGRESS`. The durable WAL and exact action commitment are
-not yet universal for direct ask-agent, automation, or ordinary async MCP
-effects, and automation definition/model-adapter identity is not yet
-review-bound. Automation is also a composite create-agent→mount/message effect:
-the initial upsert is fenced, but later partial failure has no universal durable
-`UNCERTAIN` or compensation closure. Runtime grant revisions do not prove
-durable anti-rollback, and the local audit hash chain has no independently
-protected head. No feature-gate default or write/package/plugin promotion
-changed, and no packaged Electron smoke is claimed. Production `main.ts`
-intentionally does not pass the write, sensitive-egress, async-operation,
-runtime-quota, lifecycle, inspector, ephemeral-grant, or package-capability
-enablement callbacks into Artifact Bridge; their feature-gate definitions alone
-therefore cannot promote those authorities before Session 5.
+Session 4 source is now `IMPLEMENTED_UNVERIFIED`. The closure tranche adds:
+
+- universal Artifact Bridge WAL classes for direct ask-agent, automation, and
+  ordinary async MCP, with exact action/definition/model-adapter commitments,
+  deterministic request-scoped effect IDs, no-replay recovery, and durable
+  `UNCERTAIN` closure after partial composite automation effects;
+- a separate durable one-shot AutomationService WAL for **all** manual, timer,
+  system-resume, and startup-reconciliation occurrences. It commits the exact
+  definition and attempt, writes `PREPARED` before `DISPATCHING`, and recovers
+  `PREPARED → FAILED_PRE_EFFECT` and `DISPATCHING → UNCERTAIN` without replay;
+- a central MCP trusted **tool-call** dispatch boundary intended to cover
+  registry MCP and Clodex-cloud MCP. It binds the exact descriptor, trusted classification,
+  authority binding, runtime generation, and Guardian revision; any
+  approval-required dispatch must claim a single exact affirmative approval
+  record and consume it at the final synchronous fence. Annotation or
+  `requiresApproval` metadata may escalate risk but cannot grant authority;
+  resource/prompt access must remain settings-only while corresponding agent
+  tools are disabled;
+- production construction of `ShellCapabilityBroker`, injected as a required
+  Toolbox shell security dependency with a dedicated audit path; PTY creation
+  and command/stdin/kill/poll all stage and one-shot consume exact authority;
+- JavaScript sandbox removal of remote/data module execution and ambient
+  `fs`/`fsPromises`/`require('fs')`; mount updates do not mint worker filesystem
+  authority;
+- OpenManus protocol narrowing and removal of raw host process execution,
+  credentials, host paths, argv/environment, and endpoint/model authority. No
+  OS-confined brokered adapter is installed in production, so it fails closed;
+- cloud ownership/lease checks at routing plus the local executor, remote-turn,
+  host model, and host tool dispatch boundaries; a missing browser-executor
+  ownership callback defaults to deny, and Swarm must fence each direct model,
+  tool, and history-producing dispatch;
+- exact per-agent mount-permission lookup, read-only fallback for missing
+  permission, and removal of Swarm fallback auto-mounting from stored, global,
+  last-used, and recent workspaces. Cross-agent guessed prefixes remain denied;
+  read-only fallback applies only to an already attached mount.
+
+No item in that list was tested, typechecked, linted, built, or smoke-tested in
+the current tranche. The green GitHub CI head `1ad58e67` predates these changes.
+Synchronous read-MCP external semantics, atomicity with the external provider/
+MCP/agent store, independently protected anti-rollback heads, target-OS
+confinement evidence, and packaged Electron smoke remain outside the claim. No
+feature-gate default or write/package/plugin promotion changed. Production
+authority remains absent unless a separately reviewed, verified composition is
+installed.
 
 ## Session 5 — Safe Coding vertical slice and promotion
 
@@ -364,20 +398,35 @@ preparedEffect.execute`. Constructor ports, runner identity, adapter binding,
   **2215/2215 tests across 269 files**, and all six browser typecheck targets
   pass.
 
-Session 5 remains `IN_PROGRESS`. The kernel and default evidence adapters are
-in-memory and non-durable; the POSIX ledger adapter is durable only inside its
-declared trusted-local-filesystem boundary and is not atomically linked to
-kernel state, effect execution, evidence signing, or protected checkpoint
-publication. The reference runtime has no host filesystem, Git subprocess,
-shell, process, network, credential, browser migration adapter, or production
-promotion path. Side-effect-free `adapter.prepare` and operation-specific
-capability ports are trusted assumptions, not OS confinement. Synchronous
-`commitPermit` is only local in-process linearization, not a durable or
-cross-process commit. The scoped adapter registry digest is supplied by trusted
-deployment configuration; no signed registry manifest proves root-object
-membership yet. Production key custody, independently protected anti-rollback
-heads, cross-system atomic transactions, real `openat2` filesystem confinement,
-hardened Git execution, and a real networkless sandbox remain blocking. No
-feature-gate default changed and no packaged Electron smoke is claimed.
-Independent audit found no remaining P0/P1 defect inside the stated reference
-boundaries. See [Safe Coding Autopilot MVP](SAFE_CODING_AUTOPILOT_MVP.md).
+Session 5 source is `IMPLEMENTED_UNVERIFIED`. The latest green GitHub CI head is
+`1ad58e67`; those results are a pre-tranche baseline and must not be attributed
+to later source changes. A P0 closure tranche adds `@clodex/control-plane` and
+its POSIX adapter,
+`@clodex/registry` and its honest non-protected POSIX head, plus
+`@clodex/adapters-node` with Linux openat2 and digest-pinned container
+implementations. `@clodex/production` adds a fail-closed bootstrap that returns
+no authority unless exact signed membership, an independently protected head,
+confinement attestation, complete recovery admission, promotion evidence, and a
+separate reviewed gate decision all pass. It exposes no caller-injected effect
+and does not enable a gate.
+
+Browser source now composes that bootstrap only through
+`SafeCodingProductionAuthorityService`. `main.ts` deliberately supplies
+`provider: null`, so no authority is published; only fixed control-plane and
+adapter callbacks can ever be exposed, never the raw authority handle or effect
+port. The shutdown coordinator first stops admission and drains active Safe
+Coding operations before tearing down effect-serving dependencies. This browser
+composition is also unexecuted and is not promotion evidence. The complete
+testing work is saved in
+[P0_TESTING_HANDOFF.md](P0_TESTING_HANDOFF.md); no test, typecheck, lint,
+native build, container smoke, install, or validation command was run for this
+tranche.
+
+The new code does not eliminate the external-effect transaction gap. Production
+key custody, independently protected linearizable anti-rollback heads,
+cross-store trust/revocation atomicity, compiled-helper and target-kernel
+evidence, protected container-daemon identity, loaded LSM/seccomp evidence,
+trusted non-null production provider/deployment inputs, and packaged Electron
+validation remain blocking. No feature-gate default changed and no packaged
+Electron smoke is claimed. See
+[Safe Coding Autopilot MVP](SAFE_CODING_AUTOPILOT_MVP.md).

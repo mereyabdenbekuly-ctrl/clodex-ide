@@ -17,6 +17,7 @@ import { join, resolve, sep } from 'node:path';
 import type { ToolApprovalMode } from '@clodex/agent-core/types/tool-approval';
 import {
   createShellCapabilityAction,
+  createShellSessionCapabilityAction,
   type ShellCapabilitySecurityDeps,
 } from './shell-capability';
 
@@ -305,15 +306,43 @@ export const createShellSession = (
   shellService: ShellExecutionBackend,
   agentInstanceId: string,
   getMountedPaths: MountedPathsGetter,
+  capabilitySecurity?: ShellCapabilitySecurityDeps,
 ) => {
   return tool({
     description: CREATE_SHELL_SESSION_DESCRIPTION,
     inputSchema: createShellSessionToolInputSchema,
     strict: false,
-    needsApproval: async () => false,
+    needsApproval: async (
+      input: CreateShellSessionToolInput,
+      { toolCallId },
+    ) => {
+      if (!capabilitySecurity) {
+        throw new Error(
+          'Shell capability broker unavailable; session creation blocked',
+        );
+      }
+      const cwd = resolveCwd(input.cwd, getMountedPaths);
+      await capabilitySecurity.stage({
+        agentInstanceId,
+        toolCallId,
+        action: createShellSessionCapabilityAction(input, cwd),
+        authorization: 'policy-approved',
+      });
+      return false;
+    },
     execute: async (params: CreateShellSessionToolInput, { toolCallId }) => {
       try {
+        if (!capabilitySecurity) {
+          throw new Error(
+            'Shell capability broker unavailable; session creation blocked',
+          );
+        }
         const cwd = resolveCwd(params.cwd, getMountedPaths);
+        await capabilitySecurity.consume({
+          agentInstanceId,
+          toolCallId,
+          action: createShellSessionCapabilityAction(params, cwd),
+        });
         const sessionId = await shellService.createSession(
           agentInstanceId,
           toolCallId,

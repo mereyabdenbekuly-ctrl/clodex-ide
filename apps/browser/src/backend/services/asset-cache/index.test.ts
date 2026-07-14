@@ -32,7 +32,12 @@ describe('AssetCache protected migration', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === 'win32' ? 10 : 0,
+      retryDelay: 100,
+    });
   });
 
   it('encrypts legacy presigned URLs and authenticates existing rows', async () => {

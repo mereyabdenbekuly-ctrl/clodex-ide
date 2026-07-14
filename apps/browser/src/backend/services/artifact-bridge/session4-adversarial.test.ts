@@ -19,6 +19,7 @@ import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import type { McpRegistryService } from '../mcp';
 import type { ArtifactBridgeAuditRecorder } from './audit-ledger';
+import { createArtifactBridgeAgentAskModelAdapterIdentity } from './effect-commitment';
 import { ArtifactBridgeService, type ArtifactBridgePersistence } from './index';
 
 const context: ArtifactBridgeContext = {
@@ -28,6 +29,28 @@ const context: ArtifactBridgeContext = {
 };
 
 const automationId = '1cbd31a0-af7b-4b5a-948d-e782dea80d82';
+const automationDefinition = {
+  id: automationId,
+  title: 'Approved report',
+  prompt: 'Run the approved report',
+  enabled: true,
+  schedule: { kind: 'interval' as const, everyMs: 60_000 },
+  missedRunPolicy: 'run-on-wake' as const,
+  retryPolicy: {
+    maxAttempts: 1,
+    initialBackoffMs: 5_000,
+    maxBackoffMs: 5_000,
+  },
+  executionTarget: 'local' as const,
+  workspacePaths: [],
+  modelId: 'test/model',
+  approvalMode: 'alwaysAsk' as const,
+  grant: { capabilities: [], expiresAt: null },
+  createdAt: '2026-07-14T00:00:00.000Z',
+  updatedAt: '2026-07-14T00:00:00.000Z',
+  nextRunAt: '2026-07-14T00:01:00.000Z',
+  lastRunAt: null,
+};
 
 const identity: GeneratedAppIdentity = {
   manifestSchemaVersion: 1,
@@ -208,6 +231,9 @@ function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
   } as unknown as McpRegistryService;
 
   const askEffect = vi.fn(async () => 'bounded answer');
+  const resolveAgentAskModelAdapterIdentity = vi.fn(() =>
+    createArtifactBridgeAgentAskModelAdapterIdentity('test/model'),
+  );
   const askAgent = vi.fn(
     async (
       _context: ArtifactBridgeContext,
@@ -233,14 +259,20 @@ function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
       },
     ) => {
       options?.beforeDispatch?.({
-        automation: { id: requestedAutomationId },
-        prompt: '',
+        automation: {
+          ...structuredClone(automationDefinition),
+          id: requestedAutomationId,
+        },
+        prompt: automationDefinition.prompt,
         attempt: 1,
       });
       return await automationEffect();
     },
   );
   const resolveApp = vi.fn(async () => ({ identity, manifest }));
+  const resolveAutomationDefinition = vi.fn(() =>
+    structuredClone(automationDefinition),
+  );
 
   return {
     karton,
@@ -258,9 +290,11 @@ function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
     callTool,
     mcpEffect,
     askAgent,
+    resolveAgentAskModelAdapterIdentity,
     askEffect,
     runAutomation,
     automationEffect,
+    resolveAutomationDefinition,
     resolveApp,
   };
 }
@@ -290,7 +324,10 @@ async function createService(
       ? { areAsyncOperationsEnabled: options.asyncOperations }
       : {}),
     askAgent: harness.askAgent,
+    resolveAgentAskModelAdapterIdentity:
+      harness.resolveAgentAskModelAdapterIdentity,
     runAutomation: harness.runAutomation,
+    resolveAutomationDefinition: harness.resolveAutomationDefinition,
     resolveApp: harness.resolveApp,
     ...(options.auditRecorder ? { auditRecorder: options.auditRecorder } : {}),
     ...(options.now ? { now: options.now } : {}),

@@ -1,8 +1,4 @@
 import { z } from 'zod';
-import {
-  readPersistedData,
-  writePersistedData,
-} from '../../utils/persisted-data';
 
 export const artifactBridgeEffectWalStateSchema = z.enum([
   'PREPARED',
@@ -20,9 +16,30 @@ const effectWalRecordSchema = z
   .object({
     version: z.literal(1),
     effectId: z.string().uuid(),
-    kind: z.enum(['mcp-write', 'sensitive-mcp']),
+    kind: z.enum([
+      'mcp-write',
+      'sensitive-mcp',
+      'agent-ask',
+      'automation',
+      'mcp-read-async',
+    ]),
     commitmentHash: z.string().regex(/^[a-f0-9]{64}$/),
     ticketHash: z.string().regex(/^[a-f0-9]{64}$/),
+    actionHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable()
+      .default(null),
+    definitionHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable()
+      .default(null),
+    adapterHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable()
+      .default(null),
     state: artifactBridgeEffectWalStateSchema,
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
@@ -58,6 +75,7 @@ export class PersistedArtifactBridgeEffectWal
   implements ArtifactBridgeEffectWalPersistence
 {
   public async load(): Promise<unknown> {
+    const { readPersistedData } = await import('@/utils/persisted-data');
     return await readPersistedData(
       'artifact-effect-wal',
       effectWalStoreSchema,
@@ -71,6 +89,7 @@ export class PersistedArtifactBridgeEffectWal
   }
 
   public async save(store: EffectWalStore): Promise<void> {
+    const { writePersistedData } = await import('@/utils/persisted-data');
     await writePersistedData(
       'artifact-effect-wal',
       effectWalStoreSchema,
@@ -99,6 +118,9 @@ export interface ArtifactBridgeEffectPreparation {
   kind: ArtifactBridgeEffectWalRecord['kind'];
   commitmentHash: string;
   ticketHash: string;
+  actionHash?: string;
+  definitionHash?: string;
+  adapterHash?: string;
 }
 
 const MAX_EFFECT_WAL_RECORDS = 10_000;
@@ -107,6 +129,11 @@ const TERMINAL_STATES = new Set<ArtifactBridgeEffectWalState>([
   'RESULT_UNAVAILABLE',
   'UNCERTAIN',
   'FAILED_PRE_EFFECT',
+]);
+const UNIVERSAL_EFFECT_KINDS = new Set<ArtifactBridgeEffectWalRecord['kind']>([
+  'agent-ask',
+  'automation',
+  'mcp-read-async',
 ]);
 
 /**
@@ -148,11 +175,45 @@ export class ArtifactBridgeEffectWal {
     const input = z
       .object({
         effectId: z.string().uuid(),
-        kind: z.enum(['mcp-write', 'sensitive-mcp']),
+        kind: z.enum([
+          'mcp-write',
+          'sensitive-mcp',
+          'agent-ask',
+          'automation',
+          'mcp-read-async',
+        ]),
         commitmentHash: z.string().regex(/^[a-f0-9]{64}$/),
         ticketHash: z.string().regex(/^[a-f0-9]{64}$/),
+        actionHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        definitionHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        adapterHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
       })
       .strict()
+      .superRefine((value, context) => {
+        if (!UNIVERSAL_EFFECT_KINDS.has(value.kind)) return;
+        for (const field of [
+          'actionHash',
+          'definitionHash',
+          'adapterHash',
+        ] as const) {
+          if (!value[field]) {
+            context.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [field],
+              message: `${field} is required for a universal effect`,
+            });
+          }
+        }
+      })
       .parse(raw);
     return await this.mutate(async (next) => {
       const existing = next.records[input.effectId];
@@ -167,6 +228,9 @@ export class ArtifactBridgeEffectWal {
       const record = effectWalRecordSchema.parse({
         version: 1,
         ...input,
+        actionHash: input.actionHash ?? null,
+        definitionHash: input.definitionHash ?? null,
+        adapterHash: input.adapterHash ?? null,
         state: 'PREPARED',
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -184,6 +248,9 @@ export class ArtifactBridgeEffectWal {
     effectId: string;
     commitmentHash: string;
     ticketHash: string;
+    actionHash?: string;
+    definitionHash?: string;
+    adapterHash?: string;
   }): Promise<ArtifactBridgeEffectWalRecord> {
     return await this.transition(input, 'DISPATCHING');
   }
@@ -222,17 +289,47 @@ export class ArtifactBridgeEffectWal {
 
   private async recoverInterruptedDispatches(): Promise<void> {
     const interrupted = Object.values(this.store.records).filter(
-      (record) => record.state === 'DISPATCHING',
+      (record) =>
+        record.state === 'DISPATCHING' ||
+        (record.state === 'PREPARED' &&
+          UNIVERSAL_EFFECT_KINDS.has(record.kind)) ||
+        (record.state === 'COMMITTED' &&
+          UNIVERSAL_EFFECT_KINDS.has(record.kind)),
     );
     if (interrupted.length === 0) return;
     await this.mutate(async (next) => {
       const timestamp = new Date(this.now()).toISOString();
       for (const record of Object.values(next.records)) {
-        if (record.state !== 'DISPATCHING') continue;
-        record.state = 'UNCERTAIN';
+        if (record.state === 'DISPATCHING') {
+          record.state = 'UNCERTAIN';
+          record.error =
+            'Process stopped while effect dispatch was in progress';
+        } else if (
+          record.state === 'PREPARED' &&
+          UNIVERSAL_EFFECT_KINDS.has(record.kind)
+        ) {
+          // Direct/async universal requests have no durable caller continuation.
+          // Burning an orphaned PREPARED record prevents startup or request
+          // recovery from silently replaying it under the same request ID.
+          record.state = 'FAILED_PRE_EFFECT';
+          record.error =
+            'Process stopped before effect dispatch; a fresh request is required';
+        } else if (
+          record.state === 'COMMITTED' &&
+          UNIVERSAL_EFFECT_KINDS.has(record.kind)
+        ) {
+          // Universal results are intentionally held only by the live caller or
+          // async-operation registry. A restart proves that the committed result
+          // can no longer be delivered, so preserve no-replay while recording
+          // the loss explicitly instead of leaving a misleading COMMITTED state.
+          record.state = 'RESULT_UNAVAILABLE';
+          record.error =
+            'Process stopped after effect commit; the result is unavailable';
+        } else {
+          continue;
+        }
         record.updatedAt = timestamp;
         record.terminalAt = timestamp;
-        record.error = 'Process stopped while effect dispatch was in progress';
       }
     });
   }
@@ -244,6 +341,9 @@ export class ArtifactBridgeEffectWal {
       ticketHash?: string;
       resultHash?: string;
       error?: string;
+      actionHash?: string;
+      definitionHash?: string;
+      adapterHash?: string;
     },
     target: ArtifactBridgeEffectWalState,
   ): Promise<ArtifactBridgeEffectWalRecord> {
@@ -263,6 +363,18 @@ export class ArtifactBridgeEffectWal {
           .regex(/^[a-f0-9]{64}$/)
           .optional(),
         error: z.string().max(500).optional(),
+        actionHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        definitionHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        adapterHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
       })
       .strict()
       .parse(raw);
@@ -276,6 +388,9 @@ export class ArtifactBridgeEffectWal {
           kind: record.kind,
           commitmentHash: input.commitmentHash,
           ticketHash: input.ticketHash,
+          actionHash: input.actionHash,
+          definitionHash: input.definitionHash,
+          adapterHash: input.adapterHash,
         });
       }
       if (!isLegalTransition(record.state, target)) {
@@ -301,7 +416,13 @@ export class ArtifactBridgeEffectWal {
     if (
       record.kind !== input.kind ||
       record.commitmentHash !== input.commitmentHash ||
-      record.ticketHash !== input.ticketHash
+      record.ticketHash !== input.ticketHash ||
+      (input.actionHash !== undefined &&
+        record.actionHash !== input.actionHash) ||
+      (input.definitionHash !== undefined &&
+        record.definitionHash !== input.definitionHash) ||
+      (input.adapterHash !== undefined &&
+        record.adapterHash !== input.adapterHash)
     ) {
       throw new Error('Artifact Bridge effect ticket or commitment mismatch');
     }

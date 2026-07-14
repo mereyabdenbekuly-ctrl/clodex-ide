@@ -117,6 +117,7 @@ export const automationRunStatusSchema = z.enum([
   'running',
   'succeeded',
   'failed',
+  'uncertain',
   'cancelled',
   'skipped',
 ]);

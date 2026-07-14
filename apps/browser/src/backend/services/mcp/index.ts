@@ -19,6 +19,7 @@ import {
   type ResolvedMcpTransport,
 } from '@clodex/mcp-runtime';
 import type { SecretEntry } from '@shared/credential-types';
+import type { GuardianPolicyChecker } from '@shared/guardian';
 import { DisposableService } from '../disposable';
 import type { CredentialsService } from '../credentials';
 import type { Logger } from '../logger';
@@ -31,6 +32,16 @@ import {
   type McpHostSupervisorOptions,
 } from '../../mcp-host';
 import type { McpOAuthService } from './oauth';
+import {
+  assertTrustedMcpDescriptorCommitment,
+  assertTrustedMcpDispatchCommitment,
+  authorizeTrustedMcpDispatch,
+  createTrustedRegistryMcpDescriptorCommitment,
+  createTrustedMcpDispatchCommitment,
+  type TrustedMcpDescriptorCommitment,
+  type TrustedMcpDispatchCommitment,
+  type TrustedMcpFinalAuthority,
+} from './trusted-dispatch-gateway';
 
 const STORAGE_NAME = 'mcp-registry' as const;
 const STORAGE_OPTIONS = {
@@ -161,6 +172,8 @@ export class McpRegistryService extends DisposableService {
     McpResourceTemplateDescriptor[]
   >();
   private readonly promptCache = new Map<string, McpPromptDescriptor[]>();
+  private guardianPolicyChecker: GuardianPolicyChecker | null = null;
+  private guardianPolicyRevision = 0;
   private readonly createHost: NonNullable<
     McpRegistryServiceOptions['createHost']
   >;
@@ -227,6 +240,16 @@ export class McpRegistryService extends DisposableService {
     };
   }
 
+  public getToolDispatchCommitment(
+    serverId: string,
+    toolName: string,
+  ): TrustedMcpDispatchCommitment {
+    return createRegistryToolDispatchCommitments(
+      this.getToolDispatchSnapshot(serverId, toolName),
+      this.guardianPolicyRevision,
+    ).dispatch;
+  }
+
   public setElicitationHandler(
     handler:
       | ((
@@ -239,6 +262,15 @@ export class McpRegistryService extends DisposableService {
   ): void {
     this.assertNotDisposed();
     this.elicitationHandler = handler;
+  }
+
+  public setGuardianPolicyChecker(checker: GuardianPolicyChecker | null): void {
+    this.assertNotDisposed();
+    if (this.guardianPolicyRevision >= Number.MAX_SAFE_INTEGER) {
+      throw new Error('MCP Guardian policy revision space is exhausted');
+    }
+    this.guardianPolicyChecker = checker;
+    this.guardianPolicyRevision += 1;
   }
 
   public listRuntimeStates(): McpServerRuntimeState[] {
@@ -595,8 +627,9 @@ export class McpRegistryService extends DisposableService {
     const host = await this.ensureHost();
     const tools = await host.listTools(serverId);
     this.requireCurrentServerConfigurationRevision(serverId, requestedRevision);
-    this.toolCache.set(serverId, structuredClone(tools));
-    return tools;
+    const committed = commitUniqueMcpToolDescriptors(tools);
+    this.toolCache.set(serverId, committed);
+    return structuredClone(committed);
   }
 
   public async listResources(
@@ -725,13 +758,70 @@ export class McpRegistryService extends DisposableService {
       timeoutMs?: number;
       signal?: AbortSignal;
       agentInstanceId?: string;
+      toolCallId?: string;
+      finalAuthority?: TrustedMcpFinalAuthority;
+      expectedDescriptorCommitment?: TrustedMcpDescriptorCommitment;
+      expectedDispatchCommitment?: TrustedMcpDispatchCommitment;
       beforeDispatch?: () => void;
     } = {},
   ): Promise<unknown> {
     this.assertNotDisposed();
     await this.ensureConnected(serverId);
     const host = await this.ensureHost();
-    return await host.callTool(serverId, toolName, args, options);
+    const reviewed = createRegistryToolDispatchCommitments(
+      this.getToolDispatchSnapshot(serverId, toolName),
+      this.guardianPolicyRevision,
+    );
+    if (!options.expectedDispatchCommitment && !options.finalAuthority) {
+      throw new Error('MCP dispatch is missing trusted descriptor authority');
+    }
+    if (options.expectedDispatchCommitment) {
+      assertTrustedMcpDispatchCommitment(
+        options.expectedDispatchCommitment,
+        reviewed.dispatch,
+      );
+    }
+    if (options.expectedDescriptorCommitment) {
+      assertTrustedMcpDescriptorCommitment(
+        options.expectedDescriptorCommitment,
+        reviewed.descriptor,
+      );
+    }
+    const authorization = await authorizeTrustedMcpDispatch({
+      commitment: reviewed.dispatch,
+      assessGuardian: this.guardianPolicyChecker,
+      finalAuthority: options.finalAuthority,
+      effect: options.finalAuthority
+        ? {
+            principalId: options.agentInstanceId ?? 'mcp-registry',
+            toolCallId: options.toolCallId ?? 'external-dispatch',
+            arguments: args,
+          }
+        : undefined,
+    });
+    const callerFence = options.beforeDispatch;
+    const hostOptions = {
+      ...(options.timeoutMs !== undefined
+        ? { timeoutMs: options.timeoutMs }
+        : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.agentInstanceId
+        ? { agentInstanceId: options.agentInstanceId }
+        : {}),
+    };
+
+    return await host.callTool(serverId, toolName, args, {
+      ...hostOptions,
+      beforeDispatch: () => {
+        callerFence?.();
+        authorization.prepareFinalCheck();
+        const current = createRegistryToolDispatchCommitments(
+          this.getToolDispatchSnapshot(serverId, toolName),
+          this.guardianPolicyRevision,
+        );
+        authorization.assertCurrent(current.dispatch);
+      },
+    });
   }
 
   public async handleOAuthCallback(url: string): Promise<boolean> {
@@ -854,10 +944,16 @@ export class McpRegistryService extends DisposableService {
           // the cache from the committed connection.
           if (this.serverConnectionQueues.has(serverId)) return;
           if (kind === 'tools') {
-            this.toolCache.set(
-              serverId,
-              structuredClone(items as McpToolDescriptor[]),
-            );
+            try {
+              this.toolCache.set(
+                serverId,
+                commitUniqueMcpToolDescriptors(items as McpToolDescriptor[]),
+              );
+            } catch (error) {
+              this.toolCache.delete(serverId);
+              this.appendLog(serverId, 'error', toSafeErrorMessage(error));
+              return;
+            }
           } else if (kind === 'resources') {
             this.resourceCache.set(
               serverId,
@@ -1135,6 +1231,45 @@ export class McpRegistryService extends DisposableService {
       }
     }
   }
+}
+
+function createRegistryToolDispatchCommitments(
+  snapshot: McpToolDispatchSnapshot,
+  guardianPolicyRevision: number,
+) {
+  const trusted = createTrustedRegistryMcpDescriptorCommitment(
+    snapshot.server,
+    snapshot.descriptor,
+  );
+  if (trusted.evaluation.policy.decision === 'deny') {
+    throw new Error(
+      `MCP policy denied "${snapshot.server.id}/${snapshot.descriptor.name}"`,
+    );
+  }
+
+  return {
+    descriptor: trusted.descriptor,
+    dispatch: createTrustedMcpDispatchCommitment(trusted.descriptor, {
+      runtime: snapshot.runtime,
+      guardianPolicyRevision,
+    }),
+  };
+}
+
+function commitUniqueMcpToolDescriptors(
+  descriptors: McpToolDescriptor[],
+): McpToolDescriptor[] {
+  const committed = structuredClone(descriptors);
+  const names = new Set<string>();
+  for (const descriptor of committed) {
+    if (names.has(descriptor.name)) {
+      throw new Error(
+        `MCP catalog contains duplicate tool name "${descriptor.name}"`,
+      );
+    }
+    names.add(descriptor.name);
+  }
+  return committed;
 }
 
 function assertCredentialOrigin(

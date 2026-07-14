@@ -969,7 +969,7 @@ export class MountManagerService extends DisposableService {
       const wsPath = this.core.getWorkspacePathForPrefix(prefix);
       const rt = wsPath ? this.clientRuntimesPerPath.get(wsPath) : undefined;
       const permissions =
-        perAgent?.get(prefix) ?? ([...FULL_PERMISSIONS] as MountPermission[]);
+        perAgent?.get(prefix) ?? (['read'] as MountPermission[]);
       if (wsPath && rt) {
         result.push({ prefix, path: wsPath, permissions, clientRuntime: rt });
       }
@@ -990,6 +990,14 @@ export class MountManagerService extends DisposableService {
 
   public getWorkspacePathForPrefix(prefix: string): string | undefined {
     return this.core.getWorkspacePathForPrefix(prefix);
+  }
+
+  public getMountPermissionsForPrefix(
+    agentInstanceId: string,
+    prefix: string,
+  ): readonly MountPermission[] | undefined {
+    const permissions = this.agentPermissions.get(agentInstanceId)?.get(prefix);
+    return permissions ? [...permissions] : undefined;
   }
 
   public getAllMountedPaths(): Set<string> {

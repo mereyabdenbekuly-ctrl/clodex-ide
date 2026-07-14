@@ -17,7 +17,7 @@ import {
   type IsolatedAgentTurnResult,
 } from './isolated-agent-turn';
 
-export const AGENT_HOST_PROTOCOL_VERSION = 3;
+export const AGENT_HOST_PROTOCOL_VERSION = 4;
 export const AGENT_HOST_HEARTBEAT_INTERVAL_MS = 5_000;
 
 export interface AgentRuntimeSummary {
@@ -38,15 +38,8 @@ export interface AgentRuntimeSnapshot {
 export interface OpenManusExecutionRequest {
   prompt: string;
   mountPrefix: string;
-  workspacePath: string;
-  openManusHome: string;
-  pythonExecutable: string;
   timeoutMs: number;
-  modelId: string;
-  baseUrl: string;
-  apiKey: string;
   maxTokens: number;
-  environment: Record<string, string>;
 }
 
 export interface OpenManusExecutionResult {
@@ -54,8 +47,8 @@ export interface OpenManusExecutionResult {
   exitCode: number | null;
   signal?: string;
   timedOut: boolean;
-  workspacePath: string;
-  openManusHome: string;
+  mountPrefix: string;
+  runtimeId: string;
   stdout: string;
   stderr: string;
 }
@@ -438,17 +431,11 @@ function isOpenManusExecutionRequest(
 ): value is OpenManusExecutionRequest {
   return (
     isRecord(value) &&
+    hasExactKeys(value, ['prompt', 'mountPrefix', 'timeoutMs', 'maxTokens']) &&
     isNonEmptyString(value.prompt) &&
     isNonEmptyString(value.mountPrefix) &&
-    isNonEmptyString(value.workspacePath) &&
-    isNonEmptyString(value.openManusHome) &&
-    isNonEmptyString(value.pythonExecutable) &&
     isPositiveInteger(value.timeoutMs) &&
-    isNonEmptyString(value.modelId) &&
-    isNonEmptyString(value.baseUrl) &&
-    isNonEmptyString(value.apiKey) &&
-    isPositiveInteger(value.maxTokens) &&
-    isStringRecord(value.environment)
+    isPositiveInteger(value.maxTokens)
   );
 }
 
@@ -457,12 +444,26 @@ function isOpenManusExecutionResult(
 ): value is OpenManusExecutionResult {
   return (
     isRecord(value) &&
+    hasExactKeys(
+      value,
+      [
+        'message',
+        'exitCode',
+        'signal',
+        'timedOut',
+        'mountPrefix',
+        'runtimeId',
+        'stdout',
+        'stderr',
+      ],
+      ['signal'],
+    ) &&
     typeof value.message === 'string' &&
     (value.exitCode === null || Number.isInteger(value.exitCode)) &&
     (value.signal === undefined || typeof value.signal === 'string') &&
     typeof value.timedOut === 'boolean' &&
-    isNonEmptyString(value.workspacePath) &&
-    isNonEmptyString(value.openManusHome) &&
+    isNonEmptyString(value.mountPrefix) &&
+    isNonEmptyString(value.runtimeId) &&
     typeof value.stdout === 'string' &&
     typeof value.stderr === 'string'
   );
@@ -478,15 +479,23 @@ function isSerializedError(
   );
 }
 
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return (
-    isRecord(value) &&
-    Object.values(value).every((entry) => typeof entry === 'string')
-  );
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  if (Object.getOwnPropertySymbols(value).length !== 0) return false;
+  const keys = Object.keys(value);
+  const allowedSet = new Set(allowed);
+  const optionalSet = new Set(optional);
+  return (
+    keys.every((key) => allowedSet.has(key)) &&
+    allowed.every((key) => optionalSet.has(key) || keys.includes(key))
+  );
 }
 
 function isNonEmptyString(value: unknown): value is string {

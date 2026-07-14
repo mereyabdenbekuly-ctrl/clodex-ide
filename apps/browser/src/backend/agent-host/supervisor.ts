@@ -245,53 +245,11 @@ export class AgentHostProcessService extends DisposableService {
     options: { signal?: AbortSignal } = {},
   ): Promise<OpenManusExecutionResult> {
     this.assertNotDisposed();
-    if (!this.canExecuteAgentWorkloads || !this.launchId) {
-      throw new Error('Agent utility process is not ready for execution');
-    }
     if (options.signal?.aborted) throw createAbortError();
-
-    const requestId = randomUUID();
-    const launchId = this.launchId;
-    return await new Promise<OpenManusExecutionResult>((resolve, reject) => {
-      const handleAbort = () => {
-        const pending = this.pendingExecutions.get(requestId);
-        if (!pending) return;
-        this.pendingExecutions.delete(requestId);
-        pending.removeAbortListener();
-        this.safeSend({
-          type: 'cancel-execution',
-          launchId,
-          requestId,
-        });
-        reject(createAbortError());
-      };
-      const removeAbortListener = () => {
-        options.signal?.removeEventListener('abort', handleAbort);
-      };
-      this.pendingExecutions.set(requestId, {
-        resolve,
-        reject,
-        removeAbortListener,
-      });
-      options.signal?.addEventListener('abort', handleAbort, {
-        once: true,
-      });
-
-      if (
-        !this.safeSend({
-          type: 'execute-openmanus',
-          launchId,
-          requestId,
-          request,
-        })
-      ) {
-        this.pendingExecutions.delete(requestId);
-        removeAbortListener();
-        reject(
-          new Error('Failed to dispatch execution to agent utility process'),
-        );
-      }
-    });
+    void request;
+    throw new Error(
+      'Agent Host cannot execute OpenManus: an Electron utility process is not an OS-confined, credential-brokered adapter',
+    );
   }
 
   public async executeAgentTurn(

@@ -159,7 +159,7 @@ export class ExecutionTargetRouter implements AgentStepExecutor {
     this.now = options.now ?? Date.now;
     this.maxRecentTasks = options.maxRecentTasks ?? DEFAULT_MAX_RECENT_TASKS;
     this.isLocalExecutionAllowed =
-      options.isLocalExecutionAllowed ?? (() => true);
+      options.isLocalExecutionAllowed ?? (() => false);
   }
 
   public async execute(

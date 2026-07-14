@@ -1,0 +1,31 @@
+#include <tunables/global>
+
+profile clodex-container-v1 flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Docker stop/kill must still be able to signal the confined process.
+  signal (receive) peer=unconfined,
+
+  deny capability,
+  deny network,
+  deny mount,
+  deny umount,
+  deny pivot_root,
+  deny ptrace,
+
+  / r,
+  /** rix,
+
+  deny /workspace/** wklx,
+  /workspace/** r,
+
+  /scratch/** rwklix,
+  /tmp/** rwkl,
+
+  deny /proc/** wklx,
+  deny /sys/** wklx,
+  /dev/null rw,
+  deny /dev/** klx,
+  deny /run/** rwklx,
+  deny /var/run/** rwklx,
+}

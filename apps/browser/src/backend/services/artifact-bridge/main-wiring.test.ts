@@ -10,14 +10,19 @@ describe('Artifact Bridge production audit wiring', () => {
       path.resolve(directory, '../../main.ts'),
       'utf8',
     );
+    const normalizedMainSource = mainSource.replaceAll('\r\n', '\n');
 
-    expect(mainSource).toContain(
+    expect(normalizedMainSource).toContain(
       'new ArtifactBridgeAuditLedger(\n    getArtifactBridgeAuditPath(),',
     );
-    expect(mainSource).toContain(
+    expect(normalizedMainSource).toContain(
       'await artifactBridgeAuditLedger.listRecent(1);',
     );
-    expect(mainSource).toContain('auditRecorder: artifactBridgeAuditLedger,');
-    expect(mainSource).toContain('auditReader: artifactBridgeAuditLedger,');
+    expect(normalizedMainSource).toContain(
+      'auditRecorder: artifactBridgeAuditLedger,',
+    );
+    expect(normalizedMainSource).toContain(
+      'auditReader: artifactBridgeAuditLedger,',
+    );
   });
 });

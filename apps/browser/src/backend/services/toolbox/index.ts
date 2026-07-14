@@ -1,5 +1,4 @@
 import type { Logger } from '@/services/logger';
-import type { AgentHostProcessService } from '@/agent-host';
 import {
   getInstalledPluginsDir,
   getPluginsPath,
@@ -16,6 +15,7 @@ import {
   ShellService,
   type DetectedShell,
   type GuardianApprovalDeps,
+  type ShellCapabilitySecurityDeps,
   type SmartApprovalDeps,
   executeShellCommand as executeShellCommandTool,
   createShellSession as createShellSessionTool,
@@ -24,6 +24,7 @@ import { createKartonShellStreamSink } from './services/shell/karton-stream-sink
 import { ClodexMcpService } from './services/clodex-mcp';
 import { isClodexCloudSelected } from '@shared/provider-consent';
 import type { McpRegistryService } from '../mcp';
+import { TrustedMcpApprovalBroker } from '../mcp/approval-broker';
 import type {
   McpElicitationRequest,
   McpElicitationResult,
@@ -173,8 +174,9 @@ export class ToolboxService
   private readonly hostAgentStateMutations: HostAgentStateMutations;
   private readonly attachments: AttachmentsService;
   private readonly memoryNotesService: MemoryNotesService | undefined;
-  private readonly agentHostProcessService: AgentHostProcessService | null;
   private readonly mcpRegistryService: McpRegistryService;
+  private readonly mcpApprovalBroker: TrustedMcpApprovalBroker;
+  private readonly shellCapabilitySecurity: ShellCapabilitySecurityDeps;
 
   private sandboxService: SandboxService | null = null;
   private shellService: ShellService | null = null;
@@ -415,6 +417,7 @@ export class ToolboxService
    */
   public setGuardianPolicyChecker(checker: GuardianPolicyChecker | null): void {
     this.guardianPolicyChecker = checker;
+    this.mcpRegistryService.setGuardianPolicyChecker(checker);
   }
 
   /**
@@ -556,7 +559,7 @@ export class ToolboxService
     hostAgentStateMutations: HostAgentStateMutations,
     attachments: AttachmentsService,
     memoryNotesService: MemoryNotesService | undefined,
-    agentHostProcessService?: AgentHostProcessService | null,
+    shellCapabilitySecurity: ShellCapabilitySecurityDeps,
     protectedFiles?: ProtectedFileStorage,
   ) {
     super();
@@ -571,6 +574,7 @@ export class ToolboxService
     this.userExperienceService = userExperienceService;
     this.credentialsService = credentialsService;
     this.mcpRegistryService = mcpRegistryService;
+    this.mcpApprovalBroker = new TrustedMcpApprovalBroker(agentStore);
     this.gitService = gitService;
     this.preferencesService = preferencesService;
     this.clodexMcpService = new ClodexMcpService({
@@ -591,6 +595,8 @@ export class ToolboxService
       },
       assessGuardian: async (request) =>
         (await this.guardianPolicyChecker?.(request)) ?? null,
+      stageApproval: (input) => this.mcpApprovalBroker.stage(input),
+      claimApprovalAuthority: (input) => this.mcpApprovalBroker.claim(input),
     });
     this.detectedShell = detectedShell;
     this.resolvedEnvPromise = resolvedEnvPromise;
@@ -598,8 +604,8 @@ export class ToolboxService
     this.hostAgentStateMutations = hostAgentStateMutations;
     this.attachments = attachments;
     this.memoryNotesService = memoryNotesService;
-    this.agentHostProcessService = agentHostProcessService ?? null;
     this.protectedFiles = protectedFiles;
+    this.shellCapabilitySecurity = shellCapabilitySecurity;
   }
 
   public static async create(
@@ -622,7 +628,7 @@ export class ToolboxService
     hostAgentStateMutations: HostAgentStateMutations,
     attachments: AttachmentsService,
     memoryNotesService: MemoryNotesService | undefined,
-    agentHostProcessService?: AgentHostProcessService | null,
+    shellCapabilitySecurity: ShellCapabilitySecurityDeps,
     protectedFiles?: ProtectedFileStorage,
   ): Promise<ToolboxService> {
     const instance = new ToolboxService(
@@ -645,7 +651,7 @@ export class ToolboxService
       hostAgentStateMutations,
       attachments,
       memoryNotesService,
-      agentHostProcessService,
+      shellCapabilitySecurity,
       protectedFiles,
     );
     await instance.initialize();
@@ -865,25 +871,19 @@ export class ToolboxService
           },
         );
       case 'runOpenManus':
-        if (!this.agentHostProcessService?.canExecuteAgentWorkloads) {
-          return null;
-        }
         return runOpenManusTool({
           getWorkspaceMounts: () =>
-            this.getWorkspaceSnapshot(agentInstanceId).mounts,
-          resolvedEnvPromise: this.resolvedEnvPromise,
-          authService: this.authService,
-          isolatedExecution: {
-            isAvailable: () =>
-              this.agentHostProcessService?.canExecuteAgentWorkloads ?? false,
-            execute: (request, options) =>
-              this.agentHostProcessService!.executeOpenManus(request, options),
-          },
+            this.getWorkspaceSnapshot(agentInstanceId).mounts.map(
+              ({ prefix }) => ({ prefix }),
+            ),
         });
       case 'createShellSession': {
         if (!this.shellService?.isAvailable()) return null;
-        return createShellSessionTool(this.shellService, agentInstanceId, () =>
-          this.getShellMountedPathsForAgent(agentInstanceId),
+        return createShellSessionTool(
+          this.shellService,
+          agentInstanceId,
+          () => this.getShellMountedPathsForAgent(agentInstanceId),
+          this.shellCapabilitySecurity,
         );
       }
       case 'executeShellCommand': {
@@ -953,6 +953,7 @@ export class ToolboxService
           () => this.getShellMountedPathsForAgent(agentInstanceId),
           smartApproval,
           guardianApproval,
+          this.shellCapabilitySecurity,
         );
       }
       default:
@@ -978,6 +979,8 @@ export class ToolboxService
             explanation,
           );
         },
+        stageApproval: (input) => this.mcpApprovalBroker.stage(input),
+        claimApprovalAuthority: (input) => this.mcpApprovalBroker.claim(input),
       }),
       Promise.resolve(
         this.remoteConnectionsService?.getAgentTools({

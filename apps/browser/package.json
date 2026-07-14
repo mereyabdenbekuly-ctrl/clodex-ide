@@ -124,6 +124,7 @@
     "@clodex/api-client": "workspace:*",
     "@clodex/karton": "workspace:*",
     "@clodex/mcp-runtime": "workspace:*",
+    "@clodex/production": "workspace:*",
     "@clodex/stage-ui": "workspace:*",
     "@clodex/tailwindcss-color-modifiers": "workspace:*",
     "@dnd-kit/core": "^6.3.1",

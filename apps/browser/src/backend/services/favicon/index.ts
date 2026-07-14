@@ -2,7 +2,7 @@ import type { Logger } from '../logger';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import * as schema from './schema';
 import { drizzle } from 'drizzle-orm/libsql';
-import { createClient } from '@libsql/client';
+import { createClient, type InStatement } from '@libsql/client';
 import { net } from 'electron';
 import { getDbPath } from '@/utils/paths';
 import { toWebKitTimestamp } from '../chrome-db-utils';
@@ -71,6 +71,7 @@ export class FaviconService {
   }
 
   public teardown(): void {
+    this.dbDriver.close();
     this.logger.debug('[FaviconService] Shutdown complete');
   }
 
@@ -118,61 +119,80 @@ export class FaviconService {
       }
     }
 
-    // Now run the DB-only operations inside a short transaction.
-    await this.db.transaction(async (tx) => {
-      // Re-check inside transaction to handle races
-      const faviconEntry = await tx
-        .select()
-        .from(schema.favicons)
-        .where(eq(schema.favicons.url, faviconUrl))
-        .get();
+    // Keep the atomic DB-only work on the client-owned connection. An
+    // interactive libSQL transaction detaches its native connection from the
+    // client, so client.close() cannot deterministically release that handle.
+    const statements: InStatement[] = [
+      {
+        sql: `
+          INSERT INTO favicons (url, icon_type)
+          SELECT $faviconUrl, $iconType
+          WHERE NOT EXISTS (
+            SELECT 1 FROM favicons WHERE url = $faviconUrl
+          )
+        `,
+        args: { faviconUrl, iconType },
+      },
+    ];
 
-      let iconId: number;
+    if (imageData) {
+      statements.push({
+        sql: `
+          INSERT INTO favicon_bitmaps (
+            icon_id,
+            last_updated,
+            image_data,
+            width,
+            height,
+            last_requested
+          )
+          SELECT
+            last_insert_rowid(),
+            $now,
+            $imageData,
+            $width,
+            $height,
+            $now
+          WHERE changes() > 0
+        `,
+        args: {
+          now,
+          imageData: imageData.buffer,
+          width: imageData.width,
+          height: imageData.height,
+        },
+      });
+    }
 
-      if (!faviconEntry) {
-        const result = await tx
-          .insert(schema.favicons)
-          .values({
-            url: faviconUrl,
-            iconType,
-          })
-          .returning({ id: schema.favicons.id });
-        iconId = result[0].id;
+    statements.push(
+      {
+        sql: `
+          UPDATE icon_mapping
+          SET icon_id = (
+            SELECT id FROM favicons WHERE url = $faviconUrl LIMIT 1
+          )
+          WHERE id = (
+            SELECT id FROM icon_mapping WHERE page_url = $pageUrl LIMIT 1
+          )
+        `,
+        args: { faviconUrl, pageUrl },
+      },
+      {
+        sql: `
+          INSERT INTO icon_mapping (page_url, icon_id, page_url_type)
+          SELECT
+            $pageUrl,
+            (SELECT id FROM favicons WHERE url = $faviconUrl LIMIT 1),
+            0
+          WHERE NOT EXISTS (
+            SELECT 1 FROM icon_mapping WHERE page_url = $pageUrl
+          )
+        `,
+        args: { faviconUrl, pageUrl },
+      },
+    );
 
-        if (imageData) {
-          await tx.insert(schema.faviconBitmaps).values({
-            iconId,
-            lastUpdated: now,
-            imageData: imageData.buffer,
-            width: imageData.width,
-            height: imageData.height,
-            lastRequested: now,
-          });
-        }
-      } else {
-        iconId = faviconEntry.id;
-      }
-
-      // Update or create the icon mapping
-      const existingMapping = await tx
-        .select()
-        .from(schema.iconMapping)
-        .where(eq(schema.iconMapping.pageUrl, pageUrl))
-        .get();
-
-      if (existingMapping) {
-        await tx
-          .update(schema.iconMapping)
-          .set({ iconId })
-          .where(eq(schema.iconMapping.id, existingMapping.id));
-      } else {
-        await tx.insert(schema.iconMapping).values({
-          pageUrl,
-          iconId,
-          pageUrlType: 0,
-        });
-      }
-    });
+    await this.dbDriver.batch(statements, 'write');
   }
 
   /**

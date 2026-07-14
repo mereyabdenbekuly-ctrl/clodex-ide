@@ -20,6 +20,7 @@ import {
   type AgentMessage,
 } from '@clodex/agent-core';
 import { AgentTypes } from '@shared/karton-contracts/ui/agent';
+import type { ArtifactBridgeContext } from '@shared/artifact-bridge';
 import { WorktreeSetupSettingsService } from './services/worktree-setup-settings';
 import { resolveFeatureGate } from '@shared/feature-gates';
 import {
@@ -54,6 +55,7 @@ import { runBrowserUiServicesPhase } from './startup/phases/browser-ui-services'
 import { runNotificationRuntimePhase } from './startup/phases/notification-runtime';
 import {
   CloudTaskExecutionLeaseRegistry,
+  CloudExecutionLeaseConflictError,
   createBrowserAgentStepExecutor,
   createExecutionTargetRouter,
 } from './agent-host';
@@ -76,6 +78,10 @@ import {
 import { NativeWakeScheduler } from './services/automations/native-wake';
 import { ArtifactBridgeService } from './services/artifact-bridge';
 import { ArtifactBridgeAuditLedger } from './services/artifact-bridge/audit-ledger';
+import {
+  createArtifactBridgeAgentAskModelAdapterIdentity,
+  createArtifactBridgeAgentAskModelAdapterIdentityFromResolvedModel,
+} from './services/artifact-bridge/effect-commitment';
 import { ArtifactBridgeFrameBroker } from './services/artifact-bridge/frame-broker';
 import { GeneratedAppIdentityResolver } from './services/generated-app-library/identity-resolver';
 import { SpacesService } from './services/spaces';
@@ -93,6 +99,7 @@ import { runAgentCoreFoundationPhase } from './startup/phases/agent-core-foundat
 import { prepareProtectedStorage } from './startup/phases/prepare-protected-storage';
 import { runModelToolboxRuntimePhase } from './startup/phases/model-toolbox-runtime';
 import { runPlatformIntegrationServicesPhase } from './startup/phases/platform-integration-services';
+import { SafeCodingProductionAuthorityService } from './services/safe-coding';
 
 export type MainParameters = {
   launchOptions: {
@@ -417,6 +424,14 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     },
   };
 
+  const cloudTaskExecutionLeaseRegistry = new CloudTaskExecutionLeaseRegistry();
+  const assertLocalExecutionAllowed = (agentInstanceId: string): void => {
+    if (
+      !cloudTaskExecutionLeaseRegistry.isLocalExecutionAllowed(agentInstanceId)
+    ) {
+      throw new CloudExecutionLeaseConflictError();
+    }
+  };
   const localExecutionTarget = createBrowserAgentStepExecutor({
     process: agentHostProcessService,
     logger,
@@ -426,6 +441,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       },
     },
     isKillSwitchActive: () => isolatedAgentRuntimeKillSwitchActive,
+    assertLocalExecutionAllowed,
     circuitBreaker: {
       failureThreshold: isolatedAgentRuntimePolicy.failureThreshold,
       cooldownMs: isolatedAgentRuntimePolicy.cooldownMs,
@@ -440,7 +456,6 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
   const cloudTaskKillSwitchActive = isCloudTaskKillSwitchActive(
     process.env.CLODEX_CLOUD_TASKS_KILL_SWITCH,
   );
-  const cloudTaskExecutionLeaseRegistry = new CloudTaskExecutionLeaseRegistry();
   const cloudTaskRuntime: CloudTaskRuntimeResult = createCloudTaskRuntime({
     logger,
     baseUrl: process.env.CLODEX_CLOUD_TASKS_URL,
@@ -552,6 +567,8 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
         __APP_RELEASE_CHANNEL__,
       ).enabled &&
       !cloudTaskKillSwitchActive,
+    isLocalExecutionAllowed: (agentInstanceId) =>
+      cloudTaskExecutionLeaseRegistry.isLocalExecutionAllowed(agentInstanceId),
     audit: (event) => {
       telemetryService.capture('cloud-task-execution-event', {
         operation: event.operation,
@@ -723,6 +740,20 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     logger,
   );
   await artifactBridgeAuditLedger.listRecent(1);
+  const resolveArtifactBridgeAgentAskModelAdapterIdentity = (
+    context: ArtifactBridgeContext,
+  ) => {
+    if (context.kind !== 'agent') {
+      throw new Error(
+        'Packaged generated apps cannot impersonate or ask an agent',
+      );
+    }
+    const modelId =
+      uiKarton.state.agents.instances[context.agentId]?.state.activeModelId;
+    if (!modelId)
+      throw new Error('The generated app owner has no active model');
+    return createArtifactBridgeAgentAskModelAdapterIdentity(modelId);
+  };
   const artifactBridgeService = await ArtifactBridgeService.create({
     logger,
     karton: uiKarton,
@@ -735,29 +766,65 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
         preferencesService.get().featureGates.overrides,
         __APP_RELEASE_CHANNEL__,
       ).enabled,
+    resolveAgentAskModelAdapterIdentity:
+      resolveArtifactBridgeAgentAskModelAdapterIdentity,
+    prepareAgentAsk: async (context) => {
+      if (context.kind !== 'agent') {
+        throw new Error(
+          'Packaged generated apps cannot impersonate or ask an agent',
+        );
+      }
+      const requestedIdentity =
+        resolveArtifactBridgeAgentAskModelAdapterIdentity(context);
+      const model = await agentCoreHost.models.get(
+        requestedIdentity.modelId,
+        `artifact-bridge:${context.agentId}:${context.appId}`,
+      );
+      const modelAdapterIdentity =
+        createArtifactBridgeAgentAskModelAdapterIdentityFromResolvedModel(
+          requestedIdentity.modelId,
+          model,
+        );
+      return {
+        modelAdapterIdentity,
+        execute: async (prompt, options) => {
+          options.beforeDispatch();
+          const result = await generateText({
+            model,
+            prompt,
+            maxOutputTokens: modelAdapterIdentity.maxOutputTokens,
+            maxRetries: modelAdapterIdentity.maxRetries,
+            abortSignal: AbortSignal.timeout(modelAdapterIdentity.timeoutMs),
+          });
+          return result.text;
+        },
+      };
+    },
     askAgent: async (context, prompt, options) => {
       if (context.kind !== 'agent') {
         throw new Error(
           'Packaged generated apps cannot impersonate or ask an agent',
         );
       }
-      const modelId =
-        uiKarton.state.agents.instances[context.agentId]?.state.activeModelId;
-      if (!modelId)
-        throw new Error('The generated app owner has no active model');
+      const modelAdapterIdentity =
+        options?.modelAdapterIdentity ??
+        resolveArtifactBridgeAgentAskModelAdapterIdentity(context);
       const model = await agentCoreHost.models.get(
-        modelId,
+        modelAdapterIdentity.modelId,
         `artifact-bridge:${context.agentId}:${context.appId}`,
       );
       options?.beforeDispatch?.();
       const result = await generateText({
         model,
         prompt,
-        maxOutputTokens: 1_024,
-        abortSignal: AbortSignal.timeout(30_000),
+        maxOutputTokens: modelAdapterIdentity.maxOutputTokens,
+        maxRetries: modelAdapterIdentity.maxRetries,
+        abortSignal: AbortSignal.timeout(modelAdapterIdentity.timeoutMs),
       });
       return result.text;
     },
+    resolveAutomationDefinition: (automationId) =>
+      automationService.getDefinitionForDispatch(automationId),
     runAutomation: async (automationId, options) =>
       await automationService.runAutomationNow(automationId, options),
     resolveApp: async (context) =>
@@ -1295,6 +1362,14 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       }
     },
   });
+  // Browser production composition intentionally has no trusted bootstrap
+  // provider yet. Construct the boundary explicitly so every authority-bearing
+  // operation remains fail-closed and the production gate stays default-off.
+  const safeCodingProductionAuthorityService =
+    await SafeCodingProductionAuthorityService.create({
+      logger,
+      provider: null,
+    });
   const guardianService = new GuardianService({
     isFeatureEnabled: isAgentOsFeatureEnabled,
     telemetry: telemetryService,
@@ -1415,10 +1490,9 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       attachments,
       logger,
       toolboxService,
-      agentDb: persistence.agentDb,
-      userExperienceService,
       pendingEditService,
       agentManagerService,
+      assertLocalExecutionAllowed,
     });
 
   const getWorkspaceLastUsedAtByPath = async (workspacePaths: string[]) =>
@@ -1543,6 +1617,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       cloudTaskArtifactService,
     },
     asynchronousServices: {
+      safeCodingProductionAuthorityService,
       automationService,
       artifactBridgeFrameBroker,
       artifactBridgeService,

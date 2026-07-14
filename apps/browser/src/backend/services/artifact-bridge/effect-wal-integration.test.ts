@@ -17,6 +17,7 @@ import type {
   ArtifactBridgeEffectWalPersistence,
   ArtifactBridgeEffectWalRecord,
 } from './effect-wal';
+import { createArtifactBridgeAgentAskModelAdapterIdentity } from './effect-commitment';
 import { ArtifactBridgeService, type ArtifactBridgePersistence } from './index';
 
 const context: ArtifactBridgeContext = {
@@ -31,6 +32,30 @@ const identity: GeneratedAppIdentity = {
   manifestHash: 'a'.repeat(64),
   executableHash: 'b'.repeat(64),
   assetHash: 'c'.repeat(64),
+};
+
+const automationId = '73d94ed7-cd2b-459a-b6b0-57f43e295ec7';
+const automationDefinition = {
+  id: automationId,
+  title: 'Approved report',
+  prompt: 'Run the approved report',
+  enabled: true,
+  schedule: { kind: 'interval' as const, everyMs: 60_000 },
+  missedRunPolicy: 'run-on-wake' as const,
+  retryPolicy: {
+    maxAttempts: 1,
+    initialBackoffMs: 5_000,
+    maxBackoffMs: 5_000,
+  },
+  executionTarget: 'local' as const,
+  workspacePaths: [],
+  modelId: 'test/model',
+  approvalMode: 'alwaysAsk' as const,
+  grant: { capabilities: [], expiresAt: null },
+  createdAt: '2026-07-14T00:00:00.000Z',
+  updatedAt: '2026-07-14T00:00:00.000Z',
+  nextRunAt: '2026-07-14T00:01:00.000Z',
+  lastRunAt: null,
 };
 
 const manifest: GeneratedAppManifest = {
@@ -49,6 +74,12 @@ const manifest: GeneratedAppManifest = {
       type: 'mcp:write',
       reason: 'Update records',
       tools: [{ serverId: 'docs', toolName: 'update' }],
+    },
+    { type: 'agent:ask', reason: 'Summarize approved data' },
+    {
+      type: 'automation:run',
+      reason: 'Run the approved report',
+      automationIds: [automationId],
     },
   ],
 };
@@ -119,6 +150,15 @@ function createWalProbe() {
         ).records[effectId],
       );
     },
+    records(): ArtifactBridgeEffectWalRecord[] {
+      return Object.values(
+        (
+          store as {
+            records: Record<string, ArtifactBridgeEffectWalRecord>;
+          }
+        ).records,
+      ).map((record) => structuredClone(record));
+    },
   };
 }
 
@@ -157,6 +197,20 @@ function createHarness() {
     beforeDispatch?.();
     return { ok: true };
   };
+  let askBehavior: (
+    beforeDispatch: (() => void) | undefined,
+  ) => Promise<string> = async (beforeDispatch) => {
+    beforeDispatch?.();
+    return 'answer';
+  };
+  let automationBehavior: (
+    beforeDispatch: (() => void) | undefined,
+  ) => Promise<unknown> = async (beforeDispatch) => {
+    beforeDispatch?.();
+    return { ok: true };
+  };
+  let agentModelId = 'test/model';
+  let currentAutomationDefinition = structuredClone(automationDefinition);
   const callTool = vi.fn(
     async (
       _serverId: string,
@@ -201,7 +255,29 @@ function createHarness() {
     ) {
       adapterBehavior = behavior;
     },
-    async createService() {
+    setAskBehavior(
+      behavior: (beforeDispatch: (() => void) | undefined) => Promise<string>,
+    ) {
+      askBehavior = behavior;
+    },
+    setAutomationBehavior(
+      behavior: (beforeDispatch: (() => void) | undefined) => Promise<unknown>,
+    ) {
+      automationBehavior = behavior;
+    },
+    setAgentModelId(modelId: string) {
+      agentModelId = modelId;
+    },
+    setAutomationDefinitionTitle(title: string) {
+      currentAutomationDefinition = {
+        ...currentAutomationDefinition,
+        title,
+        updatedAt: '2026-07-14T00:00:01.000Z',
+      };
+    },
+    async createService(
+      options: { setGrant?: boolean; sensitiveEgress?: boolean } = {},
+    ) {
       const service = await ArtifactBridgeService.create({
         logger: { warn: vi.fn() } as unknown as Logger,
         karton,
@@ -211,20 +287,40 @@ function createHarness() {
         isFeatureEnabled: () => true,
         areEphemeralGrantsEnabled: () => true,
         areWritesEnabled: () => true,
-        isSensitiveEgressEnabled: () => true,
-        askAgent: async () => 'unused',
-        runAutomation: async () => ({ unused: true }),
+        isSensitiveEgressEnabled: () => options.sensitiveEgress ?? true,
+        areAsyncOperationsEnabled: () => true,
+        resolveAgentAskModelAdapterIdentity: () =>
+          createArtifactBridgeAgentAskModelAdapterIdentity(agentModelId),
+        askAgent: async (_context, _prompt, askOptions) =>
+          await askBehavior(askOptions?.beforeDispatch),
+        resolveAutomationDefinition: () =>
+          structuredClone(currentAutomationDefinition),
+        runAutomation: async (_automationId, automationOptions) =>
+          await automationBehavior(() =>
+            automationOptions?.beforeDispatch?.({
+              automation: structuredClone(automationDefinition),
+              prompt: automationDefinition.prompt,
+              attempt: 1,
+            }),
+          ),
         resolveApp: async () => ({ identity, manifest }),
       });
-      await service.setGrant({
-        context,
-        identity,
-        capabilities: ['mcp:call', 'mcp:write'],
-        mcpTools: [{ serverId: 'docs', toolName: 'search' }],
-        mcpWriteTools: [{ serverId: 'docs', toolName: 'update' }],
-        automationIds: [],
-        expiresAt: null,
-      });
+      if (options.setGrant ?? true) {
+        await service.setGrant({
+          context,
+          identity,
+          capabilities: [
+            'mcp:call',
+            'mcp:write',
+            'agent:ask',
+            'automation:run',
+          ],
+          mcpTools: [{ serverId: 'docs', toolName: 'search' }],
+          mcpWriteTools: [{ serverId: 'docs', toolName: 'update' }],
+          automationIds: [automationId],
+          expiresAt: null,
+        });
+      }
       return service;
     },
   };
@@ -442,6 +538,206 @@ describe('ArtifactBridgeService effect WAL integration', () => {
     } finally {
       continueToFence.resolve();
       await service.teardown();
+    }
+  });
+
+  it('records RESULT_UNAVAILABLE for a direct ask result-loss and never regenerates it', async () => {
+    const harness = createHarness();
+    let effects = 0;
+    harness.setAskBehavior(async (beforeDispatch) => {
+      beforeDispatch?.();
+      effects += 1;
+      return 'x'.repeat(1_000_001);
+    });
+    const service = await harness.createService();
+    const request: ArtifactBridgeRequest = {
+      id: 'universal-ask-result-loss',
+      method: 'askAgent',
+      params: { prompt: 'Summarize the approved data.' },
+    };
+    try {
+      await expect(invoke(service, request)).rejects.toThrow();
+      expect(
+        harness.wal.records().find((record) => record.kind === 'agent-ask'),
+      ).toMatchObject({ state: 'RESULT_UNAVAILABLE' });
+      await expect(invoke(service, request)).rejects.toThrow(
+        /retry is forbidden/i,
+      );
+      expect(effects).toBe(1);
+    } finally {
+      await service.teardown();
+    }
+  });
+
+  it('records UNCERTAIN for automation create-agent/message partial failure and forbids replay', async () => {
+    const harness = createHarness();
+    let effects = 0;
+    harness.setAutomationBehavior(async (beforeDispatch) => {
+      beforeDispatch?.();
+      effects += 1;
+      throw new Error('Agent was created but message delivery was lost');
+    });
+    const service = await harness.createService();
+    const request: ArtifactBridgeRequest = {
+      id: 'universal-automation-partial-failure',
+      method: 'runAutomation',
+      params: { automationId },
+    };
+    try {
+      await expect(invoke(service, request)).rejects.toThrow();
+      expect(
+        harness.wal.records().find((record) => record.kind === 'automation'),
+      ).toMatchObject({ state: 'UNCERTAIN' });
+      await expect(invoke(service, request)).rejects.toThrow(
+        /retry is forbidden/i,
+      );
+      expect(effects).toBe(1);
+    } finally {
+      await service.teardown();
+    }
+  });
+
+  it('burns a direct ask when revocation wins the synchronous final fence', async () => {
+    const harness = createHarness();
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let effects = 0;
+    harness.setAskBehavior(async (beforeDispatch) => {
+      entered.resolve();
+      await release.promise;
+      beforeDispatch?.();
+      effects += 1;
+      return 'answer';
+    });
+    const service = await harness.createService();
+    const request: ArtifactBridgeRequest = {
+      id: 'universal-ask-revoked',
+      method: 'askAgent',
+      params: { prompt: 'Summarize the approved data.' },
+    };
+    try {
+      const invocation = invoke(service, request);
+      await entered.promise;
+      await service.revokeGrant(context);
+      release.resolve();
+      await expect(invocation).rejects.toThrow();
+      expect(effects).toBe(0);
+      expect(
+        harness.wal.records().find((record) => record.kind === 'agent-ask'),
+      ).toMatchObject({ state: 'FAILED_PRE_EFFECT' });
+    } finally {
+      release.resolve();
+      await service.teardown();
+    }
+  });
+
+  it('rejects model-adapter identity drift before direct ask dispatch', async () => {
+    const harness = createHarness();
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let effects = 0;
+    harness.setAskBehavior(async (beforeDispatch) => {
+      entered.resolve();
+      await release.promise;
+      beforeDispatch?.();
+      effects += 1;
+      return 'answer';
+    });
+    const service = await harness.createService();
+    try {
+      const invocation = invoke(service, {
+        id: 'universal-ask-model-drift',
+        method: 'askAgent',
+        params: { prompt: 'Summarize the approved data.' },
+      });
+      await entered.promise;
+      harness.setAgentModelId('test/changed-model');
+      release.resolve();
+      await expect(invocation).rejects.toThrow();
+      expect(effects).toBe(0);
+      expect(
+        harness.wal.records().find((record) => record.kind === 'agent-ask'),
+      ).toMatchObject({ state: 'FAILED_PRE_EFFECT' });
+    } finally {
+      release.resolve();
+      await service.teardown();
+    }
+  });
+
+  it('rejects automation definition drift before the composite first effect', async () => {
+    const harness = createHarness();
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let effects = 0;
+    harness.setAutomationBehavior(async (beforeDispatch) => {
+      entered.resolve();
+      await release.promise;
+      beforeDispatch?.();
+      effects += 1;
+      return { ok: true };
+    });
+    const service = await harness.createService();
+    try {
+      const invocation = invoke(service, {
+        id: 'universal-automation-definition-drift',
+        method: 'runAutomation',
+        params: { automationId },
+      });
+      await entered.promise;
+      harness.setAutomationDefinitionTitle('Changed after authorization');
+      release.resolve();
+      await expect(invocation).rejects.toThrow();
+      expect(effects).toBe(0);
+      expect(
+        harness.wal.records().find((record) => record.kind === 'automation'),
+      ).toMatchObject({ state: 'FAILED_PRE_EFFECT' });
+    } finally {
+      release.resolve();
+      await service.teardown();
+    }
+  });
+
+  it('recovers a crashed ordinary async MCP dispatch as UNCERTAIN without replay', async () => {
+    const harness = createHarness();
+    const dispatched = deferred<void>();
+    const lostResult = deferred<unknown>();
+    harness.setAdapterBehavior(async (beforeDispatch) => {
+      beforeDispatch?.();
+      dispatched.resolve();
+      return await lostResult.promise;
+    });
+    const first = await harness.createService({ sensitiveEgress: false });
+    const request: ArtifactBridgeRequest = {
+      id: 'universal-async-mcp-crash',
+      method: 'startMcpOperation',
+      params: {
+        serverId: 'docs',
+        toolName: 'search',
+        arguments: { query: 'Clodex' },
+      },
+    };
+    const secondServices: ArtifactBridgeService[] = [];
+    try {
+      await invoke(first, request);
+      await dispatched.promise;
+
+      const recovered = await harness.createService({
+        setGrant: false,
+        sensitiveEgress: false,
+      });
+      secondServices.push(recovered);
+      expect(
+        harness.wal
+          .records()
+          .find((record) => record.kind === 'mcp-read-async'),
+      ).toMatchObject({ state: 'UNCERTAIN' });
+      await expect(invoke(recovered, request)).rejects.toThrow();
+      expect(harness.callTool).toHaveBeenCalledTimes(1);
+    } finally {
+      lostResult.reject(new Error('Simulated process loss'));
+      await Promise.resolve();
+      for (const service of secondServices) await service.teardown();
+      await first.teardown();
     }
   });
 });

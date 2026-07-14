@@ -13,6 +13,10 @@ export interface StaticMount {
 export interface UniversalToolboxMountManager {
   getMountPrefixes(agentInstanceId: string): string[] | undefined;
   getWorkspacePathForPrefix(prefix: string): string | undefined;
+  getMountPermissionsForPrefix?(
+    agentInstanceId: string,
+    prefix: string,
+  ): readonly MountPermission[] | undefined;
   findWorkspaceForFile(
     agentInstanceId: string,
     filePath: string,

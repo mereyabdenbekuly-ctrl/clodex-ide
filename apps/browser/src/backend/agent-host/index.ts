@@ -174,6 +174,12 @@ export type {
   OpenManusExecutionRequest,
   OpenManusExecutionResult,
 } from './protocol';
+export {
+  OPENMANUS_OS_CONFINED_ADAPTER_PROFILE,
+  OpenManusConfinementUnavailableError,
+  type OpenManusOsConfinedAdapter,
+  type OpenManusRuntimeOptions,
+} from './openmanus-runtime';
 export type {
   AgentTurnHostHandlers,
   AgentTurnJsonObject,

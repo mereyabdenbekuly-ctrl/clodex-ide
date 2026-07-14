@@ -1,4 +1,5 @@
 import type { McpServerConfig, McpToolDescriptor } from '@clodex/mcp-runtime';
+import type { LanguageModel } from 'ai';
 import type {
   ArtifactBridgeContext,
   ArtifactBridgePolicy,
@@ -10,6 +11,103 @@ export const ARTIFACT_BRIDGE_MCP_ADAPTER_ID =
   'clodex.mcp-host-supervisor.call-tool';
 export const ARTIFACT_BRIDGE_MCP_ADAPTER_VERSION = 1;
 export const ARTIFACT_BRIDGE_MCP_CLASSIFIER_VERSION = 1;
+
+export const ARTIFACT_BRIDGE_AGENT_ASK_ADAPTER_ID =
+  'clodex.artifact-bridge.ai-sdk.generate-text';
+export const ARTIFACT_BRIDGE_AGENT_ASK_ADAPTER_VERSION = 1;
+export const ARTIFACT_BRIDGE_AGENT_ASK_MAX_OUTPUT_TOKENS = 1_024;
+export const ARTIFACT_BRIDGE_AGENT_ASK_TIMEOUT_MS = 30_000;
+export const ARTIFACT_BRIDGE_AGENT_ASK_MAX_RETRIES = 0;
+
+export const ARTIFACT_BRIDGE_AUTOMATION_ADAPTER_ID =
+  'clodex.automation-service.create-agent-send-message';
+export const ARTIFACT_BRIDGE_AUTOMATION_ADAPTER_VERSION = 1;
+
+export interface ArtifactBridgeAgentAskModelAdapterIdentity {
+  modelId: string;
+  resolvedProviderId: string;
+  resolvedModelId: string;
+  adapterId: typeof ARTIFACT_BRIDGE_AGENT_ASK_ADAPTER_ID;
+  adapterVersion: typeof ARTIFACT_BRIDGE_AGENT_ASK_ADAPTER_VERSION;
+  maxOutputTokens: typeof ARTIFACT_BRIDGE_AGENT_ASK_MAX_OUTPUT_TOKENS;
+  timeoutMs: typeof ARTIFACT_BRIDGE_AGENT_ASK_TIMEOUT_MS;
+  maxRetries: typeof ARTIFACT_BRIDGE_AGENT_ASK_MAX_RETRIES;
+}
+
+export function createArtifactBridgeAgentAskModelAdapterIdentity(
+  modelId: string,
+  resolved: {
+    providerId?: string;
+    modelId?: string;
+  } = {},
+): ArtifactBridgeAgentAskModelAdapterIdentity {
+  return {
+    modelId,
+    resolvedProviderId: resolved.providerId ?? 'injected-artifact-bridge',
+    resolvedModelId: resolved.modelId ?? modelId,
+    adapterId: ARTIFACT_BRIDGE_AGENT_ASK_ADAPTER_ID,
+    adapterVersion: ARTIFACT_BRIDGE_AGENT_ASK_ADAPTER_VERSION,
+    maxOutputTokens: ARTIFACT_BRIDGE_AGENT_ASK_MAX_OUTPUT_TOKENS,
+    timeoutMs: ARTIFACT_BRIDGE_AGENT_ASK_TIMEOUT_MS,
+    maxRetries: ARTIFACT_BRIDGE_AGENT_ASK_MAX_RETRIES,
+  };
+}
+
+/**
+ * Binds an effect to the concrete AI SDK adapter captured for dispatch.
+ * Registry string IDs and unknown model shapes are rejected because resolving
+ * them later could select a different provider after the effect was prepared.
+ */
+export function createArtifactBridgeAgentAskModelAdapterIdentityFromResolvedModel(
+  modelId: string,
+  model: LanguageModel,
+): ArtifactBridgeAgentAskModelAdapterIdentity {
+  if (
+    typeof model !== 'object' ||
+    model === null ||
+    !('specificationVersion' in model) ||
+    (model.specificationVersion !== 'v2' &&
+      model.specificationVersion !== 'v3') ||
+    !('provider' in model) ||
+    typeof model.provider !== 'string' ||
+    !('modelId' in model) ||
+    typeof model.modelId !== 'string'
+  ) {
+    throw new Error(
+      'Artifact Bridge requires a concrete AI SDK model adapter identity',
+    );
+  }
+  const providerId = model.provider.trim();
+  const resolvedModelId = model.modelId.trim();
+  if (
+    providerId.length === 0 ||
+    providerId.length > 256 ||
+    resolvedModelId.length === 0 ||
+    resolvedModelId.length > 256
+  ) {
+    throw new Error(
+      'Artifact Bridge resolved invalid AI SDK model adapter metadata',
+    );
+  }
+  return createArtifactBridgeAgentAskModelAdapterIdentity(modelId, {
+    providerId,
+    modelId: resolvedModelId,
+  });
+}
+
+export const ARTIFACT_BRIDGE_AUTOMATION_ADAPTER_IDENTITY = {
+  adapterId: ARTIFACT_BRIDGE_AUTOMATION_ADAPTER_ID,
+  adapterVersion: ARTIFACT_BRIDGE_AUTOMATION_ADAPTER_VERSION,
+  retryMode: 'no-blind-retry',
+  failureMode: 'propagate',
+  agentType: 'chat',
+  defaultModelId: 'claude-sonnet-4.6',
+  orderedSteps: [
+    'agents.create',
+    'agents.create.workspace-mounts',
+    'agents.sendUserMessage',
+  ],
+} as const;
 
 export type ArtifactBridgeTrustedMcpClassification =
   | { kind: 'read' }
@@ -157,6 +255,65 @@ export function createArtifactBridgeMcpEffectCommitment(
 export function artifactBridgeMcpCommitmentsEqual(
   left: ArtifactBridgeMcpEffectCommitment,
   right: ArtifactBridgeMcpEffectCommitment,
+): boolean {
+  return left.version === right.version && left.hash === right.hash;
+}
+
+export interface ArtifactBridgeUniversalEffectCommitmentInput {
+  authority: unknown;
+  action: unknown;
+  definition: unknown;
+  adapter: unknown;
+}
+
+export interface ArtifactBridgeUniversalEffectCommitment {
+  version: 1;
+  hash: string;
+  authorityHash: string;
+  actionHash: string;
+  definitionHash: string;
+  adapterHash: string;
+}
+
+/**
+ * A content-free commitment shared by non-reviewed Artifact Bridge effects.
+ * The WAL stores only these hashes, while the caller recomputes the complete
+ * commitment synchronously at the final application-owned dispatch boundary.
+ */
+export function createArtifactBridgeUniversalEffectCommitment(
+  input: ArtifactBridgeUniversalEffectCommitmentInput,
+): ArtifactBridgeUniversalEffectCommitment {
+  const parts = {
+    authorityHash: hashArtifactBridgeJson(
+      'clodex.artifact-bridge.universal-effect.authority.v1',
+      input.authority,
+    ),
+    actionHash: hashArtifactBridgeJson(
+      'clodex.artifact-bridge.universal-effect.action.v1',
+      input.action,
+    ),
+    definitionHash: hashArtifactBridgeJson(
+      'clodex.artifact-bridge.universal-effect.definition.v1',
+      input.definition,
+    ),
+    adapterHash: hashArtifactBridgeJson(
+      'clodex.artifact-bridge.universal-effect.adapter.v1',
+      input.adapter,
+    ),
+  };
+  return {
+    version: 1,
+    ...parts,
+    hash: hashArtifactBridgeJson(
+      'clodex.artifact-bridge.universal-effect.commitment.v1',
+      { version: 1, ...parts },
+    ),
+  };
+}
+
+export function artifactBridgeUniversalCommitmentsEqual(
+  left: ArtifactBridgeUniversalEffectCommitment,
+  right: ArtifactBridgeUniversalEffectCommitment,
 ): boolean {
   return left.version === right.version && left.hash === right.hash;
 }

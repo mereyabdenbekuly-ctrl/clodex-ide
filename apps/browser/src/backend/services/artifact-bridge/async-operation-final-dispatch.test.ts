@@ -21,6 +21,28 @@ const context: ArtifactBridgeContext = {
 };
 
 const automationId = 'd9af065d-bef7-4f3f-a348-961e40a01792';
+const automationDefinition = {
+  id: automationId,
+  title: 'Approved report',
+  prompt: 'approved automation',
+  enabled: true,
+  schedule: { kind: 'interval' as const, everyMs: 60_000 },
+  missedRunPolicy: 'run-on-wake' as const,
+  retryPolicy: {
+    maxAttempts: 1,
+    initialBackoffMs: 5_000,
+    maxBackoffMs: 5_000,
+  },
+  executionTarget: 'local' as const,
+  workspacePaths: [],
+  modelId: 'test/model',
+  approvalMode: 'alwaysAsk' as const,
+  grant: { capabilities: [], expiresAt: null },
+  createdAt: '2026-07-14T00:00:00.000Z',
+  updatedAt: '2026-07-14T00:00:00.000Z',
+  nextRunAt: '2026-07-14T00:01:00.000Z',
+  lastRunAt: null,
+};
 
 const identity: GeneratedAppIdentity = {
   manifestSchemaVersion: 1,
@@ -165,8 +187,11 @@ function createHarness() {
   const runAutomation = vi.fn(
     async (requestedAutomationId: string, options?: AutomationRunOptions) => {
       options?.beforeDispatch?.({
-        automation: { id: requestedAutomationId },
-        prompt: 'approved automation',
+        automation: {
+          ...structuredClone(automationDefinition),
+          id: requestedAutomationId,
+        },
+        prompt: automationDefinition.prompt,
         attempt: 1,
       });
       return await automationEffect();
@@ -181,6 +206,9 @@ function createHarness() {
     callTool,
     automationEffect,
     runAutomation,
+    resolveAutomationDefinition: vi.fn(() =>
+      structuredClone(automationDefinition),
+    ),
     resolveApp: vi.fn(async () => ({ identity, manifest })),
   };
 }
@@ -215,6 +243,7 @@ async function createService(
     isSensitiveEgressEnabled: sensitiveEnabled,
     askAgent: vi.fn(async () => 'answer'),
     runAutomation: harness.runAutomation,
+    resolveAutomationDefinition: harness.resolveAutomationDefinition,
     resolveApp: harness.resolveApp,
   });
 }
@@ -275,6 +304,21 @@ async function flushBackgroundOperation() {
   await Promise.resolve();
 }
 
+async function waitForOperationStatus(
+  service: ArtifactBridgeService,
+  operationId: string,
+  status: ArtifactBridgeOperationSnapshot['status'],
+) {
+  await vi.waitFor(async () => {
+    const inspector = await service.getRuntimeInspector(context);
+    expect(inspector.operations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: operationId, status }),
+      ]),
+    );
+  });
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -308,7 +352,7 @@ describe('ArtifactBridge async final-dispatch fence', () => {
     asyncEnabled = false;
     releaseFinalCallback.resolve();
     await settled.promise;
-    await flushBackgroundOperation();
+    await waitForOperationStatus(service, operation.id, 'failed');
     expect(harness.mcpEffect).not.toHaveBeenCalled();
 
     asyncEnabled = true;
@@ -330,8 +374,11 @@ describe('ArtifactBridge async final-dispatch fence', () => {
         try {
           await releaseFinalCallback.promise;
           options?.beforeDispatch?.({
-            automation: { id: requestedAutomationId },
-            prompt: 'approved automation',
+            automation: {
+              ...structuredClone(automationDefinition),
+              id: requestedAutomationId,
+            },
+            prompt: automationDefinition.prompt,
             attempt: 1,
           });
           return await harness.automationEffect();
@@ -350,7 +397,7 @@ describe('ArtifactBridge async final-dispatch fence', () => {
     asyncEnabled = false;
     releaseFinalCallback.resolve();
     await settled.promise;
-    await flushBackgroundOperation();
+    await waitForOperationStatus(service, operation.id, 'failed');
     expect(harness.automationEffect).not.toHaveBeenCalled();
 
     asyncEnabled = true;
@@ -661,8 +708,11 @@ describe('ArtifactBridge async final-dispatch fence', () => {
         try {
           await releaseFinalCallback.promise;
           options?.beforeDispatch?.({
-            automation: { id: requestedAutomationId },
-            prompt: 'approved automation',
+            automation: {
+              ...structuredClone(automationDefinition),
+              id: requestedAutomationId,
+            },
+            prompt: automationDefinition.prompt,
             attempt: 1,
           });
           return await harness.automationEffect();
@@ -701,8 +751,11 @@ describe('ArtifactBridge async final-dispatch fence', () => {
       async (requestedAutomationId, options?: AutomationRunOptions) => {
         try {
           options?.beforeDispatch?.({
-            automation: { id: requestedAutomationId },
-            prompt: 'approved automation',
+            automation: {
+              ...structuredClone(automationDefinition),
+              id: requestedAutomationId,
+            },
+            prompt: automationDefinition.prompt,
             attempt: 1,
           });
           afterFinalCallback.resolve();

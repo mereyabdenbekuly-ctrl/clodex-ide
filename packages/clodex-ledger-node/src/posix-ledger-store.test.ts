@@ -48,6 +48,7 @@ const PREPARED_AT = '2026-07-14T00:01:00Z';
 const PERMITTED_AT = '2026-07-14T00:02:00Z';
 
 const temporaryRoots: string[] = [];
+const describePosix = describe.skipIf(process.platform === 'win32');
 
 afterEach(async () => {
   await Promise.all(
@@ -218,6 +219,9 @@ function runCasWorker(input: {
   readonly mutation: SafeCodingLedgerPersistenceMutation;
   readonly holdAfterLockMs: number;
 }): Promise<unknown> {
+  if (process.platform === 'win32') {
+    throw new Error('The POSIX ledger CAS worker must not run on Windows');
+  }
   const executable = fileURLToPath(
     new URL('../../../node_modules/.bin/tsx', import.meta.url),
   );
@@ -280,7 +284,25 @@ async function waitForPath(path: string): Promise<void> {
   }
 }
 
-describe('PosixSafeCodingLedgerStore', () => {
+it.runIf(process.platform === 'win32')(
+  'fails closed with platform-unsupported on Windows',
+  () => {
+    let failure: unknown;
+    try {
+      new PosixSafeCodingLedgerStore({
+        baseDirectory: join(tmpdir(), 'clodex-ledger-platform-probe'),
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      name: 'PosixSafeCodingLedgerStoreError',
+      code: 'platform-unsupported',
+    });
+  },
+);
+
+describePosix('PosixSafeCodingLedgerStore', () => {
   it('persists one closed canonical snapshot with private POSIX modes before APPLIED', async () => {
     const baseDirectory = await newBaseDirectory();
     const observed: PosixSafeCodingLedgerFaultPoint[] = [];

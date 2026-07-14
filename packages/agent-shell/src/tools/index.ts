@@ -14,6 +14,7 @@ export type {
 } from './execute-shell-command';
 export {
   createShellCapabilityAction,
+  createShellSessionCapabilityAction,
   type ConsumeShellCapabilityInput,
   type ShellCapabilityAction,
   type ShellCapabilityAuthorization,
