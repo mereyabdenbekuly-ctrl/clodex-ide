@@ -43,17 +43,49 @@ typechecked, linted, built, packaged, or smoke-tested in this tranche:
   AgentStore approval history; `requiresApproval`, `needsApproval`, MCP
   annotations, or a model-selected field are not approval evidence. Its
   source-only durable store persists bounded identities plus exact descriptor/
-  context/effect digests, writes `STAGED` before `needsApproval` returns true or
-  the host pending-approval record is published, and saves `CLAIMED` before
-  returning authority. Exact affirmative evidence is hashed
-  into the claimed record and re-read after persistence; expiry, or invalid
-  evidence observed during claim, closes `EXPIRED`/`INVALIDATED`. Encrypted
-  atomic writes fsync the temporary file and fsync the containing directory on
-  platforms where that operation is supported (the current Windows path skips
-  directory fsync). Ambiguous save outcomes are reconciled by exact read-back
-  without converting a rejected save into authority issuance; an intended
-  read-back remains durability-pending and must pass a later idempotent save
-  barrier before another mutation or teardown reports success;
+  context/effect/decision digests, writes `STAGED` before `needsApproval`
+  returns true or the host pending-approval record is published, and implements
+  the explicit-response lifecycle
+  `STAGED → RESPONSE_RECORDED → APPROVED → CLAIMED` or
+  `STAGED → RESPONSE_RECORDED → DENIED`. `RESPONSE_RECORDED` is deliberately
+  non-authorizing. The common `BaseAgent` ingress requires exactly one matching
+  `approval-requested` part, waits for the originating step's UI stream and
+  final best-effort save attempt to settle without a step failure, runs broker
+  prepare, performs an exact AgentStore mutation, and strictly persists the
+  full affected message payload for the persistent browser agent through a
+  per-agent serialized Agent SQLite queue. That queue binds the enqueue-time
+  payload, rechecks fresh AgentStore, and reads back message ID, role, parts,
+  and metadata inside the transaction before broker commit. Only then may
+  continuation be scheduled. User-message ingress, queue flush, stop/recovery,
+  retry, replace, revert, and recovered UI replay are serialized per agent.
+  Priority stop/flush/recovery advances the step and approval generations and
+  aborts the current controller synchronously before its durable cleanup waits
+  for that queue. Destructive history rewrites hold an admission gate across
+  host undo and the exact synchronous mutation. Recovered replay uses one
+  session-bound generation and a bounded closed-execution tombstone set, so a
+  superseded late chunk cannot reopen the stream. Replay ingress that overlaps
+  a queued priority stop/flush/recovery is tombstoned before admission. Before
+  subscriber-visible `beginStep`, replay also snapshots the history-preemption
+  generation; synchronous AgentStore priority preemption wins before replay
+  session identity is published, and a `finally` path records the tombstone
+  even when that subscriber throws. A failed strict save or broker commit rolls
+  the in-memory part back when its exact binding is still present; otherwise a
+  sticky admission barrier prevents continuation. New user messages, stop,
+  queue flush, and system
+  interruption durably invalidate open broker records before their existing
+  AgentStore sweeps; broker `INVALIDATED` records do not masquerade as canonical
+  human denial evidence. A failed automatic-sweep save retains its dirty rows
+  behind a fail-closed retry barrier, including a synchronous subscriber
+  failure after mutation commit.
+  Exact affirmative evidence is hashed into the claimed record and
+  re-read after persistence; expiry, or invalid evidence observed during claim,
+  closes `EXPIRED`/`INVALIDATED`. Encrypted broker writes fsync the temporary
+  file and fsync the containing directory on platforms where that operation is
+  supported (the current Windows path skips directory fsync). Ambiguous broker
+  save outcomes are reconciled by exact read-back without converting a rejected
+  save into authority issuance; an intended read-back remains
+  durability-pending and must pass a later idempotent save barrier before
+  another mutation or teardown reports success;
 - production shell session creation and command/stdin/kill/poll dispatch are
   staged and one-shot consumed through `ShellCapabilityBroker`, including the
   exact mount prefix and resolved host cwd for PTY creation; the browser wires
@@ -79,26 +111,29 @@ typechecked, linted, built, packaged, or smoke-tested in this tranche:
 These are source statements, not runtime guarantees. External-effect
 atomicity, independently protected/linearizable anti-rollback heads,
 production key custody, target-OS/native-helper/container/LSM evidence, and a
-packaged Electron smoke remain explicit non-claims. MCP `STAGED` and `CLAIMED`
-records survive ordinary restart while the encrypted store remains present,
-and a claimed agent/tool-call identity is retained as a bounded fail-closed
-replay tombstone. This does not reconstruct AgentStore `pendingApprovals` or
-guarantee a resumable approval UI/normal continuation after restart. It also
-does **not** create a separate durable `APPROVED` state: affirmative evidence
-remains canonical, mutable AgentStore history. Nor does `CLAIMED` prove that
+packaged Electron smoke remain explicit non-claims. MCP `STAGED`,
+`RESPONSE_RECORDED`, `APPROVED`, and `CLAIMED` records survive ordinary restart
+while the encrypted broker store remains present, and a claimed
+agent/tool-call identity is retained as a bounded fail-closed replay tombstone.
+The exact `approval-responded` message is separately committed to Agent SQLite,
+but this does not reconstruct ephemeral AgentStore `pendingApprovals`, restore a
+resumable approval UI, or automatically continue the turn after restart.
+`APPROVED` means only that the exact response passed the ordered broker and
+Agent SQLite barriers; it does not prove dispatch. Nor does `CLAIMED` prove that
 the in-memory final authority was consumed, that IPC/network dispatch occurred,
-or that the external effect committed. The local revision is stored in the
+or that the external effect committed. The broker revision is stored in the
 same encrypted file and has no independently protected monotonic or existence
 anchor, so hostile rollback, deletion, or reset to a fresh empty store remains
-outside the claim. Expiry uses the wall clock rather than a trusted monotonic
-clock, so clock rollback can extend `STAGED` validity. Windows lacks the
-containing-directory fsync used on supported platforms, so power-loss
-durability there is not claimed. Tombstones are retained up to the bounded
-capacity and capacity exhaustion fails closed rather than pruning replay
-history. The broker also does not provide cross-process writer serialization
-or a transaction shared with AgentStore or the external MCP effect; the
-affirmative-response lifecycle and durable claim are not one cross-store atomic
-operation.
+outside the claim. Coordinated rollback or deletion of both the broker and
+Agent SQLite stores is not detected. Expiry uses the wall clock rather than a
+trusted monotonic clock, so clock rollback can extend open-record validity.
+Windows lacks the containing-directory fsync used for the broker on supported
+platforms, and SQLite power-loss durability has not been established.
+Tombstones are retained up to the bounded capacity and capacity exhaustion
+fails closed rather than pruning replay history. The implementation does not
+provide cross-process writer serialization or a transaction shared by broker
+JSON, Agent SQLite, final MCP dispatch, and the external effect; the lifecycle
+is deliberately ordered and fail-closed, not cross-store atomic.
 
 Source map for the testing model:
 
@@ -109,6 +144,13 @@ Source map for the testing model:
   [registry service](../../apps/browser/src/backend/services/mcp/index.ts),
   [registry agent tools](../../apps/browser/src/backend/services/mcp/tools.ts),
   and [Clodex-cloud tools](../../apps/browser/src/backend/services/toolbox/services/clodex-mcp/index.ts);
+- [common approval ingress](../../packages/agent-core/src/agents/base-agent.ts),
+  [exact approval mutations](../../packages/agent-core/src/services/agent-manager/state-mutations/approvals.ts),
+  [manager hook and serialized persistence wiring](../../packages/agent-core/src/services/agent-manager/agent-manager.ts),
+  and [Agent SQLite persistence](../../packages/agent-core/src/services/agent-persistence/db.ts);
+- [Toolbox broker adapters](../../apps/browser/src/backend/services/toolbox/index.ts),
+  [browser AgentManager composition](../../apps/browser/src/backend/services/agent-manager/agent-manager.ts),
+  and [main-process hook wiring](../../apps/browser/src/backend/main.ts);
 - [shell capability broker](../../apps/browser/src/backend/services/guardian/shell-capability-broker.ts),
   [shell action fences](../../packages/agent-shell/src/tools/execute-shell-command.ts),
   and [platform wiring](../../apps/browser/src/backend/startup/phases/platform-integration-services.ts);
@@ -139,29 +181,70 @@ complete focused tests for the source-only paths above. At minimum, prove:
    their durable-approval path is wiring only unless a read-only cloud tool is
    escalated by Guardian. A tool requiring approval cannot dispatch unless the
    exact tool name, tool-call ID, principal, descriptor digest,
-   approval-context digest, and canonical arguments match a single affirmative
-   AgentStore part.
+   approval-context digest, canonical arguments, approval ID, and committed
+   affirmative decision match a single AgentStore part.
    Prove `STAGED` is durable before `needsApproval` returns true and before the
    host pending-approval record is published; exact duplicate staging is
-   idempotent while changed bindings fail closed; affirmative evidence is
-   hashed and rechecked after persistence; and `CLAIMED` is durably saved before
-   authority return. Restart must preserve claimed replay tombstones, expire
-   stale staged records, reject duplicate/reused/denied/ambiguous/malformed
-   evidence, and fail closed at the bounded capacity. Fault save-before-apply,
-   apply-then-throw, read-back mismatch, corrupt/truncated data, unavailable
-   encryption, and teardown with queued mutations; prove every rejected save
-   rejects the claim even when read-back contains the intended tombstone.
+   idempotent while changed bindings fail closed. Prove the explicit order
+   `originating-step settlement → broker prepare → exact AgentStore mutation →
+   strict exact-payload Agent SQLite commit → broker commit → continuation`;
+   neither `STAGED` nor
+   `RESPONSE_RECORDED` may pass `claim()` or start continuation. Cover explicit
+   approve and deny, broker-level exact-duplicate idempotency, common-ingress
+   duplicate/double-click rejection, opposite-decision conflict,
+   unknown/ambiguous approval IDs, true dynamic-tool names, non-tail message
+   persistence, an approval click while the originating UI stream is still
+   draining, and response input/tool/approval binding drift. Prove a strict
+   persistence failure or broker-commit failure never schedules continuation,
+   restores the exact request plus pending-approval metadata when possible, and
+   otherwise leaves the admission barrier closed. Race double-click,
+   approve-versus-deny, UI-versus-remote ingress, a response against an
+   overlapping ordinary save, and multiple simultaneous approvals. Verify the
+   per-agent queue reads a fresh AgentStore snapshot inside serialization so an
+   older save cannot overwrite a committed response. The strict DB path must
+   verify that each enqueue-time expected message ID, role, parts, and metadata
+   payload exists at its exact SQLite sequence before the transaction commits.
+   Prove new user message, stop, queue flush,
+   and system interruption invalidate the listed records plus any unpublished
+   open MCP record for the same agent before the AgentStore sweep, clear orphan
+   `pendingApprovals` keys, strictly persist affected history rows, retain and
+   retry dirty rows after a rejected save or synchronous subscriber failure,
+   never record broker state `DENIED` or treat cancellation output as canonical
+   `approval-responded` human evidence. Race cancellation against the gap between
+   broker stage, pending-approval indexing, UI-part merge, and a stale
+   `needsApproval` callback (MCP, remote, shell, or sandbox) that runs after
+   cancellation linearizes. Exercise recovered replay while a priority
+   stop/flush/recovery is already pending and when that priority action is
+   enqueued after replay ingress but before its serialized worker starts. Also
+   exercise a `beginStep` subscriber that (a) enqueues each priority action and
+   returns and (b) enqueues it and throws. Prove the chunk is never merged,
+   sequence-marked, or persisted; no replay identity is published; the
+   execution is tombstoned; and every later chunk is `duplicate` while the
+   queued priority worker still owns cleanup. Crash after every lifecycle
+   transition and confirm that restart does
+   not reconstruct the pending-approval UI or automatically continue a turn.
+   Affirmative evidence must be hashed and rechecked after persistence, and
+   `CLAIMED` must be durably saved before authority return. Restart must preserve
+   claimed replay tombstones, expire stale open records, reject
+   duplicate/reused/denied/ambiguous/malformed evidence, and fail closed at the
+   bounded capacity. Fault save-before-apply, apply-then-throw, read-back
+   mismatch, corrupt/truncated data, unavailable encryption, and teardown with
+   queued mutations; prove every rejected save rejects the claim even when
+   read-back contains the intended tombstone.
    Prove that the intended tombstone remains burned in memory and that the next
    mutation/flush/teardown retries the same persistence barrier before success.
    Separately cover deleted/reset stores, wall-clock rollback, Windows' missing
    directory-fsync guarantee, and restart without reconstructed AgentStore
    pending-approval UI. Descriptor/runtime/Guardian revision drift must still
    fail at the last synchronous fence. Report
-   `CLAIMED` only as a replay tombstone, not proof of final consumption,
-   dispatch, or effect; separately demonstrate that rollback of the same file
-   is not protected without an independent anchor. If MCP resource/prompt agent
-   tools remain disabled, prove resource/prompt access is settings-only and
-   cannot become an agent effect path.
+   `APPROVED` only as a committed response, not dispatch, and `CLAIMED` only as
+   a replay tombstone, not proof of final consumption, dispatch, or effect;
+   separately demonstrate that rollback of the broker file, coordinated
+   rollback/deletion of broker plus Agent SQLite, and cross-process writers are
+   not protected without independent anchors/serialization. Treat SQLite
+   power-loss durability as unproven. If MCP resource/prompt agent tools remain
+   disabled, prove resource/prompt access is settings-only and cannot become an
+   agent effect path.
 3. PTY creation and command/stdin/kill/poll execution cannot bypass the
    capability broker and its audit record; changed mount resolution plus stale,
    missing, mismatched, reused, or unauditable authority fails closed.
@@ -192,7 +275,9 @@ pnpm --dir apps/browser test -- \
   src/backend/services/automations/index.test.ts \
   src/backend/services/mcp/trusted-dispatch-gateway.test.ts \
   src/backend/services/mcp/approval-broker.test.ts \
+  src/backend/services/mcp/approval-lifecycle-wiring.test.ts \
   src/backend/services/mcp/index.test.ts \
+  src/backend/services/agent-manager/agent-manager.test.ts \
   src/backend/services/toolbox/services/clodex-mcp/index.test.ts \
   src/backend/services/guardian/shell-capability-broker.test.ts \
   src/backend/services/sandbox/sandbox-worker.test.ts \
@@ -206,6 +291,12 @@ pnpm --dir apps/browser test -- \
   src/backend/services/safe-coding/production-authority.test.ts \
   src/backend/services/shutdown-coordinator.test.ts
 pnpm --dir apps/browser typecheck
+pnpm --dir packages/agent-core test -- \
+  src/services/agent-manager/state-mutations/approvals.test.ts \
+  src/agents/base-agent.approval-lifecycle.test.ts \
+  src/services/agent-manager/agent-manager.persistence-queue.test.ts \
+  src/services/agent-persistence/db.test.ts
+pnpm --dir packages/agent-core typecheck
 ```
 
 If a named focused test does not yet exist, creating it is part of the testing

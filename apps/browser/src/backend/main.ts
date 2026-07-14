@@ -599,6 +599,14 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       notificationSoundsService.notifyAgentEvent(event, agentId),
     enrichAgentHistoryEntries,
     executionTargetRouter,
+    {
+      prepareResponse: (intent) =>
+        toolboxService.prepareToolApprovalResponse(intent),
+      commitResponse: (commit) =>
+        toolboxService.commitToolApprovalResponse(commit),
+      invalidateOpen: (intent) =>
+        toolboxService.invalidateOpenToolApprovals(intent),
+    },
   );
   const cloudTaskTeleportController = new CloudTaskTeleportController({
     karton: uiKarton,

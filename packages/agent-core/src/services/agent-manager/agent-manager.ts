@@ -9,10 +9,7 @@ import { toAgentsMap, type AgentsMap } from '../../agents/agents-map';
 import type { AgentHost } from '../../host/host';
 import type { CommandRegistry } from '../../commands/command-registry';
 import type { Logger } from '../../host/logger';
-import type {
-  AgentPersistenceDB,
-  StoreAgentInstanceOptions,
-} from '../agent-persistence/db';
+import type { AgentPersistenceDB } from '../agent-persistence/db';
 import { ChatPersistenceService, type ChatProject } from '../chat-persistence';
 import type { AttachmentsService } from '../attachments';
 import type { ProcessedImageCacheService } from '../processed-image-cache';
@@ -59,6 +56,13 @@ import { generateAttachmentFilename } from './attachment-filename';
 import { randomUUID } from 'node:crypto';
 import type { UserMessageMetadata } from '../../types/metadata';
 import type { AgentStepExecutor } from '../../agents/agent-step-executor';
+import type { ToolApprovalLifecycleHooks } from '../../agents/tool-approval-lifecycle';
+import type {
+  AgentStatePersistMessageBinding,
+  AgentStatePersistOptions,
+  AgentStatePersistRequest,
+} from '../../agents/state-persistence';
+import { serializeAgentStatePersistMessage } from '../../agents/state-persistence';
 
 import {
   AgentSessionCheckpointSafePointError,
@@ -140,6 +144,40 @@ function hasPendingToolApproval(history: AgentMessage[]): boolean {
   return false;
 }
 
+function isLegacyAgentStatePersistRequest(
+  request: AgentStatePersistRequest,
+): request is readonly number[] {
+  return Array.isArray(request);
+}
+
+function normalizeAgentStatePersistRequest(
+  request?: AgentStatePersistRequest,
+): AgentStatePersistOptions {
+  if (!request) return {};
+  if (isLegacyAgentStatePersistRequest(request)) {
+    return { dirtyMessageIndices: [...request] };
+  }
+  return {
+    dirtyMessageIndices: request.dirtyMessageIndices
+      ? [...request.dirtyMessageIndices]
+      : undefined,
+    expectedMessageBindings: request.expectedMessageBindings?.map(
+      (binding) => ({ ...binding }),
+    ),
+    throwOnError: request.throwOnError,
+  };
+}
+
+interface CapturedAgentStatePersistMessageBinding
+  extends AgentStatePersistMessageBinding {
+  readonly expectedSerializedMessage: string;
+}
+
+interface CapturedAgentStatePersistOptions
+  extends Omit<AgentStatePersistOptions, 'expectedMessageBindings'> {
+  readonly expectedMessageBindings?: readonly CapturedAgentStatePersistMessageBinding[];
+}
+
 export interface PreparedAgentSessionCheckpointState {
   agentStateFlushedAt: string;
   memoryFlushedAt: string;
@@ -202,6 +240,8 @@ export class AgentManager extends DisposableService {
     event: AgentNotificationEvent,
     agentId: string,
   ) => void | Promise<void>;
+  /** Host-neutral prepare/commit/invalidate seam for tool approvals. */
+  private readonly toolApprovalLifecycle?: ToolApprovalLifecycleHooks;
   /**
    * Optional host hook that augments raw {@link AgentHistoryEntry}
    * rows from {@link AgentPersistenceDB} with data only the host can
@@ -255,6 +295,12 @@ export class AgentManager extends DisposableService {
    */
   private readonly persistenceDb: AgentPersistenceDB;
   private readonly chatPersistence: ChatPersistenceService;
+  /**
+   * Per-agent write tails. Each persistence callback reads AgentStore only
+   * after the preceding write settles, preventing an older overlapping save
+   * from overwriting a newer approval response snapshot.
+   */
+  private readonly agentPersistenceTails = new Map<string, Promise<void>>();
 
   /**
    * Registry of {@link DomainAdapter}s threaded into every `BaseAgent`.
@@ -300,6 +346,7 @@ export class AgentManager extends DisposableService {
     this.agentsMap = toAgentsMap(agentTypeRegistry);
     this.renderHostMention = hooks?.renderHostMention;
     this.onAgentEvent = hooks?.onAgentEvent;
+    this.toolApprovalLifecycle = hooks?.toolApprovalLifecycle;
     this.enrichHistoryEntries = hooks?.enrichHistoryEntries;
     this.isNetworkOnline = hooks?.isNetworkOnline;
     this.getSkillsForSlashRedaction =
@@ -433,7 +480,7 @@ export class AgentManager extends DisposableService {
     // failure cannot break unrelated UI flows. A checkpoint, however, must
     // prove that the current task state reached durable storage before a
     // caller is allowed to teleport or restart the session.
-    await this.persistAgentState(instanceId, undefined, {
+    await this.persistAgentState(instanceId, {
       throwOnError: true,
     });
     const agentStateFlushedAt = new Date().toISOString();
@@ -1399,10 +1446,11 @@ export class AgentManager extends DisposableService {
         // The recipe channel is retired. The runloop writes through
         // the bound state-mutation bundle built once per agent.
         commands: bindStateMutations(this.agentStore, agentInstanceId),
-        persist: (dirtyMessageIndices?: number[]) =>
-          this.persistAgentState(agentInstanceId, dirtyMessageIndices),
+        persist: (request?: AgentStatePersistRequest) =>
+          this.persistAgentState(agentInstanceId, request),
       } as unknown as BaseAgentDependencies<any, any>['state'],
       host: this.host,
+      toolApprovalLifecycle: this.toolApprovalLifecycle,
       toolbox: this.agentToolbox,
       caches: {
         fileReadCache: this.fileReadCache,
@@ -1551,12 +1599,78 @@ export class AgentManager extends DisposableService {
     return createdAgent;
   }
 
-  private async persistAgentState(
+  private persistAgentState(
     instanceId: string,
-    dirtyMessageIndices?: number[],
-    options?: StoreAgentInstanceOptions,
-  ) {
+    request?: AgentStatePersistRequest,
+  ): Promise<void> {
+    const normalizedOptions = normalizeAgentStatePersistRequest(request);
+    let options: CapturedAgentStatePersistOptions;
+    try {
+      const stateAtEnqueue = getAgentInstance(
+        this.agentStore,
+        instanceId,
+      )?.state;
+      if (!stateAtEnqueue) {
+        throw new Error(`Agent with instance id ${instanceId} not found`);
+      }
+      const dirtyMessageIndices = new Set(
+        normalizedOptions.dirtyMessageIndices ?? [],
+      );
+      const expectedMessageBindings =
+        normalizedOptions.expectedMessageBindings?.map((binding) => {
+          const message = stateAtEnqueue.history[binding.messageIndex];
+          if (
+            !message ||
+            message.id !== binding.messageId ||
+            !dirtyMessageIndices.has(binding.messageIndex)
+          ) {
+            throw new Error(
+              `Agent persistence cannot capture strict message ${binding.messageId} at history index ${binding.messageIndex}`,
+            );
+          }
+          return {
+            ...binding,
+            expectedSerializedMessage:
+              serializeAgentStatePersistMessage(message),
+          };
+        });
+      options = {
+        ...normalizedOptions,
+        expectedMessageBindings,
+        throwOnError:
+          expectedMessageBindings && expectedMessageBindings.length > 0
+            ? true
+            : normalizedOptions.throwOnError,
+      };
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const previousTail =
+      this.agentPersistenceTails.get(instanceId) ?? Promise.resolve();
+
+    // A strict caller must observe its own failure, but a rejected write must
+    // never poison the queue and prevent later recovery attempts.
+    const operation = previousTail
+      .catch(() => undefined)
+      .then(() => this.persistAgentStateSnapshot(instanceId, options));
+    const nextTail = operation.catch(() => undefined);
+    this.agentPersistenceTails.set(instanceId, nextTail);
+    void nextTail.finally(() => {
+      if (this.agentPersistenceTails.get(instanceId) === nextTail) {
+        this.agentPersistenceTails.delete(instanceId);
+      }
+    });
+    return operation;
+  }
+
+  private async persistAgentStateSnapshot(
+    instanceId: string,
+    options: CapturedAgentStatePersistOptions,
+  ): Promise<void> {
     // Store agent state into DB.
+    // Read every mutable dependency inside the per-agent queue. Capturing the
+    // envelope before awaiting the previous write would allow an older save to
+    // commit a stale history after a newer approval response.
     const agent = this.activeAgents.get(instanceId);
 
     const envelope = getAgentInstance(this.agentStore, instanceId);
@@ -1564,6 +1678,21 @@ export class AgentManager extends DisposableService {
 
     if (!agent || !agentState) {
       throw new Error(`Agent with instance id ${instanceId} not found`);
+    }
+
+    for (const binding of options.expectedMessageBindings ?? []) {
+      if (
+        !Number.isSafeInteger(binding.messageIndex) ||
+        binding.messageIndex < 0 ||
+        agentState.history[binding.messageIndex]?.id !== binding.messageId ||
+        serializeAgentStatePersistMessage(
+          agentState.history[binding.messageIndex]!,
+        ) !== binding.expectedSerializedMessage
+      ) {
+        throw new Error(
+          `Agent persistence binding changed for ${instanceId} at history index ${binding.messageIndex}`,
+        );
+      }
     }
 
     if (agentState.history.length === 0) {
@@ -1596,8 +1725,13 @@ export class AgentManager extends DisposableService {
         mountedWorkspaces,
       },
       agentState.history,
-      dirtyMessageIndices,
-      options,
+      options.dirtyMessageIndices
+        ? [...options.dirtyMessageIndices]
+        : undefined,
+      {
+        throwOnError: options.throwOnError,
+        expectedMessageBindings: options.expectedMessageBindings,
+      },
     );
   }
 

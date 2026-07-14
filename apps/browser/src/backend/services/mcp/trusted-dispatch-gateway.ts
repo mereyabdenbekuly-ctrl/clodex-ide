@@ -424,9 +424,27 @@ export function hashTrustedMcpFinalAuthorityEffect(
   descriptor: TrustedMcpDescriptorCommitment,
   effect: TrustedMcpFinalAuthorityEffect,
 ): string {
+  return hashTrustedMcpFinalAuthorityEffectForDescriptorDigest(
+    descriptor.digest,
+    effect,
+  );
+}
+
+/**
+ * Recomputes an exact effect commitment when only the previously reviewed
+ * descriptor digest remains available. This is used by durable approval
+ * lifecycle recovery without persisting the raw descriptor or arguments.
+ */
+export function hashTrustedMcpFinalAuthorityEffectForDescriptorDigest(
+  descriptorDigest: string,
+  effect: TrustedMcpFinalAuthorityEffect,
+): string {
+  if (!/^[a-f0-9]{64}$/.test(descriptorDigest)) {
+    throw new Error('MCP descriptor digest is invalid');
+  }
   return hashCanonicalValue(
     {
-      descriptorDigest: descriptor.digest,
+      descriptorDigest,
       principalId: requireBoundedId(effect.principalId, 'MCP principal'),
       toolCallId: requireBoundedId(effect.toolCallId, 'MCP tool call'),
       arguments: effect.arguments,

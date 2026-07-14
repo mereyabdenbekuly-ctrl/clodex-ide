@@ -87,7 +87,12 @@ import {
   type PendingEditService,
   ProjectIndexService,
 } from '@clodex/agent-core';
-import type { BaseAgentToolboxView } from '@clodex/agent-core/agents';
+import type {
+  BaseAgentToolboxView,
+  ToolApprovalDecisionCommit,
+  ToolApprovalDecisionIntent,
+  ToolApprovalInvalidationIntent,
+} from '@clodex/agent-core/agents';
 import { executeSandboxJs as executeSandboxJsTool } from './tools/browser/execute-sandbox-js';
 import { readConsoleLogs as readConsoleLogsTool } from './tools/browser/read-console-logs';
 import { runOpenManus as runOpenManusTool } from './tools/agents/run-openmanus';
@@ -212,6 +217,10 @@ export class ToolboxService
         agentId: string,
       ) => void | Promise<void>)
     | null = null;
+  /** Invalidates approval publication/staging closures from superseded steps. */
+  private readonly toolApprovalLifecycleEpochs = new Map<string, number>();
+  /** Prevents epoch ABA when a deleted agent id is later reused. */
+  private toolApprovalLifecycleEpochCounter = 0;
 
   /** Cached API client - recreated when auth changes */
   private apiClient: ApiClient | null = null;
@@ -587,16 +596,23 @@ export class ToolboxService
           this.preferencesService.get(),
           Boolean(this.authService.accessToken),
         ),
-      recordPendingApproval: (agentInstanceId, toolCallId, explanation) => {
-        this.hostAgentStateMutations.recordPendingApproval(
+      recordPendingApprovalAtEpoch: (
+        agentInstanceId,
+        toolCallId,
+        explanation,
+        approvalLifecycleEpoch,
+      ) => {
+        this.recordPendingToolApprovalAtEpoch(
           agentInstanceId,
           toolCallId,
           explanation,
+          approvalLifecycleEpoch,
         );
       },
       assessGuardian: async (request) =>
         (await this.guardianPolicyChecker?.(request)) ?? null,
-      stageApproval: (input) => this.mcpApprovalBroker.stage(input),
+      stageApprovalAtEpoch: (input, approvalLifecycleEpoch) =>
+        this.stageMcpApprovalAtEpoch(input, approvalLifecycleEpoch),
       claimApprovalAuthority: (input) => this.mcpApprovalBroker.claim(input),
     });
     this.detectedShell = detectedShell;
@@ -814,6 +830,8 @@ export class ToolboxService
     const getToolApprovalMode = (): ToolApprovalMode =>
       this.uiKarton.state.agents.instances[agentInstanceId]?.state
         .toolApprovalMode ?? DEFAULT_TOOL_APPROVAL_MODE;
+    const approvalLifecycleEpoch =
+      this.getToolApprovalLifecycleEpoch(agentInstanceId);
 
     switch (tool) {
       case 'write':
@@ -855,10 +873,11 @@ export class ToolboxService
           assess: async (request) =>
             (await this.guardianPolicyChecker?.(request)) ?? null,
           recordPendingApproval: (toolCallId, explanation) => {
-            this.hostAgentStateMutations.recordPendingApproval(
+            this.recordPendingToolApprovalAtEpoch(
               agentInstanceId,
               toolCallId,
               explanation,
+              approvalLifecycleEpoch,
             );
           },
         });
@@ -928,10 +947,11 @@ export class ToolboxService
             // Legacy field name: this is smart-approval explanation metadata,
             // not the canonical approval-pending state. The canonical state
             // is the assistant tool part with state === 'approval-requested'.
-            this.hostAgentStateMutations.recordPendingApproval(
+            this.recordPendingToolApprovalAtEpoch(
               agentInstanceId,
               toolCallId,
               explanation,
+              approvalLifecycleEpoch,
             );
           },
         };
@@ -949,10 +969,11 @@ export class ToolboxService
             };
           },
           recordPendingApproval: (toolCallId, explanation) => {
-            this.hostAgentStateMutations.recordPendingApproval(
+            this.recordPendingToolApprovalAtEpoch(
               agentInstanceId,
               toolCallId,
               explanation,
+              approvalLifecycleEpoch,
             );
           },
         };
@@ -972,33 +993,118 @@ export class ToolboxService
     }
   }
 
+  private getToolApprovalLifecycleEpoch(agentInstanceId: string): number {
+    const existing = this.toolApprovalLifecycleEpochs.get(agentInstanceId);
+    if (existing !== undefined) return existing;
+    const initial = this.nextToolApprovalLifecycleEpoch();
+    this.toolApprovalLifecycleEpochs.set(agentInstanceId, initial);
+    return initial;
+  }
+
+  private nextToolApprovalLifecycleEpoch(): number {
+    if (this.toolApprovalLifecycleEpochCounter >= Number.MAX_SAFE_INTEGER) {
+      throw new Error('Tool approval lifecycle epoch space is exhausted');
+    }
+    this.toolApprovalLifecycleEpochCounter += 1;
+    return this.toolApprovalLifecycleEpochCounter;
+  }
+
+  private advanceToolApprovalLifecycleEpoch(agentInstanceId: string): number {
+    const next = this.nextToolApprovalLifecycleEpoch();
+    this.toolApprovalLifecycleEpochs.set(agentInstanceId, next);
+    return next;
+  }
+
+  private assertToolApprovalLifecycleEpoch(
+    agentInstanceId: string,
+    expectedEpoch: number,
+  ): void {
+    if (
+      this.toolApprovalLifecycleEpochs.get(agentInstanceId) !== expectedEpoch
+    ) {
+      throw new Error(
+        'Tool approval publication was superseded by a newer agent lifecycle action',
+      );
+    }
+  }
+
+  private async stageMcpApprovalAtEpoch(
+    input: Parameters<TrustedMcpApprovalBroker['stage']>[0],
+    expectedEpoch: number,
+  ): Promise<void> {
+    this.assertToolApprovalLifecycleEpoch(input.agentInstanceId, expectedEpoch);
+    await this.mcpApprovalBroker.stage(input);
+    if (
+      this.toolApprovalLifecycleEpochs.get(input.agentInstanceId) ===
+      expectedEpoch
+    ) {
+      return;
+    }
+
+    const staleStageError = new Error(
+      'MCP approval staging completed after its agent lifecycle was superseded',
+    );
+    try {
+      await this.mcpApprovalBroker.invalidateOpen({
+        agentInstanceId: input.agentInstanceId,
+        toolCallIds: [input.toolCallId],
+        reason: 'system-interrupted',
+      });
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [staleStageError, cleanupError],
+        'Stale MCP approval staging could not be durably invalidated',
+      );
+    }
+    throw staleStageError;
+  }
+
+  private recordPendingToolApprovalAtEpoch(
+    agentInstanceId: string,
+    toolCallId: string,
+    explanation: string,
+    expectedEpoch: number,
+  ): void {
+    this.assertToolApprovalLifecycleEpoch(agentInstanceId, expectedEpoch);
+    this.hostAgentStateMutations.recordPendingApproval(
+      agentInstanceId,
+      toolCallId,
+      explanation,
+    );
+  }
+
   public async getClodexMcpTools(
     agentInstanceId: string,
   ): Promise<Record<string, Tool>> {
+    const approvalLifecycleEpoch =
+      this.getToolApprovalLifecycleEpoch(agentInstanceId);
     const [cloudTools, registryTools, remoteTools] = await Promise.all([
-      this.clodexMcpService.getTools(agentInstanceId),
+      this.clodexMcpService.getTools(agentInstanceId, approvalLifecycleEpoch),
       createRegistryMcpTools({
         registry: this.mcpRegistryService,
         agentInstanceId,
         assessGuardian: async (request) =>
           (await this.guardianPolicyChecker?.(request)) ?? null,
         recordPendingApproval: (toolCallId, explanation) => {
-          this.hostAgentStateMutations.recordPendingApproval(
+          this.recordPendingToolApprovalAtEpoch(
             agentInstanceId,
             toolCallId,
             explanation,
+            approvalLifecycleEpoch,
           );
         },
-        stageApproval: (input) => this.mcpApprovalBroker.stage(input),
+        stageApproval: (input) =>
+          this.stageMcpApprovalAtEpoch(input, approvalLifecycleEpoch),
         claimApprovalAuthority: (input) => this.mcpApprovalBroker.claim(input),
       }),
       Promise.resolve(
         this.remoteConnectionsService?.getAgentTools({
           recordPendingApproval: (toolCallId, explanation) => {
-            this.hostAgentStateMutations.recordPendingApproval(
+            this.recordPendingToolApprovalAtEpoch(
               agentInstanceId,
               toolCallId,
               explanation,
+              approvalLifecycleEpoch,
             );
           },
         }) ?? {},
@@ -1009,6 +1115,54 @@ export class ToolboxService
       ...registryTools,
       ...remoteTools,
     };
+  }
+
+  /**
+   * Host-owned prepare phase for an explicit approval response. The broker
+   * receipt stays opaque to agent-core and is returned only as its lifecycle
+   * commit token.
+   */
+  public async prepareToolApprovalResponse(
+    intent: ToolApprovalDecisionIntent,
+  ): Promise<ToolApprovalDecisionCommit | null> {
+    const receipt = await this.mcpApprovalBroker.prepareResponse({
+      agentInstanceId: intent.agentInstanceId,
+      approvalId: intent.approvalId,
+      toolCallId: intent.toolCallId,
+      aiToolName: intent.toolName,
+      input: intent.input,
+      approved: intent.approved,
+    });
+    return receipt ? Object.freeze({ token: receipt }) : null;
+  }
+
+  /** Commit a prepared broker response after core persisted AgentStore. */
+  public async commitToolApprovalResponse(
+    commit: ToolApprovalDecisionCommit,
+  ): Promise<void> {
+    await this.mcpApprovalBroker.commitResponse(
+      commit.token as Parameters<TrustedMcpApprovalBroker['commitResponse']>[0],
+    );
+  }
+
+  /** Durably invalidate MCP approvals displaced by an agent lifecycle event. */
+  public async invalidateOpenToolApprovals(
+    intent: ToolApprovalInvalidationIntent,
+  ): Promise<number> {
+    // `new-user-message` is the probe used before BaseAgent decides whether a
+    // busy message may remain queued. Advancing here would stale every tool
+    // closure in a step that is intentionally allowed to keep running. When
+    // the probe finds displaced work, BaseAgent follows with `queue-flush`,
+    // which is the cancellation linearization point and advances the epoch.
+    if (intent.reason !== 'new-user-message') {
+      this.advanceToolApprovalLifecycleEpoch(intent.agentInstanceId);
+    }
+    return await this.mcpApprovalBroker.invalidateOpen({
+      agentInstanceId: intent.agentInstanceId,
+      toolCallIds: intent.toolCallIds,
+      reason: intent.reason,
+      includeAllOpenForAgent: true,
+    });
   }
 
   /**
@@ -1741,6 +1895,7 @@ export class ToolboxService
     this.sandboxService?.destroyAgent(agentInstanceId);
     this.shellService?.destroyAgent(agentInstanceId);
     this.appsRuntimes.delete(agentInstanceId);
+    this.toolApprovalLifecycleEpochs.delete(agentInstanceId);
     if (deleteBlobs) {
       void this.attachments.deleteAgentBlobs(agentInstanceId);
       this.shellService?.deleteShellLogs(agentInstanceId);

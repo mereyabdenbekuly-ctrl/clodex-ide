@@ -24,6 +24,7 @@ import type {
 import type { AgentTypes } from '../types/agent';
 import type { ModelCapabilities } from '../types/models';
 import type { AgentStateMutations } from '../services/agent-manager/state-mutations';
+import { ApprovalResolutionMutationError } from '../services/agent-manager/state-mutations/approvals';
 import type { AgentHost } from '../host/host';
 import {
   MODEL_REQUEST_PURPOSE_METADATA_KEY,
@@ -41,6 +42,14 @@ import {
   resolveAgentTaskSnapshotSelectionFromMessages,
   type AgentExecutionTarget,
 } from './execution-target';
+import {
+  serializeAgentStatePersistMessage,
+  type AgentStatePersistRequest,
+} from './state-persistence';
+import type {
+  ToolApprovalInvalidationReason,
+  ToolApprovalLifecycleHooks,
+} from './tool-approval-lifecycle';
 
 import {
   AgentSessionCheckpointSafePointError,
@@ -244,9 +253,11 @@ export interface BaseAgentDependencies<
   state: {
     get: () => AgentState;
     commands: AgentStateMutations;
-    persist: (dirtyMessageIndices?: number[]) => Promise<void>;
+    persist: (request?: AgentStatePersistRequest) => Promise<void>;
   };
   host: AgentHost;
+  /** Optional host-owned durable lifecycle for explicit tool responses. */
+  toolApprovalLifecycle?: ToolApprovalLifecycleHooks;
   toolbox: TToolbox;
   caches: BaseAgentCaches;
   /**
@@ -601,7 +612,7 @@ export abstract class BaseAgent<
   private readonly state: {
     get: () => AgentState;
     commands: AgentStateMutations;
-    persist: (dirtyMessageIndices?: number[]) => Promise<void>;
+    persist: (request?: AgentStatePersistRequest) => Promise<void>;
   };
 
   /**
@@ -614,6 +625,7 @@ export abstract class BaseAgent<
 
   // External dependencies — host-supplied capability seam.
   protected readonly host: AgentHost;
+  private readonly toolApprovalLifecycle?: ToolApprovalLifecycleHooks;
   protected readonly toolbox: TToolbox;
   protected readonly domainAdapterRegistry: DomainAdapterRegistry;
 
@@ -673,6 +685,58 @@ export abstract class BaseAgent<
   private _pendingMemoryWriteReason: MemoryWriteReason | null = null;
   private _lastMemoryWriteAt = 0;
   private _recoveredReplayExecutionId: string | null = null;
+  private _recoveredReplayStepGeneration: number | null = null;
+  private readonly _closedRecoveredReplayExecutionIds = new Set<string>();
+
+  /** Number of explicit approval responses crossing durable barriers. */
+  private _approvalDurabilityInFlight = 0;
+  /** Sticky fail-closed bit used when an exact rollback cannot be proven. */
+  private _approvalAdmissionFailedClosed = false;
+  /** Blocks execution until a failed automatic sweep is durably retried. */
+  private _approvalSweepPersistenceBlocked = false;
+  /** A changed sweep must remain retryable even when the next sweep is a no-op. */
+  private _approvalSweepPersistencePending = false;
+  /** Non-tail history rows still owed to persistence by a failed sweep. */
+  private readonly _pendingApprovalSweepDirtyMessageIndices = new Set<number>();
+  /** Serializes sweep mutation + retry ownership for the shared pending set. */
+  private _approvalSweepTail: Promise<void> = Promise.resolve();
+  /** Counts queued/running sweep transactions before they publish receipts. */
+  private _approvalSweepOperationsInFlight = 0;
+  /** Invalidates an in-flight response when a newer lifecycle action wins. */
+  private _approvalLifecycleGeneration = 0;
+  /** Rejects response ingress while a newer lifecycle invalidation is open. */
+  private _approvalInvalidationInFlight = 0;
+  /** Serializes host lifecycle invalidations so stale success cannot clear failure. */
+  private _approvalInvalidationTail: Promise<void> = Promise.resolve();
+  /** Blocks execution after a durable host invalidation failure until retry. */
+  private _approvalLifecycleInvalidationFailedClosed = false;
+  /** Tool calls whose explicit response is currently crossing barriers. */
+  private readonly _approvalResponsesInFlight = new Set<string>();
+  /** Serializes exact full-message approval mutations within this agent. */
+  private _approvalResponseTail: Promise<void> = Promise.resolve();
+  /** Waiters used by stop/new-message paths before they sweep AgentStore. */
+  private readonly _approvalDurabilitySettledWaiters = new Set<() => void>();
+  /** Serializes user-message ingress and destructive history rewrites. */
+  private _historyLifecycleTail: Promise<void> = Promise.resolve();
+  /** Blocks step/replay/approval admission while an undo-backed rewrite yields. */
+  private _historyRewriteInFlight = 0;
+  /** Cancels an older queued/running history operation before its next write. */
+  private _historyPreemptionGeneration = 0;
+  /** Keeps execution fail-closed until priority stop/recovery work is durable. */
+  private _historyPreemptionInFlight = 0;
+
+  /**
+   * Settlement barrier for the currently admitted step. The controller is
+   * cleared from inside the SDK's `onFinish` callback, before the teed UI
+   * stream and the final persistence pass have necessarily drained. Keeping a
+   * separate barrier prevents an approval response from starting its
+   * continuation against that half-settled history.
+   */
+  private _activeStepRun: {
+    readonly generation: number;
+    readonly settled: Promise<'completed' | 'failed' | 'superseded'>;
+    readonly resolve: (outcome: 'completed' | 'failed' | 'superseded') => void;
+  } | null = null;
 
   /**
    * Set by `onFinish` once `handlePostStep` has decided whether another
@@ -771,6 +835,7 @@ export abstract class BaseAgent<
     this.instanceId = deps.instanceId;
     this.state = deps.state;
     this.host = deps.host;
+    this.toolApprovalLifecycle = deps.toolApprovalLifecycle;
     this.toolbox = deps.toolbox;
     this.domainAdapterRegistry = deps.domainAdapterRegistry;
     this.instanceConfig = deps.instanceConfig;
@@ -822,6 +887,62 @@ export abstract class BaseAgent<
    * =======================================================
    */
 
+  private enqueueHistoryLifecycleOperation<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const queued = this._historyLifecycleTail
+      .catch(() => undefined)
+      .then(operation);
+    this._historyLifecycleTail = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  }
+
+  private captureHistoryPreemptionGeneration(operation: string): number {
+    if (this._historyPreemptionInFlight > 0) {
+      throw new Error(
+        `${operation} cannot start while a priority agent lifecycle action is pending`,
+      );
+    }
+    return this._historyPreemptionGeneration;
+  }
+
+  private assertHistoryNotPreempted(
+    expectedGeneration: number,
+    operation: string,
+  ): void {
+    if (this._historyPreemptionGeneration !== expectedGeneration) {
+      throw new Error(
+        `${operation} was superseded by a newer priority agent lifecycle action`,
+      );
+    }
+  }
+
+  private enqueuePriorityHistoryLifecycleOperation<T>(
+    operation: () => Promise<T>,
+    afterSuccess?: (result: T) => void,
+  ): Promise<T> {
+    this._historyPreemptionInFlight += 1;
+    this._historyPreemptionGeneration += 1;
+    this._approvalLifecycleGeneration += 1;
+    this.supersedeCurrentStep();
+
+    return this.enqueueHistoryLifecycleOperation(async () => {
+      let result: T;
+      try {
+        result = await operation();
+      } catch (error) {
+        this._historyPreemptionInFlight -= 1;
+        throw error;
+      }
+      this._historyPreemptionInFlight -= 1;
+      afterSuccess?.(result);
+      return result;
+    });
+  }
+
   /**
    * Send a message to the agent. If the agent is busy, the message will be queued.
    * @param message - The message to send to the agent
@@ -836,6 +957,18 @@ export abstract class BaseAgent<
   public async sendUserMessage(
     message: AgentMessage & { role: 'user' },
   ): Promise<MessageId> {
+    const detachedMessage = structuredClone(message);
+    return await this.enqueueHistoryLifecycleOperation(() =>
+      this.sendUserMessageSerialized(detachedMessage),
+    );
+  }
+
+  private async sendUserMessageSerialized(
+    message: AgentMessage & { role: 'user' },
+    deferRunStep = false,
+  ): Promise<MessageId> {
+    const preemptionGeneration =
+      this.captureHistoryPreemptionGeneration('User message');
     // We override the message id with a random UUID to ensure it's unique.
     const id = crypto.randomUUID();
 
@@ -856,44 +989,80 @@ export abstract class BaseAgent<
       },
     );
 
-    // If the agent is running, we queue the message
-    if (this.state.get().isWorking) {
-      const { queuedModelId, queueLengthAfter } =
-        this.state.commands.enqueueUserMessage({ message: msg });
+    // Invalidate host-managed records before deciding whether a busy message
+    // can be queued. This closes the interval where the broker has already
+    // staged an approval but AgentStore/UI has not published it yet.
+    const hadLocalApproval = this.hasLocalOpenToolApproval();
+    const hadLifecycleInvalidationFailure =
+      this._approvalLifecycleInvalidationFailedClosed;
+    const invalidation =
+      await this.invalidateOpenToolApprovals('new-user-message');
+    try {
+      this.assertHistoryNotPreempted(preemptionGeneration, 'User message');
+      const displacedApproval =
+        hadLocalApproval ||
+        this.hasLocalOpenToolApproval() ||
+        invalidation.invalidatedCount > 0 ||
+        this._approvalSweepPersistencePending ||
+        this._approvalSweepOperationsInFlight > 0 ||
+        hadLifecycleInvalidationFailure;
 
-      this.host.logger.debug(`[BaseAgent:${this.instanceId}] Queued message`);
+      // Busy agents without a displaced approval keep the existing queue
+      // semantics.
+      const isBusy = this.state.get().isWorking || this._activeStepRun !== null;
+      if (isBusy && !displacedApproval) {
+        const { queuedModelId, queueLengthAfter } =
+          this.state.commands.enqueueUserMessage({ message: msg });
 
-      this.host.telemetry?.capture('agent-message-queued', {
-        agent_type: this.agentType,
-        agent_instance_id: this.instanceId,
-        model_id: queuedModelId,
-        queue_length_after: queueLengthAfter,
-      });
+        this.host.logger.debug(`[BaseAgent:${this.instanceId}] Queued message`);
 
-      return message.id;
+        this.host.telemetry?.capture('agent-message-queued', {
+          agent_type: this.agentType,
+          agent_instance_id: this.instanceId,
+          model_id: queuedModelId,
+          queue_length_after: queueLengthAfter,
+        });
+
+        return id;
+      }
+
+      this.host.logger.debug(
+        `[BaseAgent:${this.instanceId}] Sending user message`,
+      );
+
+      if (this.state.get().isWorking || this._activeStepRun !== null) {
+        // Keep the outer invalidation gate held across abort, AgentStore
+        // sweep, and strict persistence so a response cannot re-enter between
+        // those phases.
+        await this.internalStop('user-flushed-queue');
+        this.assertHistoryNotPreempted(preemptionGeneration, 'User message');
+      }
+
+      // Auto-deny any pending approval requests and force-terminate any
+      // non-terminal tool parts before the user message enters history.
+      // Without this, stale tool states (approval-requested, input-streaming,
+      // input-available) would cause canRunStep() to block indefinitely.
+      await this.applyAndPersistApprovalSweep(() =>
+        this.state.commands.denyAllNonTerminalToolPartsInHistory({
+          approvalDenyReason:
+            this.config.flushQueueToolCallRequestApprovalReason ??
+            'User sent new message before tool call approval was granted.',
+          forceErrorText:
+            'Tool execution interrupted — agent session ended before tool call finished.',
+        }),
+      );
+      this.assertHistoryNotPreempted(preemptionGeneration, 'User message');
+
+      // If the agent is not running, add the message to history and
+      // immediately send it to the model after releasing the invalidation
+      // gate below.
+      this.state.commands.appendHistoryMessage({ message: msg });
+      this.scheduleMemorySnapshotWrite('user-message');
+    } finally {
+      invalidation.release();
     }
 
-    this.host.logger.debug(
-      `[BaseAgent:${this.instanceId}] Sending user message`,
-    );
-
-    // Auto-deny any pending approval requests and force-terminate any
-    // non-terminal tool parts before the user message enters history.
-    // Without this, stale tool states (approval-requested, input-streaming,
-    // input-available) would cause canRunStep() to block indefinitely.
-    this.state.commands.denyAllNonTerminalToolPartsInHistory({
-      approvalDenyReason:
-        this.config.flushQueueToolCallRequestApprovalReason ??
-        'User sent new message before tool call approval was granted.',
-      forceErrorText:
-        'Tool execution interrupted — agent session ended before tool call finished.',
-    });
-
-    // If the agent is not running, we add the message to the history and immediately send it to the model.
-    this.state.commands.appendHistoryMessage({ message: msg });
-    this.scheduleMemorySnapshotWrite('user-message');
-
-    void this.runStep();
+    if (!deferRunStep) void this.runStep();
 
     return id;
   }
@@ -912,47 +1081,208 @@ export abstract class BaseAgent<
   public async sendToolApprovalResponse(
     toolCallResponse: ToolApprovalResponse,
   ): Promise<void> {
+    const detachedResponse = structuredClone(toolCallResponse);
+    const operation = this._approvalResponseTail
+      .catch(() => undefined)
+      .then(() => this.sendToolApprovalResponseSerialized(detachedResponse));
+    this._approvalResponseTail = operation.catch(() => undefined);
+    return await operation;
+  }
+
+  private async sendToolApprovalResponseSerialized(
+    toolCallResponse: ToolApprovalResponse,
+  ): Promise<void> {
+    if (this._approvalInvalidationInFlight > 0) {
+      throw new Error(
+        'Tool approval response cannot start during agent lifecycle invalidation',
+      );
+    }
+    if (
+      this._approvalAdmissionFailedClosed ||
+      this._approvalSweepPersistenceBlocked ||
+      this._approvalSweepOperationsInFlight > 0 ||
+      this._historyRewriteInFlight > 0 ||
+      this._historyPreemptionInFlight > 0 ||
+      this._approvalLifecycleInvalidationFailedClosed
+    ) {
+      throw new Error(
+        'Tool approval response cannot start while approval persistence is fail-closed',
+      );
+    }
+    if (this._recoveredReplayExecutionId !== null) {
+      throw new Error(
+        'Tool approval response cannot start while recovered UI replay is still open',
+      );
+    }
     const approvalId = toolCallResponse.approvalId;
     const approved = toolCallResponse.approved;
     const reason = toolCallResponse.reason;
 
-    this.state.commands.resolveApproval({ approvalId, approved, reason });
+    const request = this.state.commands.snapshotApprovalRequest({
+      approvalId,
+    });
+    if (this._approvalResponsesInFlight.has(request.toolCallId)) {
+      throw new Error(
+        `Tool approval response is already being committed for '${approvalId}'`,
+      );
+    }
 
-    // Find the tool name from the approval for telemetry
-    let toolName = 'unknown';
-    for (let i = this.state.get().history.length - 1; i >= 0; i--) {
-      const msg = this.state.get().history[i];
-      if (!msg || msg.role !== 'assistant') continue;
-      const part = msg.parts.find(
-        (p) =>
-          (p.type.startsWith('tool-') || p.type === 'dynamic-tool') &&
-          (p as AgentToolUIPart | DynamicToolUIPart).approval?.id ===
-            approvalId,
-      ) as AgentToolUIPart | DynamicToolUIPart | undefined;
-      if (part) {
-        toolName =
-          part.type === 'dynamic-tool'
-            ? 'dynamic-tool'
-            : part.type.replace('tool-', '');
-        break;
+    const lifecycleGeneration = this._approvalLifecycleGeneration;
+    const originatingStep = this._activeStepRun;
+    const originatingStepGeneration = this._stepGeneration;
+    this._approvalResponsesInFlight.add(request.toolCallId);
+    let durabilityAdmitted = false;
+
+    const approvalLifecycle = this.toolApprovalLifecycle;
+    let resolution:
+      | ReturnType<AgentStateMutations['resolveApproval']>
+      | undefined;
+    try {
+      if (originatingStep) {
+        const settlementOutcome = await originatingStep.settled;
+        if (settlementOutcome !== 'completed') {
+          throw new Error(
+            `Tool approval response '${approvalId}' cannot commit because its originating step ${settlementOutcome}`,
+          );
+        }
+      }
+      this.assertApprovalLifecycleGeneration(lifecycleGeneration, approvalId);
+      if (this._stepGeneration !== originatingStepGeneration) {
+        throw new Error(
+          `Tool approval response '${approvalId}' was superseded before durable commit`,
+        );
+      }
+      this._approvalDurabilityInFlight += 1;
+      durabilityAdmitted = true;
+
+      const prepared =
+        (await approvalLifecycle?.prepareResponse({
+          agentInstanceId: this.instanceId,
+          approvalId: request.approvalId,
+          toolCallId: request.toolCallId,
+          toolName: request.toolName,
+          input: structuredClone(request.input),
+          approved,
+        })) ?? null;
+
+      this.assertApprovalLifecycleGeneration(lifecycleGeneration, approvalId);
+      if (prepared && !this.config.persistent) {
+        throw new Error(
+          'Host-managed tool approval requires a persistent agent history',
+        );
+      }
+      resolution = this.state.commands.resolveApproval({
+        approvalId,
+        approved,
+        reason,
+        expected: request,
+      });
+
+      if (this.config.persistent) {
+        await this.state.persist({
+          dirtyMessageIndices: [resolution.messageIndex],
+          expectedMessageBindings: [
+            {
+              messageIndex: resolution.messageIndex,
+              messageId: resolution.messageId,
+            },
+          ],
+          throwOnError: true,
+        });
+      }
+      this.assertApprovalLifecycleGeneration(lifecycleGeneration, approvalId);
+
+      if (prepared) {
+        if (!approvalLifecycle) {
+          throw new Error('Tool approval lifecycle disappeared before commit');
+        }
+        await approvalLifecycle.commitResponse(prepared);
+      }
+      this.assertApprovalLifecycleGeneration(lifecycleGeneration, approvalId);
+    } catch (error) {
+      let failure = error;
+      if (!resolution && error instanceof ApprovalResolutionMutationError) {
+        resolution = error.receipt;
+      }
+      if (resolution) {
+        let rolledBack = false;
+        try {
+          rolledBack = this.state.commands.rollbackApprovalResolution({
+            receipt: resolution,
+          });
+        } catch (rollbackMutationError) {
+          this._approvalAdmissionFailedClosed = true;
+          failure = new AggregateError(
+            [error, rollbackMutationError],
+            'Tool approval response failed and its in-memory rollback could not be proven',
+          );
+        }
+        if (!rolledBack) {
+          this._approvalAdmissionFailedClosed = true;
+        } else if (this.config.persistent) {
+          try {
+            await this.state.persist({
+              dirtyMessageIndices: [resolution.messageIndex],
+              expectedMessageBindings: [
+                {
+                  messageIndex: resolution.messageIndex,
+                  messageId: resolution.messageId,
+                },
+              ],
+              throwOnError: true,
+            });
+          } catch (rollbackError) {
+            this._approvalAdmissionFailedClosed = true;
+            failure = new AggregateError(
+              [error, rollbackError],
+              'Tool approval response failed and its durable rollback could not be proven',
+            );
+          }
+        }
+      }
+      throw failure;
+    } finally {
+      if (durabilityAdmitted) this._approvalDurabilityInFlight -= 1;
+      this._approvalResponsesInFlight.delete(request.toolCallId);
+      if (this._approvalDurabilityInFlight === 0) {
+        for (const resolve of this._approvalDurabilitySettledWaiters) resolve();
+        this._approvalDurabilitySettledWaiters.clear();
       }
     }
-    if (approved) {
-      this.host.telemetry?.capture('tool-approved', {
-        tool_name: toolName,
-        agent_instance_id: this.instanceId,
-        tool_call_id: approvalId,
-      });
-    } else {
-      this.host.telemetry?.capture('tool-denied', {
-        tool_name: toolName,
-        reason,
-        agent_instance_id: this.instanceId,
-        tool_call_id: approvalId,
-      });
+
+    try {
+      if (approved) {
+        this.host.telemetry?.capture('tool-approved', {
+          tool_name: request.toolName,
+          agent_instance_id: this.instanceId,
+          tool_call_id: request.toolCallId,
+        });
+      } else {
+        this.host.telemetry?.capture('tool-denied', {
+          tool_name: request.toolName,
+          reason,
+          agent_instance_id: this.instanceId,
+          tool_call_id: request.toolCallId,
+        });
+      }
+    } catch (error) {
+      this.host.logger.debug(
+        `[BaseAgent:${this.instanceId}] Tool approval telemetry failed: ${(error as Error).message}`,
+      );
     }
 
-    this.runStep(true);
+    void this.continueAfterToolApprovalResponse({
+      lifecycleGeneration,
+      originatingStepGeneration,
+      originatingStepSettlement: originatingStep?.settled,
+    }).catch((error) => {
+      const normalizedError =
+        error instanceof Error ? error : new Error(String(error));
+      this.host.logger.error(
+        `[BaseAgent:${this.instanceId}] Failed to schedule tool approval continuation: ${this.formatError(normalizedError)}`,
+      );
+      this.report(normalizedError, 'continueAfterToolApprovalResponse');
+    });
 
     return;
   }
@@ -964,16 +1294,18 @@ export abstract class BaseAgent<
    * @note DO NOT OVERRIDE
    */
   public async deleteQueuedMessage(messageId: string): Promise<void> {
-    this.state.commands.removeQueuedMessage({ messageId });
-    return;
+    return await this.enqueueHistoryLifecycleOperation(async () => {
+      this.state.commands.removeQueuedMessage({ messageId });
+    });
   }
 
   /**
    * Clears/Empties the queue of the agent without sending any of the queued messages.
    */
   public async clearQueue(): Promise<void> {
-    this.state.commands.clearQueuedMessages();
-    return;
+    return await this.enqueueHistoryLifecycleOperation(async () => {
+      this.state.commands.clearQueuedMessages();
+    });
   }
 
   /**
@@ -993,7 +1325,20 @@ export abstract class BaseAgent<
       assertAgentSessionCheckpointSafePoint({
         isWorking: state.isWorking,
         hasRunningToolTransaction: Boolean(
-          this.stepAbortController && !this.stepAbortController.signal.aborted,
+          this._activeStepRun !== null ||
+            this._recoveredReplayExecutionId !== null ||
+            this._approvalDurabilityInFlight > 0 ||
+            this._approvalInvalidationInFlight > 0 ||
+            this._approvalResponsesInFlight.size > 0 ||
+            this._approvalAdmissionFailedClosed ||
+            this._approvalSweepPersistenceBlocked ||
+            this._approvalSweepPersistencePending ||
+            this._approvalSweepOperationsInFlight > 0 ||
+            this._historyRewriteInFlight > 0 ||
+            this._historyPreemptionInFlight > 0 ||
+            this._approvalLifecycleInvalidationFailedClosed ||
+            (this.stepAbortController &&
+              !this.stepAbortController.signal.aborted),
         ),
         pendingApprovalCount: Object.keys(state.pendingApprovals).length,
       });
@@ -1006,8 +1351,10 @@ export abstract class BaseAgent<
         toolApprovalMode: state.toolApprovalMode,
         goal: state.goal ?? null,
         usedTokens: state.usedTokens,
-        historyIds: state.history.map((message) => message.id),
-        queuedMessageIds: state.queuedMessages.map((message) => message.id),
+        history: state.history.map(serializeAgentStatePersistMessage),
+        queuedMessages: state.queuedMessages.map(
+          serializeAgentStatePersistMessage,
+        ),
       });
     };
 
@@ -1048,6 +1395,28 @@ export abstract class BaseAgent<
     sequence: number;
     chunk: InferUIMessageChunk<AgentMessage>;
   }): Promise<'applied' | 'duplicate'> {
+    if (this._historyPreemptionInFlight > 0) {
+      this.rememberClosedRecoveredReplayExecution(input.executionId);
+      return 'duplicate';
+    }
+    const detachedInput = structuredClone(input);
+    return await this.enqueueHistoryLifecycleOperation(() =>
+      this.replayRecoveredUiChunkSerialized(detachedInput),
+    );
+  }
+
+  private async replayRecoveredUiChunkSerialized(input: {
+    executionId: string;
+    sequence: number;
+    chunk: InferUIMessageChunk<AgentMessage>;
+  }): Promise<'applied' | 'duplicate'> {
+    if (this._closedRecoveredReplayExecutionIds.has(input.executionId)) {
+      return 'duplicate';
+    }
+    if (this._historyPreemptionInFlight > 0) {
+      this.rememberClosedRecoveredReplayExecution(input.executionId);
+      return 'duplicate';
+    }
     const current = this.state.get();
     const lastAssistantMessage = [...current.history]
       .reverse()
@@ -1059,21 +1428,73 @@ export abstract class BaseAgent<
     ) {
       return 'duplicate';
     }
+    let replayStepGeneration: number;
     if (this._recoveredReplayExecutionId === null) {
+      const replayPreemptionGeneration = this._historyPreemptionGeneration;
       assertAgentSessionCheckpointSafePoint({
         isWorking: current.isWorking,
+        hasRunningToolTransaction: Boolean(
+          this._activeStepRun !== null ||
+            this._approvalDurabilityInFlight > 0 ||
+            this._approvalInvalidationInFlight > 0 ||
+            this._approvalResponsesInFlight.size > 0 ||
+            this._approvalAdmissionFailedClosed ||
+            this._approvalSweepPersistenceBlocked ||
+            this._approvalSweepPersistencePending ||
+            this._approvalSweepOperationsInFlight > 0 ||
+            this._historyRewriteInFlight > 0 ||
+            this._historyPreemptionInFlight > 0 ||
+            this._approvalLifecycleInvalidationFailedClosed ||
+            (this.stepAbortController &&
+              !this.stepAbortController.signal.aborted),
+        ),
         pendingApprovalCount: Object.keys(current.pendingApprovals).length,
       });
-      this.state.commands.beginStep({ flushQueue: false });
+      let replayWasPreempted = false;
+      try {
+        this.state.commands.beginStep({ flushQueue: false });
+      } finally {
+        // AgentStore subscribers run synchronously. A subscriber may enqueue a
+        // priority stop/recovery while observing beginStep(), before this replay
+        // has published its session identity. In that case the priority action
+        // has already won: tombstone the execution even if that subscriber also
+        // throws, and never let a later chunk reopen it.
+        replayWasPreempted =
+          this._historyPreemptionGeneration !== replayPreemptionGeneration ||
+          this._historyPreemptionInFlight > 0;
+        if (replayWasPreempted) {
+          this.rememberClosedRecoveredReplayExecution(input.executionId);
+        }
+      }
+      if (replayWasPreempted) return 'duplicate';
+      replayStepGeneration = ++this._stepGeneration;
       this._recoveredReplayExecutionId = input.executionId;
+      this._recoveredReplayStepGeneration = replayStepGeneration;
     } else if (this._recoveredReplayExecutionId !== input.executionId) {
       throw new AgentSessionCheckpointSafePointError('agent-step-running');
+    } else {
+      const existingGeneration = this._recoveredReplayStepGeneration;
+      if (
+        existingGeneration === null ||
+        this._stepGeneration !== existingGeneration
+      ) {
+        return 'duplicate';
+      }
+      replayStepGeneration = existingGeneration;
     }
     try {
       await this.handleUiStream(
         singleChunkUiStream(input.chunk),
         lastAssistantMessage,
+        replayStepGeneration,
       );
+      if (
+        this._recoveredReplayExecutionId !== input.executionId ||
+        this._recoveredReplayStepGeneration !== replayStepGeneration ||
+        this._stepGeneration !== replayStepGeneration
+      ) {
+        return 'duplicate';
+      }
       const mergedAssistant = [...this.state.get().history]
         .reverse()
         .find((message) => message.role === 'assistant');
@@ -1087,9 +1508,16 @@ export abstract class BaseAgent<
         recoveredAt: new Date().toISOString(),
       });
       await this.saveState();
+      if (
+        this._recoveredReplayExecutionId !== input.executionId ||
+        this._recoveredReplayStepGeneration !== replayStepGeneration ||
+        this._stepGeneration !== replayStepGeneration
+      ) {
+        return 'duplicate';
+      }
       return 'applied';
     } catch (error) {
-      await this.finishRecoveredUiReplay({
+      await this.finishRecoveredUiReplaySerialized({
         executionId: input.executionId,
         outcome: 'failed',
         error,
@@ -1103,8 +1531,19 @@ export abstract class BaseAgent<
     outcome: 'completed' | 'cancelled' | 'failed';
     error?: unknown;
   }): Promise<void> {
+    return await this.enqueueHistoryLifecycleOperation(() =>
+      this.finishRecoveredUiReplaySerialized(input),
+    );
+  }
+
+  private async finishRecoveredUiReplaySerialized(input: {
+    executionId: string;
+    outcome: 'completed' | 'cancelled' | 'failed';
+    error?: unknown;
+  }): Promise<void> {
     if (this._recoveredReplayExecutionId !== input.executionId) return;
-    this._recoveredReplayExecutionId = null;
+    const replayStepGeneration = this._recoveredReplayStepGeneration;
+    if (replayStepGeneration === null) return;
     if (input.outcome === 'failed') {
       this.state.commands.recordStepError({
         error: {
@@ -1122,8 +1561,23 @@ export abstract class BaseAgent<
       });
     }
     await this.saveState();
+    if (
+      this._recoveredReplayExecutionId !== input.executionId ||
+      this._recoveredReplayStepGeneration !== replayStepGeneration ||
+      this._stepGeneration !== replayStepGeneration
+    ) {
+      return;
+    }
     this.scheduleMemorySnapshotWrite('post-step');
     await this.onIdle();
+    if (
+      this._recoveredReplayExecutionId === input.executionId &&
+      this._recoveredReplayStepGeneration === replayStepGeneration
+    ) {
+      this.rememberClosedRecoveredReplayExecution(input.executionId);
+      this._recoveredReplayExecutionId = null;
+      this._recoveredReplayStepGeneration = null;
+    }
   }
 
   /**
@@ -1136,6 +1590,15 @@ export abstract class BaseAgent<
    * @note DO NOT OVERRIDE
    */
   public async flushQueue(): Promise<void> {
+    return await this.enqueuePriorityHistoryLifecycleOperation(
+      () => this.flushQueueSerialized(),
+      () => {
+        void this.runStep();
+      },
+    );
+  }
+
+  private async flushQueueSerialized(): Promise<void> {
     const flushedCount = this.state.get().queuedMessages.length;
 
     await this.internalStop('user-flushed-queue');
@@ -1154,8 +1617,6 @@ export abstract class BaseAgent<
       });
     }
 
-    this.runStep();
-
     return;
   }
 
@@ -1167,6 +1628,12 @@ export abstract class BaseAgent<
    * @note DO NOT OVERRIDE
    */
   public async stop(): Promise<void> {
+    return await this.enqueuePriorityHistoryLifecycleOperation(() =>
+      this.stopSerialized(),
+    );
+  }
+
+  private async stopSerialized(): Promise<void> {
     await this.internalStop('user-stopped');
     this.state.commands.setIsWorkingFalse();
   }
@@ -1181,6 +1648,17 @@ export abstract class BaseAgent<
   public async recoverInterruptedRun(
     reason: 'system-resumed' | 'event-loop-stalled',
   ): Promise<void> {
+    return await this.enqueuePriorityHistoryLifecycleOperation(
+      () => this.recoverInterruptedRunSerialized(reason),
+      () => {
+        void this.runStep();
+      },
+    );
+  }
+
+  private async recoverInterruptedRunSerialized(
+    reason: 'system-resumed' | 'event-loop-stalled',
+  ): Promise<void> {
     const historyLengthBefore = this.state.get().history.length;
 
     this.host.logger.info(
@@ -1191,7 +1669,6 @@ export abstract class BaseAgent<
     this.state.commands.setIsWorkingFalse();
 
     this._pendingSyntheticContinuation = { reason };
-    void this.runStep();
   }
 
   /**
@@ -1226,30 +1703,88 @@ export abstract class BaseAgent<
     newUserMessage: AgentMessage & { role: 'user' },
     undoToolCalls: boolean,
   ): Promise<string> {
-    const undoneMessages = this.state
-      .get()
-      .history.slice(
-        this.state.get().history.findIndex((msg) => msg.id === userMessageId),
+    const detachedMessage = structuredClone(newUserMessage);
+    return await this.enqueueHistoryLifecycleOperation(() =>
+      this.replaceUserMessageSerialized(
+        userMessageId,
+        detachedMessage,
+        undoToolCalls,
+      ),
+    );
+  }
+
+  private async replaceUserMessageSerialized(
+    userMessageId: string,
+    newUserMessage: AgentMessage & { role: 'user' },
+    undoToolCalls: boolean,
+  ): Promise<string> {
+    const preemptionGeneration = this.captureHistoryPreemptionGeneration(
+      'User message replacement',
+    );
+    this._historyRewriteInFlight += 1;
+    let shouldRunStep = false;
+    try {
+      if (this._recoveredReplayExecutionId !== null) {
+        throw new Error(
+          'Cannot replace a user message while recovered UI replay is still open',
+        );
+      }
+
+      // Fence stale stream/context callbacks before the first await below can
+      // yield. The rewrite gate remains held across host undo so no approval,
+      // replay, or new step can publish into the history being replaced.
+      await this.internalStop('user-flushed-queue');
+      this.assertHistoryNotPreempted(
+        preemptionGeneration,
+        'User message replacement',
       );
+      this.state.commands.setIsWorkingFalse();
 
-    const undoneToolCallIds = undoneMessages
-      .filter((msg) => msg.role === 'assistant')
-      .flatMap(
-        (msg) =>
-          msg.parts.filter(
-            (part) =>
-              part.type.startsWith('tool-') || part.type === 'dynamic-tool',
-          ) as (AgentToolUIPart | DynamicToolUIPart)[],
-      )
-      .map((part) => (part as AgentToolUIPart | DynamicToolUIPart).toolCallId);
+      const history = this.state.get().history;
+      const replaceMessageIndex = history.findIndex(
+        (message) => message.id === userMessageId,
+      );
+      if (replaceMessageIndex === -1) {
+        throw new Error('User message not found in history');
+      }
+      const undoneMessages = history.slice(replaceMessageIndex);
 
-    if (undoneToolCallIds.length > 0 && undoToolCalls) {
-      await this.toolbox.undoToolCalls(undoneToolCallIds, this.instanceId);
+      const undoneToolCallIds = undoneMessages
+        .filter((msg) => msg.role === 'assistant')
+        .flatMap(
+          (msg) =>
+            msg.parts.filter(
+              (part) =>
+                part.type.startsWith('tool-') || part.type === 'dynamic-tool',
+            ) as (AgentToolUIPart | DynamicToolUIPart)[],
+        )
+        .map(
+          (part) => (part as AgentToolUIPart | DynamicToolUIPart).toolCallId,
+        );
+
+      if (undoneToolCallIds.length > 0 && undoToolCalls) {
+        await this.toolbox.undoToolCalls(undoneToolCallIds, this.instanceId);
+      }
+
+      // Once host undo has completed, the matching history rewrite must
+      // commit even if a newer priority stop arrived during that await. The
+      // generation assertion then prevents the replacement message/step from
+      // reviving after the newer stop.
+      this.state.commands.replaceUserMessage({ userMessageId });
+      this.assertHistoryNotPreempted(
+        preemptionGeneration,
+        'User message replacement',
+      );
+      const newMessageId = await this.sendUserMessageSerialized(
+        newUserMessage,
+        true,
+      );
+      shouldRunStep = true;
+      return newMessageId;
+    } finally {
+      this._historyRewriteInFlight -= 1;
+      if (shouldRunStep) void this.runStep();
     }
-
-    this.state.commands.replaceUserMessage({ userMessageId });
-
-    return await this.sendUserMessage(newUserMessage);
   }
 
   /**
@@ -1260,6 +1795,12 @@ export abstract class BaseAgent<
    * @note DO NOT OVERRIDE
    */
   public async retryLastUserMessage(): Promise<void> {
+    return await this.enqueueHistoryLifecycleOperation(() =>
+      this.retryLastUserMessageSerialized(),
+    );
+  }
+
+  private async retryLastUserMessageSerialized(): Promise<void> {
     const currentState = this.state.get();
 
     // Check if there's an error
@@ -1274,7 +1815,9 @@ export abstract class BaseAgent<
     for (let i = history.length - 1; i >= 0; i--) {
       const entry = history[i];
       if (entry?.role === 'user') {
-        lastUserMessage = entry as AgentMessage & { role: 'user' };
+        lastUserMessage = structuredClone(
+          entry as AgentMessage & { role: 'user' },
+        );
         break;
       }
     }
@@ -1284,8 +1827,8 @@ export abstract class BaseAgent<
     }
 
     // Revert to the last user message and resend it
-    await this.revertToUserMessage(lastUserMessage.id, false);
-    await this.sendUserMessage(lastUserMessage);
+    await this.revertToUserMessageSerialized(lastUserMessage.id, false);
+    await this.sendUserMessageSerialized(lastUserMessage);
   }
 
   /**
@@ -1309,40 +1852,78 @@ export abstract class BaseAgent<
     userMessageId: string,
     undoToolCalls: boolean,
   ): Promise<void> {
-    if (this.state.get().isWorking) {
-      throw new Error(
-        'Cannot revert to user message while agent is still running',
+    return await this.enqueueHistoryLifecycleOperation(() =>
+      this.revertToUserMessageSerialized(userMessageId, undoToolCalls),
+    );
+  }
+
+  private async revertToUserMessageSerialized(
+    userMessageId: string,
+    undoToolCalls: boolean,
+  ): Promise<void> {
+    const preemptionGeneration = this.captureHistoryPreemptionGeneration(
+      'User message revert',
+    );
+    this._historyRewriteInFlight += 1;
+    try {
+      if (
+        this.state.get().isWorking ||
+        this._activeStepRun !== null ||
+        this._recoveredReplayExecutionId !== null ||
+        this._approvalResponsesInFlight.size > 0 ||
+        this._approvalDurabilityInFlight > 0 ||
+        this._approvalInvalidationInFlight > 0 ||
+        this._approvalSweepOperationsInFlight > 0
+      ) {
+        throw new Error(
+          'Cannot revert to user message while agent is still running',
+        );
+      }
+
+      const history = this.state.get().history;
+      const msgIndex = history.findIndex((msg) => msg.id === userMessageId);
+      if (msgIndex === -1) {
+        throw new Error('User message not found in history');
+      }
+      const undoneMessages = history.slice(msgIndex);
+
+      // Even an idle history can contain an open host approval. Close it
+      // durably and advance the step generation before undo can yield and
+      // before the history is truncated. The rewrite gate stays held until
+      // the exact synchronous truncate below has committed.
+      await this.internalStop('user-flushed-queue');
+      this.assertHistoryNotPreempted(
+        preemptionGeneration,
+        'User message revert',
       );
+      this.state.commands.setIsWorkingFalse();
+
+      const undoneToolCallIds = undoneMessages
+        .filter((msg) => msg.role === 'assistant')
+        .flatMap(
+          (msg) =>
+            msg.parts.filter(
+              (part) =>
+                part.type.startsWith('tool-') || part.type === 'dynamic-tool',
+            ) as (AgentToolUIPart | DynamicToolUIPart)[],
+        )
+        .map(
+          (part) => (part as AgentToolUIPart | DynamicToolUIPart).toolCallId,
+        );
+
+      if (undoneToolCallIds.length > 0 && undoToolCalls) {
+        await this.toolbox.undoToolCalls(undoneToolCallIds, this.instanceId);
+      }
+
+      this.state.commands.truncateHistoryAt({ messageIndex: msgIndex });
+      this.scheduleMemorySnapshotWrite('user-message');
+      this.assertHistoryNotPreempted(
+        preemptionGeneration,
+        'User message revert',
+      );
+    } finally {
+      this._historyRewriteInFlight -= 1;
     }
-
-    const msgIndex = this.state
-      .get()
-      .history.findIndex((msg) => msg.id === userMessageId);
-    if (msgIndex === -1) {
-      throw new Error('User message not found in history');
-    }
-
-    const undoneMessages = this.state.get().history.slice(msgIndex);
-
-    const undoneToolCallIds = undoneMessages
-      .filter((msg) => msg.role === 'assistant')
-      .flatMap(
-        (msg) =>
-          msg.parts.filter(
-            (part) =>
-              part.type.startsWith('tool-') || part.type === 'dynamic-tool',
-          ) as (AgentToolUIPart | DynamicToolUIPart)[],
-      )
-      .map((part) => (part as AgentToolUIPart | DynamicToolUIPart).toolCallId);
-
-    if (undoneToolCallIds.length > 0 && undoToolCalls) {
-      await this.toolbox.undoToolCalls(undoneToolCallIds, this.instanceId);
-    }
-
-    this.state.commands.truncateHistoryAt({ messageIndex: msgIndex });
-    this.scheduleMemorySnapshotWrite('user-message');
-
-    return;
   }
 
   public async updateInputState(newInputState: string): Promise<void> {
@@ -1765,8 +2346,14 @@ export abstract class BaseAgent<
   /**
    * Execute once there's a good reason to update the title.
    */
-  private async updateTitle(): Promise<void> {
+  private async updateTitle(expectedStepGeneration?: number): Promise<void> {
     try {
+      if (
+        expectedStepGeneration !== undefined &&
+        this._stepGeneration !== expectedStepGeneration
+      ) {
+        return;
+      }
       // Check if a title update is needed
       if (!this.config.generateTitles) {
         return;
@@ -1800,6 +2387,13 @@ export abstract class BaseAgent<
       );
 
       const newTitle = await this.generateTitle(this.state.get().history);
+
+      if (
+        expectedStepGeneration !== undefined &&
+        this._stepGeneration !== expectedStepGeneration
+      ) {
+        return;
+      }
 
       // Re-check: user may have manually set a title while generation was in-flight
       if (this.state.get().titleLockedByUser) {
@@ -1838,6 +2432,69 @@ export abstract class BaseAgent<
     // Increment step generation so stale callbacks from previous steps are
     // ignored. Capture it in a local const for the closures below.
     const stepGen = ++this._stepGeneration;
+    let resolveStepSettlement!: (
+      outcome: 'completed' | 'failed' | 'superseded',
+    ) => void;
+    const stepSettlement = new Promise<'completed' | 'failed' | 'superseded'>(
+      (resolve) => {
+        resolveStepSettlement = resolve;
+      },
+    );
+    const activeStepRun = {
+      generation: stepGen,
+      settled: stepSettlement,
+      resolve: resolveStepSettlement,
+    };
+    this._activeStepRun = activeStepRun;
+
+    let outcome: 'completed' | 'failed' | 'superseded' = 'failed';
+    try {
+      outcome = await this.runAdmittedStep(isApprovalContinuation, stepGen);
+    } catch (rawError) {
+      if (this._stepGeneration !== stepGen) {
+        outcome = 'superseded';
+      } else {
+        const error =
+          rawError instanceof Error
+            ? rawError
+            : new Error(
+                typeof rawError === 'string'
+                  ? rawError
+                  : 'Unexpected agent step failure',
+              );
+        this.host.logger.error(
+          `[BaseAgent:${this.instanceId}] Unexpected runStep failure: ${this.formatError(error)}`,
+        );
+        this.report(error, 'runStepUnexpected');
+        this._stepGeneration++;
+        this._pendingContinue = null;
+        this._pendingSyntheticContinuation = null;
+        try {
+          this.stepAbortController?.abort();
+        } catch {}
+        this.stepAbortController = null;
+        this.state.commands.recordStepError({
+          error: {
+            message: `Internal error: ${error.message}`,
+            stack: error.stack,
+          },
+          markUnread: 'mark-unread',
+        });
+        this.emitNotificationEvent('error');
+        outcome = 'failed';
+      }
+    } finally {
+      if (this._activeStepRun === activeStepRun) {
+        this._activeStepRun = null;
+      }
+      activeStepRun.resolve(outcome);
+    }
+  }
+
+  private async runAdmittedStep(
+    isApprovalContinuation: boolean,
+    stepGen: number,
+  ): Promise<'completed' | 'failed' | 'superseded'> {
     this._stepStartTime = Date.now();
     // Reset continuation flag at the start of every step so a leftover
     // value from a prior aborted step cannot leak into the tail.
@@ -1853,6 +2510,7 @@ export abstract class BaseAgent<
     // where the assistant message is guaranteed to exist in
     // `state.history` — see `populateReasoningDetailsOnAssistantMessage`.
     let finishedResult: StepResult<ToolSet> | null = null;
+    let stepCallbackFailed = false;
 
     // Skip flush on approval continuations — the approval step must
     // complete in isolation first. Queued messages will be picked up
@@ -1887,6 +2545,7 @@ export abstract class BaseAgent<
         )}`,
       );
     }
+    if (this._stepGeneration !== stepGen) return 'superseded';
     this._stepRequestedModelId = requestedModelId;
     this._stepResolvedModelId = stepModelId;
     this._stepTaskRole = stepTaskRole;
@@ -1911,6 +2570,7 @@ export abstract class BaseAgent<
       this._stepProviderMode = modelWithOptions.providerMode;
       this._stepCodingPlanId = modelWithOptions.connectedCodingPlanId;
     } catch (error) {
+      if (this._stepGeneration !== stepGen) return 'superseded';
       const err = error as Error;
       this.host.logger.error(
         `[BaseAgent:${this.instanceId}] Failed to resolve model "${stepModelId}" for role "${stepTaskRole}" (selected "${requestedModelId}"): ${err.message}`,
@@ -1925,8 +2585,9 @@ export abstract class BaseAgent<
         markUnread: 'always',
       });
       this.emitNotificationEvent('error');
-      return;
+      return 'failed';
     }
+    if (this._stepGeneration !== stepGen) return 'superseded';
 
     let modelMessages: Awaited<
       ReturnType<typeof this.generateContextForNewStep>
@@ -1937,8 +2598,11 @@ export abstract class BaseAgent<
       modelMessages = await this.generateContextForNewStep(
         queueFlushIndex >= 0 ? queueFlushIndex : undefined,
         modelWithOptions.reasoningSignatureSource,
+        stepGen,
       );
+      if (this._stepGeneration !== stepGen) return 'superseded';
       tools = await this.getToolsForStep();
+      if (this._stepGeneration !== stepGen) return 'superseded';
       this._toolCallDurations.clear();
       tools = this.wrapToolsWithTiming(tools);
       tools = this.wrapToolsWithOutputBudget(tools);
@@ -1950,6 +2614,7 @@ export abstract class BaseAgent<
         ...(await this.getModelSettings(this.messages)),
       };
     } catch (e) {
+      if (this._stepGeneration !== stepGen) return 'superseded';
       const error = e as Error;
       this.host.logger.error(
         `[BaseAgent:${this.instanceId}] Failed to prepare step context: ${this.formatError(error)}`,
@@ -1964,8 +2629,9 @@ export abstract class BaseAgent<
         markUnread: 'always',
       });
       this.emitNotificationEvent('error');
-      return;
+      return 'failed';
     }
+    if (this._stepGeneration !== stepGen) return 'superseded';
 
     if (isApprovalContinuation)
       modelMessages = this.ensureToolApprovalResponseIsLast(modelMessages);
@@ -1977,226 +2643,266 @@ export abstract class BaseAgent<
 
     this.stepAbortController = new AbortController();
 
-    const stream = await this.stepExecutor.execute({
-      context: {
-        agentInstanceId: this.instanceId,
-        agentType: this.agentType,
-        traceId: this.instanceId,
-        requestedModelId,
-        resolvedModelId: stepModelId,
-        isApprovalContinuation,
-        executionTarget: this.getExecutionTargetForCurrentTurn(),
-        snapshotSelection: resolveAgentTaskSnapshotSelectionFromMessages(
-          this.state.get().history,
-        ),
-        metadata: {
-          $ai_span_name: `${this.agentType}-history`,
-          $ai_parent_id: this.instanceId,
-          [MODEL_REQUEST_PURPOSE_METADATA_KEY]: 'agent-step',
-          [MODEL_TASK_ROLE_METADATA_KEY]: stepTaskRole,
-          task_role: stepTaskRole,
-          requested_model_id: requestedModelId,
-          routed_model_id: stepModelId,
-          session_checkpoint: resolveAgentSessionCheckpointFromMessages(
+    let stream: Awaited<ReturnType<AgentStepExecutor['execute']>>;
+    try {
+      stream = await this.stepExecutor.execute({
+        context: {
+          agentInstanceId: this.instanceId,
+          agentType: this.agentType,
+          traceId: this.instanceId,
+          requestedModelId,
+          resolvedModelId: stepModelId,
+          isApprovalContinuation,
+          executionTarget: this.getExecutionTargetForCurrentTurn(),
+          snapshotSelection: resolveAgentTaskSnapshotSelectionFromMessages(
             this.state.get().history,
           ),
+          metadata: {
+            $ai_span_name: `${this.agentType}-history`,
+            $ai_parent_id: this.instanceId,
+            [MODEL_REQUEST_PURPOSE_METADATA_KEY]: 'agent-step',
+            [MODEL_TASK_ROLE_METADATA_KEY]: stepTaskRole,
+            task_role: stepTaskRole,
+            requested_model_id: requestedModelId,
+            routed_model_id: stepModelId,
+            session_checkpoint: resolveAgentSessionCheckpointFromMessages(
+              this.state.get().history,
+            ),
+          },
         },
-      },
-      options: {
-        model: modelWithOptions.model,
-        providerOptions: modelWithOptions.providerOptions,
-        headers: modelWithOptions.headers,
-        messages: modelMessages,
-        tools: tools as ToolSet,
-        timeout: resolvedConfig.maxTime
-          ? {
-              totalMs: resolvedConfig.maxTime,
-            }
-          : undefined,
-        maxRetries: resolvedConfig.maxRetries ?? 1,
-        maxOutputTokens: resolvedConfig.maxOutputTokens,
-        abortSignal: this.stepAbortController.signal,
-        onAbort: () => {
-          // Guard: ignore if a newer step has started (e.g. queue flush)
-          if (this._stepGeneration !== stepGen) return;
-          this.state.commands.setIsWorkingFalse();
-        },
-        onFinish: async (result) => {
-          // Guard: ignore if a newer step has started (e.g. queue flush)
-          if (this._stepGeneration !== stepGen) return;
-
-          stepHasApprovalRequest = result.content.some(
-            (part) => part.type === 'tool-approval-request',
-          );
-          finishedResult = result;
-
-          // Log step completion details
-          this.host.logger.debug(
-            `[BaseAgent:${this.instanceId}] Step finished | finishReason=${result.finishReason} | outputTokens=${result.usage.outputTokens} | inputTokens=${result.usage.inputTokens} | cacheRead=${result.usage.inputTokenDetails.cacheReadTokens} | cacheWrite=${result.usage.inputTokenDetails.cacheWriteTokens} | totalTokens=${result.usage.totalTokens} | toolCalls=${result.toolCalls.length}`,
-          );
-
-          if (result.finishReason === 'length') {
-            this.host.logger.warn(
-              `[BaseAgent:${this.instanceId}] Output truncated (finishReason=length). ` +
-                `outputTokens=${result.usage.outputTokens}, toolCalls=${result.toolCalls.length}. ` +
-                `The model hit maxOutputTokens and its response was cut off. ` +
-                `Tool calls in this step may have been incomplete/dropped.`,
-            );
-          }
-
-          try {
-            const shouldContinue = await this.handlePostStep(result);
-            // Re-check after async work — internalStop may have been called
+        options: {
+          model: modelWithOptions.model,
+          providerOptions: modelWithOptions.providerOptions,
+          headers: modelWithOptions.headers,
+          messages: modelMessages,
+          tools: tools as ToolSet,
+          timeout: resolvedConfig.maxTime
+            ? {
+                totalMs: resolvedConfig.maxTime,
+              }
+            : undefined,
+          maxRetries: resolvedConfig.maxRetries ?? 1,
+          maxOutputTokens: resolvedConfig.maxOutputTokens,
+          abortSignal: this.stepAbortController.signal,
+          onAbort: () => {
+            // Guard: ignore if a newer step has started (e.g. queue flush)
             if (this._stepGeneration !== stepGen) return;
-            this.stepAbortController = null;
+            stepCallbackFailed = true;
+            this.state.commands.setIsWorkingFalse();
+          },
+          onFinish: async (result) => {
+            // Guard: ignore if a newer step has started (e.g. queue flush)
+            if (this._stepGeneration !== stepGen) return;
 
-            // Defer both scheduling the next step and flipping to idle
-            // until `runStep`'s tail — AFTER populatePathReferences +
-            // saveState — so the next step (or any user-initiated
-            // follow-up) cannot read a half-populated history.
-            // See `_pendingContinue` for the full rationale.
-            this._pendingContinue = shouldContinue;
-          } catch (err) {
-            const error = err as Error;
-            this.host.logger.error(
-              `[BaseAgent:${this.instanceId}] Error in onFinish: ${this.formatError(error)}`,
+            stepHasApprovalRequest = result.content.some(
+              (part) => part.type === 'tool-approval-request',
             );
-            this.report(error, 'onFinish');
-            this.stepAbortController = null;
-            // Guard: only reset if this step is still current
-            if (this._stepGeneration === stepGen) {
-              this.state.commands.recordStepError({
-                error: {
-                  message: `Internal error: ${error.message ?? 'Unknown error'}`,
+            finishedResult = result;
+
+            // Log step completion details
+            this.host.logger.debug(
+              `[BaseAgent:${this.instanceId}] Step finished | finishReason=${result.finishReason} | outputTokens=${result.usage.outputTokens} | inputTokens=${result.usage.inputTokens} | cacheRead=${result.usage.inputTokenDetails.cacheReadTokens} | cacheWrite=${result.usage.inputTokenDetails.cacheWriteTokens} | totalTokens=${result.usage.totalTokens} | toolCalls=${result.toolCalls.length}`,
+            );
+
+            if (result.finishReason === 'length') {
+              this.host.logger.warn(
+                `[BaseAgent:${this.instanceId}] Output truncated (finishReason=length). ` +
+                  `outputTokens=${result.usage.outputTokens}, toolCalls=${result.toolCalls.length}. ` +
+                  `The model hit maxOutputTokens and its response was cut off. ` +
+                  `Tool calls in this step may have been incomplete/dropped.`,
+              );
+            }
+
+            try {
+              const shouldContinue = await this.handlePostStep(result, stepGen);
+              // Re-check after async work — internalStop may have been called
+              if (shouldContinue === null || this._stepGeneration !== stepGen) {
+                return;
+              }
+              this.stepAbortController = null;
+
+              // Defer both scheduling the next step and flipping to idle
+              // until `runStep`'s tail — AFTER populatePathReferences +
+              // saveState — so the next step (or any user-initiated
+              // follow-up) cannot read a half-populated history.
+              // See `_pendingContinue` for the full rationale.
+              this._pendingContinue = shouldContinue;
+            } catch (err) {
+              stepCallbackFailed = true;
+              const error = err as Error;
+              this.host.logger.error(
+                `[BaseAgent:${this.instanceId}] Error in onFinish: ${this.formatError(error)}`,
+              );
+              this.report(error, 'onFinish');
+              // Guard: only reset if this step is still current
+              if (this._stepGeneration === stepGen) {
+                this.stepAbortController = null;
+                this.state.commands.recordStepError({
+                  error: {
+                    message: `Internal error: ${error.message ?? 'Unknown error'}`,
+                    stack: error.stack,
+                  },
+                  markUnread: 'mark-unread',
+                });
+                this.emitNotificationEvent('error');
+              }
+            }
+          },
+          onError: (ev) => {
+            // Guard: ignore if a newer step has started (e.g. queue flush)
+            if (this._stepGeneration !== stepGen) return;
+            stepCallbackFailed = true;
+            // ev.error may not be a real Error instance (e.g. network abort
+            // events, plain objects from the AI SDK). Normalize so every
+            // downstream consumer (logger, PostHog, UI state) gets a proper Error.
+            const raw = ev.error;
+            const error =
+              raw instanceof Error
+                ? raw
+                : new Error(
+                    typeof raw === 'string'
+                      ? raw
+                      : (raw as Record<string, unknown>)?.message
+                        ? String((raw as Record<string, unknown>).message)
+                        : 'Unknown error',
+                  );
+            this.host.logger.error(
+              `[BaseAgent:${this.instanceId}] Error in 'streamText': ${this.formatError(error)}`,
+            );
+            this.report(error, 'streamText');
+
+            const parsedPlanLimit = this.parsePlanLimitError(error);
+            if (parsedPlanLimit?.kind === 'plan-limit-exceeded') {
+              const sortedWindows = [...parsedPlanLimit.exceededWindows].sort(
+                (a, b) =>
+                  new Date(a.resetsAt).getTime() -
+                  new Date(b.resetsAt).getTime(),
+              );
+              this.host.telemetry?.capture('usage-limit-reached', {
+                agent_type: this.agentType,
+                model_id: stepModelId,
+                provider_mode: this._stepProviderMode,
+                plan: parsedPlanLimit.plan ?? 'unknown',
+                window_types: sortedWindows.map((w) => w.type),
+                first_window_resets_at: sortedWindows[0]?.resetsAt ?? '',
+                exceeded_window_count: sortedWindows.length,
+              });
+            }
+            const parsedModelRestricted = this.parseModelRestrictedError(error);
+            if (parsedModelRestricted?.kind === 'model-restricted') {
+              this.host.telemetry?.capture('model-restricted', {
+                agent_type: this.agentType,
+                model_id: stepModelId,
+                provider_mode: this._stepProviderMode,
+                plan: parsedModelRestricted.plan ?? 'unknown',
+              });
+            }
+            const parsedProviderError = this.parseProviderError(error);
+            const parsedOverloadBase =
+              parsedPlanLimit ||
+              parsedModelRestricted ||
+              this.isZaiBillingOrQuotaError(
+                parsedProviderError,
+                modelWithOptions.reasoningSignatureSource,
+              )
+                ? null
+                : this.parseUpstreamOverloadError(error);
+            const parsedOverload: Extract<
+              AgentRuntimeError,
+              { kind: 'upstream-overload' }
+            > | null =
+              parsedOverloadBase?.kind === 'upstream-overload'
+                ? {
+                    ...parsedOverloadBase,
+                    modelId: stepModelId,
+                  }
+                : null;
+            if (parsedOverload?.kind === 'upstream-overload') {
+              this.host.telemetry?.capture('upstream-overload', {
+                agent_type: this.agentType,
+                model_id: stepModelId,
+                provider_mode: this._stepProviderMode,
+                provider_name: parsedOverload.providerName,
+                status_code: parsedOverload.statusCode,
+              });
+            }
+            this.state.commands.recordStepError({
+              error: parsedPlanLimit ??
+                parsedModelRestricted ??
+                parsedOverload ?? {
+                  message: `LLM provider error: ${parsedProviderError?.message ?? error.message}`,
                   stack: error.stack,
                 },
-                markUnread: 'mark-unread',
-              });
+              markUnread: 'mark-unread',
+            });
+            // Plan-limit and model-restricted errors surface their own dedicated
+            // UI affordance, so we suppress the generic error notification in
+            // those cases (matches the browser host's pre-extraction behavior).
+            if (!parsedPlanLimit && !parsedModelRestricted) {
               this.emitNotificationEvent('error');
             }
-          }
-        },
-        onError: (ev) => {
-          // Guard: ignore if a newer step has started (e.g. queue flush)
-          if (this._stepGeneration !== stepGen) return;
-          // ev.error may not be a real Error instance (e.g. network abort
-          // events, plain objects from the AI SDK). Normalize so every
-          // downstream consumer (logger, PostHog, UI state) gets a proper Error.
-          const raw = ev.error;
-          const error =
-            raw instanceof Error
-              ? raw
-              : new Error(
-                  typeof raw === 'string'
-                    ? raw
-                    : (raw as Record<string, unknown>)?.message
-                      ? String((raw as Record<string, unknown>).message)
-                      : 'Unknown error',
-                );
-          this.host.logger.error(
-            `[BaseAgent:${this.instanceId}] Error in 'streamText': ${this.formatError(error)}`,
-          );
-          this.report(error, 'streamText');
-
-          const parsedPlanLimit = this.parsePlanLimitError(error);
-          if (parsedPlanLimit?.kind === 'plan-limit-exceeded') {
-            const sortedWindows = [...parsedPlanLimit.exceededWindows].sort(
-              (a, b) =>
-                new Date(a.resetsAt).getTime() - new Date(b.resetsAt).getTime(),
+            this.host.logger.debug(
+              `[BaseAgent:${this.instanceId}] Wrote error to public state`,
             );
-            this.host.telemetry?.capture('usage-limit-reached', {
-              agent_type: this.agentType,
-              model_id: stepModelId,
-              provider_mode: this._stepProviderMode,
-              plan: parsedPlanLimit.plan ?? 'unknown',
-              window_types: sortedWindows.map((w) => w.type),
-              first_window_resets_at: sortedWindows[0]?.resetsAt ?? '',
-              exceeded_window_count: sortedWindows.length,
-            });
-          }
-          const parsedModelRestricted = this.parseModelRestrictedError(error);
-          if (parsedModelRestricted?.kind === 'model-restricted') {
-            this.host.telemetry?.capture('model-restricted', {
-              agent_type: this.agentType,
-              model_id: stepModelId,
-              provider_mode: this._stepProviderMode,
-              plan: parsedModelRestricted.plan ?? 'unknown',
-            });
-          }
-          const parsedProviderError = this.parseProviderError(error);
-          const parsedOverloadBase =
-            parsedPlanLimit ||
-            parsedModelRestricted ||
-            this.isZaiBillingOrQuotaError(
-              parsedProviderError,
-              modelWithOptions.reasoningSignatureSource,
-            )
-              ? null
-              : this.parseUpstreamOverloadError(error);
-          const parsedOverload: Extract<
-            AgentRuntimeError,
-            { kind: 'upstream-overload' }
-          > | null =
-            parsedOverloadBase?.kind === 'upstream-overload'
-              ? {
-                  ...parsedOverloadBase,
-                  modelId: stepModelId,
-                }
-              : null;
-          if (parsedOverload?.kind === 'upstream-overload') {
-            this.host.telemetry?.capture('upstream-overload', {
-              agent_type: this.agentType,
-              model_id: stepModelId,
-              provider_mode: this._stepProviderMode,
-              provider_name: parsedOverload.providerName,
-              status_code: parsedOverload.statusCode,
-            });
-          }
-          this.state.commands.recordStepError({
-            error: parsedPlanLimit ??
-              parsedModelRestricted ??
-              parsedOverload ?? {
-                message: `LLM provider error: ${parsedProviderError?.message ?? error.message}`,
-                stack: error.stack,
-              },
-            markUnread: 'mark-unread',
-          });
-          // Plan-limit and model-restricted errors surface their own dedicated
-          // UI affordance, so we suppress the generic error notification in
-          // those cases (matches the browser host's pre-extraction behavior).
-          if (!parsedPlanLimit && !parsedModelRestricted) {
-            this.emitNotificationEvent('error');
-          }
-          this.host.logger.debug(
-            `[BaseAgent:${this.instanceId}] Wrote error to public state`,
-          );
-          // Drop any deferred continuation decision from a previous
-          // successful step so the error cannot be followed by a stale
-          // next-step scheduling in runStep's tail.
-          this._pendingContinue = null;
-          try {
-            this.stepAbortController?.abort();
-          } catch {}
-          this.stepAbortController = null;
+            // Drop any deferred continuation decision from a previous
+            // successful step so the error cannot be followed by a stale
+            // next-step scheduling in runStep's tail.
+            this._pendingContinue = null;
+            try {
+              this.stepAbortController?.abort();
+            } catch {}
+            this.stepAbortController = null;
+          },
+          experimental_repairToolCall: repairToolCall,
+          experimental_transform: smoothStream({
+            delayInMs: 10,
+            chunking: 'word',
+          }),
+          temperature: resolvedConfig.temperature,
+          stopWhen: () => true, // We always stop immediately and handle the execution of the next step manually
+          topP: resolvedConfig.topP,
+          topK: resolvedConfig.topK,
+          presencePenalty: resolvedConfig.presencePenalty,
+          frequencyPenalty: resolvedConfig.frequencyPenalty,
+          stopSequences: resolvedConfig.stopSequences,
+          seed: resolvedConfig.seed,
         },
-        experimental_repairToolCall: repairToolCall,
-        experimental_transform: smoothStream({
-          delayInMs: 10,
-          chunking: 'word',
-        }),
-        temperature: resolvedConfig.temperature,
-        stopWhen: () => true, // We always stop immediately and handle the execution of the next step manually
-        topP: resolvedConfig.topP,
-        topK: resolvedConfig.topK,
-        presencePenalty: resolvedConfig.presencePenalty,
-        frequencyPenalty: resolvedConfig.frequencyPenalty,
-        stopSequences: resolvedConfig.stopSequences,
-        seed: resolvedConfig.seed,
-      },
-    });
+      });
+    } catch (rawError) {
+      if (this._stepGeneration !== stepGen) return 'superseded';
+      const error =
+        rawError instanceof Error
+          ? rawError
+          : new Error(
+              typeof rawError === 'string'
+                ? rawError
+                : 'Agent step executor failed before returning a stream',
+            );
+      this.host.logger.error(
+        `[BaseAgent:${this.instanceId}] Step executor failed: ${this.formatError(error)}`,
+      );
+      this.report(error, 'executeStep');
+      this._stepGeneration++;
+      this._pendingContinue = null;
+      this._pendingSyntheticContinuation = null;
+      try {
+        this.stepAbortController?.abort();
+      } catch {}
+      this.stepAbortController = null;
+      this.state.commands.recordStepError({
+        error: {
+          message: `Internal error: ${error.message}`,
+          stack: error.stack,
+        },
+        markUnread: 'mark-unread',
+      });
+      this.emitNotificationEvent('error');
+      return 'failed';
+    }
+    if (this._stepGeneration !== stepGen) return 'superseded';
 
     // Trigger an title update asynchronously once the user started sending a message
-    void this.updateTitle();
+    void this.updateTitle(stepGen);
 
     try {
       const lastAssistantMessage = [...this.state.get().history]
@@ -2226,9 +2932,12 @@ export abstract class BaseAgent<
         this.handleUiStream(
           uiStream,
           isApprovalContinuation ? lastAssistantMessage : undefined,
+          stepGen,
         ),
         stream.consumeStream(),
       ]);
+
+      if (this._stepGeneration !== stepGen) return 'superseded';
 
       // ─── Populate pathReferences on the assistant message ───────────
       // MUST run AFTER Promise.all resolves so the UI stream has fully
@@ -2240,7 +2949,8 @@ export abstract class BaseAgent<
       // and silently skipping the file-content injection on the next
       // step — which makes the LLM receive an orphaned tool-result and
       // return an empty "stop" response.
-      await this.populatePathReferencesOnAssistantMessage();
+      await this.populatePathReferencesOnAssistantMessage(stepGen);
+      if (this._stepGeneration !== stepGen) return 'superseded';
 
       // ─── Capture signed reasoning_details onto the assistant message ──
       // MUST run here (after the UI stream drained) and only when the host
@@ -2269,6 +2979,7 @@ export abstract class BaseAgent<
       // The initial saveState() in handlePostStep ran before the refs
       // were known, so this second save is required for crash safety.
       await this.saveState();
+      if (this._stepGeneration !== stepGen) return 'superseded';
       this.scheduleMemorySnapshotWrite('post-step');
       const latestAssistantMessage = [...this.state.get().history]
         .reverse()
@@ -2310,7 +3021,9 @@ export abstract class BaseAgent<
         this._pendingContinue = null;
         if (pending === true) {
           // setTimeout to keep the call stack clean (unbounded recursion).
-          setTimeout(() => void this.runStep(), 0);
+          setTimeout(() => {
+            if (this._stepGeneration === stepGen) void this.runStep();
+          }, 0);
         } else if (pending === false) {
           // Mark unread only if history contains at least one assistant
           // message (covers fresh-session edge case).
@@ -2333,10 +3046,16 @@ export abstract class BaseAgent<
         // aborted, or superseded step). Nothing to do; the onError /
         // onAbort / catch handlers own state cleanup.
       } else {
-        // Superseded — just clear the flag so nothing leaks.
-        this._pendingContinue = null;
+        // Superseded — a newer generation owns the shared continuation slot.
+        return 'superseded';
       }
+      return stepCallbackFailed || finishedResult === null
+        ? 'failed'
+        : 'completed';
     } catch (err) {
+      if (this._stepGeneration !== stepGen) {
+        return 'superseded';
+      }
       const raw = err;
       const error =
         raw instanceof Error
@@ -2371,6 +3090,7 @@ export abstract class BaseAgent<
         markUnread: 'mark-unread',
       });
       this.emitNotificationEvent('error');
+      return 'failed';
     }
   }
 
@@ -2398,7 +3118,9 @@ export abstract class BaseAgent<
    */
   private static readonly KEPT_BUDGET_HARD_CAP_TOKENS = 40_000;
 
-  private async compressHistoryInternal(): Promise<void> {
+  private async compressHistoryInternal(
+    expectedStepGeneration?: number,
+  ): Promise<void> {
     // Prevent concurrent compression runs — a second trigger while
     // compression is in-flight would see stale history and produce
     // a redundant (or conflicting) summary.
@@ -2422,6 +3144,12 @@ export abstract class BaseAgent<
       } catch {
         // Model may have been deleted — fall back to a conservative size
         contextWindowSize = 100_000;
+      }
+      if (
+        expectedStepGeneration !== undefined &&
+        this._stepGeneration !== expectedStepGeneration
+      ) {
+        return;
       }
       const keptBudget = Math.min(
         Math.floor(contextWindowSize * BaseAgent.KEPT_BUDGET_FRACTION),
@@ -2490,6 +3218,12 @@ export abstract class BaseAgent<
       );
 
       const compressedHistory = await this.compressHistory(messagesToCompact);
+      if (
+        expectedStepGeneration !== undefined &&
+        this._stepGeneration !== expectedStepGeneration
+      ) {
+        return;
+      }
 
       // Re-fetch by id inside the command — user could've undone/
       // manipulated messages while we were busy compressing.
@@ -2511,6 +3245,12 @@ export abstract class BaseAgent<
         .get()
         .history.findIndex((m) => m.id === boundaryMessageId);
       await this.saveState(boundarySeq >= 0 ? [boundarySeq] : undefined);
+      if (
+        expectedStepGeneration !== undefined &&
+        this._stepGeneration !== expectedStepGeneration
+      ) {
+        return;
+      }
       this.scheduleMemorySnapshotWrite('compression');
       this.recordEvidenceEvent(
         'compression_completed',
@@ -2950,7 +3690,11 @@ export abstract class BaseAgent<
    *
    * @returns Whether the agent should run a new step based on the given conditions.
    */
-  private async handlePostStep(result: StepResult<ToolSet>): Promise<boolean> {
+  private async handlePostStep(
+    result: StepResult<ToolSet>,
+    expectedStepGeneration: number,
+  ): Promise<boolean | null> {
+    if (this._stepGeneration !== expectedStepGeneration) return null;
     this.state.commands.recordUsage({
       totalTokens: result.usage.totalTokens ?? 0,
     });
@@ -2959,6 +3703,7 @@ export abstract class BaseAgent<
 
     // Save the agent state for recovery
     await this.saveState();
+    if (this._stepGeneration !== expectedStepGeneration) return null;
 
     // Drain any host-produced attachments (e.g. files written by a
     // sandbox/runtime side-channel during this step) into
@@ -3013,6 +3758,7 @@ export abstract class BaseAgent<
           '',
         )
       ).contextWindowSize;
+      if (this._stepGeneration !== expectedStepGeneration) return null;
       const fractionalTriggerTokens = compactionThreshold * contextWindowSize;
       const effectiveTriggerTokens = Math.min(
         fractionalTriggerTokens,
@@ -3022,13 +3768,14 @@ export abstract class BaseAgent<
         compactionThreshold >= 0 &&
         this.state.get().usedTokens > effectiveTriggerTokens
       ) {
-        void this.compressHistoryInternal();
+        void this.compressHistoryInternal(expectedStepGeneration);
       }
     } catch {
       // Model may have been deleted between step start and finish — skip compaction check
     }
 
     const userWantsToContinue = (await this.onStepFinished(result)) ?? true;
+    if (this._stepGeneration !== expectedStepGeneration) return null;
     const shouldRunNewStep = this.shouldRunNewStep(result, userWantsToContinue);
 
     if (!shouldRunNewStep) {
@@ -3064,6 +3811,7 @@ export abstract class BaseAgent<
   private async generateContextForNewStep(
     queueFlushStart?: number,
     reasoningSignatureSource?: ReasoningSignatureSource,
+    expectedStepGeneration?: number,
   ): Promise<ModelMessage[]> {
     // ─── Resolve env-domain allow-list from this agent type's profile ─
     // Hosts opt agent types into env capture explicitly via
@@ -3094,6 +3842,12 @@ export abstract class BaseAgent<
       this.instanceId,
       allowedEnvDomainIds,
     );
+    if (
+      expectedStepGeneration !== undefined &&
+      this._stepGeneration !== expectedStepGeneration
+    ) {
+      return [];
+    }
     if (entries.size > 0) {
       this.state.commands.attachEnvState({
         entries,
@@ -3105,14 +3859,32 @@ export abstract class BaseAgent<
     // Extracts path: links, attachment paths, and mention paths, then
     // hashes each file/directory so the conversion pipeline can track
     // content state and deduplicate injections.
-    await this.populatePathReferencesOnUserMessages();
+    await this.populatePathReferencesOnUserMessages(expectedStepGeneration);
+    if (
+      expectedStepGeneration !== undefined &&
+      this._stepGeneration !== expectedStepGeneration
+    ) {
+      return [];
+    }
 
     // ─── Build model messages from history ────────────────────────────
     const messages = this.state.get().history;
 
     const filteredUIMsgs = await this.transformMessagesBeforeStep(messages);
+    if (
+      expectedStepGeneration !== undefined &&
+      this._stepGeneration !== expectedStepGeneration
+    ) {
+      return [];
+    }
 
     const systemPrompt = await this.getSystemPrompt();
+    if (
+      expectedStepGeneration !== undefined &&
+      this._stepGeneration !== expectedStepGeneration
+    ) {
+      return [];
+    }
 
     const modelMessages = await this.transformMessagesToModelMessages(
       filteredUIMsgs,
@@ -3120,16 +3892,35 @@ export abstract class BaseAgent<
       reasoningSignatureSource,
       allowedEnvDomainIds,
     );
+    if (
+      expectedStepGeneration !== undefined &&
+      this._stepGeneration !== expectedStepGeneration
+    ) {
+      return [];
+    }
 
     // Then, we allow another step to modify the final model messages
     const transformedModelMessages =
       await this.transformModelMessagesBeforeStep(modelMessages);
+    if (
+      expectedStepGeneration !== undefined &&
+      this._stepGeneration !== expectedStepGeneration
+    ) {
+      return [];
+    }
     const evidenceAugmentedMessages = await this.injectEvidenceContextIfEnabled(
       transformedModelMessages,
     );
+    if (
+      expectedStepGeneration !== undefined &&
+      this._stepGeneration !== expectedStepGeneration
+    ) {
+      return [];
+    }
 
     const finalModelMessages = this.appendSyntheticContinuationIfNeeded(
       evidenceAugmentedMessages,
+      expectedStepGeneration,
     );
 
     return finalModelMessages;
@@ -3137,7 +3928,14 @@ export abstract class BaseAgent<
 
   private appendSyntheticContinuationIfNeeded(
     modelMessages: ModelMessage[],
+    expectedStepGeneration?: number,
   ): ModelMessage[] {
+    if (
+      expectedStepGeneration !== undefined &&
+      this._stepGeneration !== expectedStepGeneration
+    ) {
+      return modelMessages;
+    }
     const continuation = this._pendingSyntheticContinuation;
     if (!continuation) return modelMessages;
 
@@ -3167,7 +3965,9 @@ export abstract class BaseAgent<
    * never populated (e.g. messages sent while a step was in-flight) are
    * also processed so their file content is injected during conversion.
    */
-  private async populatePathReferencesOnUserMessages(): Promise<void> {
+  private async populatePathReferencesOnUserMessages(
+    expectedStepGeneration?: number,
+  ): Promise<void> {
     const history = this.state.get().history;
     const mountPaths = this.toolbox.getMountedPathsForAgent(this.instanceId);
 
@@ -3227,6 +4027,12 @@ export abstract class BaseAgent<
     // Write back all populated pathReferences in a single state update
     const populated = results.filter((r) => r.pathReferences);
     if (populated.length === 0) return;
+    if (
+      expectedStepGeneration !== undefined &&
+      this._stepGeneration !== expectedStepGeneration
+    ) {
+      return;
+    }
 
     this.state.commands.setUserPathReferences({ populated });
   }
@@ -3238,7 +4044,9 @@ export abstract class BaseAgent<
    *
    * Called in `handlePostStep` after each step completes.
    */
-  private async populatePathReferencesOnAssistantMessage(): Promise<void> {
+  private async populatePathReferencesOnAssistantMessage(
+    expectedStepGeneration?: number,
+  ): Promise<void> {
     const history = this.state.get().history;
     // Capture the index at read-time so the write targets the same message
     // even if history grows concurrently (e.g. a new message appended).
@@ -3290,6 +4098,12 @@ export abstract class BaseAgent<
       }),
     );
 
+    if (
+      expectedStepGeneration !== undefined &&
+      this._stepGeneration !== expectedStepGeneration
+    ) {
+      return;
+    }
     if (Object.keys(references).length > 0) {
       this.state.commands.mergeAssistantPathReferences({
         targetIdx,
@@ -3413,6 +4227,21 @@ export abstract class BaseAgent<
    * @returns Whether the agent can run a new step based on the given conditions.
    */
   private canRunStep(): boolean {
+    if (
+      this._activeStepRun !== null ||
+      this._recoveredReplayExecutionId !== null ||
+      this._approvalDurabilityInFlight > 0 ||
+      this._approvalInvalidationInFlight > 0 ||
+      this._approvalAdmissionFailedClosed ||
+      this._approvalSweepPersistenceBlocked ||
+      this._approvalSweepOperationsInFlight > 0 ||
+      this._historyRewriteInFlight > 0 ||
+      this._historyPreemptionInFlight > 0 ||
+      this._approvalLifecycleInvalidationFailedClosed
+    ) {
+      return false;
+    }
+
     // Only check stepAbortController for concurrency - isWorking is just a UI state indicator
     if (this.stepAbortController && !this.stepAbortController.signal.aborted) {
       return false;
@@ -3490,6 +4319,7 @@ export abstract class BaseAgent<
   private async handleUiStream(
     uiStream: AsyncIterableStream<InferUIMessageChunk<AgentMessage>>,
     lastAssistantMessage?: AgentMessage,
+    expectedStepGeneration?: number,
   ): Promise<void> {
     for await (const uiMessage of readUIMessageStream<AgentMessage>({
       stream: uiStream,
@@ -3497,6 +4327,14 @@ export abstract class BaseAgent<
         ? structuredClone(lastAssistantMessage)
         : undefined,
     })) {
+      // Keep draining the tee for back-pressure, but never merge chunks from
+      // a run superseded by stop/new-message/recovery.
+      if (
+        expectedStepGeneration !== undefined &&
+        this._stepGeneration !== expectedStepGeneration
+      ) {
+        continue;
+      }
       this.state.commands.mergeUIMessageStream({
         uiMessage,
         onApprovalRequested: ({ approvalId, toolPart }) => {
@@ -3521,12 +4359,274 @@ export abstract class BaseAgent<
     }
   }
 
-  private async internalStop(
-    stopReason:
-      | 'user-stopped'
-      | 'user-flushed-queue'
-      | 'system-interrupted' = 'user-stopped',
+  private assertApprovalLifecycleGeneration(
+    expectedGeneration: number,
+    approvalId: string,
+  ): void {
+    if (this._approvalLifecycleGeneration !== expectedGeneration) {
+      throw new Error(
+        `Tool approval response '${approvalId}' was invalidated by a newer agent lifecycle action`,
+      );
+    }
+  }
+
+  private async waitForApprovalDurabilityToSettle(): Promise<void> {
+    if (this._approvalDurabilityInFlight === 0) return;
+    await new Promise<void>((resolve) => {
+      this._approvalDurabilitySettledWaiters.add(resolve);
+    });
+  }
+
+  private async continueAfterToolApprovalResponse(input: {
+    readonly lifecycleGeneration: number;
+    readonly originatingStepGeneration: number;
+    readonly originatingStepSettlement?: Promise<
+      'completed' | 'failed' | 'superseded'
+    >;
+  }): Promise<void> {
+    const settlementOutcome = input.originatingStepSettlement
+      ? await input.originatingStepSettlement
+      : 'completed';
+    if (settlementOutcome === 'failed') {
+      const invalidation =
+        await this.invalidateOpenToolApprovals('system-interrupted');
+      invalidation.release();
+      return;
+    }
+    if (settlementOutcome === 'superseded') return;
+    await this.waitForApprovalDurabilityToSettle();
+
+    // A stop/new-message action or a superseding/error step owns the next
+    // transition once either generation changes. The durable response may
+    // already exist, but it must not revive execution after that boundary.
+    if (
+      this._approvalLifecycleGeneration !== input.lifecycleGeneration ||
+      this._stepGeneration !== input.originatingStepGeneration
+    ) {
+      return;
+    }
+
+    await this.runStep(true);
+  }
+
+  private hasLocalOpenToolApproval(): boolean {
+    const state = this.state.get();
+    if (Object.keys(state.pendingApprovals).length > 0) return true;
+    return state.history.some(
+      (message) =>
+        message.role === 'assistant' &&
+        message.parts.some((part) => {
+          if (
+            !(part.type.startsWith('tool-') || part.type === 'dynamic-tool')
+          ) {
+            return false;
+          }
+          const toolPart = part as AgentToolUIPart | DynamicToolUIPart;
+          return (
+            toolPart.state === 'approval-requested' ||
+            toolPart.state === 'approval-responded'
+          );
+        }),
+    );
+  }
+
+  private async persistApprovalSweep(sweep: {
+    readonly changed: boolean;
+    readonly dirtyMessageIndices: readonly number[];
+  }): Promise<void> {
+    if (!this.config.persistent) return;
+    if (sweep.changed) {
+      this._approvalSweepPersistencePending = true;
+      for (const index of sweep.dirtyMessageIndices) {
+        if (Number.isSafeInteger(index) && index >= 0) {
+          this._pendingApprovalSweepDirtyMessageIndices.add(index);
+        }
+      }
+    }
+    if (!this._approvalSweepPersistencePending) return;
+
+    const history = this.state.get().history;
+    const dirtyMessageIndices = [
+      ...this._pendingApprovalSweepDirtyMessageIndices,
+    ].filter((index) => index < history.length);
+    try {
+      await this.state.persist({
+        dirtyMessageIndices,
+        expectedMessageBindings: dirtyMessageIndices.map((messageIndex) => ({
+          messageIndex,
+          messageId: history[messageIndex]!.id,
+        })),
+        throwOnError: true,
+      });
+      this._approvalSweepPersistencePending = false;
+      this._pendingApprovalSweepDirtyMessageIndices.clear();
+      this._approvalSweepPersistenceBlocked = false;
+    } catch (error) {
+      this._approvalSweepPersistenceBlocked = true;
+      throw error;
+    }
+  }
+
+  private applyAndPersistApprovalSweep(
+    mutate: () => {
+      readonly changed: boolean;
+      readonly dirtyMessageIndices: readonly number[];
+    },
   ): Promise<void> {
+    this._approvalSweepOperationsInFlight += 1;
+    const operation = this._approvalSweepTail
+      .catch(() => undefined)
+      .then(() => this.applyAndPersistApprovalSweepSerialized(mutate));
+    const tracked = operation.finally(() => {
+      this._approvalSweepOperationsInFlight -= 1;
+    });
+    this._approvalSweepTail = tracked.catch(() => undefined);
+    return tracked;
+  }
+
+  private async applyAndPersistApprovalSweepSerialized(
+    mutate: () => {
+      readonly changed: boolean;
+      readonly dirtyMessageIndices: readonly number[];
+    },
+  ): Promise<void> {
+    let sweep: {
+      readonly changed: boolean;
+      readonly dirtyMessageIndices: readonly number[];
+    };
+    try {
+      sweep = mutate();
+    } catch (mutationError) {
+      // `AgentStore.update()` commits before notifying synchronous
+      // subscribers. If a subscriber throws, the mutation has no returned
+      // receipt even though history may already be changed. Persist every
+      // current row as a conservative recovery receipt before propagating the
+      // original error.
+      const fallback = {
+        changed: true,
+        dirtyMessageIndices: this.state
+          .get()
+          .history.map((_, messageIndex) => messageIndex),
+      } as const;
+      try {
+        await this.persistApprovalSweep(fallback);
+      } catch (fallbackPersistenceError) {
+        throw new AggregateError(
+          [mutationError, fallbackPersistenceError],
+          'Approval sweep mutation and conservative durable recovery both failed',
+        );
+      }
+      throw mutationError;
+    }
+    await this.persistApprovalSweep(sweep);
+  }
+
+  /**
+   * Durably closes host-managed approvals displaced by a newer lifecycle
+   * action. The generation changes synchronously before the first await so an
+   * explicit response already crossing persistence barriers cannot schedule a
+   * continuation after stop/new-message wins the race.
+   */
+  private async invalidateOpenToolApprovals(
+    reason: ToolApprovalInvalidationReason,
+  ): Promise<{ release: () => void; invalidatedCount: number }> {
+    this._approvalInvalidationInFlight += 1;
+    this._approvalLifecycleGeneration += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this._approvalInvalidationInFlight -= 1;
+    };
+    try {
+      let invalidatedCount = 0;
+      const operation = this._approvalInvalidationTail
+        .catch(() => undefined)
+        .then(async () => {
+          invalidatedCount =
+            await this.invalidateOpenToolApprovalsSerialized(reason);
+        });
+      this._approvalInvalidationTail = operation.catch(() => undefined);
+      await operation;
+      return { release, invalidatedCount };
+    } catch (error) {
+      release();
+      throw error;
+    }
+  }
+
+  private async invalidateOpenToolApprovalsSerialized(
+    reason: ToolApprovalInvalidationReason,
+  ): Promise<number> {
+    const lifecycle = this.toolApprovalLifecycle;
+
+    const toolCallIds = new Set(this._approvalResponsesInFlight);
+    const addToolCallId = (toolCallId: unknown) => {
+      if (
+        typeof toolCallId === 'string' &&
+        toolCallId.length > 0 &&
+        toolCallId === toolCallId.trim() &&
+        !toolCallId.includes('\0')
+      ) {
+        toolCallIds.add(toolCallId);
+      }
+    };
+    const state = this.state.get();
+    for (const toolCallId of Object.keys(state.pendingApprovals)) {
+      addToolCallId(toolCallId);
+    }
+    for (const message of state.history) {
+      if (message.role !== 'assistant') continue;
+      for (const part of message.parts) {
+        if (!(part.type.startsWith('tool-') || part.type === 'dynamic-tool')) {
+          continue;
+        }
+        const toolPart = part as AgentToolUIPart | DynamicToolUIPart;
+        if (
+          toolPart.state !== 'approval-requested' &&
+          toolPart.state !== 'approval-responded'
+        ) {
+          continue;
+        }
+        addToolCallId(toolPart.toolCallId);
+      }
+    }
+
+    const ids = [...toolCallIds];
+    let invalidatedCount = 0;
+    try {
+      if (lifecycle) {
+        const batchCount = Math.max(1, Math.ceil(ids.length / 1_000));
+        for (let batch = 0; batch < batchCount; batch++) {
+          const offset = batch * 1_000;
+          invalidatedCount += await lifecycle.invalidateOpen({
+            agentInstanceId: this.instanceId,
+            toolCallIds: ids.slice(offset, offset + 1_000),
+            reason,
+          });
+        }
+      }
+      await this.waitForApprovalDurabilityToSettle();
+      this._approvalLifecycleInvalidationFailedClosed = false;
+      return invalidatedCount;
+    } catch (error) {
+      this._approvalLifecycleInvalidationFailedClosed = true;
+      throw error;
+    }
+  }
+
+  private rememberClosedRecoveredReplayExecution(executionId: string): void {
+    this._closedRecoveredReplayExecutionIds.add(executionId);
+    while (this._closedRecoveredReplayExecutionIds.size > 256) {
+      const oldest = this._closedRecoveredReplayExecutionIds
+        .values()
+        .next().value;
+      if (typeof oldest !== 'string') break;
+      this._closedRecoveredReplayExecutionIds.delete(oldest);
+    }
+  }
+
+  private supersedeCurrentStep(): void {
     // Invalidate pending callbacks BEFORE firing abort — onAbort fires
     // synchronously and must see the new generation to be ignored.
     this._stepGeneration++;
@@ -3540,34 +4640,71 @@ export abstract class BaseAgent<
       this.stepAbortController?.abort();
     } catch {}
     this.stepAbortController = null;
+    // Resolve approval-continuation waiters immediately as superseded, then
+    // detach the old run so a replacement step is not held hostage by a
+    // provider stream that ignores abort. The old run's identity-checked
+    // finally block cannot clear a newer run.
+    this._activeStepRun?.resolve('superseded');
+    this._activeStepRun = null;
+    if (this._recoveredReplayExecutionId !== null) {
+      this.rememberClosedRecoveredReplayExecution(
+        this._recoveredReplayExecutionId,
+      );
+      this._recoveredReplayExecutionId = null;
+      this._recoveredReplayStepGeneration = null;
+    }
+  }
 
-    // Dismiss any pending host-side user-facing dialogs so their UI
-    // is torn down alongside the cancelled step.
-    this.toolbox.cancelPendingAgentDialogs(this.instanceId);
-    this.toolbox.cancelPendingEdits?.(this.instanceId);
+  private async internalStop(
+    stopReason:
+      | 'user-stopped'
+      | 'user-flushed-queue'
+      | 'system-interrupted' = 'user-stopped',
+  ): Promise<void> {
+    this.supersedeCurrentStep();
 
-    const toolCallAbortReason =
-      stopReason === 'system-interrupted'
-        ? 'System was suspended or stalled before tool call finished.'
-        : stopReason === 'user-stopped'
-          ? (this.config.stopToolCallAbortReason ??
-            'User stopped agent before tool call finished.')
-          : (this.config.flushQueueToolCallAbortReason ??
-            'User sent new message before tool call finished.');
+    const approvalInvalidationReason: ToolApprovalInvalidationReason =
+      stopReason === 'user-stopped'
+        ? 'user-stop'
+        : stopReason === 'user-flushed-queue'
+          ? 'queue-flush'
+          : 'system-interrupted';
+    const { release: releaseApprovalInvalidation } =
+      await this.invalidateOpenToolApprovals(approvalInvalidationReason);
 
-    const toolCallRequestApprovalAbortReason =
-      stopReason === 'system-interrupted'
-        ? 'System was suspended or stalled before tool call approval was granted.'
-        : stopReason === 'user-stopped'
-          ? (this.config.stopToolCallRequestApprovalReason ??
-            'User stopped agent before tool call approval was granted.')
-          : (this.config.flushQueueToolCallRequestApprovalReason ??
-            'User sent new message before tool call approval was granted.');
+    try {
+      const toolCallAbortReason =
+        stopReason === 'system-interrupted'
+          ? 'System was suspended or stalled before tool call finished.'
+          : stopReason === 'user-stopped'
+            ? (this.config.stopToolCallAbortReason ??
+              'User stopped agent before tool call finished.')
+            : (this.config.flushQueueToolCallAbortReason ??
+              'User sent new message before tool call finished.');
 
-    this.state.commands.terminateNonTerminalToolPartsInLastAssistant({
-      approvalDenyReason: toolCallRequestApprovalAbortReason,
-      outputErrorText: toolCallAbortReason,
-    });
+      const toolCallRequestApprovalAbortReason =
+        stopReason === 'system-interrupted'
+          ? 'System was suspended or stalled before tool call approval was granted.'
+          : stopReason === 'user-stopped'
+            ? (this.config.stopToolCallRequestApprovalReason ??
+              'User stopped agent before tool call approval was granted.')
+            : (this.config.flushQueueToolCallRequestApprovalReason ??
+              'User sent new message before tool call approval was granted.');
+
+      await this.applyAndPersistApprovalSweep(() =>
+        this.state.commands.terminateNonTerminalToolPartsInLastAssistant({
+          approvalDenyReason: toolCallRequestApprovalAbortReason,
+          outputErrorText: toolCallAbortReason,
+        }),
+      );
+
+      // Security-critical cancellation is durable before best-effort host UI
+      // cleanup can throw or re-enter unrelated code.
+      this.toolbox.cancelPendingAgentDialogs(this.instanceId);
+      this.toolbox.cancelPendingEdits?.(this.instanceId);
+    } finally {
+      releaseApprovalInvalidation();
+    }
   }
 
   /**

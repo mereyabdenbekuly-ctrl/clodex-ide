@@ -58,11 +58,21 @@ export interface ClodexMcpServiceDeps {
     toolCallId: string,
     explanation: string,
   ) => void;
+  recordPendingApprovalAtEpoch?: (
+    agentInstanceId: string,
+    toolCallId: string,
+    explanation: string,
+    approvalLifecycleEpoch: number,
+  ) => void;
   assessGuardian?: GuardianPolicyChecker;
   claimApprovalAuthority?: (
     input: ClaimTrustedMcpApprovalInput,
   ) => Promise<TrustedMcpFinalAuthority | null>;
   stageApproval?: (input: StageTrustedMcpApprovalInput) => Promise<void>;
+  stageApprovalAtEpoch?: (
+    input: StageTrustedMcpApprovalInput,
+    approvalLifecycleEpoch: number,
+  ) => Promise<void>;
 }
 
 export class ClodexMcpService {
@@ -77,12 +87,23 @@ export class ClodexMcpService {
         explanation: string,
       ) => void)
     | undefined;
+  private readonly recordPendingApprovalAtEpoch?:
+    | ((
+        agentInstanceId: string,
+        toolCallId: string,
+        explanation: string,
+        approvalLifecycleEpoch: number,
+      ) => void)
+    | undefined;
   private readonly assessGuardian: GuardianPolicyChecker | undefined;
   private readonly claimApprovalAuthority:
     | ClodexMcpServiceDeps['claimApprovalAuthority']
     | undefined;
   private readonly stageApproval:
     | ClodexMcpServiceDeps['stageApproval']
+    | undefined;
+  private readonly stageApprovalAtEpoch:
+    | ClodexMcpServiceDeps['stageApprovalAtEpoch']
     | undefined;
   private client: Client | null = null;
   private transport: SSEClientTransport | null = null;
@@ -107,13 +128,16 @@ export class ClodexMcpService {
     );
     this.isEnabled = deps.isEnabled ?? (() => true);
     this.recordPendingApproval = deps.recordPendingApproval;
+    this.recordPendingApprovalAtEpoch = deps.recordPendingApprovalAtEpoch;
     this.assessGuardian = deps.assessGuardian;
     this.claimApprovalAuthority = deps.claimApprovalAuthority;
     this.stageApproval = deps.stageApproval;
+    this.stageApprovalAtEpoch = deps.stageApprovalAtEpoch;
   }
 
   public async getTools(
     agentInstanceId: string,
+    approvalLifecycleEpoch = 0,
   ): Promise<Record<string, Tool>> {
     if (!this.isEnabled()) {
       this.clearToolDefinitionsCache();
@@ -144,6 +168,7 @@ export class ClodexMcpService {
             this.toAiTool(
               mcpTool,
               agentInstanceId,
+              approvalLifecycleEpoch,
               registrationCache.connectionGeneration,
               registrationCache.catalogRevision,
             ),
@@ -413,6 +438,7 @@ export class ClodexMcpService {
   private toAiTool(
     mcpTool: McpToolDefinition,
     agentInstanceId: string,
+    approvalLifecycleEpoch: number,
     registrationConnectionGeneration: number,
     registrationCatalogRevision: number,
   ): Tool {
@@ -438,22 +464,39 @@ export class ClodexMcpService {
       needsApproval: async (args, { toolCallId }) => {
         const approvalRequired = requiresApproval(mcpTool);
         const requireApproval = async (explanation: string): Promise<true> => {
-          if (!this.stageApproval) {
+          if (!this.stageApproval && !this.stageApprovalAtEpoch) {
             throw new Error('MCP approval broker is unavailable');
           }
-          await this.stageApproval({
+          const approvalInput = {
             agentInstanceId,
             toolCallId,
             aiToolName,
             arguments: args,
             descriptor: reviewedDescriptor,
             approvalContextDigest: reviewedDispatch.digest,
-          });
-          this.recordPendingApproval?.(
-            agentInstanceId,
-            toolCallId,
-            explanation,
-          );
+          };
+          if (this.stageApprovalAtEpoch) {
+            await this.stageApprovalAtEpoch(
+              approvalInput,
+              approvalLifecycleEpoch,
+            );
+          } else {
+            await this.stageApproval!(approvalInput);
+          }
+          if (this.recordPendingApprovalAtEpoch) {
+            this.recordPendingApprovalAtEpoch(
+              agentInstanceId,
+              toolCallId,
+              explanation,
+              approvalLifecycleEpoch,
+            );
+          } else {
+            this.recordPendingApproval?.(
+              agentInstanceId,
+              toolCallId,
+              explanation,
+            );
+          }
           return true;
         };
         if (this.assessGuardian) {
