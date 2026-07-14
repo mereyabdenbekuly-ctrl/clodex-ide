@@ -1,6 +1,6 @@
 # CLODEx Security Guarantee Manifest
 
-- **Version:** 0.11
+- **Version:** 0.12
 - **Date:** July 14, 2026
 - **Rule:** only ENFORCED claims may be described as runtime guarantees.
 - **Source specification:** ../INTENT_CONTRACT_SPEC.md
@@ -68,7 +68,7 @@
 | INV-EFFECT-001        | Every modeled effect reaches one durable terminal closure state                                      | effect adapters                  | BLOCKED   | tested isolated ledger/evidence/runtime references plus unverified universal Artifact Bridge WAL and atomic local control-plane implementations narrow the gap | External effects, independently stored trust/evidence/checkpoints, protected heads, and packaged production wiring still do not share one atomic authority/effect transaction |
 | INV-MEM-001           | Memory cannot mint authority                                                                         | memory/control plane             | SPEC_ONLY | Intent Contract authority model                                                                                                                                                 | Complete semantic lineage and universal runtime mediation are not claimed                                                                                 |
 | INV-SANDBOX-001       | Test execution has no host filesystem, credential, or network escape                                 | sandbox/test adapter             | BLOCKED   | reference profile plus unverified `@clodex/adapters-node` implementation require digest-only images, `--pull=never`, no network/credentials, read-only workspace/root, disposable scratch, dropped capabilities, LSM/seccomp and limits | No target-platform execution evidence exists; daemon endpoint protection, loaded LSM state, container escape testing, and packaged production wiring remain blocking |
-| INV-MCP-001           | Every agent-reachable MCP tool call is mediated by exact descriptor/runtime commitment, approval authority, Guardian policy, and a final fence | MCP tool dispatch | IMPLEMENTED_UNVERIFIED | registry and Clodex-cloud agent tools now use the central trusted-dispatch gateway; Toolbox wires an approval broker that stages intent but claims authority only from one exact affirmative AgentStore record | Source was not tested; pending/claimed approval state is process-memory only, durable reuse prevention across restart is absent, and resource/prompt agent tools remain disabled/settings-only |
+| INV-MCP-001           | Every agent-reachable MCP tool call is mediated by exact descriptor/runtime commitment, approval authority where required, Guardian policy, and a final fence | MCP tool dispatch | IMPLEMENTED_UNVERIFIED | registry tools and the allowlisted read-only Clodex-cloud tool use the central trusted-dispatch gateway; effectful cloud tools remain unregistered; Toolbox's encrypted approval store persists exact bounded identity/descriptor/context/effect digests and `STAGED → CLAIMED/EXPIRED/INVALIDATED`, durably claims one exact affirmative AgentStore record before authority return, retains replay tombstones, and reconciles ambiguous saves by exact read-back without treating a rejected save as authority success | Source was not tested; affirmative evidence remains mutable AgentStore history rather than a separate durable `APPROVED` state; `CLAIMED` does not prove final-authority consumption, IPC/network send, or effect commit; no cross-process/cross-store atomicity exists; deletion/reset, wall-clock rollback, Windows directory-fsync absence, and the same-file revision's lack of protected anti-rollback/existence anchors remain outside the claim; resource/prompt agent tools remain disabled/settings-only |
 | INV-CLOUD-001         | Stale local owner cannot execute after cloud handoff                                                 | execution lanes                  | IMPLEMENTED_UNVERIFIED | router/browser-executor omission defaults deny; final checks cover local/remote turn, host model/tool, wrapped local tool, and intended Swarm model/tool/history dispatches        | Source-only changes were not tested across lease races, awaits, Swarm direct paths, restart, or packaged execution                                          |
 
 ## Session 1 evidence
@@ -243,19 +243,39 @@
   `PREPARED` as `FAILED_PRE_EFFECT` and `DISPATCHING` as `UNCERTAIN`; no startup
   path replays an occurrence.
 - The same source tranche adds the central MCP commitment/final-fence gateway
-  and exact approval-broker design; ShellCapabilityBroker production wiring;
+  and an encrypted durable approval broker. The broker persists only bounded
+  identifiers and exact digests, writes `STAGED` before `needsApproval` returns
+  true or the host pending-approval record is published,
+  accepts only one exact affirmative AgentStore part, hashes that evidence,
+  saves `CLAIMED` before returning one-shot authority, rechecks the evidence
+  after the save, retains replay tombstones, and closes expiry or invalid
+  evidence observed during claim as `EXPIRED`/`INVALIDATED`. Ambiguous writes
+  are reconciled by exact read-back, but every rejected save still rejects
+  authority issuance; an intended read-back remains durability-pending for an
+  idempotent retry, while read-back divergence faults the broker. This tranche
+  also adds ShellCapabilityBroker production wiring;
   removal of remote module import and ambient filesystem authority from the JS
   sandbox; fail-closed OpenManus without an OS-confined brokered adapter;
   cloud-ownership checks at model/tool/turn/local dispatch boundaries; exact
   per-agent mount permission lookup; and removal of Swarm ambient workspace
   auto-mounting. `INV-MCP-001` is `IMPLEMENTED_UNVERIFIED`: source now wires
-  the broker for registry and Clodex-cloud tools, but executable evidence must
-  still prove every path claims authority only from exact affirmative approval.
+  the durable broker for registry tools and the allowlisted read-only
+  Clodex-cloud path; effectful cloud tools remain unregistered. Executable
+  evidence must still prove every approval path stages before `needsApproval`
+  returns true and before the host pending-approval record is published, claims
+  only exact affirmative evidence, and cannot reuse a terminal identity after
+  restart. `CLAIMED` is intentionally only a conservative replay tombstone; it
+  is not evidence of final-fence consumption, dispatch, or external effect.
 - None of those later changes was tested, typechecked, linted, built, packaged,
   or smoke-tested. The green CI head `1ad58e67` is the pre-tranche baseline
   only. Package/plugin authority, write defaults, and ephemeral-grant defaults
-  remain unpromoted. External-effect atomicity, protected heads, target-OS
-  confinement evidence, and packaged Electron smoke remain non-claims.
+  remain unpromoted. The approval-store revision is stored in the same
+  encrypted file and has no independent monotonic/existence anchor, so hostile
+  rollback, deletion, or reset to a fresh store remains a non-claim. Expiry is
+  wall-clock based, restart does not reconstruct the pending-approval UI, and
+  Windows has no containing-directory fsync. External-effect atomicity,
+  protected heads, target-OS confinement evidence, and packaged Electron smoke
+  remain non-claims.
 
 ## Session 5 checkpoint evidence
 

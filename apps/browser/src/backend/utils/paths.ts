@@ -35,6 +35,7 @@ export type JsonName =
   | 'mcp-custom-credentials'
   | 'mcp-registry'
   | 'mcp-oauth-sessions'
+  | 'mcp-approval-authority'
   | 'private-marketplace-sources'
   | 'remote-connections'
   | 'docker-runner-profiles'

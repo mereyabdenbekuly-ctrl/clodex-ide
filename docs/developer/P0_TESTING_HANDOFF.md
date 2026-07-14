@@ -35,13 +35,25 @@ typechecked, linted, built, packaged, or smoke-tested in this tranche:
   startup-reconciliation dispatches, commits the exact definition/occurrence/
   attempt, and recovers `PREPARED → FAILED_PRE_EFFECT` and
   `DISPATCHING → UNCERTAIN` without replay;
-- a central trusted MCP **tool-call** dispatch boundary commits the exact descriptor,
-  trusted classification, authority binding, and current runtime generation,
-  runs Guardian policy, requires exact affirmative approval authority for any
-  approval-required call, and consumes that authority at the final dispatch
-  fence. The approval broker must derive sign-off from canonical AgentStore
-  approval history; `requiresApproval`, `needsApproval`, MCP annotations, or a
-  model-selected field are not approval evidence;
+- a central trusted MCP **tool-call** dispatch boundary commits the exact
+  descriptor, trusted classification, authority binding, and current runtime
+  generation, runs Guardian policy, requires exact affirmative approval
+  authority for any approval-required call, and consumes that authority at the
+  final dispatch fence. The approval broker must derive sign-off from canonical
+  AgentStore approval history; `requiresApproval`, `needsApproval`, MCP
+  annotations, or a model-selected field are not approval evidence. Its
+  source-only durable store persists bounded identities plus exact descriptor/
+  context/effect digests, writes `STAGED` before `needsApproval` returns true or
+  the host pending-approval record is published, and saves `CLAIMED` before
+  returning authority. Exact affirmative evidence is hashed
+  into the claimed record and re-read after persistence; expiry, or invalid
+  evidence observed during claim, closes `EXPIRED`/`INVALIDATED`. Encrypted
+  atomic writes fsync the temporary file and fsync the containing directory on
+  platforms where that operation is supported (the current Windows path skips
+  directory fsync). Ambiguous save outcomes are reconciled by exact read-back
+  without converting a rejected save into authority issuance; an intended
+  read-back remains durability-pending and must pass a later idempotent save
+  barrier before another mutation or teardown reports success;
 - production shell session creation and command/stdin/kill/poll dispatch are
   staged and one-shot consumed through `ShellCapabilityBroker`, including the
   exact mount prefix and resolved host cwd for PTY creation; the browser wires
@@ -67,10 +79,26 @@ typechecked, linted, built, packaged, or smoke-tested in this tranche:
 These are source statements, not runtime guarantees. External-effect
 atomicity, independently protected/linearizable anti-rollback heads,
 production key custody, target-OS/native-helper/container/LSM evidence, and a
-packaged Electron smoke remain explicit non-claims. MCP pending/claimed
-approval state is process-memory only: restart loses staged state and fails
-closed for normal continuation, but durable consumption of a historically
-reused agent/tool-call identifier is not implemented.
+packaged Electron smoke remain explicit non-claims. MCP `STAGED` and `CLAIMED`
+records survive ordinary restart while the encrypted store remains present,
+and a claimed agent/tool-call identity is retained as a bounded fail-closed
+replay tombstone. This does not reconstruct AgentStore `pendingApprovals` or
+guarantee a resumable approval UI/normal continuation after restart. It also
+does **not** create a separate durable `APPROVED` state: affirmative evidence
+remains canonical, mutable AgentStore history. Nor does `CLAIMED` prove that
+the in-memory final authority was consumed, that IPC/network dispatch occurred,
+or that the external effect committed. The local revision is stored in the
+same encrypted file and has no independently protected monotonic or existence
+anchor, so hostile rollback, deletion, or reset to a fresh empty store remains
+outside the claim. Expiry uses the wall clock rather than a trusted monotonic
+clock, so clock rollback can extend `STAGED` validity. Windows lacks the
+containing-directory fsync used on supported platforms, so power-loss
+durability there is not claimed. Tombstones are retained up to the bounded
+capacity and capacity exhaustion fails closed rather than pruning replay
+history. The broker also does not provide cross-process writer serialization
+or a transaction shared with AgentStore or the external MCP effect; the
+affirmative-response lifecycle and durable claim are not one cross-store atomic
+operation.
 
 Source map for the testing model:
 
@@ -105,14 +133,35 @@ complete focused tests for the source-only paths above. At minimum, prove:
    `DISPATCHING`, never blind-retry an occurrence, expose machine-readable
    `uncertain`, reject cycles/accessors/sparse arrays/oversized commitments,
    and flush after active mutations during teardown.
-2. Every agent-reachable registry and Clodex-cloud MCP tool call enters the
-   central gateway. A tool requiring approval cannot dispatch unless the exact
-   tool name, tool-call ID, principal, descriptor digest, and canonical
-   arguments match a single affirmative approval record. Descriptor/runtime/
-   Guardian revision drift or a duplicate/expired authority must fail at the
-   last synchronous fence. If MCP resource/prompt agent tools remain disabled,
-   prove resource/prompt access is settings-only and cannot become an agent
-   effect path.
+2. Every agent-reachable registry tool and the current host-allowlisted
+   read-only Clodex-cloud tool enter the central gateway. Effectful/
+   approval-required Clodex-cloud tools remain intentionally unregistered;
+   their durable-approval path is wiring only unless a read-only cloud tool is
+   escalated by Guardian. A tool requiring approval cannot dispatch unless the
+   exact tool name, tool-call ID, principal, descriptor digest,
+   approval-context digest, and canonical arguments match a single affirmative
+   AgentStore part.
+   Prove `STAGED` is durable before `needsApproval` returns true and before the
+   host pending-approval record is published; exact duplicate staging is
+   idempotent while changed bindings fail closed; affirmative evidence is
+   hashed and rechecked after persistence; and `CLAIMED` is durably saved before
+   authority return. Restart must preserve claimed replay tombstones, expire
+   stale staged records, reject duplicate/reused/denied/ambiguous/malformed
+   evidence, and fail closed at the bounded capacity. Fault save-before-apply,
+   apply-then-throw, read-back mismatch, corrupt/truncated data, unavailable
+   encryption, and teardown with queued mutations; prove every rejected save
+   rejects the claim even when read-back contains the intended tombstone.
+   Prove that the intended tombstone remains burned in memory and that the next
+   mutation/flush/teardown retries the same persistence barrier before success.
+   Separately cover deleted/reset stores, wall-clock rollback, Windows' missing
+   directory-fsync guarantee, and restart without reconstructed AgentStore
+   pending-approval UI. Descriptor/runtime/Guardian revision drift must still
+   fail at the last synchronous fence. Report
+   `CLAIMED` only as a replay tombstone, not proof of final consumption,
+   dispatch, or effect; separately demonstrate that rollback of the same file
+   is not protected without an independent anchor. If MCP resource/prompt agent
+   tools remain disabled, prove resource/prompt access is settings-only and
+   cannot become an agent effect path.
 3. PTY creation and command/stdin/kill/poll execution cannot bypass the
    capability broker and its audit record; changed mount resolution plus stale,
    missing, mismatched, reused, or unauditable authority fails closed.

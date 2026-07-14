@@ -556,6 +556,7 @@ export class ToolboxService
     detectedShell: DetectedShell | null,
     resolvedEnvPromise: Promise<Record<string, string> | null>,
     agentStore: AgentStore,
+    mcpApprovalBroker: TrustedMcpApprovalBroker,
     hostAgentStateMutations: HostAgentStateMutations,
     attachments: AttachmentsService,
     memoryNotesService: MemoryNotesService | undefined,
@@ -574,7 +575,7 @@ export class ToolboxService
     this.userExperienceService = userExperienceService;
     this.credentialsService = credentialsService;
     this.mcpRegistryService = mcpRegistryService;
-    this.mcpApprovalBroker = new TrustedMcpApprovalBroker(agentStore);
+    this.mcpApprovalBroker = mcpApprovalBroker;
     this.gitService = gitService;
     this.preferencesService = preferencesService;
     this.clodexMcpService = new ClodexMcpService({
@@ -631,31 +632,40 @@ export class ToolboxService
     shellCapabilitySecurity: ShellCapabilitySecurityDeps,
     protectedFiles?: ProtectedFileStorage,
   ): Promise<ToolboxService> {
-    const instance = new ToolboxService(
-      logger,
-      uiKarton,
-      diffHistoryService,
-      pendingEditService,
-      windowLayoutService,
-      authService,
-      telemetryService,
-      filePickerService,
-      userExperienceService,
-      credentialsService,
-      mcpRegistryService,
-      gitService,
-      preferencesService,
-      detectedShell,
-      resolvedEnvPromise,
-      agentStore,
-      hostAgentStateMutations,
-      attachments,
-      memoryNotesService,
-      shellCapabilitySecurity,
-      protectedFiles,
-    );
-    await instance.initialize();
-    return instance;
+    const mcpApprovalBroker = await TrustedMcpApprovalBroker.create(agentStore);
+    let instance: ToolboxService | null = null;
+    try {
+      instance = new ToolboxService(
+        logger,
+        uiKarton,
+        diffHistoryService,
+        pendingEditService,
+        windowLayoutService,
+        authService,
+        telemetryService,
+        filePickerService,
+        userExperienceService,
+        credentialsService,
+        mcpRegistryService,
+        gitService,
+        preferencesService,
+        detectedShell,
+        resolvedEnvPromise,
+        agentStore,
+        mcpApprovalBroker,
+        hostAgentStateMutations,
+        attachments,
+        memoryNotesService,
+        shellCapabilitySecurity,
+        protectedFiles,
+      );
+      await instance.initialize();
+      return instance;
+    } catch (error) {
+      if (instance) await instance.teardown();
+      else await mcpApprovalBroker.teardown();
+      throw error;
+    }
   }
 
   private report(
@@ -2218,6 +2228,8 @@ export class ToolboxService
   }
 
   protected async onTeardown(): Promise<void> {
+    await this.mcpApprovalBroker.teardown();
+
     this.unsubPreferenceSync?.();
     this.unsubPreferenceSync = null;
 

@@ -61,8 +61,8 @@ export interface ClodexMcpServiceDeps {
   assessGuardian?: GuardianPolicyChecker;
   claimApprovalAuthority?: (
     input: ClaimTrustedMcpApprovalInput,
-  ) => TrustedMcpFinalAuthority | null;
-  stageApproval?: (input: StageTrustedMcpApprovalInput) => void;
+  ) => Promise<TrustedMcpFinalAuthority | null>;
+  stageApproval?: (input: StageTrustedMcpApprovalInput) => Promise<void>;
 }
 
 export class ClodexMcpService {
@@ -437,11 +437,11 @@ export class ClodexMcpService {
       strict: false,
       needsApproval: async (args, { toolCallId }) => {
         const approvalRequired = requiresApproval(mcpTool);
-        const stageApproval = (): true => {
+        const requireApproval = async (explanation: string): Promise<true> => {
           if (!this.stageApproval) {
             throw new Error('MCP approval broker is unavailable');
           }
-          this.stageApproval({
+          await this.stageApproval({
             agentInstanceId,
             toolCallId,
             aiToolName,
@@ -449,6 +449,11 @@ export class ClodexMcpService {
             descriptor: reviewedDescriptor,
             approvalContextDigest: reviewedDispatch.digest,
           });
+          this.recordPendingApproval?.(
+            agentInstanceId,
+            toolCallId,
+            explanation,
+          );
           return true;
         };
         if (this.assessGuardian) {
@@ -463,12 +468,9 @@ export class ClodexMcpService {
               }),
             );
           } catch {
-            this.recordPendingApproval?.(
-              agentInstanceId,
-              toolCallId,
+            return await requireApproval(
               'Guardian assessment failed. Approving manually to stay safe.',
             );
-            return stageApproval();
           }
           if (assessment) {
             if (assessment.decision === 'deny') {
@@ -481,25 +483,14 @@ export class ClodexMcpService {
               assessment.irreversible ||
               assessment.decision === 'escalate'
             ) {
-              this.recordPendingApproval?.(
-                agentInstanceId,
-                toolCallId,
-                assessment.explanation,
-              );
-              return stageApproval();
+              return await requireApproval(assessment.explanation);
             }
             return false;
           }
         }
 
         if (!approvalRequired) return false;
-
-        this.recordPendingApproval?.(
-          agentInstanceId,
-          toolCallId,
-          buildApprovalExplanation(mcpTool),
-        );
-        return stageApproval();
+        return await requireApproval(buildApprovalExplanation(mcpTool));
       },
       execute: async (args, executionOptions) => {
         const toolCallId = (
@@ -507,14 +498,14 @@ export class ClodexMcpService {
         )?.toolCallId;
         const finalAuthority =
           toolCallId && this.claimApprovalAuthority
-            ? (this.claimApprovalAuthority({
+            ? ((await this.claimApprovalAuthority({
                 agentInstanceId,
                 toolCallId,
                 aiToolName,
                 arguments: args,
                 descriptor: reviewedDescriptor,
                 approvalContextDigest: reviewedDispatch.digest,
-              }) ?? undefined)
+              })) ?? undefined)
             : undefined;
         try {
           const token = await this.requireModelAccessToken();

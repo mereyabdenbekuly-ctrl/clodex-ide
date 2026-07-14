@@ -15,7 +15,7 @@
 | 1. CI and protocol truth                     | COMPLETE    | Pages is in mandatory typecheck; shared v2 protocol scaffolding is tested but is not the production generated-app bridge                                                     |
 | 2. Session and navigation boundary           | COMPLETE    | Document-bound transport is wired fail-closed in main, has ordered teardown, and passed 111/111 focused tests plus all required typechecks                                   |
 | 3. Resolver and canonical authority approval | COMPLETE    | Local-agent resolver, trusted reviewer, canonical current-profile review, exact-byte revision lifecycle, and isolated-app egress controls passed 252/252 tests               |
-| 4. Atomic authorization-to-effect safety     | IMPLEMENTED_UNVERIFIED | Universal ask-agent/async-MCP WAL, universal scheduled/manual Automation WAL, central MCP dispatch fencing, shell brokering, sandbox/OpenManus fail-closed changes, cloud lease checks, and mount narrowing are source-complete but intentionally unexecuted; external atomicity and protected heads remain blocked |
+| 4. Atomic authorization-to-effect safety     | IMPLEMENTED_UNVERIFIED | Universal ask-agent/async-MCP WAL, universal scheduled/manual Automation WAL, central MCP dispatch fencing with durable approval replay tombstones, shell brokering, sandbox/OpenManus fail-closed changes, cloud lease checks, and mount narrowing are source-complete but intentionally unexecuted; external atomicity and protected heads remain blocked |
 | 5. Safe Coding vertical slice and promotion  | IMPLEMENTED_UNVERIFIED | Tested reference baseline remains historical; atomic control plane, signed registry, Linux adapters, and fail-closed production bootstrap now have browser composition with `provider: null` and ordered admission teardown, but the tranche is unexecuted and gates remain default-off |
 
 ## Session 1 — CI and protocol truth
@@ -241,7 +241,8 @@ Implemented and verified:
   reconciled on startup before authority can be published;
 - prepared-only grant audit semantics (`grant.save-prepared` and
   `grant.revoke-prepared`), production audit recorder/reader wiring, sticky
-  integrity failure, and file plus directory fsync for audit/persisted writes;
+  integrity failure, and file plus supported-platform directory fsync for
+  audit/persisted writes;
 - final MCP dispatch validation inside `McpHostSupervisor`, after
   `ensureReady()` and immediately before the synchronous IPC request;
 - MCP host protocol v6 connection identity, serialized per-server lifecycle,
@@ -283,11 +284,27 @@ Session 4 source is now `IMPLEMENTED_UNVERIFIED`. The closure tranche adds:
   system-resume, and startup-reconciliation occurrences. It commits the exact
   definition and attempt, writes `PREPARED` before `DISPATCHING`, and recovers
   `PREPARED → FAILED_PRE_EFFECT` and `DISPATCHING → UNCERTAIN` without replay;
-- a central MCP trusted **tool-call** dispatch boundary intended to cover
-  registry MCP and Clodex-cloud MCP. It binds the exact descriptor, trusted classification,
-  authority binding, runtime generation, and Guardian revision; any
-  approval-required dispatch must claim a single exact affirmative approval
-  record and consume it at the final synchronous fence. Annotation or
+- a central MCP trusted **tool-call** dispatch boundary covering registry MCP
+  and the host-allowlisted read-only Clodex-cloud path. Effectful/
+  approval-required cloud tools remain intentionally unregistered, so their
+  durable-approval path is wiring only unless Guardian escalates the allowlisted
+  read-only tool. The boundary binds the exact descriptor, trusted
+  classification, authority binding, runtime generation, and Guardian
+  revision. The approval broker durably stages bounded identifiers and exact
+  descriptor/context/effect digests before `needsApproval` returns true or the
+  host pending-approval record is published, then claims authority only from
+  one exact affirmative canonical AgentStore part.
+  The transition `STAGED → CLAIMED` uses encrypted atomic persistence, file
+  fsync, and containing-directory fsync where supported (not on the current
+  Windows path); it is read-back reconciled after an ambiguous save and
+  completed before the one-shot authority object is returned. Expiry, or
+  invalid evidence observed during claim, closes the record as `EXPIRED` or
+  `INVALIDATED`. The claimed record also binds a digest of the affirmative
+  evidence and is rechecked against current AgentStore history after the
+  durable save. A rejected save never returns authority even when read-back
+  shows the intended tombstone; that state remains durability-pending and a
+  later mutation or teardown must complete an idempotent save barrier before
+  reporting success. Annotation or
   `requiresApproval` metadata may escalate risk but cannot grant authority;
   resource/prompt access must remain settings-only while corresponding agent
   tools are disabled;
@@ -313,8 +330,21 @@ No item in that list was tested, typechecked, linted, built, or smoke-tested in
 the current tranche. The green GitHub CI head `1ad58e67` predates these changes.
 Synchronous read-MCP external semantics, atomicity with the external provider/
 MCP/agent store, independently protected anti-rollback heads, target-OS
-confinement evidence, and packaged Electron smoke remain outside the claim. No
-feature-gate default or write/package/plugin promotion changed. Production
+confinement evidence, and packaged Electron smoke remain outside the claim.
+For MCP approval specifically, `CLAIMED` is a conservative durable replay
+tombstone written before authority return; it does not attest that the
+in-memory final authority was consumed, that IPC/network dispatch occurred, or
+that the external effect committed. Affirmative evidence remains canonical
+AgentStore history rather than a separate persisted `APPROVED` state, and the
+approval-store revision has no independent monotonic anchor, so restoration of
+an older otherwise valid encrypted file is not claimed to be detected. Store
+deletion/reset is likewise accepted as a fresh store because there is no
+protected existence anchor. Expiry uses the wall clock, so rollback can extend
+`STAGED`; ordinary restart does not reconstruct AgentStore pending-approval UI;
+and Windows lacks containing-directory fsync. There is no cross-process writer
+serialization and no cross-store transaction joining AgentStore approval
+response, the broker tombstone, final authority, and the external MCP effect.
+No feature-gate default or write/package/plugin promotion changed. Production
 authority remains absent unless a separately reviewed, verified composition is
 installed.
 
