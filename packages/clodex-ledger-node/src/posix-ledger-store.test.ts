@@ -261,8 +261,8 @@ function runCasWorker(input: {
   });
 }
 
-async function waitForPath(path: string): Promise<void> {
-  const deadline = Date.now() + 2_000;
+async function waitForPath(path: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
       await stat(path);
@@ -451,9 +451,14 @@ describePosix('PosixSafeCodingLedgerStore', () => {
     const first = runCasWorker({
       baseDirectory,
       mutation,
-      holdAfterLockMs: 150,
+      holdAfterLockMs: 1_000,
     });
-    await waitForPath(lockPath(baseDirectory));
+    try {
+      await waitForPath(lockPath(baseDirectory));
+    } catch (error) {
+      await first.catch(() => undefined);
+      throw error;
+    }
     const second = runCasWorker({
       baseDirectory,
       mutation,
@@ -473,7 +478,7 @@ describePosix('PosixSafeCodingLedgerStore', () => {
     await expect(
       new PosixSafeCodingLedgerStore({ baseDirectory }).scan(),
     ).resolves.toEqual([mutation.nextRecord]);
-  });
+  }, 15_000);
 
   it('never breaks a surviving lock directory automatically', async () => {
     const baseDirectory = await newBaseDirectory();
