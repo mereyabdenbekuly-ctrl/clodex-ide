@@ -16,8 +16,8 @@ export interface IsolatedAgentRuntimeObservationBuildReadiness {
   eventNames: typeof isolatedAgentRuntimeObservationEventNames;
 }
 
-const squirrelCompatiblePrereleaseVersion =
-  /^\d+\.\d+\.\d+-(?:alpha|beta)\d{3}$/;
+const supportedObservationPrereleaseVersion =
+  /^(?:\d+\.\d+\.\d+-(?:alpha|beta)\d{3}|\d+\.\d+\.\d+-preview\.[1-9]\d*)$/;
 
 export function assertIsolatedAgentRuntimeObservationBuildReady(
   input: IsolatedAgentRuntimeObservationBuildInput,
@@ -28,9 +28,9 @@ export function assertIsolatedAgentRuntimeObservationBuildReady(
     );
   }
 
-  if (!squirrelCompatiblePrereleaseVersion.test(input.appVersion)) {
+  if (!supportedObservationPrereleaseVersion.test(input.appVersion)) {
     throw new Error(
-      'observation build version must use the Squirrel-compatible alphaNNN or betaNNN prerelease format',
+      'observation build version must use alphaNNN, betaNNN, or the explicit preview.N technical-preview format',
     );
   }
 

@@ -56,6 +56,17 @@ not block readiness. Use `--artifacts=all` (or `artifact_set=all`) for the
 cross-platform release workflow, which builds both macOS and Windows artifacts
 and therefore requires both secret groups.
 
+Preview, alpha, and beta observation builds additionally require this
+**GitHub Secret** before the release tag is created:
+
+```text
+POSTHOG_API_KEY
+```
+
+The readiness CLI defaults to `--channel=release`. Pass `--channel=preview`
+(or `release_channel=preview` in the manual workflow) for the technical
+preview preflight.
+
 ## Content-free blocker codes
 
 Missing Environment entries use deterministic codes:
@@ -73,6 +84,7 @@ GH_ENV_RELEASE_SECRET_AZURE_CLIENT_SECRET_MISSING
 GH_ENV_RELEASE_SECRET_AZURE_ACCOUNT_NAME_MISSING
 GH_ENV_RELEASE_SECRET_AZURE_ACCOUNT_ENDPOINT_URI_MISSING
 GH_ENV_RELEASE_SECRET_AZURE_CERTIFICATE_PROFILE_NAME_MISSING
+GH_ENV_RELEASE_SECRET_POSTHOG_API_KEY_MISSING
 GH_ENV_RELEASE_VAR_UPDATE_SERVER_ORIGIN_MISSING
 GH_ENV_RELEASE_VAR_UPDATE_SERVER_ORIGIN_INVALID
 ```
@@ -100,6 +112,7 @@ blockers:
 ```bash
 pnpm release:signing:readiness -- \
   --artifacts=macos \
+  --channel=preview \
   --allow-blocked \
   --report=/tmp/clodex-signing-readiness.json
 ```
@@ -119,6 +132,7 @@ gh workflow run release-signing-readiness.yml \
   --ref <workflow-ref> \
   -f ref=<candidate-ref> \
   -f artifact_set=macos \
+  -f release_channel=preview \
   -f check_macos_keychain=true
 ```
 

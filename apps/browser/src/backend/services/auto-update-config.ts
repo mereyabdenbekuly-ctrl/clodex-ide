@@ -16,21 +16,30 @@ export function resolveUpdateArchitecture(
   return architecture === 'arm64' ? 'arm64' : 'x64';
 }
 
-export function inferPrereleaseUpdateChannel(version: string): UpdateChannel {
-  return version.includes('-alpha') ? 'alpha' : 'beta';
+export function inferPrereleaseUpdateChannel(
+  version: string,
+): UpdateChannel | null {
+  if (/^\d+\.\d+\.\d+-alpha(?:\.?\d+)$/u.test(version)) return 'alpha';
+  if (/^\d+\.\d+\.\d+-beta(?:\.?\d+)$/u.test(version)) return 'beta';
+  return null;
+}
+
+export function isTechnicalPreviewVersion(version: string): boolean {
+  return /^\d+\.\d+\.\d+-preview\.[1-9]\d*$/u.test(version);
 }
 
 export function resolveUpdateChannel(options: {
   releaseChannel: AppReleaseChannel;
   version: string;
   preference?: UpdateChannel;
-}): 'release' | 'nightly' | UpdateChannel {
+}): 'release' | 'nightly' | UpdateChannel | null {
   switch (options.releaseChannel) {
     case 'release':
       return 'release';
     case 'nightly':
       return 'nightly';
     case 'prerelease':
+      if (isTechnicalPreviewVersion(options.version)) return null;
       return (
         options.preference ?? inferPrereleaseUpdateChannel(options.version)
       );
@@ -48,6 +57,16 @@ export function buildUpdateFeedURL(options: {
   architecture: string;
   preference?: UpdateChannel;
 }): string | null {
+  // Technical previews are distributed as manually installed GitHub
+  // prereleases. They must never silently inherit the beta feed: preview.1
+  // has no compatible updater artifacts to serve as a rollback target.
+  if (
+    options.releaseChannel === 'prerelease' &&
+    isTechnicalPreviewVersion(options.version)
+  ) {
+    return null;
+  }
+
   const rawOrigin = options.origin?.trim();
   if (!rawOrigin) return null;
 
@@ -69,6 +88,7 @@ export function buildUpdateFeedURL(options: {
 
   const base = origin.toString().replace(/\/+$/, '');
   const channel = resolveUpdateChannel(options);
+  if (!channel) return null;
   const platform = resolveUpdatePlatform(options.platform);
   const architecture = resolveUpdateArchitecture(options.architecture);
   const appName = options.appName ?? 'clodex';

@@ -19,8 +19,8 @@ export const agenticAppRuntimeObservationGateIds = [
   'generated-app-package-capabilities',
 ] as const satisfies readonly FeatureGateId[];
 
-const squirrelCompatiblePrereleaseVersion =
-  /^\d+\.\d+\.\d+-(?:alpha|beta)\d{3}$/;
+const supportedObservationPrereleaseVersion =
+  /^(?:\d+\.\d+\.\d+-(?:alpha|beta)\d{3}|\d+\.\d+\.\d+-preview\.[1-9]\d*)$/;
 
 export function assertAgenticAppRuntimeObservationBuildReady(input: {
   releaseChannel: AppReleaseChannel;
@@ -37,9 +37,9 @@ export function assertAgenticAppRuntimeObservationBuildReady(input: {
       `Agentic App Runtime observation build must use releaseChannel="prerelease"; received ${JSON.stringify(input.releaseChannel)}`,
     );
   }
-  if (!squirrelCompatiblePrereleaseVersion.test(input.appVersion)) {
+  if (!supportedObservationPrereleaseVersion.test(input.appVersion)) {
     throw new Error(
-      'Agentic App Runtime observation build version must use alphaNNN or betaNNN format',
+      'Agentic App Runtime observation build version must use alphaNNN, betaNNN, or the explicit preview.N technical-preview format',
     );
   }
   if (!agenticAppRuntimeDogfoodChannels.includes(input.releaseChannel)) {

@@ -9,6 +9,7 @@ import {
   inspectDeveloperIdSignature,
   inspectUpdateServerOrigin,
   MACOS_RELEASE_SECRETS,
+  OBSERVATION_RELEASE_SECRETS,
   parseCodesignAuthorities,
   REQUIRED_RELEASE_SECRETS,
   REQUIRED_RELEASE_VARIABLES,
@@ -64,6 +65,37 @@ test('does not require Azure credentials for macOS-only readiness', () => {
     crossPlatformReport.blockers.some(
       (item) => item.code === 'GH_ENV_RELEASE_SECRET_AZURE_TENANT_ID_MISSING',
     ),
+  );
+});
+
+test('requires PostHog before preview, alpha, or beta tag creation', () => {
+  const environment = completeEnvironment();
+  for (const channel of ['preview', 'alpha', 'beta']) {
+    const blocked = evaluateReleaseEnvironment(environment, {
+      artifacts: 'all',
+      channel,
+    });
+    assert.equal(blocked.status, 'blocked');
+    assert.deepEqual(
+      blocked.blockers.map((item) => item.code),
+      OBSERVATION_RELEASE_SECRETS.map(
+        (name) => `GH_ENV_RELEASE_SECRET_${name}_MISSING`,
+      ),
+    );
+
+    const ready = evaluateReleaseEnvironment(
+      { ...environment, POSTHOG_API_KEY: 'configured-project-token' },
+      { artifacts: 'all', channel },
+    );
+    assert.equal(ready.status, 'ready');
+  }
+
+  assert.equal(
+    evaluateReleaseEnvironment(environment, {
+      artifacts: 'all',
+      channel: 'release',
+    }).status,
+    'ready',
   );
 });
 
@@ -221,6 +253,7 @@ test('release workflows bind the fail-fast contract to the Release environment',
   );
   assert.match(readinessStep, /signing-readiness\.mjs/);
   assert.match(readinessStep, /--artifacts=all/);
+  assert.match(readinessStep, /--channel=\$\{\{ inputs\.channel \}\}/);
   for (const name of REQUIRED_RELEASE_SECRETS) {
     assert.ok(readinessStep.includes(`${name}: \${{ secrets.${name} }}`));
   }
@@ -228,6 +261,9 @@ test('release workflows bind the fail-fast contract to the Release environment',
     readinessStep.includes(
       `UPDATE_SERVER_ORIGIN: \${{ vars.UPDATE_SERVER_ORIGIN }}`,
     ),
+  );
+  assert.ok(
+    readinessStep.includes(`POSTHOG_API_KEY: \${{ secrets.POSTHOG_API_KEY }}`),
   );
 
   const readinessWorkflowSource = readFileSync(

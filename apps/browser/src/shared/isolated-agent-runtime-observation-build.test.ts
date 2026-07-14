@@ -21,6 +21,19 @@ describe('isolated agent runtime observation build readiness', () => {
     });
   });
 
+  it('accepts the explicit technical-preview version with telemetry configured', () => {
+    expect(
+      assertIsolatedAgentRuntimeObservationBuildReady({
+        releaseChannel: 'prerelease',
+        appVersion: '1.16.0-preview.2',
+        posthogApiKey: 'configured-project-token',
+      }),
+    ).toMatchObject({
+      releaseChannel: 'prerelease',
+      appVersion: '1.16.0-preview.2',
+    });
+  });
+
   it('rejects nightly and stable builds for prerelease evidence collection', () => {
     expect(() =>
       assertIsolatedAgentRuntimeObservationBuildReady({
@@ -42,6 +55,9 @@ describe('isolated agent runtime observation build readiness', () => {
     for (const appVersion of [
       '1.16.1-alpha.1',
       '1.16.1-alpha1',
+      '1.16.1-preview.0',
+      '1.16.1-preview.2.extra',
+      '1.16.1-rc.1',
       '1.16.1-nightly20260710c001',
       '1.16.1',
     ]) {
@@ -51,7 +67,7 @@ describe('isolated agent runtime observation build readiness', () => {
           appVersion,
           posthogApiKey: 'configured-project-token',
         }),
-      ).toThrow('alphaNNN or betaNNN');
+      ).toThrow('alphaNNN, betaNNN, or the explicit preview.N');
     }
   });
 

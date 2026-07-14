@@ -34,6 +34,16 @@ export const REQUIRED_RELEASE_VARIABLES = Object.freeze([
   'UPDATE_SERVER_ORIGIN',
 ]);
 
+export const OBSERVATION_RELEASE_SECRETS = Object.freeze(['POSTHOG_API_KEY']);
+
+const supportedReleaseChannels = new Set([
+  'preview',
+  'alpha',
+  'beta',
+  'nightly',
+  'release',
+]);
+
 const blockerCode = (kind, name, suffix) =>
   `GH_ENV_RELEASE_${kind}_${name}_${suffix}`;
 
@@ -145,15 +155,27 @@ function secretsForArtifactSet(artifactSet) {
   throw new Error(`Unsupported artifact set: ${artifactSet}`);
 }
 
+function secretsForRelease(artifactSet, channel) {
+  if (!supportedReleaseChannels.has(channel)) {
+    throw new Error(`Unsupported release channel: ${channel}`);
+  }
+  const secrets = [...secretsForArtifactSet(artifactSet)];
+  if (['preview', 'alpha', 'beta'].includes(channel)) {
+    secrets.push(...OBSERVATION_RELEASE_SECRETS);
+  }
+  return secrets;
+}
+
 export function evaluateReleaseEnvironment(
   environment = process.env,
   options = {},
 ) {
   const artifactSet = options.artifacts ?? 'macos';
+  const channel = options.channel ?? 'release';
   const requirements = [];
   const blockers = [];
 
-  for (const name of secretsForArtifactSet(artifactSet)) {
+  for (const name of secretsForRelease(artifactSet, channel)) {
     const present = Boolean(environment[name]?.trim());
     const code = blockerCode('SECRET', name, 'MISSING');
     requirements.push(requirement('secret', name, present, code));
@@ -184,9 +206,10 @@ export function evaluateReleaseEnvironment(
 
   return {
     blockers,
-    contract: 'distributable-signing-update-server-v1',
+    contract: 'distributable-signing-update-server-v2',
     environment: RELEASE_ENVIRONMENT,
     artifactSet,
+    channel,
     requirements,
     schemaVersion: 1,
     status: blockers.length === 0 ? 'ready' : 'blocked',
@@ -197,6 +220,7 @@ function parseArguments(values) {
   const options = {
     allowBlocked: false,
     artifacts: 'macos',
+    channel: 'release',
     checkKeychain: false,
     githubAnnotations: false,
     report: undefined,
@@ -209,6 +233,11 @@ function parseArguments(values) {
     else if (value.startsWith('--artifacts=')) {
       options.artifacts = value.slice('--artifacts='.length);
       secretsForArtifactSet(options.artifacts);
+    } else if (value.startsWith('--channel=')) {
+      options.channel = value.slice('--channel='.length);
+      if (!supportedReleaseChannels.has(options.channel)) {
+        throw new Error(`Unsupported release channel: ${options.channel}`);
+      }
     } else if (value === '--check-keychain') options.checkKeychain = true;
     else if (value === '--github-annotations') options.githubAnnotations = true;
     else if (value.startsWith('--report=')) {
@@ -225,6 +254,7 @@ Usage:
 Options:
   --allow-blocked       Exit successfully while still reporting blockers
   --artifacts=<set>     macos (default), windows, or all
+  --channel=<channel>   preview, alpha, beta, nightly, or release (default)
   --check-keychain      Verify APPLE_SIGNING_IDENTITY in the macOS keychain
   --github-annotations  Emit content-free GitHub Actions annotations
   --report=<path>       Write a content-free JSON readiness report
@@ -285,6 +315,7 @@ function renderSummary(report) {
     '',
     `- Environment: \`${report.environment}\``,
     `- Artifact set: \`${report.artifactSet}\``,
+    `- Release channel: \`${report.channel}\``,
     `- Status: **${report.status.toUpperCase()}**`,
     `- Blockers: ${report.blockers.length}`,
     '',
@@ -309,6 +340,7 @@ async function main() {
   const options = parseArguments(process.argv.slice(2));
   const report = evaluateReleaseEnvironment(process.env, {
     artifacts: options.artifacts,
+    channel: options.channel,
   });
   if (options.checkKeychain) appendKeychainCheck(report, process.env);
 

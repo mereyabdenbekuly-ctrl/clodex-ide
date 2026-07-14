@@ -92,6 +92,9 @@ jobs:
       - name: Validate Clodex kernel boundaries
         run: pnpm check:boundaries
 
+      - name: Validate release plumbing contracts
+        run: pnpm release:signing:readiness:test
+
       - name: Run Biome Check
         run: pnpm check
 

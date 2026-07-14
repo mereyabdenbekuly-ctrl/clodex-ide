@@ -95,6 +95,29 @@ jobs:
           console.log('The reusable release workflow will pin the resolved candidate SHA.');
           NODE
 
+      - name: Refuse a completed preview release retry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          if ! release_state=$(node scripts/release/github-release-state.mjs --tag="$RELEASE_TAG"); then
+            echo "::error::Unable to determine whether GitHub Release $RELEASE_TAG exists"
+            exit 1
+          fi
+          case "$release_state" in
+            exists)
+              echo "::error::GitHub Release $RELEASE_TAG already exists; completed previews are immutable"
+              exit 1
+              ;;
+            absent)
+              echo "No completed GitHub Release exists for $RELEASE_TAG; an exact-SHA tag retry is allowed."
+              ;;
+            *)
+              echo "::error::Unexpected GitHub Release state: $release_state"
+              exit 1
+              ;;
+          esac
+
   release:
     name: Build and publish technical preview
     needs: preflight

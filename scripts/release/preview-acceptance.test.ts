@@ -118,6 +118,64 @@ describe('preview release acceptance', () => {
     expect(report.canary.stopReasons).toEqual([]);
   });
 
+  it('rejects a future canary end instead of simulating elapsed time', () => {
+    const input = acceptedInput();
+    input.canary = {
+      ...passingCanary(),
+      endedAt: '2026-07-16T01:00:00.000Z',
+      startedAt: '2026-07-15T00:00:00.000Z',
+    };
+
+    expect(() =>
+      evaluatePreviewAcceptance(
+        input,
+        passedAutomatedChecks(),
+        new Date('2026-07-15T00:01:00.000Z'),
+      ),
+    ).toThrow('acceptance-canary-window-invalid');
+  });
+
+  it('rejects a canary end that precedes its start', () => {
+    const input = acceptedInput();
+    input.canary = {
+      ...passingCanary(),
+      endedAt: '2026-07-14T23:59:59.000Z',
+      startedAt: '2026-07-15T00:00:00.000Z',
+    };
+
+    expect(() =>
+      evaluatePreviewAcceptance(
+        input,
+        passedAutomatedChecks(),
+        new Date('2026-07-16T00:00:00.000Z'),
+      ),
+    ).toThrow('acceptance-canary-window-invalid');
+  });
+
+  it('holds below five installations and stops when canary scope exceeds five', () => {
+    const belowScope = acceptedInput();
+    belowScope.canary = { ...passingCanary(), uniqueInstallations: 4 };
+    expect(
+      evaluatePreviewAcceptance(
+        belowScope,
+        passedAutomatedChecks(),
+        new Date('2026-07-14T00:00:00.000Z'),
+      ).status,
+    ).toBe('canary-running');
+
+    const exceededScope = acceptedInput();
+    exceededScope.canary = { ...passingCanary(), uniqueInstallations: 6 };
+    const report = evaluatePreviewAcceptance(
+      exceededScope,
+      passedAutomatedChecks(),
+      new Date('2026-07-14T00:00:00.000Z'),
+    );
+    expect(report.status).toBe('rollback-required');
+    expect(report.canary.stopReasons).toContain(
+      'canary-installation-scope-exceeded',
+    );
+  });
+
   it('requires rollback on an unexpected egress allow', () => {
     const input = acceptedInput();
     input.canary = { ...passingCanary(), egressUnexpectedAllows: 1 };
