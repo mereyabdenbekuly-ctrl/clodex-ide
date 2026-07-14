@@ -83,8 +83,10 @@ Use only the variables required by the feature under development.
 - promotion signing keys;
 - update-server authority.
 
-Never place release private keys in a repository file. Use protected CI secrets
-or a local temporary file with owner-only permissions and delete it after use.
+Never place release private keys in a repository file or anywhere inside a
+public worktree, even on an ignored path. Use a protected CI/OS secret store or
+an owner-only temporary file outside every public worktree and delete it after
+use.
 
 ## 4. Build order
 
@@ -164,11 +166,14 @@ pnpm --dir apps/browser visual:test
 
 ## 8. Adding a feature
 
-1. Define shared schemas and feature gates.
-2. Implement backend ownership and validation.
-3. Expose typed Karton procedures/state if UI access is required.
-4. Add UI with loading, empty, error, and disabled states.
-5. Add content-free audit or telemetry.
-6. Add focused tests and typechecks.
-7. Add a promotion contract if the feature can affect production side effects.
-8. Update this handbook and the appropriate specialized document.
+1. Classify every artifact under the open/closed boundary before editing.
+2. For protocol work, approve input-manifest entries and stable requirement IDs
+   before treating a schema as publishable or extractable.
+3. Define shared schemas and feature gates.
+4. Implement backend ownership and validation.
+5. Expose typed Karton procedures/state if UI access is required.
+6. Add UI with loading, empty, error, and disabled states.
+7. Add content-free audit or telemetry.
+8. Add focused tests and typechecks.
+9. Add a promotion contract if the feature can affect production side effects.
+10. Update this handbook and the appropriate specialized document.

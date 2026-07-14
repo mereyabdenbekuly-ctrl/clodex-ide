@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.clodex.dev/agent-gateway/v0/version-negotiation.schema.json",
+  "title": "CLODEx Agent Gateway Version Negotiation v0",
+  "description": "Signed bootstrap messages for selecting one protocol version and an explicit capability set.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Offer"
+    },
+    {
+      "$ref": "#/$defs/Selection"
+    }
+  ],
+  "$defs": {
+    "Capability": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "Offer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "negotiationVersion",
+        "negotiationId",
+        "clientId",
+        "supportedVersions",
+        "requiredCapabilities",
+        "optionalCapabilities",
+        "nonce",
+        "issuedAt",
+        "expiresAt",
+        "signature"
+      ],
+      "properties": {
+        "kind": {
+          "const": "clodex.agent-gateway.version-offer"
+        },
+        "negotiationVersion": {
+          "$ref": "common.schema.json#/$defs/DraftProtocolVersion"
+        },
+        "negotiationId": {
+          "$ref": "common.schema.json#/$defs/OpaqueIdentifier"
+        },
+        "clientId": {
+          "$ref": "common.schema.json#/$defs/OpaqueIdentifier"
+        },
+        "supportedVersions": {
+          "type": "array",
+          "description": "Versions in descending client preference order.",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/ProtocolVersion"
+          }
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/Capability"
+          }
+        },
+        "optionalCapabilities": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/Capability"
+          }
+        },
+        "nonce": {
+          "$ref": "common.schema.json#/$defs/Nonce"
+        },
+        "issuedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "signature": {
+          "$ref": "common.schema.json#/$defs/Signature"
+        }
+      }
+    },
+    "Selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "negotiationVersion",
+        "negotiationId",
+        "serverId",
+        "result",
+        "serverSupportedVersions",
+        "acceptedCapabilities",
+        "nonce",
+        "issuedAt",
+        "validUntil",
+        "signature"
+      ],
+      "properties": {
+        "kind": {
+          "const": "clodex.agent-gateway.version-selection"
+        },
+        "negotiationVersion": {
+          "$ref": "common.schema.json#/$defs/DraftProtocolVersion"
+        },
+        "negotiationId": {
+          "$ref": "common.schema.json#/$defs/OpaqueIdentifier"
+        },
+        "serverId": {
+          "$ref": "common.schema.json#/$defs/OpaqueIdentifier"
+        },
+        "result": {
+          "type": "string",
+          "enum": ["SELECTED", "REJECTED"]
+        },
+        "selectedVersion": {
+          "$ref": "common.schema.json#/$defs/ProtocolVersion"
+        },
+        "serverSupportedVersions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "common.schema.json#/$defs/ProtocolVersion"
+          }
+        },
+        "acceptedCapabilities": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/Capability"
+          }
+        },
+        "rejectionCode": {
+          "type": "string",
+          "enum": ["NO_COMMON_VERSION", "REQUIRED_CAPABILITY_UNAVAILABLE", "OFFER_EXPIRED"]
+        },
+        "nonce": {
+          "$ref": "common.schema.json#/$defs/Nonce"
+        },
+        "issuedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "validUntil": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "signature": {
+          "$ref": "common.schema.json#/$defs/Signature"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "const": "SELECTED"
+              }
+            }
+          },
+          "then": {
+            "required": ["selectedVersion"],
+            "not": {
+              "required": ["rejectionCode"]
+            }
+          },
+          "else": {
+            "required": ["rejectionCode"],
+            "properties": {
+              "acceptedCapabilities": {
+                "maxItems": 0
+              }
+            },
+            "not": {
+              "required": ["selectedVersion"]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

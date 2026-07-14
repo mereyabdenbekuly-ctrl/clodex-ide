@@ -115,7 +115,7 @@ Primary code:
 - isolated Agent Host utility process;
 - SSH execution against saved profiles;
 - Docker execution with resource and network restrictions;
-- custom runner SDK;
+- legacy custom runner SDK surface (audit-blocked for new integrations);
 - snapshot-bound jobs;
 - leases, receipts, artifacts, and replay protection;
 - shadow routing and paired replay;
@@ -127,6 +127,11 @@ Primary code:
 - remote-connections and docker-runner services;
 - Agent Core runner-routing;
 - `packages/runner-sdk`.
+
+`packages/runner-sdk` remains part of the current monorepo behavior but is RED
+as a new publication/private-boundary dependency because it imports
+`agent-shell`. New ecosystem work waits for a separately reviewed GREEN
+Protocol v0 SDK.
 
 ## 8. Session continuity
 

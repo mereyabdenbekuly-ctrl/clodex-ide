@@ -66,8 +66,10 @@ Typed state synchronization and RPC between browser processes.
 
 ### `packages/runner-sdk`
 
-Public contracts for custom execution providers: manifests, job admission,
-leases, artifacts, signed receipts, and capability declarations.
+Legacy/audit-blocked custom-runner surface. It currently depends on and
+re-exports `agent-shell`, so it is not a clean public protocol/SDK boundary and
+must not be used by new protocol or private Gateway work. Maintain existing
+callers only until a future GREEN Protocol v0 SDK replaces it.
 
 ### UI and support packages
 

@@ -38,6 +38,78 @@ tmp
 # Packaging still scans ignored paths and fails closed if one is present.
 /apps/browser/bundled/plugins/openmanus-runtime/
 
+# Open/closed boundary defense in depth. See AGENTS.md and
+# docs/governance/OPEN_CLOSED_BOUNDARY.md. These exact private/restricted
+# artifact locations belong outside the public repository. Do not use
+# `git add -f` to bypass these rules.
+**/CLODEx_Private_Data_Room
+**/clodex_private_data_room
+**/clodex-private-data-room
+**/CLODEx_Pitch_Deck_Deliverables
+**/clodex_pitch_deck_deliverables
+**/clodex-pitch-deck-deliverables
+**/Pitch_Deck
+**/pitch_deck
+**/pitch-deck
+**/private-data-room
+**/private_data_room
+**/pitch-deck-private
+**/pitch_deck_private
+**/investor-data-room
+**/investor_data_room
+**/customer-data
+**/customer_data
+**/customer-artifacts-private
+**/customer_artifacts_private
+**/customer-policy-packs-private
+**/customer_policy_packs_private
+**/private-benchmark-holdout
+**/private_benchmark_holdout
+**/private-security-intel
+**/private_security_intel
+**/internal-security-reports
+**/internal_security_reports
+**/active-incident-material
+**/active_incident_material
+**/production-secrets
+**/production_secrets
+**/production-key-material
+**/production_key_material
+**/hsm-kms-material
+**/hsm_kms_material
+**/production-deployments-unsanitized
+**/production_deployments_unsanitized
+**/*pitch*deck*private*
+**/*investor*material*private*
+**/*pricing*private*
+**/*customer*trace*private*
+**/*production*state*private*
+**/clodex-agent-gateway
+**/clodex-agent-gateway-private
+**/clodex-enterprise-private
+**/clodex-cloud-private
+**/clodex-security-intel-private
+**/clodex-customer-connectors-private
+/PITCH_DECK_TECHNICAL_FOUNDATION.md
+*PITCH_DECK_PRIVATE*
+*.pptx
+*.keynote
+
+# Private keys, signing containers, and credential databases.
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.kdbx
+*.mobileprovision
+*.ppk
+**/.ssh
+**/id_rsa
+**/id_dsa
+**/id_ecdsa
+**/id_ed25519
+
 
 # Debug
 npm-debug.log*

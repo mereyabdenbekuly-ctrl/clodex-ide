@@ -1,0 +1,200 @@
+openapi: 3.2.0
+info:
+  title: CLODEx Agent Gateway Protocol v0
+  version: 0.1.0-draft
+  summary: Schema-only boundary contract for one authorized agent effect
+  description: |-
+    This document describes the transport-facing shape of the Agent Gateway
+    Protocol v0 draft. It is not a Gateway implementation, SDK, deployment
+    topology, or promise that a managed endpoint exists.
+
+    A successful effect-request exchange returns a signed terminal receipt.
+    Policy denials and effect failures are represented by that receipt, not by
+    an unsigned transport error. Error envelopes are reserved for faults that
+    cannot serve as canonical authorization or effect evidence.
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+tags:
+  - name: Protocol
+    description: Bootstrap negotiation before sending effect requests.
+  - name: Effects
+    description: Submit one identity-bound, digest-bound effect request.
+paths:
+  /protocol/versions:
+    post:
+      tags: [Protocol]
+      operationId: negotiateAgentGatewayVersion
+      summary: Select an explicit protocol version and capability set
+      description: |-
+        The client sends a signed, expiring offer. The server returns a signed
+        selection or rejection bound to the same negotiation identifier and
+        nonce. Silent version fallback is forbidden.
+      requestBody:
+        required: true
+        content:
+          application/vnd.clodex.agent-gateway.version-offer.v0+json:
+            schema:
+              $ref: "./version-negotiation.schema.json#/$defs/Offer"
+      responses:
+        "200":
+          description: A signed version selection.
+          content:
+            application/vnd.clodex.agent-gateway.version-selection.v0+json:
+              schema:
+                allOf:
+                  - $ref: "./version-negotiation.schema.json#/$defs/Selection"
+                  - type: object
+                    required: [result]
+                    properties:
+                      result:
+                        const: SELECTED
+        "400":
+          $ref: "#/components/responses/ProtocolError"
+        "401":
+          $ref: "#/components/responses/AuthenticationError"
+        "406":
+          description: A signed rejection because no safe version/capability set exists.
+          content:
+            application/vnd.clodex.agent-gateway.version-selection.v0+json:
+              schema:
+                allOf:
+                  - $ref: "./version-negotiation.schema.json#/$defs/Selection"
+                  - type: object
+                    required: [result]
+                    properties:
+                      result:
+                        const: REJECTED
+  /v0/effect-requests:
+    post:
+      tags: [Effects]
+      operationId: submitAgentEffectRequest
+      summary: Authorize and execute exactly one digest-bound effect
+      description: |-
+        This logical v0 operation returns only after the request reaches a
+        terminal outcome. A deployment may use streaming or another negotiated
+        transport internally, but its canonical evidence is the signed receipt.
+
+        A repeated idempotency key with the same canonical request returns the
+        original receipt. Reuse with any changed binding or payload is an
+        idempotency conflict and must not execute.
+      requestBody:
+        required: true
+        content:
+          application/vnd.clodex.agent-gateway.effect-request.v0+json:
+            schema:
+              $ref: ./request-envelope.schema.json
+      responses:
+        "200":
+          description: |-
+            A gateway-signed terminal receipt. SUCCEEDED, FAILED, DENIED,
+            CANCELLED, EXPIRED, SUPERSEDED, and INVALIDATED are all terminal
+            protocol outcomes; their effectState determines what can be claimed.
+          content:
+            application/vnd.clodex.agent-gateway.effect-receipt.v0+json:
+              schema:
+                $ref: ./signed-effect-receipt.schema.json
+        "400":
+          $ref: "#/components/responses/ProtocolError"
+        "401":
+          $ref: "#/components/responses/AuthenticationError"
+        "409":
+          $ref: "#/components/responses/ReplayError"
+        "422":
+          $ref: "#/components/responses/BindingError"
+        "503":
+          $ref: "#/components/responses/AvailabilityError"
+components:
+  schemas:
+    RequestEnvelope:
+      $ref: ./request-envelope.schema.json
+    ApprovalEvidenceReference:
+      $ref: ./approval-evidence-reference.schema.json
+    SignedEffectReceipt:
+      $ref: ./signed-effect-receipt.schema.json
+    ErrorEnvelope:
+      $ref: ./error-envelope.schema.json
+    VersionNegotiation:
+      $ref: ./version-negotiation.schema.json
+  responses:
+    ProtocolError:
+      description: The message is malformed or uses unsupported protocol semantics.
+      content:
+        application/vnd.clodex.agent-gateway.error.v0+json:
+          schema:
+            allOf:
+              - $ref: ./error-envelope.schema.json
+              - type: object
+                required: [error]
+                properties:
+                  error:
+                    type: object
+                    required: [code]
+                    properties:
+                      code:
+                        enum: [MALFORMED_ENVELOPE, UNSUPPORTED_VERSION]
+    AuthenticationError:
+      description: Transport identity or envelope signature authentication failed.
+      content:
+        application/vnd.clodex.agent-gateway.error.v0+json:
+          schema:
+            allOf:
+              - $ref: ./error-envelope.schema.json
+              - type: object
+                required: [error]
+                properties:
+                  error:
+                    type: object
+                    required: [code]
+                    properties:
+                      code:
+                        enum: [AUTHENTICATION_FAILED, SIGNATURE_INVALID]
+    ReplayError:
+      description: Replay detected, approval evidence reused, or idempotency key reused with different bytes/bindings.
+      content:
+        application/vnd.clodex.agent-gateway.error.v0+json:
+          schema:
+            allOf:
+              - $ref: ./error-envelope.schema.json
+              - type: object
+                required: [error]
+                properties:
+                  error:
+                    type: object
+                    required: [code]
+                    properties:
+                      code:
+                        enum: [REPLAY_DETECTED, IDEMPOTENCY_CONFLICT, EVIDENCE_REPLAY]
+    BindingError:
+      description: A digest, identity, policy, or evidence binding is invalid. Signature authentication failures use 401.
+      content:
+        application/vnd.clodex.agent-gateway.error.v0+json:
+          schema:
+            allOf:
+              - $ref: ./error-envelope.schema.json
+              - type: object
+                required: [error]
+                properties:
+                  error:
+                    type: object
+                    required: [code]
+                    properties:
+                      code:
+                        enum: [BINDING_MISMATCH, EVIDENCE_INVALID]
+    AvailabilityError:
+      description: |-
+        The Gateway was unavailable before any effect could start. If an
+        effect may have started, the response must instead be a signed FAILED
+        receipt whose effectState is UNKNOWN.
+      content:
+        application/vnd.clodex.agent-gateway.error.v0+json:
+          schema:
+            allOf:
+              - $ref: ./error-envelope.schema.json
+              - type: object
+                required: [error]
+                properties:
+                  error:
+                    type: object
+                    required: [code]
+                    properties:
+                      code:
+                        enum: [POLICY_UNAVAILABLE, GATEWAY_UNAVAILABLE, INTERNAL_ERROR]

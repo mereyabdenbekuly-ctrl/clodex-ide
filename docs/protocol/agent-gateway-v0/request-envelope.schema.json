@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.clodex.dev/agent-gateway/v0/request-envelope.schema.json",
+  "title": "CLODEx Agent Gateway Request Envelope v0",
+  "description": "A signed, replay-protected request for exactly one digest-bound tool effect.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "protocolVersion",
+    "requestId",
+    "negotiation",
+    "binding",
+    "intent",
+    "toolDescriptor",
+    "context",
+    "requestedEffect",
+    "replayProtection",
+    "signature"
+  ],
+  "properties": {
+    "kind": {
+      "const": "clodex.agent-gateway.effect-request"
+    },
+    "protocolVersion": {
+      "$ref": "common.schema.json#/$defs/DraftProtocolVersion"
+    },
+    "requestId": {
+      "$ref": "common.schema.json#/$defs/OpaqueIdentifier"
+    },
+    "negotiation": {
+      "$ref": "common.schema.json#/$defs/NegotiationBinding"
+    },
+    "binding": {
+      "$ref": "common.schema.json#/$defs/EffectBinding"
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["intentType", "artifact"],
+      "properties": {
+        "intentType": {
+          "$ref": "common.schema.json#/$defs/ShortToken"
+        },
+        "artifact": {
+          "$ref": "common.schema.json#/$defs/Artifact"
+        }
+      }
+    },
+    "toolDescriptor": {
+      "$ref": "common.schema.json#/$defs/Artifact"
+    },
+    "context": {
+      "$ref": "common.schema.json#/$defs/Artifact"
+    },
+    "requestedEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["effectType", "artifact"],
+      "properties": {
+        "effectType": {
+          "$ref": "common.schema.json#/$defs/ShortToken"
+        },
+        "artifact": {
+          "$ref": "common.schema.json#/$defs/Artifact"
+        }
+      }
+    },
+    "approvalEvidence": {
+      "$ref": "approval-evidence-reference.schema.json"
+    },
+    "replayProtection": {
+      "$ref": "common.schema.json#/$defs/ReplayProtection"
+    },
+    "signature": {
+      "$ref": "common.schema.json#/$defs/Signature"
+    }
+  }
+}

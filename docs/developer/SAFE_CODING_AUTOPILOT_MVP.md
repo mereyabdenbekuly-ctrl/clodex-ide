@@ -1,9 +1,14 @@
 # Safe Coding Autopilot MVP
 
-- **Status:** `IN_PROGRESS`
+- **Status:** `HISTORICAL_REFERENCE / SUPERSEDED_FOR_CURRENT_WIRING`
 - **Date:** July 14, 2026
-- **Execution profile:** independent reference components; no production wiring
-- **Promotion:** disabled
+- **Execution profile at this snapshot:** independent reference components; no
+  production wiring claimed by this slice
+- **Promotion at this snapshot:** disabled
+
+This document preserves the original reference-slice claims and gaps. It is not
+the source of truth for current `main` wiring or release readiness; use the P0
+handoff/status documents and the gate-based product release plan for that.
 
 ## Scope
 
@@ -198,11 +203,15 @@ The following remain blocking:
     denial, credential denial, and quarantine;
 11. delegation subset proofs and ancestor-shared durable budgets are not yet
     implemented;
-12. no browser migration adapter, production main wiring, packaged Electron
-    smoke, host-workspace apply, feature-gate promotion, or default change is
-    claimed.
+12. at this historical snapshot, no browser migration adapter, production main
+    wiring, packaged Electron smoke, host-workspace apply, feature-gate
+    promotion, or default change was claimed; this is not a statement about the
+    newer P0 composition on `main`.
 
-## Next implementation order
+## Historical next implementation order
+
+This sequence is retained for audit context and is superseded where newer P0
+plans/status documents record completed or re-ordered work.
 
 1. atomically link durable kernel ticket state, effect ledger, and evidence
    outbox without reopening post-authorization retry authority;

@@ -1,0 +1,163 @@
+{
+  "manifestVersion": "0.1.0-draft",
+  "protocolVersion": "0.1.0-draft",
+  "status": "DEFINITIONS_ONLY",
+  "fixturesPresent": false,
+  "vectors": [
+    {
+      "id": "agw-v0-valid-request-001",
+      "title": "Valid exactly bound request",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "STRUCTURALLY_ADMISSIBLE",
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-replay-original-001",
+      "title": "Replay of identical canonical request",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "RETURN_ORIGINAL_RECEIPT",
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-idempotency-conflict-001",
+      "title": "Idempotency key reused with changed request",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "REJECT_BEFORE_EXECUTION",
+      "expectedCode": "IDEMPOTENCY_CONFLICT",
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-digest-drift-001",
+      "title": "Artifact digest drifts from signed effect binding",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "REJECT_BEFORE_EXECUTION",
+      "expectedCode": "BINDING_MISMATCH",
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-expired-evidence-001",
+      "title": "Approved evidence is expired before authorization evaluation",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "ACCEPT_TERMINAL_RECEIPT",
+      "expectedOutcome": {
+        "status": "EXPIRED",
+        "effectState": "NOT_APPLIED"
+      },
+      "expectedAuthorization": {
+        "decision": "NOT_EVALUATED",
+        "decisionSource": "LIFECYCLE"
+      },
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-receipt-substitution-001",
+      "title": "Receipt substituted across request bindings",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "REJECT_AS_EVIDENCE",
+      "expectedCode": "BINDING_MISMATCH",
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-failed-unknown-001",
+      "title": "Failed receipt with unknown effect state",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "ACCEPT_TERMINAL_FAIL_CLOSED_RECEIPT",
+      "expectedOutcome": {
+        "status": "FAILED",
+        "effectState": "UNKNOWN"
+      },
+      "mustNotExecute": true,
+      "automaticNewKeyRetryAllowed": false
+    },
+    {
+      "id": "agw-v0-denied-evidence-no-override-001",
+      "title": "Denied approval evidence cannot be overridden",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "ACCEPT_TERMINAL_RECEIPT",
+      "expectedOutcome": {
+        "status": "DENIED",
+        "effectState": "NOT_APPLIED"
+      },
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-denied-expiry-precedence-001",
+      "title": "Denied evidence takes precedence when request/evidence expiry is also true",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "ACCEPT_TERMINAL_RECEIPT",
+      "expectedOutcome": {
+        "status": "DENIED",
+        "effectState": "NOT_APPLIED"
+      },
+      "expectedAuthorization": {
+        "decision": "DENIED",
+        "decisionSource": "APPROVAL_EVIDENCE"
+      },
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-evidence-replay-001",
+      "title": "Approval evidence reused in a different canonical request",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "REJECT_BEFORE_EXECUTION",
+      "expectedCode": "EVIDENCE_REPLAY",
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-version-downgrade-001",
+      "title": "Selected version was not offered by the client",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "REJECT_NEGOTIATION",
+      "expectedCode": "NO_COMMON_VERSION",
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-selection-substitution-001",
+      "title": "Effect request is bound to a substituted negotiation selection",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "REJECT_BEFORE_EXECUTION",
+      "expectedCode": "BINDING_MISMATCH",
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-required-capability-missing-001",
+      "title": "Required capability is absent from selection",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "REJECT_NEGOTIATION",
+      "expectedCode": "REQUIRED_CAPABILITY_UNAVAILABLE",
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-offer-expired-window-001",
+      "title": "Expired offer receives a bounded signed rejection",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "REJECT_NEGOTIATION",
+      "expectedCode": "OFFER_EXPIRED",
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-inline-locator-conflict-001",
+      "title": "Inline artifact also contains a locator",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "REJECT_SCHEMA",
+      "expectedCode": "MALFORMED_ENVELOPE",
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-invalid-base64url-001",
+      "title": "Base64url has an invalid or non-canonical final quantum",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "REJECT_SCHEMA",
+      "expectedCode": "MALFORMED_ENVELOPE",
+      "mustNotExecute": true
+    },
+    {
+      "id": "agw-v0-timestamp-claim-order-001",
+      "title": "Receipt timestamps or claimedAt matrix are impossible",
+      "fixtureStatus": "PLANNED",
+      "expectedResult": "REJECT_AS_EVIDENCE",
+      "expectedCode": "BINDING_MISMATCH",
+      "mustNotExecute": true
+    }
+  ]
+}

@@ -65,7 +65,7 @@ Physical tests must report sanitized metadata only.
 Local package:
 
 ```bash
-RELEASE_CHANNEL=nightly +CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD=true +pnpm --dir apps/browser package
+RELEASE_CHANNEL=nightly CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD=true pnpm --dir apps/browser package
 ```
 
 Official package:
@@ -97,8 +97,16 @@ Verify:
 - Electron fuse configuration;
 - platform signature;
 - installer checksums;
+- root and package license/notice bundle is present and user-accessible;
+- final-artifact SBOM/inventory contains no unknown or missing license entry;
+- Stagewise/Karton attribution is preserved;
+- Nucleo redistribution rights are recorded for every bundled asset, or the
+  unapproved asset is absent;
 - ZIP or DMG extraction;
 - clean-profile application startup.
+
+These checks close desktop attribution gate `OCB-006`; a preview, prerelease,
+or stable build must not be distributed while that gate is RED.
 
 macOS:
 
@@ -166,10 +174,12 @@ Local development keys and local packets do not authorize a release.
 1. Select an authoritative repository and protected branch.
 2. Freeze an exact source commit.
 3. Run full source and package validation.
-4. Collect real evidence.
-5. Obtain required human approvals.
-6. Sign and notarize artifacts.
-7. Run official packaged smoke and manual acceptance.
-8. Enable a narrow prerelease canary.
-9. Monitor health and execute a rollback drill.
-10. Expand gradually and run the final strict gate.
+4. Inspect the final artifact for licenses, notices, Nucleo rights, and SBOM
+   completeness; close `OCB-006`.
+5. Collect real evidence.
+6. Obtain required human approvals.
+7. Sign and notarize artifacts.
+8. Run official packaged smoke and manual acceptance.
+9. Enable a narrow prerelease canary.
+10. Monitor health and execute a rollback drill.
+11. Expand gradually and run the final strict gate.

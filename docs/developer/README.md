@@ -22,6 +22,12 @@ testing, packaging, and operational work.
 | [Hybrid migration](../migration/README.md)                                       | Strangler stages, parity matrix, provenance ledger, and cutover rules                                                  |
 | [Architecture boundaries](../architecture/BOUNDARIES.md)                         | Independent, migration, and legacy zones plus dependency and shadow-mode rules                                         |
 | [Provenance policy](../governance/PROVENANCE_POLICY.md)                          | Independent implementation, AI assistance, third-party material, and DCO expectations                                  |
+| [Open/closed product boundary](../governance/OPEN_CLOSED_BOUNDARY.md)             | Public core/specification, private managed-product, restricted-data, and Gateway-start rules                            |
+| [Open/closed component matrix](../provenance/OPEN_CLOSED_COMPONENT_MATRIX.md)     | GREEN/YELLOW/RED provenance and dependency status for extraction and private-boundary candidates                        |
+| [Protocol v0 extraction audit](../provenance/PROTOCOL_EXTRACTION_AUDIT.md)        | Clean-room input rules and release gates for a future public protocol/SDK                                                |
+| [Protocol v0 input manifest](../provenance/PROTOCOL_V0_INPUT_MANIFEST.json)       | Provisional machine-readable source/AI-context inventory; all gates remain open                                          |
+| [Agent Gateway Protocol v0](../protocol/agent-gateway-v0/README.md)               | Schema-only request, approval evidence, signed receipt, error, and version-negotiation draft                            |
+| [Product and release plan](../roadmap/PRODUCT_RELEASE_PLAN.md)                    | Gate-based preview, stable IDE, protocol/Gateway alpha, beta, limited availability, and GA targets                      |
 | [Security invariants](../security/INVARIANTS.md)                                 | Authority, isolation, credentials, egress, replay, and side-effect constraints                                         |
 | [Intent Contract specification](../INTENT_CONTRACT_SPEC.md)                      | Draft signed authority envelope, one-shot execution tickets, effect attestations, and Artifact Bridge security profile |
 | [Zero-Trust Execution five-session plan](ZERO_TRUST_EXECUTION_5_SESSION_PLAN.md) | Staged implementation, session boundaries, exit criteria, and promotion rules                                          |

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.clodex.dev/agent-gateway/v0/approval-evidence-reference.schema.json",
+  "title": "CLODEx Approval Evidence Reference v0",
+  "description": "A signed reference to an approval or denial decision bound to exactly one requested effect.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "protocolVersion",
+    "evidenceId",
+    "evidenceIssuerId",
+    "decision",
+    "decisionSource",
+    "decisionMaker",
+    "scope",
+    "binding",
+    "evidenceDigest",
+    "evidenceLocator",
+    "evidenceNonce",
+    "decidedAt",
+    "expiresAt",
+    "signature"
+  ],
+  "properties": {
+    "kind": {
+      "const": "clodex.agent-gateway.approval-evidence-reference"
+    },
+    "protocolVersion": {
+      "$ref": "common.schema.json#/$defs/DraftProtocolVersion"
+    },
+    "evidenceId": {
+      "$ref": "common.schema.json#/$defs/OpaqueIdentifier"
+    },
+    "evidenceIssuerId": {
+      "$ref": "common.schema.json#/$defs/OpaqueIdentifier"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["APPROVED", "DENIED"]
+    },
+    "decisionSource": {
+      "type": "string",
+      "enum": ["HUMAN", "POLICY", "GUARDIAN"]
+    },
+    "decisionMaker": {
+      "$ref": "common.schema.json#/$defs/ActorIdentity"
+    },
+    "scope": {
+      "const": "SINGLE_EFFECT"
+    },
+    "binding": {
+      "$ref": "common.schema.json#/$defs/EffectBinding"
+    },
+    "evidenceDigest": {
+      "$ref": "common.schema.json#/$defs/Digest"
+    },
+    "evidenceLocator": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 2048
+    },
+    "evidenceNonce": {
+      "$ref": "common.schema.json#/$defs/Nonce"
+    },
+    "decidedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "signature": {
+      "$ref": "common.schema.json#/$defs/Signature"
+    }
+  }
+}
