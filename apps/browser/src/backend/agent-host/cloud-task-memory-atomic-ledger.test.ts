@@ -31,20 +31,16 @@ const logger: Logger = {
 const services: EvidenceMemoryService[] = [];
 const ledgers: SqliteCloudTaskMemoryAtomicLedger[] = [];
 const directories: string[] = [];
+const WINDOWS_CLEANUP_DEADLINE_MS = 10_000;
 
 afterEach(async () => {
-  await Promise.all(ledgers.splice(0).map((ledger) => ledger.close()));
-  await Promise.all(services.splice(0).map((service) => service.teardown()));
-  await Promise.all(
-    directories.splice(0).map((directory) =>
-      fs.rm(directory, {
-        recursive: true,
-        force: true,
-        maxRetries: process.platform === 'win32' ? 10 : 0,
-        retryDelay: 100,
-      }),
-    ),
-  );
+  // libSQL's native Windows teardown can retain a file handle when multiple
+  // clients close concurrently. Serialize every close before removing its
+  // isolated data directory so the hook cannot deadlock or race directory
+  // deletion.
+  for (const ledger of ledgers.splice(0)) await ledger.close();
+  for (const service of services.splice(0)) await service.teardown();
+  await Promise.all(directories.splice(0).map(removeTestDirectory));
 });
 
 describe('SqliteCloudTaskMemoryAtomicLedger', () => {
@@ -262,8 +258,10 @@ async function createRequest(
 }
 
 async function createMemory(): Promise<EvidenceMemoryService> {
-  const directory = path.join(os.tmpdir(), 'atomic-ledger-memory-tests');
-  await fs.mkdir(directory, { recursive: true });
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'atomic-ledger-memory-tests-'),
+  );
+  directories.push(directory);
   const service = await EvidenceMemoryService.createWithUrl(
     `file:${path.join(directory, `${randomUUID()}.sqlite`)}`,
     { logger, now: () => 1_700_000_000_000 },
@@ -278,6 +276,44 @@ async function createLedgerUrl(): Promise<{ url: string }> {
   );
   directories.push(directory);
   return { url: `file:${path.join(directory, 'ledger.sqlite')}` };
+}
+
+async function removeTestDirectory(directory: string): Promise<void> {
+  const removal = fs
+    .rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === 'win32' ? 10 : 0,
+      retryDelay: 100,
+    })
+    .then(
+      () => ({ status: 'removed' as const }),
+      (error: unknown) => ({ status: 'failed' as const, error }),
+    );
+  if (process.platform !== 'win32') {
+    const result = await removal;
+    if (result.status === 'failed') throw result.error;
+    return;
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const result = await Promise.race([
+    removal,
+    new Promise<{ status: 'deferred' }>((resolve) => {
+      timeout = setTimeout(
+        () => resolve({ status: 'deferred' }),
+        WINDOWS_CLEANUP_DEADLINE_MS,
+      );
+    }),
+  ]);
+  if (timeout) clearTimeout(timeout);
+  if (result.status === 'failed') throw result.error;
+  if (result.status === 'deferred') {
+    // The isolated temp directory cannot affect later tests. Keep the native
+    // request observed through `removal`, but do not let an unbounded Windows
+    // filesystem operation consume Vitest's entire hook timeout.
+    console.warn('[atomic-ledger-test] deferred Windows temp cleanup');
+  }
 }
 
 async function createLedger(
