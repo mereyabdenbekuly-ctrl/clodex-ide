@@ -4,9 +4,9 @@
 
 **Strict gate:** GREEN
 
-**Inventory:** 946 unique dependency versions; 0 blockers
+**Inventory:** 834 unique dependency versions; 0 blockers
 
-**Reviewed exact-version overrides:** 44 applied from a 53-record release-matrix registry
+**Reviewed exact-version overrides:** 42 applied on macOS arm64 and 43 on Linux x64 from a 54-record release-matrix registry
 
 **Nucleo:** `NOT_REQUIRED`; no `nucleo-*` package is present
 
@@ -24,7 +24,7 @@ pnpm --dir apps/browser release:attribution:check -- --channel=release
 Expected result:
 
 ```text
-[release-attribution] 946 dependencies; 0 blocker(s); Nucleo=NOT_REQUIRED
+[release-attribution] 834 dependencies; 0 blocker(s); Nucleo=NOT_REQUIRED
 ```
 
 ## Closed baseline blockers
@@ -44,17 +44,23 @@ They were closed without a broad or name-only fallback:
    repository's existing `AGPL-3.0-only` license metadata; and
 4. exact `package@version` records are pinned in
    [`DEPENDENCY_LICENSE_OVERRIDES.json`](./DEPENDENCY_LICENSE_OVERRIDES.json):
-   the current macOS arm64 graph applies 28 pinned upstream texts, 8 pinned
+   the current macOS arm64 graph applies 28 pinned upstream texts, 6 pinned
    SPDX canonical supplements for packages whose exact manifest declares a
    license but whose tarball omits the text, 2 exact package-file metadata
    repairs, 4 combined license/notice bundles, and 2 GSAP custom-license
    snapshots.
 
-The registry contains 53 records in total. Nine additional integrity-bound
+The registry contains 54 records in total. Twelve additional integrity-bound
 records cover platform-specific native variants or exact lockfile variants not
-present in this macOS arm64 inventory. Across all 53 records the basis counts
-are 34 pinned upstream, 9 pinned canonical supplements, 2 exact package files, 6 combined
+present in this macOS arm64 inventory. Across all 54 records the basis counts
+are 35 pinned upstream, 9 pinned canonical supplements, 2 exact package files, 6 combined
 license/notice bundles, and 2 custom-license snapshots.
+
+The Linux x64 CI inventory applies the exact
+`@libsql/linux-x64-musl@0.5.29` record in addition to the applicable GNU
+variant. It therefore applies 43 records (29 upstream, 6 canonical, 2 exact
+package files, 4 combined bundles, and 2 custom-license snapshots), leaving 11
+release-matrix records non-current on that host.
 
 Every override is bound to an exact npm tarball and integrity value, a reviewed
 license identity, public source references, and a SHA-256-pinned local text.

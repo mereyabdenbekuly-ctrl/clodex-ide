@@ -654,6 +654,34 @@
       "notes": "Exact release-matrix platform package; license text is shared by the same upstream version."
     },
     {
+      "package": "@libsql/linux-x64-musl",
+      "version": "0.5.29",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@libsql/linux-x64-musl/-/linux-x64-musl-0.5.29.tgz",
+        "integrity": "sha512-gquqwA/39tH4pFl+J9n3SOMSymjX+6kZ3kWgY3b94nXFTwac9bnFNMffIomgvlFaC4ArVqMnOZD3nuJ3H3VO1w==",
+        "repository": {
+          "url": "git+https://github.com/tursodatabase/libsql-js.git",
+          "type": "git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/libsql-js-0.5.29-MIT.txt",
+        "sha256": "81680d013513cf3003b03b7074948609dfb90dfeca0b8292b3c16e0172a189f4",
+        "sourceReferences": [
+          "https://github.com/tursodatabase/libsql-js/tree/55bee86d1c284f1ddf2b9e280e870d2b6cef884a",
+          "https://github.com/tursodatabase/libsql-js/blob/55bee86d1c284f1ddf2b9e280e870d2b6cef884a/LICENSE"
+        ]
+      },
+      "notes": "Exact release-matrix platform package; license text is shared by the same upstream version."
+    },
+    {
       "package": "@libsql/win32-x64-msvc",
       "version": "0.5.29",
       "license": "MIT",

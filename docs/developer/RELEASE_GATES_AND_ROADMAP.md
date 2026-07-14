@@ -53,12 +53,13 @@ Implemented in OCB-006:
 - retained Electron and Chromium runtime notices in packaged resources;
 - made future `nucleo-*` use fail closed without exact approved evidence.
 
-The source-tree strict gate now reports 946 dependency versions and zero
-blockers on macOS arm64. That graph applies 44 reviewed exact-version records;
-the 53-record registry also covers supported release-matrix and exact lockfile
+The source-tree strict gate now reports 834 dependency versions and zero
+blockers on macOS arm64. That graph applies 42 reviewed exact-version records;
+the 54-record registry also covers supported release-matrix and exact lockfile
 variants not present in this host inventory. It supplies pinned public evidence
-only where an exact tarball
-omitted text or metadata; conflicts and hash drift fail closed. Final
+only where an exact tarball omitted text or metadata. The Linux x64 CI graph
+applies 43 records because it includes the exact `@libsql/linux-x64-musl`
+package. Conflicts and hash drift fail closed. Final
 cross-platform app/installer validation is still required. The current result
 and residual release/legal decisions are
 [`OCB_006_RELEASE_LICENSE_BLOCKERS.md`](../provenance/OCB_006_RELEASE_LICENSE_BLOCKERS.md).

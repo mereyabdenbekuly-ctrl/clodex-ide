@@ -1,13 +1,17 @@
 import { createHash } from 'node:crypto';
 import {
   createReadStream,
+  createWriteStream,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +21,7 @@ import {
   ATTRIBUTION_DIRECTORY_NAME,
   inspectPackagedAttribution,
   REQUIRED_ATTRIBUTION_PATHS,
+  resolveElectronRuntimeNoticePaths,
   writeFinalArtifactSbom,
 } from './release-attribution.mjs';
 
@@ -160,6 +165,194 @@ async function hashFile(filePath, algorithm) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function safeArchiveEntry(entryName, label) {
+  const normalized = entryName.replaceAll('\\', '/').replace(/^\.\//, '');
+  if (
+    !normalized ||
+    normalized.includes('\0') ||
+    normalized.startsWith('/') ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    normalized.split('/').some((segment) => segment === '..')
+  ) {
+    throw new Error(`Unsafe ${label} entry: ${entryName}`);
+  }
+  return normalized;
+}
+
+function extractZipSafely(zipPath, destinationDirectory) {
+  mkdirSync(destinationDirectory, { recursive: true });
+  return new Promise((resolve, reject) => {
+    yauzl.open(zipPath, { lazyEntries: true }, (openError, zipFile) => {
+      if (openError || !zipFile) {
+        reject(openError ?? new Error(`Could not open ${zipPath}`));
+        return;
+      }
+
+      let entryCount = 0;
+      let totalBytes = 0;
+      let settled = false;
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        zipFile.close();
+        reject(error);
+      };
+      zipFile.on('error', fail);
+      zipFile.on('entry', (entry) => {
+        if (entry.fileName === '.' || entry.fileName === './') {
+          zipFile.readEntry();
+          return;
+        }
+        let normalized;
+        try {
+          normalized = safeArchiveEntry(entry.fileName, 'ZIP');
+        } catch (error) {
+          fail(error);
+          return;
+        }
+        entryCount += 1;
+        totalBytes += entry.uncompressedSize;
+        if (entryCount > 100_000 || totalBytes > 8 * 1024 * 1024 * 1024) {
+          fail(new Error(`ZIP extraction limits exceeded: ${zipPath}`));
+          return;
+        }
+        if ((entry.generalPurposeBitFlag & 0x1) !== 0) {
+          fail(
+            new Error(`Encrypted ZIP entry is forbidden: ${entry.fileName}`),
+          );
+          return;
+        }
+
+        const unixMode = (entry.externalFileAttributes >>> 16) & 0xffff;
+        if ((unixMode & 0o170000) === 0o120000) {
+          fail(new Error(`Symlink ZIP entry is forbidden: ${entry.fileName}`));
+          return;
+        }
+        const destinationPath = path.resolve(destinationDirectory, normalized);
+        const destinationRoot = `${path.resolve(destinationDirectory)}${path.sep}`;
+        if (!destinationPath.startsWith(destinationRoot)) {
+          fail(
+            new Error(`ZIP entry escapes extraction root: ${entry.fileName}`),
+          );
+          return;
+        }
+        if (normalized.endsWith('/')) {
+          mkdirSync(destinationPath, { recursive: true });
+          zipFile.readEntry();
+          return;
+        }
+
+        mkdirSync(path.dirname(destinationPath), { recursive: true });
+        zipFile.openReadStream(entry, (streamError, stream) => {
+          if (streamError || !stream) {
+            fail(streamError ?? new Error(`Could not read ${entry.fileName}`));
+            return;
+          }
+          const output = createWriteStream(destinationPath, { flags: 'wx' });
+          stream.on('error', fail);
+          output.on('error', fail);
+          output.on('close', () => {
+            if (!settled) zipFile.readEntry();
+          });
+          stream.pipe(output);
+        });
+      });
+      zipFile.on('end', () => {
+        if (settled) return;
+        settled = true;
+        resolve({ entryCount, totalBytes });
+      });
+      zipFile.readEntry();
+    });
+  });
+}
+
+function findExtractedApplication(extractionRoot, label) {
+  const resourcesCandidates = findFiles(
+    extractionRoot,
+    (filePath) => path.basename(filePath) === 'app.asar',
+  )
+    .map((filePath) => path.dirname(filePath))
+    .filter((resourcesDirectory) =>
+      existsSync(
+        path.join(
+          resourcesDirectory,
+          ATTRIBUTION_DIRECTORY_NAME,
+          'manifest.json',
+        ),
+      ),
+    );
+  if (resourcesCandidates.length !== 1) {
+    throw new Error(
+      `Expected one ${label} application payload, found ${resourcesCandidates.length}: ${resourcesCandidates.join(', ')}`,
+    );
+  }
+  const resourcesDirectory = resourcesCandidates[0];
+  return {
+    applicationDirectory: path.dirname(resourcesDirectory),
+    resourcesDirectory,
+  };
+}
+
+async function inspectExtractedApplication({
+  appName,
+  appVersion,
+  arch,
+  channel,
+  electronRuntime,
+  expectedPayload,
+  extractionRoot,
+  label,
+  outputPath,
+  platform,
+}) {
+  const payload = findExtractedApplication(extractionRoot, label);
+  const attribution = inspectPackagedAttribution({
+    attributionDirectory: path.join(
+      payload.resourcesDirectory,
+      ATTRIBUTION_DIRECTORY_NAME,
+    ),
+    requireReady: channel !== 'dev',
+  });
+  const appAsarPath = path.join(payload.resourcesDirectory, 'app.asar');
+  const appAsarSha256 = await hashFile(appAsarPath, 'sha256');
+  if (expectedPayload && appAsarSha256 !== expectedPayload.appAsarSha256) {
+    throw new Error(
+      `${label} app.asar differs from the validated packaged application`,
+    );
+  }
+  if (
+    expectedPayload &&
+    attribution.manifestSha256 !== expectedPayload.attributionManifestSha256
+  ) {
+    throw new Error(
+      `${label} attribution manifest differs from the validated packaged application`,
+    );
+  }
+  const sbom = await writeFinalArtifactSbom({
+    ...payload,
+    appName,
+    appVersion,
+    arch,
+    attribution,
+    electronRuntime,
+    outputPath,
+    platform,
+  });
+  return {
+    ...payload,
+    appAsarSha256,
+    attribution: {
+      dependencyCount: attribution.dependencyCount,
+      manifestSha256: attribution.manifestSha256,
+      noticePaths: attribution.noticePaths,
+      status: attribution.manifest.status,
+    },
+    extractionRoot,
+    sbom,
+  };
 }
 
 function inspectNupkg(nupkgPath, expectedBaseName, expectedVersion) {
@@ -315,8 +508,12 @@ async function validateWindows({
   allowUnsigned,
   arch,
   baseName,
+  channel,
+  electronRuntime,
+  expectedPayload,
   makeDirectory,
-  outputRoot,
+  temporaryRoot,
+  validationDirectory,
   version,
 }) {
   const squirrelDirectory = path.join(makeDirectory, 'squirrel.windows');
@@ -329,16 +526,9 @@ async function validateWindows({
     `${baseName}-${version}-${arch}-full.nupkg`,
   );
   const releasesPath = path.join(squirrelDirectory, `RELEASES-win32-${arch}`);
-  const packagedExecutable = path.join(
-    outputRoot,
-    `${baseName}-win32-${arch}`,
-    `${baseName}.exe`,
-  );
-
   const setupStats = assertFile(setupPath, 'Squirrel setup executable');
   const nupkgStats = assertFile(nupkgPath, 'Squirrel full nupkg');
   assertFile(releasesPath, 'Squirrel RELEASES manifest');
-  assertFile(packagedExecutable, 'Packaged Windows executable');
 
   const releaseLines = readFileSync(releasesPath, 'utf8')
     .trim()
@@ -368,11 +558,44 @@ async function validateWindows({
 
   const internalVersion = toSquirrelInternalVersion(version);
   const nupkg = await inspectNupkg(nupkgPath, baseName, internalVersion);
+  const extractionRoot = path.join(temporaryRoot, 'windows-nupkg');
+  const extraction = await extractZipSafely(nupkgPath, extractionRoot);
+  const payload = await inspectExtractedApplication({
+    appName: baseName,
+    appVersion: version,
+    arch,
+    channel,
+    electronRuntime,
+    expectedPayload,
+    extractionRoot,
+    label: 'Windows NUPKG',
+    outputPath: path.join(
+      validationDirectory,
+      `windows-${arch}-${version}-nupkg.cdx.json`,
+    ),
+    platform: 'windows',
+  });
+  const packagedExecutable = path.join(
+    payload.applicationDirectory,
+    `${baseName}.exe`,
+  );
+  assertFile(packagedExecutable, 'NUPKG Windows executable');
   return {
-    artifacts: [setupPath, nupkgPath, releasesPath],
+    artifacts: [setupPath, nupkgPath, releasesPath, payload.sbom.path],
     checks: {
-      nupkg,
-      squirrelInternalVersion: internalVersion,
+      nupkg: {
+        ...nupkg,
+        extraction,
+        payload: {
+          attribution: payload.attribution,
+          appAsarSha256: payload.appAsarSha256,
+          resourcesPath: path.relative(
+            extractionRoot,
+            payload.resourcesDirectory,
+          ),
+          sbom: payload.sbom,
+        },
+      },
       packagedExecutableAuthenticode: verifyAuthenticode(
         packagedExecutable,
         allowUnsigned,
@@ -382,6 +605,7 @@ async function validateWindows({
         sha1: actualSha1,
         size: nupkgStats.size,
       },
+      squirrelInternalVersion: internalVersion,
       setupAuthenticode: verifyAuthenticode(setupPath, allowUnsigned),
       setupBytes: setupStats.size,
     },
@@ -392,11 +616,40 @@ function normalizeLinuxVersion(value) {
   return value.trim().replaceAll('~', '-').replaceAll('.', '-');
 }
 
+function extractRpm(rpmPath, destinationDirectory) {
+  mkdirSync(destinationDirectory, { recursive: true });
+  const env = { ...process.env, RPM_PATH: rpmPath };
+  const listing = run(
+    '/bin/bash',
+    ['-o', 'pipefail', '-c', 'rpm2cpio "$RPM_PATH" | cpio --list --quiet'],
+    { env },
+  ).stdout;
+  for (const entry of listing.split(/\r?\n/).filter(Boolean)) {
+    if (entry === '.' || entry === './') continue;
+    safeArchiveEntry(entry, 'RPM');
+  }
+  run(
+    '/bin/bash',
+    [
+      '-o',
+      'pipefail',
+      '-c',
+      'rpm2cpio "$RPM_PATH" | cpio --extract --make-directories --no-absolute-filenames --quiet',
+    ],
+    { cwd: destinationDirectory, env },
+  );
+  return { entryCount: listing.split(/\r?\n/).filter(Boolean).length };
+}
+
 async function validateLinux({
   arch,
   baseName,
+  channel,
+  electronRuntime,
+  expectedPayload,
   makeDirectory,
-  outputRoot,
+  temporaryRoot,
+  validationDirectory,
   version,
 }) {
   const debPath = requireSingleFile(
@@ -409,13 +662,6 @@ async function validateLinux({
     (filePath) => filePath.endsWith('.rpm'),
     'RPM package',
   );
-  const packagedExecutable = path.join(
-    outputRoot,
-    `${baseName}-linux-${arch}`,
-    baseName,
-  );
-  assertFile(packagedExecutable, 'Packaged Linux executable');
-
   const readDebField = (field) =>
     run('/usr/bin/dpkg-deb', ['--field', debPath, field]).stdout.trim();
   const debPackage = readDebField('Package');
@@ -498,17 +744,72 @@ async function validateLinux({
     throw new Error('RPM package is missing LICENSES.chromium.html');
   }
 
+  const debExtractionRoot = path.join(temporaryRoot, 'linux-deb');
+  const rpmExtractionRoot = path.join(temporaryRoot, 'linux-rpm');
+  mkdirSync(debExtractionRoot, { recursive: true });
+  run('/usr/bin/dpkg-deb', ['--extract', debPath, debExtractionRoot]);
+  const rpmExtraction = extractRpm(rpmPath, rpmExtractionRoot);
+  const debPayload = await inspectExtractedApplication({
+    appName: baseName,
+    appVersion: version,
+    arch,
+    channel,
+    electronRuntime,
+    expectedPayload,
+    extractionRoot: debExtractionRoot,
+    label: 'Debian',
+    outputPath: path.join(
+      validationDirectory,
+      `linux-${arch}-${version}-deb.cdx.json`,
+    ),
+    platform: 'linux',
+  });
+  const rpmPayload = await inspectExtractedApplication({
+    appName: baseName,
+    appVersion: version,
+    arch,
+    channel,
+    electronRuntime,
+    expectedPayload,
+    extractionRoot: rpmExtractionRoot,
+    label: 'RPM',
+    outputPath: path.join(
+      validationDirectory,
+      `linux-${arch}-${version}-rpm.cdx.json`,
+    ),
+    platform: 'linux',
+  });
+
   return {
-    artifacts: [debPath, rpmPath],
+    artifacts: [debPath, rpmPath, debPayload.sbom.path, rpmPayload.sbom.path],
     checks: {
       debian: {
         architecture: debArchitecture,
         package: debPackage,
+        payload: {
+          attribution: debPayload.attribution,
+          appAsarSha256: debPayload.appAsarSha256,
+          resourcesPath: path.relative(
+            debExtractionRoot,
+            debPayload.resourcesDirectory,
+          ),
+          sbom: debPayload.sbom,
+        },
         version: debVersion,
       },
       rpm: {
         architecture: rpmArchitecture,
+        extraction: rpmExtraction,
         package: rpmPackage,
+        payload: {
+          attribution: rpmPayload.attribution,
+          appAsarSha256: rpmPayload.appAsarSha256,
+          resourcesPath: path.relative(
+            rpmExtractionRoot,
+            rpmPayload.resourcesDirectory,
+          ),
+          sbom: rpmPayload.sbom,
+        },
         version: rpmVersion,
       },
     },
@@ -550,95 +851,115 @@ async function main() {
     `${options.platform}-${options.arch}-${version}.sha256`,
   );
 
-  const validation =
-    options.platform === 'windows'
-      ? await validateWindows({
-          ...options,
-          baseName,
-          makeDirectory,
-          outputRoot,
-          version,
-        })
-      : await validateLinux({
-          ...options,
-          baseName,
-          makeDirectory,
-          outputRoot,
-          version,
-        });
-
+  const electronPackage = resolveElectronRuntimeNoticePaths({
+    appDirectory: browserDirectory,
+  });
+  const electronRuntime = {
+    license: electronPackage.license,
+    name: 'electron',
+    version: electronPackage.version,
+  };
   const packagedPlatform = options.platform === 'windows' ? 'win32' : 'linux';
   const packagedRoot = path.join(
     outputRoot,
     `${baseName}-${packagedPlatform}-${options.arch}`,
   );
-  const resourcesDirectory = path.join(packagedRoot, 'resources');
-  const attribution = inspectPackagedAttribution({
+  const packagedResourcesDirectory = path.join(packagedRoot, 'resources');
+  const packagedAttribution = inspectPackagedAttribution({
     attributionDirectory: path.join(
-      resourcesDirectory,
+      packagedResourcesDirectory,
       ATTRIBUTION_DIRECTORY_NAME,
     ),
     requireReady: options.channel !== 'dev',
   });
-  const sbomPath = path.join(
-    validationDirectory,
-    `${options.platform}-${options.arch}-${version}.cdx.json`,
-  );
-  const sbom = await writeFinalArtifactSbom({
-    applicationDirectory: packagedRoot,
-    appName: baseName,
-    appVersion: version,
-    arch: options.arch,
-    attribution,
-    outputPath: sbomPath,
-    platform: options.platform,
-    resourcesDirectory,
-  });
-  validation.checks.attribution = {
-    dependencyCount: attribution.dependencyCount,
-    manifestSha256: attribution.manifestSha256,
-    noticePaths: attribution.noticePaths,
-    status: attribution.manifest.status,
+  const expectedPayload = {
+    appAsarSha256: await hashFile(
+      path.join(packagedResourcesDirectory, 'app.asar'),
+      'sha256',
+    ),
+    attributionManifestSha256: packagedAttribution.manifestSha256,
   };
-  validation.checks.sbom = sbom;
-  validation.artifacts.push(sbomPath);
+  const temporaryRoot = mkdtempSync(
+    path.join(os.tmpdir(), 'clodex-final-artifact-validation.'),
+  );
+  try {
+    const validation =
+      options.platform === 'windows'
+        ? await validateWindows({
+            ...options,
+            baseName,
+            electronRuntime,
+            expectedPayload,
+            makeDirectory,
+            temporaryRoot,
+            validationDirectory,
+            version,
+          })
+        : await validateLinux({
+            ...options,
+            baseName,
+            electronRuntime,
+            expectedPayload,
+            makeDirectory,
+            temporaryRoot,
+            validationDirectory,
+            version,
+          });
 
-  const artifacts = [];
-  for (const artifactPath of validation.artifacts) {
-    const stats = assertFile(artifactPath, 'Release artifact');
-    artifacts.push({
-      bytes: stats.size,
-      path: artifactPath,
-      sha256: await hashFile(artifactPath, 'sha256'),
-    });
+    const artifacts = [];
+    for (const artifactPath of validation.artifacts) {
+      const stats = assertFile(artifactPath, 'Release artifact');
+      artifacts.push({
+        bytes: stats.size,
+        path: artifactPath,
+        sha256: await hashFile(artifactPath, 'sha256'),
+      });
+    }
+    const publicationAssets = artifacts.map((artifact) => ({
+      bytes: artifact.bytes,
+      fileName: path.basename(artifact.path),
+      sha256: artifact.sha256,
+    }));
+    if (
+      new Set(publicationAssets.map((asset) => asset.fileName)).size !==
+      publicationAssets.length
+    ) {
+      throw new Error('Validated publication asset filenames are not unique');
+    }
+    const manifest = {
+      schemaVersion: 2,
+      status: 'passed',
+      generatedAt: new Date().toISOString(),
+      build: {
+        arch: options.arch,
+        channel: options.channel,
+        nodeVersion: actualNodeVersion,
+        platform: options.platform,
+        version,
+      },
+      checks: validation.checks,
+      artifacts,
+      publication: {
+        assets: publicationAssets,
+        status: 'validated',
+      },
+    };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    writeFileSync(
+      checksumPath,
+      `${artifacts
+        .map(
+          (artifact) =>
+            `${artifact.sha256}  ${path.relative(browserDirectory, artifact.path)}`,
+        )
+        .join('\n')}\n`,
+    );
+    console.log('[release-artifacts] Validation passed');
+    console.log(`Manifest: ${manifestPath}`);
+    console.log(`Checksums: ${checksumPath}`);
+  } finally {
+    rmSync(temporaryRoot, { force: true, recursive: true });
   }
-  const manifest = {
-    schemaVersion: 1,
-    status: 'passed',
-    generatedAt: new Date().toISOString(),
-    build: {
-      arch: options.arch,
-      channel: options.channel,
-      nodeVersion: actualNodeVersion,
-      platform: options.platform,
-      version,
-    },
-    checks: validation.checks,
-    artifacts,
-  };
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  writeFileSync(
-    checksumPath,
-    `${artifacts
-      .map(
-        (artifact) =>
-          `${artifact.sha256}  ${path.relative(browserDirectory, artifact.path)}`,
-      )
-      .join('\n')}\n`,
-  );
-  console.log('[release-artifacts] Validation passed');
-  console.log(`Manifest: ${manifestPath}`);
-  console.log(`Checksums: ${checksumPath}`);
 }
 
 main().catch((error) => {

@@ -417,7 +417,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y rpm xvfb
+          sudo apt-get install -y cpio rpm xvfb
 
       - run: pnpm build
 
@@ -515,13 +515,24 @@ jobs:
         run: find out -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.nupkg" -o -name "RELEASES*" -o -name "*.deb" -o -name "*.rpm" -o -name "*.zip" \) 2>/dev/null || true
         shell: bash
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Stage manifest-bound release assets
+        shell: bash
+        env:
+          RELEASE_ARCH: ${{ matrix.arch }}
+          RELEASE_PLATFORM: ${{ runner.os == 'macOS' && 'macos' || runner.os == 'Windows' && 'windows' || 'linux' }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          VALIDATION_CHANNEL: ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
+        run: >-
+          node apps/browser/scripts/release-publication.mjs stage
+          --manifest="apps/browser/out/${VALIDATION_CHANNEL}/validation/${RELEASE_PLATFORM}-${RELEASE_ARCH}-${RELEASE_VERSION}.json"
+          --output="${RUNNER_TEMP}/clodex-release-bundle"
+
+      - name: Upload manifest-bound release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact }}
-          path: |
-            apps/browser/out/*/make/
-            apps/browser/out/*/validation/
-          if-no-files-found: warn
+          path: ${{ runner.temp }}/clodex-release-bundle/
+          if-no-files-found: error
 
   release:
     needs: [tag, build]
@@ -537,22 +548,30 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Setup pinned Node.js for publication verification
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: ".node-version"
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
 
-      - name: Collect Artifacts
-        run: |
-          mkdir -p release
+      - name: Verify downloaded manifests and collect release assets
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          VALIDATION_CHANNEL: ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
+        run: >-
+          node apps/browser/scripts/release-publication.mjs collect
+          --input=artifacts
+          --output=release
+          --report=${{ runner.temp }}/release-publication-report.json
+          --version="${RELEASE_VERSION}"
+          --channel="${VALIDATION_CHANNEL}"
+          --expected=macos:arm64,macos:x64,linux:x64,windows:x64
 
-          echo "Found artifacts:"
-          find artifacts -type f
-
-          # Copy all release files to flat directory
-          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.nupkg" -o -name "RELEASES*" -o -name "*.deb" -o -name "*.rpm" -o -name "*.zip" -o -name "*.cdx.json" -o -name "macos-*.json" -o -name "macos-*.sha256" -o -name "windows-*.json" -o -name "windows-*.sha256" -o -name "linux-*.json" -o -name "linux-*.sha256" \) -exec cp {} release/ \;
-
-          echo "Release artifacts:"
-          ls -la release/
+      - name: Publish verified asset summary
+        run: cat "${{ runner.temp }}/release-publication-report.json" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Re-assert immutable tag target before publication
         shell: bash
@@ -575,6 +594,7 @@ jobs:
           body: ${{ needs.tag.outputs.notes }}
           prerelease: ${{ inputs.channel != 'release' }}
           files: release/*
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

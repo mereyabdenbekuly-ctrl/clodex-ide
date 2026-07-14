@@ -1,6 +1,6 @@
 # OCB-006 desktop attribution and SBOM gate
 
-**Status:** source-tree strict gate GREEN (946 dependencies, 0 blockers);
+**Status:** source-tree strict gate GREEN (834 dependencies, 0 blockers);
 final artifact evidence must still pass before a distributable build can be
 promoted
 
@@ -67,18 +67,24 @@ or has missing/`Unknown` metadata. It may not contradict a non-empty package
 declaration. Duplicate identities, unsafe paths, missing evidence, hash drift,
 unreviewed status, or a changed exact package-file license all fail closed.
 
-The current macOS arm64 strict inventory applies 44 reviewed records:
+The current macOS arm64 strict inventory applies 42 reviewed records:
 
 - 28 pinned upstream license texts;
-- 8 pinned SPDX canonical supplements where the exact package already declares
+- 6 pinned SPDX canonical supplements where the exact package already declares
   the matching SPDX license;
 - 2 exact package-file metadata repairs;
 - 4 combined license/notice bundles; and
 - 2 public GSAP custom-license snapshots.
 
-The registry contains 53 records in total. The additional nine exact,
+The registry contains 54 records in total. The additional twelve exact,
 integrity-bound records cover platform-specific native variants or exact
 lockfile variants not present in this macOS arm64 inventory.
+
+The Linux x64 CI inventory applies 43 reviewed records because it includes the
+exact `@libsql/linux-x64-musl@0.5.29` platform record alongside the applicable
+GNU variant. Its applied basis counts are 29 upstream, 6 canonical, 2 exact
+package files, 4 combined bundles, and 2 custom-license snapshots; 11 registry
+records are non-current on that host.
 
 The GSAP snapshot is attribution evidence, not a determination that every
 CLODEx use is permitted. Release ownership and specialist counsel must review
@@ -116,7 +122,7 @@ environment-variable bypass for a release-channel build.
 ## Commands
 
 ```bash
-# Must print 946 dependencies and 0 blockers on the current exact lockfile.
+# Must print 834 dependencies and 0 blockers on the current exact lockfile.
 pnpm --dir apps/browser release:attribution:check -- --channel=release
 
 # Development-only bundle; blockers remain recorded in the manifest.

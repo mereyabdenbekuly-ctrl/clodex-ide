@@ -13,12 +13,14 @@ import {
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 
 export const ATTRIBUTION_DIRECTORY_NAME = 'release-attribution';
 export const NUCLEO_EVIDENCE_RELATIVE_PATH =
   'docs/provenance/NUCLEO_REDISTRIBUTION_EVIDENCE.json';
 export const LICENSE_OVERRIDE_REGISTRY_RELATIVE_PATH =
   'docs/provenance/DEPENDENCY_LICENSE_OVERRIDES.json';
+export const PNPM_LOCK_RELATIVE_PATH = 'pnpm-lock.yaml';
 
 const REQUIRED_NOTICE_SOURCES = [
   { source: 'LICENSE', target: 'LICENSE' },
@@ -136,6 +138,152 @@ function isBuildOnly(packageName) {
 
 function isNucleoPackage(packageName) {
   return packageName.startsWith('nucleo-');
+}
+
+function canonicalNpmTarballUrl(packageName, version) {
+  const unscopedName = packageName.includes('/')
+    ? packageName.slice(packageName.lastIndexOf('/') + 1)
+    : packageName;
+  return `https://registry.npmjs.org/${packageName}/-/${unscopedName}-${version}.tgz`;
+}
+
+function loadPnpmLockPackageSources(repositoryDirectory) {
+  const lockPath = path.join(repositoryDirectory, PNPM_LOCK_RELATIVE_PATH);
+  if (!existsSync(lockPath) || !statSync(lockPath).isFile()) {
+    return {
+      byIdentity: new Map(),
+      error: `Exact package provenance lock is missing: ${lockPath}`,
+      lockPath,
+    };
+  }
+
+  let lock;
+  try {
+    lock = parseYaml(readFileSync(lockPath, 'utf8'));
+  } catch (error) {
+    return {
+      byIdentity: new Map(),
+      error: `Exact package provenance lock is unreadable: ${lockPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      lockPath,
+    };
+  }
+  if (!lock?.packages || typeof lock.packages !== 'object') {
+    return {
+      byIdentity: new Map(),
+      error: `Exact package provenance lock has no packages map: ${lockPath}`,
+      lockPath,
+    };
+  }
+
+  const byIdentity = new Map();
+  for (const [rawIdentity, record] of Object.entries(lock.packages)) {
+    const identity = String(rawIdentity).replace(/^\//, '');
+    if (!identity || !record || typeof record !== 'object') continue;
+    const resolution = record.resolution;
+    if (!resolution || typeof resolution !== 'object') continue;
+    byIdentity.set(identity, {
+      integrity:
+        typeof resolution.integrity === 'string'
+          ? resolution.integrity.trim()
+          : '',
+      tarball:
+        typeof resolution.tarball === 'string' ? resolution.tarball.trim() : '',
+    });
+  }
+  return { byIdentity, error: null, lockPath };
+}
+
+function validateLicenseOverridePackageSource({
+  identity,
+  lockPackageSources,
+  override,
+}) {
+  const blockers = [];
+  const source = override.packageSource;
+  if (!source || source.registry !== 'npm') {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_PACKAGE_REGISTRY_INVALID',
+      message: `${identity} override package source must name the npm registry.`,
+    });
+    return blockers;
+  }
+  if (lockPackageSources.error) {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_LOCK_UNAVAILABLE',
+      message: `${identity} override cannot be bound to the install lock: ${lockPackageSources.error}`,
+    });
+    return blockers;
+  }
+
+  const locked = lockPackageSources.byIdentity.get(identity);
+  if (!locked) {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_LOCK_ENTRY_MISSING',
+      message: `${identity} override has no exact package entry in ${PNPM_LOCK_RELATIVE_PATH}.`,
+    });
+    return blockers;
+  }
+  if (!locked.integrity) {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_LOCK_INTEGRITY_MISSING',
+      message: `${identity} lock entry has no integrity value.`,
+    });
+  } else if (source.integrity !== locked.integrity) {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_PACKAGE_INTEGRITY_MISMATCH',
+      message: `${identity} override integrity does not match ${PNPM_LOCK_RELATIVE_PATH}.`,
+    });
+  }
+
+  const expectedTarball =
+    locked.tarball ||
+    canonicalNpmTarballUrl(String(override.package), String(override.version));
+  if (source.tarball !== expectedTarball) {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_PACKAGE_TARBALL_MISMATCH',
+      message: `${identity} override tarball does not match the exact locked npm package source.`,
+    });
+  }
+  return blockers;
+}
+
+function loadExactDependencyRemovalOverrides(repositoryDirectory) {
+  const rootManifestPath = path.join(repositoryDirectory, 'package.json');
+  if (!existsSync(rootManifestPath)) return new Set();
+
+  const rootManifest = readJson(rootManifestPath, 'Repository package');
+  const overrides = rootManifest.pnpm?.overrides;
+  if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) {
+    return new Set();
+  }
+
+  return new Set(
+    Object.entries(overrides)
+      .filter(([, replacement]) => replacement === '-')
+      .map(([selector]) => selector),
+  );
+}
+
+function isDependencyExplicitlyRemoved({
+  dependencyName,
+  exactRemovalOverrides,
+  requesterManifestPath,
+}) {
+  if (exactRemovalOverrides.size === 0) return false;
+
+  const requesterManifest = readJson(
+    requesterManifestPath,
+    'Dependency requester package',
+  );
+  const requesterName = String(requesterManifest.name ?? '');
+  const requesterVersion = String(requesterManifest.version ?? '');
+  if (!requesterName || !requesterVersion) return false;
+
+  return exactRemovalOverrides.has(
+    `${requesterName}@${requesterVersion}>${dependencyName}`,
+  );
 }
 
 function normalizeLicense(packageJson) {
@@ -291,14 +439,17 @@ function loadLicenseOverrideRegistry(repositoryDirectory) {
       });
     }
     if (
+      record?.packageSource?.registry !== 'npm' ||
       typeof record?.packageSource?.tarball !== 'string' ||
       !record.packageSource.tarball.trim() ||
       typeof record?.packageSource?.integrity !== 'string' ||
-      !record.packageSource.integrity.trim()
+      !/^sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}$/.test(
+        record.packageSource.integrity.trim(),
+      )
     ) {
       recordBlockers.push({
         code: 'LICENSE_OVERRIDE_PACKAGE_SOURCE_INVALID',
-        message: `${identity} override has no exact npm tarball/integrity provenance.`,
+        message: `${identity} override has no exact npm registry, tarball, or SRI provenance.`,
       });
     }
 
@@ -362,6 +513,7 @@ function applyLicenseOverride({
   declaredLicense,
   existingLicenseText,
   identity,
+  lockPackageSources,
   override,
   packageDirectory,
 }) {
@@ -386,6 +538,13 @@ function applyLicenseOverride({
   }
 
   const blockers = [];
+  blockers.push(
+    ...validateLicenseOverridePackageSource({
+      identity,
+      lockPackageSources,
+      override,
+    }),
+  );
   if (
     declaredLicense &&
     !needsLicense &&
@@ -457,6 +616,10 @@ function applyLicenseOverride({
     evidence: {
       basis: override.basis,
       licenseTextSha256: sha256Bytes(licenseText),
+      packageSource: {
+        integrity: override.packageSource.integrity,
+        tarball: override.packageSource.tarball,
+      },
       registryIdentity: identity,
       reviewStatus: override.reviewStatus,
       sourceReferences: [...override.licenseTextSource.sourceReferences],
@@ -528,6 +691,22 @@ export function resolveElectronRuntimeNoticePaths({ appDirectory }) {
     );
   }
   const electronDirectory = path.dirname(electronManifestPath);
+  const electronManifest = readJson(
+    electronManifestPath,
+    'Electron runtime package',
+  );
+  const version = String(electronManifest.version ?? '').trim();
+  const license = normalizeLicense(electronManifest);
+  if (!version) {
+    throw new Error(
+      `Electron runtime package has no exact version: ${electronManifestPath}`,
+    );
+  }
+  if (!license || UNKNOWN_LICENSE_PATTERN.test(license)) {
+    throw new Error(
+      `Electron runtime package has no usable license declaration: ${electronManifestPath}`,
+    );
+  }
   const electronLicenseCandidates = [
     path.join(electronDirectory, 'dist', 'LICENSE'),
     path.join(electronDirectory, 'LICENSE'),
@@ -556,6 +735,8 @@ export function resolveElectronRuntimeNoticePaths({ appDirectory }) {
   return {
     chromium: chromiumLicensePath,
     electron: electronLicensePath,
+    license,
+    version,
   };
 }
 
@@ -648,6 +829,7 @@ function validateNucleoEvidence(evidence, nucleoPackageNames, now) {
 
 function makeOpenSourceEntry({
   licenseOverride,
+  lockPackageSources,
   packageDirectory,
   packageJson,
   repositoryDirectory,
@@ -664,6 +846,7 @@ function makeOpenSourceEntry({
     declaredLicense,
     existingLicenseText,
     identity: `${name}@${version}`,
+    lockPackageSources,
     override: licenseOverride,
     packageDirectory,
   });
@@ -713,6 +896,11 @@ function licenseEntryBlockers(entry) {
       evidence.reviewStatus !== LICENSE_OVERRIDE_REVIEW_STATUS ||
       evidence.registryIdentity !== `${entry.name}@${entry.version}` ||
       evidence.licenseTextSha256 !== sha256Bytes(entry.licenseText) ||
+      !/^sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}$/.test(
+        String(evidence.packageSource?.integrity ?? ''),
+      ) ||
+      typeof evidence.packageSource?.tarball !== 'string' ||
+      !evidence.packageSource.tarball ||
       !Array.isArray(evidence.sourceReferences) ||
       evidence.sourceReferences.length === 0
     ) {
@@ -742,6 +930,9 @@ export function collectReleaseDependencyInventory({
     'Nucleo redistribution evidence',
   );
   const licenseOverrides = loadLicenseOverrideRegistry(repositoryDirectory);
+  const lockPackageSources = loadPnpmLockPackageSources(repositoryDirectory);
+  const exactRemovalOverrides =
+    loadExactDependencyRemovalOverrides(repositoryDirectory);
   const rootDependencies = {
     ...(appManifest.dependencies ?? {}),
     ...(appManifest.devDependencies ?? {}),
@@ -766,6 +957,15 @@ export function collectReleaseDependencyInventory({
       request.packageName,
     );
     if (!manifestPath) {
+      if (
+        isDependencyExplicitlyRemoved({
+          dependencyName: request.packageName,
+          exactRemovalOverrides,
+          requesterManifestPath: request.requesterManifestPath,
+        })
+      ) {
+        continue;
+      }
       if (!request.optional) {
         blockers.push({
           code: 'DEPENDENCY_MANIFEST_UNRESOLVED',
@@ -807,6 +1007,7 @@ export function collectReleaseDependencyInventory({
       const identity = `${packageName}@${String(packageJson.version ?? '')}`;
       const result = makeOpenSourceEntry({
         licenseOverride: licenseOverrides.byIdentity.get(identity),
+        lockPackageSources,
         packageDirectory,
         packageJson,
         repositoryDirectory,
@@ -1141,6 +1342,10 @@ export function inspectPackagedAttribution({
       record.license !== entry.license ||
       record.licenseTextSource?.sha256 !==
         entry.licenseEvidence.licenseTextSha256 ||
+      record.packageSource?.integrity !==
+        entry.licenseEvidence.packageSource?.integrity ||
+      record.packageSource?.tarball !==
+        entry.licenseEvidence.packageSource?.tarball ||
       JSON.stringify(record.licenseTextSource?.sourceReferences ?? []) !==
         JSON.stringify(entry.licenseEvidence.sourceReferences)
     ) {
@@ -1290,6 +1495,7 @@ export async function writeFinalArtifactSbom({
   appVersion,
   arch,
   attribution,
+  electronRuntime,
   outputPath,
   platform,
   resourcesDirectory,
@@ -1324,6 +1530,19 @@ export async function writeFinalArtifactSbom({
     nativePackages.map((entry) => `${entry.name}\0${entry.version}`),
   );
   const electronNotices = inspectElectronRuntimeNotices(applicationDirectory);
+  if (
+    !electronRuntime ||
+    electronRuntime.name !== 'electron' ||
+    typeof electronRuntime.version !== 'string' ||
+    !electronRuntime.version.trim() ||
+    typeof electronRuntime.license !== 'string' ||
+    !electronRuntime.license.trim() ||
+    UNKNOWN_LICENSE_PATTERN.test(electronRuntime.license.trim())
+  ) {
+    throw new Error(
+      'Final-artifact SBOM requires exact Electron runtime name, version, and license metadata.',
+    );
+  }
 
   const components = attribution.inventory.entries.map((entry) => ({
     type: entry.kind === 'commercial_asset' ? 'library' : 'library',
@@ -1348,6 +1567,30 @@ export async function writeFinalArtifactSbom({
       },
     ],
   }));
+  components.push({
+    type: 'framework',
+    'bom-ref': `urn:clodex:runtime:${sha256Bytes(
+      `${electronRuntime.name}\0${electronRuntime.version}`,
+    ).slice(0, 32)}`,
+    name: electronRuntime.name,
+    version: electronRuntime.version,
+    purl: `pkg:npm/electron@${electronRuntime.version}`,
+    licenses: [cyclonedxLicense(electronRuntime.license)],
+    properties: [
+      {
+        name: 'clodex:component-kind',
+        value: 'shipped-runtime-framework',
+      },
+      {
+        name: 'clodex:electron-license-sha256',
+        value: electronNotices.electron.sha256,
+      },
+      {
+        name: 'clodex:chromium-notices-sha256',
+        value: electronNotices.chromium.sha256,
+      },
+    ],
+  });
   components.push({
     type: 'file',
     'bom-ref': 'urn:clodex:artifact:app-asar',
@@ -1417,6 +1660,11 @@ export async function writeFinalArtifactSbom({
   return {
     bytes: statSync(outputPath).size,
     componentCount: components.length,
+    electronRuntime: {
+      license: electronRuntime.license,
+      name: electronRuntime.name,
+      version: electronRuntime.version,
+    },
     nativePackageCount: nativePackages.length,
     electronNotices: Object.fromEntries(
       Object.entries(electronNotices).map(([name, notice]) => [

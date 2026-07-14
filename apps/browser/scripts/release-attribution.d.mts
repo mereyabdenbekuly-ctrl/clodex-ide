@@ -14,6 +14,10 @@ export interface AttributionEntry {
   licenseEvidence?: {
     basis: string;
     licenseTextSha256: string;
+    packageSource: {
+      integrity: string;
+      tarball: string;
+    };
     registryIdentity: string;
     reviewStatus: string;
     sourceReferences: string[];
@@ -45,6 +49,7 @@ export class AttributionGateError extends Error {
 export const ATTRIBUTION_DIRECTORY_NAME: string;
 export const LICENSE_OVERRIDE_REGISTRY_RELATIVE_PATH: string;
 export const NUCLEO_EVIDENCE_RELATIVE_PATH: string;
+export const PNPM_LOCK_RELATIVE_PATH: string;
 export const REQUIRED_ATTRIBUTION_PATHS: string[];
 
 export function collectReleaseDependencyInventory(options: {
@@ -109,6 +114,8 @@ export function resolveElectronRuntimeNoticePaths(options: {
 }): {
   chromium: string;
   electron: string;
+  license: string;
+  version: string;
 };
 
 export function writeFinalArtifactSbom(options: {
@@ -117,6 +124,11 @@ export function writeFinalArtifactSbom(options: {
   appVersion: string;
   arch: string;
   attribution: ReturnType<typeof inspectPackagedAttribution>;
+  electronRuntime: {
+    license: string;
+    name: 'electron';
+    version: string;
+  };
   outputPath: string;
   platform: string;
   resourcesDirectory: string;
@@ -125,6 +137,11 @@ export function writeFinalArtifactSbom(options: {
   bytes: number;
   componentCount: number;
   electronNotices: Record<string, { path: string; sha256: string }>;
+  electronRuntime: {
+    license: string;
+    name: string;
+    version: string;
+  };
   nativePackageCount: number;
   path: string;
   sha256: string;

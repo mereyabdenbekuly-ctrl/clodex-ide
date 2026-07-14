@@ -29,6 +29,8 @@ const browserDirectory = path.resolve(
   '..',
 );
 const repositoryDirectory = path.resolve(browserDirectory, '../..');
+const fixtureGoodDependencyIntegrity =
+  'sha512-Zml4dHVyZS1nb29kLWRlcGVuZGVuY3k=';
 
 function writeJson(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -68,6 +70,10 @@ function makeFixture() {
       approvedAt: null,
       expiresAt: null,
     },
+  );
+  writeText(
+    path.join(root, 'pnpm-lock.yaml'),
+    `lockfileVersion: '9.0'\n\npackages:\n  good-dep@1.0.0:\n    resolution: {integrity: ${fixtureGoodDependencyIntegrity}}\n  nested-dep@2.0.0:\n    resolution: {integrity: sha512-Zml4dHVyZS1uZXN0ZWQtZGVwZW5kZW5jeQ==}\n  electron@39.0.0:\n    resolution: {integrity: sha512-Zml4dHVyZS1lbGVjdHJvbg==}\n`,
   );
   writeJson(
     path.join(root, 'docs/provenance/DEPENDENCY_LICENSE_OVERRIDES.json'),
@@ -285,8 +291,8 @@ test('applies only exact reviewed package-file overrides and rejects hash drift'
           basis: 'EXACT_PACKAGE_FILE',
           packageSource: {
             registry: 'npm',
-            tarball: 'https://registry.example/good-dep-1.0.0.tgz',
-            integrity: 'sha512-fixture',
+            tarball: 'https://registry.npmjs.org/good-dep/-/good-dep-1.0.0.tgz',
+            integrity: fixtureGoodDependencyIntegrity,
           },
           licenseTextSource: {
             type: 'package-file',
@@ -308,6 +314,28 @@ test('applies only exact reviewed package-file overrides and rejects hash drift'
     );
     assert.equal(entry.license, 'MIT');
     assert.equal(entry.licenseEvidence.reviewStatus, 'ENGINEERING_REVIEWED');
+
+    const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
+    registry.entries[0].packageSource.integrity =
+      'sha512-ZmFicmljYXRlZC1pbnRlZ3JpdHk=';
+    writeJson(registryPath, registry);
+    assert.throws(
+      () =>
+        collectReleaseDependencyInventory({
+          appDirectory: fixture.appDirectory,
+          repositoryDirectory: fixture.root,
+          strict: true,
+        }),
+      (error) =>
+        error instanceof AttributionGateError &&
+        error.blockers.some(
+          (blocker) =>
+            blocker.code === 'LICENSE_OVERRIDE_PACKAGE_INTEGRITY_MISMATCH',
+        ),
+    );
+    registry.entries[0].packageSource.integrity =
+      fixtureGoodDependencyIntegrity;
+    writeJson(registryPath, registry);
 
     writeFileSync(licensePath, 'tampered license\n');
     assert.throws(
@@ -361,8 +389,9 @@ test('rejects reviewed repository-license evidence after hash drift', () => {
             basis: 'PINNED_UPSTREAM_LICENSE',
             packageSource: {
               registry: 'npm',
-              tarball: 'https://registry.example/good-dep-1.0.0.tgz',
-              integrity: 'sha512-fixture',
+              tarball:
+                'https://registry.npmjs.org/good-dep/-/good-dep-1.0.0.tgz',
+              integrity: fixtureGoodDependencyIntegrity,
             },
             licenseTextSource: {
               type: 'repository-file',
@@ -457,6 +486,66 @@ test('deduplicates identical package versions reached through peer contexts', ()
           entry.name === 'shared-context-dep' && entry.version === '3.0.0',
       ).length,
       1,
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('honors only exact pnpm dependency-removal overrides', () => {
+  const fixture = makeFixture();
+  try {
+    const dependencyManifestPath = path.join(
+      fixture.appDirectory,
+      'node_modules/good-dep/package.json',
+    );
+    const dependencyManifest = JSON.parse(
+      readFileSync(dependencyManifestPath, 'utf8'),
+    );
+    dependencyManifest.dependencies['removed-build-dep'] = '1.0.0';
+    writeJson(dependencyManifestPath, dependencyManifest);
+    writeJson(path.join(fixture.root, 'package.json'), {
+      name: 'fixture-root',
+      private: true,
+      version: '1.0.0',
+      pnpm: {
+        overrides: {
+          'good-dep@1.0.0>removed-build-dep': '-',
+        },
+      },
+    });
+
+    const inventory = collectReleaseDependencyInventory({
+      appDirectory: fixture.appDirectory,
+      repositoryDirectory: fixture.root,
+      strict: true,
+    });
+    assert.ok(
+      !inventory.entries.some((entry) => entry.name === 'removed-build-dep'),
+    );
+
+    writeJson(path.join(fixture.root, 'package.json'), {
+      name: 'fixture-root',
+      private: true,
+      version: '1.0.0',
+      pnpm: {
+        overrides: {
+          'good-dep>removed-build-dep': '-',
+        },
+      },
+    });
+    assert.throws(
+      () =>
+        collectReleaseDependencyInventory({
+          appDirectory: fixture.appDirectory,
+          repositoryDirectory: fixture.root,
+          strict: true,
+        }),
+      (error) =>
+        error instanceof AttributionGateError &&
+        error.blockers.some(
+          (blocker) => blocker.code === 'DEPENDENCY_MANIFEST_UNRESOLVED',
+        ),
     );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
@@ -691,6 +780,11 @@ test('writes a final-artifact CycloneDX SBOM and rejects uninventoried native pa
       appVersion: '1.0.0',
       arch: 'x64',
       attribution,
+      electronRuntime: {
+        license: 'MIT',
+        name: 'electron',
+        version: '39.0.0',
+      },
       outputPath: sbomPath,
       platform: 'linux',
       resourcesDirectory,
@@ -705,6 +799,14 @@ test('writes a final-artifact CycloneDX SBOM and rejects uninventoried native pa
         (component) =>
           component.name === 'app.asar' &&
           component.hashes[0].alg === 'SHA-256',
+      ),
+    );
+    assert.ok(
+      sbom.components.some(
+        (component) =>
+          component.name === 'electron' &&
+          component.version === '39.0.0' &&
+          component.type === 'framework',
       ),
     );
 
@@ -722,6 +824,11 @@ test('writes a final-artifact CycloneDX SBOM and rejects uninventoried native pa
         appVersion: '1.0.0',
         arch: 'x64',
         attribution,
+        electronRuntime: {
+          license: 'MIT',
+          name: 'electron',
+          version: '39.0.0',
+        },
         outputPath: sbomPath,
         platform: 'linux',
         resourcesDirectory,
@@ -742,16 +849,51 @@ test('release workflow and Forge packaging wire the attribution gate before publ
     path.join(repositoryDirectory, '.github/workflows/_release-browser.yml'),
     'utf8',
   );
+  const artifactValidatorSource = readFileSync(
+    path.join(browserDirectory, 'scripts/validate-release-artifacts.mjs'),
+    'utf8',
+  );
+  const macosValidatorSource = readFileSync(
+    path.join(browserDirectory, 'scripts/validate-macos-release.mjs'),
+    'utf8',
+  );
   assert.match(forgeSource, /prepareReleaseAttributionBundle/);
   assert.match(forgeSource, /releaseAttributionPath/);
   assert.match(
     workflowSource,
     /Validate desktop attribution and redistribution rights[\s\S]*release:attribution:check/,
   );
-  assert.match(workflowSource, /\*\.cdx\.json/);
+  assert.match(
+    workflowSource,
+    /release-publication\.mjs stage[\s\S]*if-no-files-found: error/,
+  );
+  assert.match(
+    workflowSource,
+    /release-publication\.mjs collect[\s\S]*--expected=macos:arm64,macos:x64,linux:x64,windows:x64/,
+  );
+  assert.doesNotMatch(workflowSource, /find artifacts -type f/);
+  assert.match(
+    artifactValidatorSource,
+    /extractZipSafely\(nupkgPath[\s\S]*inspectExtractedApplication/,
+  );
+  assert.match(artifactValidatorSource, /dpkg-deb[\s\S]*--extract/);
+  assert.match(artifactValidatorSource, /rpm2cpio[\s\S]*cpio --extract/);
+  assert.match(
+    macosValidatorSource,
+    /ditto[\s\S]*zipAttribution[\s\S]*applicationDirectory: zipAppPath[\s\S]*sbomAppAsarSha256/,
+  );
 });
 
 test('the exact installed repository dependency graph is strict-green', () => {
+  const overrideRegistry = JSON.parse(
+    readFileSync(
+      path.join(
+        repositoryDirectory,
+        'docs/provenance/DEPENDENCY_LICENSE_OVERRIDES.json',
+      ),
+      'utf8',
+    ),
+  );
   const inventory = collectReleaseDependencyInventory({
     appDirectory: browserDirectory,
     repositoryDirectory,
@@ -759,8 +901,16 @@ test('the exact installed repository dependency graph is strict-green', () => {
   });
   assert.equal(inventory.blockers.length, 0);
   assert.equal(inventory.licenseOverrides.status, 'ENGINEERING_REVIEWED');
-  assert.equal(inventory.licenseOverrides.entryCount, 53);
-  assert.ok(inventory.licenseOverrides.appliedCount >= 44);
+  assert.equal(inventory.licenseOverrides.entryCount, 54);
+  assert.ok(inventory.licenseOverrides.appliedCount >= 40);
+  assert.equal(
+    overrideRegistry.entries.find(
+      (entry) =>
+        entry.package === '@libsql/linux-x64-musl' &&
+        entry.version === '0.5.29',
+    )?.packageSource.integrity,
+    'sha512-gquqwA/39tH4pFl+J9n3SOMSymjX+6kZ3kWgY3b94nXFTwac9bnFNMffIomgvlFaC4ArVqMnOZD3nuJ3H3VO1w==',
+  );
   assert.deepEqual(inventory.nucleo.packageNames, []);
   assert.equal(inventory.nucleo.status, 'NOT_REQUIRED');
 });
