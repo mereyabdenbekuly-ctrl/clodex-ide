@@ -144,7 +144,11 @@
         },
         "rejectionCode": {
           "type": "string",
-          "enum": ["NO_COMMON_VERSION", "REQUIRED_CAPABILITY_UNAVAILABLE", "OFFER_EXPIRED"]
+          "enum": [
+            "NO_COMMON_VERSION",
+            "REQUIRED_CAPABILITY_UNAVAILABLE",
+            "OFFER_EXPIRED"
+          ]
         },
         "nonce": {
           "$ref": "common.schema.json#/$defs/Nonce"

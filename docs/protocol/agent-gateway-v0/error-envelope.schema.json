@@ -5,13 +5,7 @@
   "description": "A pre-lifecycle protocol or transport error. This envelope is not authorization evidence or an effect receipt.",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "kind",
-    "protocolVersion",
-    "correlationId",
-    "error",
-    "issuedAt"
-  ],
+  "required": ["kind", "protocolVersion", "correlationId", "error", "issuedAt"],
   "properties": {
     "kind": {
       "const": "clodex.agent-gateway.error"
@@ -116,7 +110,11 @@
             {
               "properties": {
                 "code": {
-                  "enum": ["REPLAY_DETECTED", "IDEMPOTENCY_CONFLICT", "EVIDENCE_REPLAY"]
+                  "enum": [
+                    "REPLAY_DETECTED",
+                    "IDEMPOTENCY_CONFLICT",
+                    "EVIDENCE_REPLAY"
+                  ]
                 },
                 "category": {
                   "const": "REPLAY_PROTECTION"

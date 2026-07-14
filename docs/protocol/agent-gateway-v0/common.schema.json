@@ -75,7 +75,11 @@
     "NegotiationBinding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["negotiationId", "selectionEnvelopeDigest", "selectedVersion"],
+      "required": [
+        "negotiationId",
+        "selectionEnvelopeDigest",
+        "selectedVersion"
+      ],
       "properties": {
         "negotiationId": {
           "$ref": "#/$defs/OpaqueIdentifier"
@@ -506,7 +510,13 @@
           "properties": {
             "status": {
               "type": "string",
-              "enum": ["DENIED", "CANCELLED", "EXPIRED", "SUPERSEDED", "INVALIDATED"]
+              "enum": [
+                "DENIED",
+                "CANCELLED",
+                "EXPIRED",
+                "SUPERSEDED",
+                "INVALIDATED"
+              ]
             },
             "effectState": {
               "const": "NOT_APPLIED"
