@@ -15,6 +15,7 @@ import type { AgentHost } from '@clodex/agent-core/host';
 import type {
   AgentTypeRegistry,
   BaseAgentToolboxView,
+  ToolApprovalLifecycleHooks,
 } from '@clodex/agent-core/agents';
 import type { ProcessedImageCacheService } from '@clodex/agent-core/processed-image-cache';
 import type { FileReadCacheService } from '@clodex/agent-core/file-read-cache';
@@ -115,6 +116,7 @@ export class AgentManagerService extends DisposableService {
       entries: AgentHistoryEntry[],
     ) => Promise<AgentHistoryEntry[]>,
     stepExecutor?: AgentStepExecutor,
+    toolApprovalLifecycle?: ToolApprovalLifecycleHooks,
   ) {
     super();
     this.commandRegistry = commandRegistry;
@@ -143,6 +145,7 @@ export class AgentManagerService extends DisposableService {
       },
       hooks: {
         onAgentEvent: notificationEventHandler,
+        toolApprovalLifecycle,
         renderHostMention: renderBrowserExtraMention,
         skillsForSlashRedaction: getSkillsForSlashRedaction,
         enrichHistoryEntries,

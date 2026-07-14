@@ -691,6 +691,7 @@ export class AutomationService extends DisposableService {
     } catch {
       message = 'Automation dispatch failed with an unreadable error';
     }
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: these exact ASCII controls are intentionally removed from persisted error summaries.
     const normalized = message.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
     return (normalized || 'Automation dispatch failed').slice(0, 500);
   }

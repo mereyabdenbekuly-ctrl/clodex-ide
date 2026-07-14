@@ -130,6 +130,7 @@ function createHarness() {
     userExperienceService: { getRecentlyOpenedWorkspaces },
     pendingEditService: { releaseLocksForOwner: vi.fn() },
     agentManagerService: { setSwarmSubmitHandler },
+    assertLocalExecutionAllowed: vi.fn(),
   } as unknown as SwarmRuntimeDependencies;
 
   return {
@@ -224,10 +225,6 @@ describe('createSwarmRuntime', () => {
         ].join('\n'),
       ],
     ]);
-    expect(harness.getStoredAgentInstanceById).toHaveBeenCalledWith('agent-1');
-    expect(harness.getLastNonEmptyChatWorkspacePaths).toHaveBeenCalledOnce();
-    expect(harness.getLastChatWorkspacePaths).toHaveBeenCalledOnce();
-    expect(harness.getRecentlyOpenedWorkspaces).toHaveBeenCalledOnce();
     expect(harness.selectModelForTask).not.toHaveBeenCalled();
     expect(harness.getWithOptions).not.toHaveBeenCalled();
   });

@@ -58,11 +58,26 @@ export interface ClodexMcpServiceDeps {
     toolCallId: string,
     explanation: string,
   ) => void;
+  recordPendingApprovalAtEpoch?: (
+    agentInstanceId: string,
+    toolCallId: string,
+    explanation: string,
+    approvalLifecycleEpoch: number,
+  ) => void;
   assessGuardian?: GuardianPolicyChecker;
   claimApprovalAuthority?: (
     input: ClaimTrustedMcpApprovalInput,
-  ) => TrustedMcpFinalAuthority | null;
-  stageApproval?: (input: StageTrustedMcpApprovalInput) => void;
+    approvalLifecycleEpoch: number,
+  ) => Promise<TrustedMcpFinalAuthority | null>;
+  assertApprovalLifecycleCurrent?: (
+    agentInstanceId: string,
+    approvalLifecycleEpoch: number,
+  ) => void;
+  stageApproval?: (input: StageTrustedMcpApprovalInput) => Promise<void>;
+  stageApprovalAtEpoch?: (
+    input: StageTrustedMcpApprovalInput,
+    approvalLifecycleEpoch: number,
+  ) => Promise<void>;
 }
 
 export class ClodexMcpService {
@@ -77,12 +92,26 @@ export class ClodexMcpService {
         explanation: string,
       ) => void)
     | undefined;
+  private readonly recordPendingApprovalAtEpoch?:
+    | ((
+        agentInstanceId: string,
+        toolCallId: string,
+        explanation: string,
+        approvalLifecycleEpoch: number,
+      ) => void)
+    | undefined;
   private readonly assessGuardian: GuardianPolicyChecker | undefined;
   private readonly claimApprovalAuthority:
     | ClodexMcpServiceDeps['claimApprovalAuthority']
     | undefined;
+  private readonly assertApprovalLifecycleCurrent:
+    | ClodexMcpServiceDeps['assertApprovalLifecycleCurrent']
+    | undefined;
   private readonly stageApproval:
     | ClodexMcpServiceDeps['stageApproval']
+    | undefined;
+  private readonly stageApprovalAtEpoch:
+    | ClodexMcpServiceDeps['stageApprovalAtEpoch']
     | undefined;
   private client: Client | null = null;
   private transport: SSEClientTransport | null = null;
@@ -107,13 +136,17 @@ export class ClodexMcpService {
     );
     this.isEnabled = deps.isEnabled ?? (() => true);
     this.recordPendingApproval = deps.recordPendingApproval;
+    this.recordPendingApprovalAtEpoch = deps.recordPendingApprovalAtEpoch;
     this.assessGuardian = deps.assessGuardian;
     this.claimApprovalAuthority = deps.claimApprovalAuthority;
+    this.assertApprovalLifecycleCurrent = deps.assertApprovalLifecycleCurrent;
     this.stageApproval = deps.stageApproval;
+    this.stageApprovalAtEpoch = deps.stageApprovalAtEpoch;
   }
 
   public async getTools(
     agentInstanceId: string,
+    approvalLifecycleEpoch = 0,
   ): Promise<Record<string, Tool>> {
     if (!this.isEnabled()) {
       this.clearToolDefinitionsCache();
@@ -144,6 +177,7 @@ export class ClodexMcpService {
             this.toAiTool(
               mcpTool,
               agentInstanceId,
+              approvalLifecycleEpoch,
               registrationCache.connectionGeneration,
               registrationCache.catalogRevision,
             ),
@@ -348,7 +382,13 @@ export class ClodexMcpService {
     expected: ClodexMcpDispatchSnapshot,
     reviewedDescriptor: TrustedMcpDescriptorCommitment,
     authorization: TrustedMcpDispatchAuthorization,
+    agentInstanceId: string,
+    approvalLifecycleEpoch: number,
   ): void {
+    this.assertApprovalLifecycleCurrent?.(
+      agentInstanceId,
+      approvalLifecycleEpoch,
+    );
     authorization.prepareFinalCheck();
     if (!this.isEnabled()) {
       throw new Error('Clodex MCP dispatch was disabled after authorization');
@@ -380,6 +420,10 @@ export class ClodexMcpService {
       descriptor,
     );
     assertTrustedMcpDescriptorCommitment(reviewedDescriptor, currentDescriptor);
+    this.assertApprovalLifecycleCurrent?.(
+      agentInstanceId,
+      approvalLifecycleEpoch,
+    );
     authorization.assertCurrent(
       createTrustedMcpDispatchCommitment(
         currentDescriptor,
@@ -413,6 +457,7 @@ export class ClodexMcpService {
   private toAiTool(
     mcpTool: McpToolDefinition,
     agentInstanceId: string,
+    approvalLifecycleEpoch: number,
     registrationConnectionGeneration: number,
     registrationCatalogRevision: number,
   ): Tool {
@@ -437,18 +482,40 @@ export class ClodexMcpService {
       strict: false,
       needsApproval: async (args, { toolCallId }) => {
         const approvalRequired = requiresApproval(mcpTool);
-        const stageApproval = (): true => {
-          if (!this.stageApproval) {
+        const requireApproval = async (explanation: string): Promise<true> => {
+          if (!this.stageApproval && !this.stageApprovalAtEpoch) {
             throw new Error('MCP approval broker is unavailable');
           }
-          this.stageApproval({
+          const approvalInput = {
             agentInstanceId,
             toolCallId,
             aiToolName,
             arguments: args,
             descriptor: reviewedDescriptor,
             approvalContextDigest: reviewedDispatch.digest,
-          });
+          };
+          if (this.stageApprovalAtEpoch) {
+            await this.stageApprovalAtEpoch(
+              approvalInput,
+              approvalLifecycleEpoch,
+            );
+          } else {
+            await this.stageApproval!(approvalInput);
+          }
+          if (this.recordPendingApprovalAtEpoch) {
+            this.recordPendingApprovalAtEpoch(
+              agentInstanceId,
+              toolCallId,
+              explanation,
+              approvalLifecycleEpoch,
+            );
+          } else {
+            this.recordPendingApproval?.(
+              agentInstanceId,
+              toolCallId,
+              explanation,
+            );
+          }
           return true;
         };
         if (this.assessGuardian) {
@@ -463,12 +530,9 @@ export class ClodexMcpService {
               }),
             );
           } catch {
-            this.recordPendingApproval?.(
-              agentInstanceId,
-              toolCallId,
+            return await requireApproval(
               'Guardian assessment failed. Approving manually to stay safe.',
             );
-            return stageApproval();
           }
           if (assessment) {
             if (assessment.decision === 'deny') {
@@ -481,25 +545,14 @@ export class ClodexMcpService {
               assessment.irreversible ||
               assessment.decision === 'escalate'
             ) {
-              this.recordPendingApproval?.(
-                agentInstanceId,
-                toolCallId,
-                assessment.explanation,
-              );
-              return stageApproval();
+              return await requireApproval(assessment.explanation);
             }
             return false;
           }
         }
 
         if (!approvalRequired) return false;
-
-        this.recordPendingApproval?.(
-          agentInstanceId,
-          toolCallId,
-          buildApprovalExplanation(mcpTool),
-        );
-        return stageApproval();
+        return await requireApproval(buildApprovalExplanation(mcpTool));
       },
       execute: async (args, executionOptions) => {
         const toolCallId = (
@@ -507,14 +560,17 @@ export class ClodexMcpService {
         )?.toolCallId;
         const finalAuthority =
           toolCallId && this.claimApprovalAuthority
-            ? (this.claimApprovalAuthority({
-                agentInstanceId,
-                toolCallId,
-                aiToolName,
-                arguments: args,
-                descriptor: reviewedDescriptor,
-                approvalContextDigest: reviewedDispatch.digest,
-              }) ?? undefined)
+            ? ((await this.claimApprovalAuthority(
+                {
+                  agentInstanceId,
+                  toolCallId,
+                  aiToolName,
+                  arguments: args,
+                  descriptor: reviewedDescriptor,
+                  approvalContextDigest: reviewedDispatch.digest,
+                },
+                approvalLifecycleEpoch,
+              )) ?? undefined)
             : undefined;
         try {
           const token = await this.requireModelAccessToken();
@@ -555,6 +611,8 @@ export class ClodexMcpService {
             dispatchSnapshot,
             reviewedDescriptor,
             authorization,
+            agentInstanceId,
+            approvalLifecycleEpoch,
           );
 
           // No await is permitted between the final synchronous fence and the

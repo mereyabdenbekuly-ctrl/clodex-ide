@@ -208,22 +208,25 @@ export function createTrustedMcpApprovalAuthority(input: {
   if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
     throw new Error('MCP final-authority TTL is invalid');
   }
+  const createdAt = readFinalAuthorityNow(now);
+  const expiresAt = addFinalAuthorityTtl(createdAt, ttlMs);
   const expectedEffectDigest = hashTrustedMcpFinalAuthorityEffect(
     input.descriptor,
     input.effect,
   );
-  const expiresAt = now() + ttlMs;
   let consumed = false;
 
   return Object.freeze({
     [trustedMcpFinalAuthorityBrand]: true as const,
     prepareFinalCheck(): void {},
-    assertAndConsume(current): void {
+    assertAndConsume(
+      current: Parameters<TrustedMcpFinalAuthority['assertAndConsume']>[0],
+    ): void {
       if (consumed) {
         throw new Error('MCP final authority was already consumed');
       }
       consumed = true;
-      if (now() > expiresAt) {
+      if (readFinalAuthorityNow(now) >= expiresAt) {
         throw new Error('MCP final authority expired before dispatch');
       }
       if (
@@ -256,7 +259,8 @@ export function createTrustedMcpFenceAuthority(
   if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
     throw new Error('MCP final-authority TTL is invalid');
   }
-  const expiresAt = now() + ttlMs;
+  const createdAt = readFinalAuthorityNow(now);
+  const expiresAt = addFinalAuthorityTtl(createdAt, ttlMs);
   let consumed = false;
   let prepared = false;
 
@@ -269,7 +273,7 @@ export function createTrustedMcpFenceAuthority(
       if (prepared) {
         throw new Error('MCP final authority fence was already prepared');
       }
-      if (now() > expiresAt) {
+      if (readFinalAuthorityNow(now) >= expiresAt) {
         throw new Error('MCP final authority expired before dispatch');
       }
       fence();
@@ -282,13 +286,76 @@ export function createTrustedMcpFenceAuthority(
       if (!prepared) {
         throw new Error('MCP final authority fence was not checked');
       }
-      if (now() > expiresAt) {
+      if (readFinalAuthorityNow(now) >= expiresAt) {
         throw new Error('MCP final authority expired before dispatch');
       }
       consumed = true;
       options.onConsumed?.();
     },
   });
+}
+
+/**
+ * Adds a synchronous host-owned revocation fence to an existing authority.
+ * Any failed or out-of-order check burns the wrapper, so a stale authority
+ * cannot be retried after the owning lifecycle has advanced.
+ */
+export function bindTrustedMcpFinalAuthorityToFence(
+  authority: TrustedMcpFinalAuthority,
+  assertCurrent: () => void,
+): TrustedMcpFinalAuthority {
+  let state: 'fresh' | 'prepared' | 'consumed' = 'fresh';
+
+  return Object.freeze({
+    [trustedMcpFinalAuthorityBrand]: true as const,
+    prepareFinalCheck(): void {
+      if (state === 'consumed') {
+        throw new Error('MCP bound final authority was already consumed');
+      }
+      if (state === 'prepared') {
+        state = 'consumed';
+        throw new Error('MCP bound final authority was already prepared');
+      }
+
+      // Burn first. A throwing lifecycle fence or delegated preparation must
+      // never leave a retryable capability behind.
+      state = 'consumed';
+      assertCurrent();
+      authority.prepareFinalCheck();
+      state = 'prepared';
+    },
+    assertAndConsume(
+      current: Parameters<TrustedMcpFinalAuthority['assertAndConsume']>[0],
+    ): void {
+      if (state === 'consumed') {
+        throw new Error('MCP bound final authority was already consumed');
+      }
+      if (state !== 'prepared') {
+        state = 'consumed';
+        throw new Error('MCP bound final authority fence was not prepared');
+      }
+
+      // There is no await between this recheck and delegated consumption.
+      state = 'consumed';
+      assertCurrent();
+      authority.assertAndConsume(current);
+    },
+  });
+}
+
+function readFinalAuthorityNow(now: () => number): number {
+  const value = now();
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error('MCP final-authority clock is invalid');
+  }
+  return value;
+}
+
+function addFinalAuthorityTtl(createdAt: number, ttlMs: number): number {
+  if (ttlMs > Number.MAX_SAFE_INTEGER - createdAt) {
+    throw new Error('MCP final-authority expiry is invalid');
+  }
+  return createdAt + ttlMs;
 }
 
 export function assertTrustedMcpDescriptorCommitment(
@@ -424,9 +491,27 @@ export function hashTrustedMcpFinalAuthorityEffect(
   descriptor: TrustedMcpDescriptorCommitment,
   effect: TrustedMcpFinalAuthorityEffect,
 ): string {
+  return hashTrustedMcpFinalAuthorityEffectForDescriptorDigest(
+    descriptor.digest,
+    effect,
+  );
+}
+
+/**
+ * Recomputes an exact effect commitment when only the previously reviewed
+ * descriptor digest remains available. This is used by durable approval
+ * lifecycle recovery without persisting the raw descriptor or arguments.
+ */
+export function hashTrustedMcpFinalAuthorityEffectForDescriptorDigest(
+  descriptorDigest: string,
+  effect: TrustedMcpFinalAuthorityEffect,
+): string {
+  if (!/^[a-f0-9]{64}$/.test(descriptorDigest)) {
+    throw new Error('MCP descriptor digest is invalid');
+  }
   return hashCanonicalValue(
     {
-      descriptorDigest: descriptor.digest,
+      descriptorDigest,
       principalId: requireBoundedId(effect.principalId, 'MCP principal'),
       toolCallId: requireBoundedId(effect.toolCallId, 'MCP tool call'),
       arguments: effect.arguments,

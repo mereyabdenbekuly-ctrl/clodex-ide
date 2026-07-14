@@ -1,137 +1,87 @@
-import type { spawn } from 'node:child_process';
-import { EventEmitter } from 'node:events';
-import fs from 'node:fs';
-import fsPromises from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
-import type { OpenManusExecutionRequest } from './protocol';
-import { executeOpenManusRequest } from './openmanus-runtime';
+import type {
+  OpenManusExecutionRequest,
+  OpenManusExecutionResult,
+} from './protocol';
+import {
+  executeOpenManusRequest,
+  OPENMANUS_OS_CONFINED_ADAPTER_PROFILE,
+  OpenManusConfinementUnavailableError,
+  type OpenManusOsConfinedAdapter,
+} from './openmanus-runtime';
 
 const request: OpenManusExecutionRequest = {
   prompt: 'Inspect the workspace',
   mountPrefix: 'w1234',
-  workspacePath: '/workspace/project',
-  openManusHome: '/opt/openmanus',
-  pythonExecutable: 'python3',
   timeoutMs: 60_000,
-  modelId: 'gpt-5.5',
-  baseUrl: 'https://example.test/v1',
-  apiKey: 'secret-route-token',
   maxTokens: 8_192,
-  environment: {
-    PATH: '/usr/bin',
-  },
 };
 
+const result: OpenManusExecutionResult = {
+  message: 'OpenManus completed.',
+  exitCode: 0,
+  timedOut: false,
+  mountPrefix: 'w1234',
+  runtimeId: 'confined-runtime-1',
+  stdout: 'done',
+  stderr: '',
+};
+
+function createAdapter() {
+  const execute = vi.fn(
+    async (
+      _request: OpenManusExecutionRequest,
+      _options: { signal?: AbortSignal },
+    ) => result,
+  );
+  const adapter: OpenManusOsConfinedAdapter = {
+    profile: OPENMANUS_OS_CONFINED_ADAPTER_PROFILE,
+    execute,
+  };
+  return { adapter, execute };
+}
+
 describe('executeOpenManusRequest', () => {
-  it('runs the Python agent with an ephemeral config and redacts output', async () => {
-    let configPath = '';
-    let configContents = '';
-    const child = createFakeChild();
-    const spawnProcess = vi.fn(
-      (
-        _command: string,
-        _args: readonly string[],
-        options: { env?: NodeJS.ProcessEnv },
-      ) => {
-        configPath = options.env?.OPENMANUS_CONFIG_PATH ?? '';
-        configContents = fs.readFileSync(configPath, 'utf8');
-        queueMicrotask(() => {
-          child.stdout.write(`result ${request.apiKey}`);
-          child.stderr.write(`warning ${request.apiKey}`);
-          child.emit('close', 0, null);
-        });
-        return child;
-      },
-    ) as unknown as typeof spawn;
+  it('fails closed when no OS-confined adapter is installed', async () => {
+    await expect(executeOpenManusRequest(request)).rejects.toBeInstanceOf(
+      OpenManusConfinementUnavailableError,
+    );
+  });
 
-    const result = await executeOpenManusRequest(request, { spawnProcess });
+  it('dispatches only the closed capability request to the trusted adapter', async () => {
+    const { adapter, execute } = createAdapter();
+    const controller = new AbortController();
 
-    expect(spawnProcess).toHaveBeenCalledWith(
-      'python3',
-      ['main.py', '--prompt', expect.stringContaining('Inspect the workspace')],
-      expect.objectContaining({
-        cwd: '/opt/openmanus',
-        shell: false,
-        env: expect.objectContaining({
-          PATH: '/usr/bin',
-          WORKSPACE_ROOT: '/workspace/project',
-          OPENMANUS_WORKSPACE_ROOT: '/workspace/project',
-          OPENMANUS_CONFIG_PATH: expect.any(String),
-        }),
+    await expect(
+      executeOpenManusRequest(request, {
+        signal: controller.signal,
+        confinedAdapter: adapter,
       }),
-    );
-    expect(configContents).toContain('model = "gpt-5.5"');
-    expect(configContents).toContain('api_key = "secret-route-token"');
-    expect(result).toMatchObject({
-      message: 'OpenManus completed.',
-      exitCode: 0,
-      timedOut: false,
-      stdout: 'result [REDACTED]',
-      stderr: 'warning [REDACTED]',
+    ).resolves.toEqual(result);
+
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining(request), {
+      signal: controller.signal,
     });
-    expect(fs.existsSync(configPath)).toBe(false);
+    const dispatched = execute.mock.calls[0]?.[0];
+    expect(Object.keys(dispatched ?? {}).sort()).toEqual([
+      'maxTokens',
+      'mountPrefix',
+      'prompt',
+      'timeoutMs',
+    ]);
+    expect(Object.isFrozen(dispatched)).toBe(true);
   });
 
-  it('terminates the child when the caller aborts', async () => {
-    const child = createFakeChild();
-    let notifySpawned: (() => void) | undefined;
-    const spawned = new Promise<void>((resolve) => {
-      notifySpawned = resolve;
-    });
-    child.kill.mockImplementation((signal?: NodeJS.Signals | number) => {
-      queueMicrotask(() => child.emit('close', null, signal ?? 'SIGTERM'));
-      return true;
-    });
-    const spawnProcess = vi.fn(() => {
-      notifySpawned?.();
-      return child;
-    }) as unknown as typeof spawn;
-    const abortController = new AbortController();
+  it('rejects ambient host authority before the adapter can run', async () => {
+    const { adapter, execute } = createAdapter();
+    const unsafeRequest = {
+      ...request,
+      workspacePath: '/workspace/project',
+    } as unknown as OpenManusExecutionRequest;
 
-    const execution = executeOpenManusRequest(request, {
-      signal: abortController.signal,
-      spawnProcess,
-    });
-    await spawned;
-    abortController.abort();
-
-    await expect(execution).rejects.toMatchObject({ name: 'AbortError' });
-    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
-  });
-
-  it('removes the ephemeral directory when config creation fails', async () => {
-    const tmpDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'clodex-openmanus-test-'),
-    );
-    const mkdtemp = vi.spyOn(fsPromises, 'mkdtemp').mockResolvedValue(tmpDir);
-    const writeFile = vi
-      .spyOn(fsPromises, 'writeFile')
-      .mockRejectedValueOnce(new Error('disk full'));
-
-    try {
-      await expect(executeOpenManusRequest(request)).rejects.toThrow(
-        'disk full',
-      );
-      expect(fs.existsSync(tmpDir)).toBe(false);
-    } finally {
-      mkdtemp.mockRestore();
-      writeFile.mockRestore();
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    await expect(
+      executeOpenManusRequest(unsafeRequest, { confinedAdapter: adapter }),
+    ).rejects.toThrow('ambient host authority');
+    expect(execute).not.toHaveBeenCalled();
   });
 });
-
-function createFakeChild() {
-  const child = new EventEmitter() as EventEmitter & {
-    stdout: PassThrough;
-    stderr: PassThrough;
-    kill: ReturnType<typeof vi.fn>;
-  };
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  child.kill = vi.fn(() => true);
-  return child;
-}

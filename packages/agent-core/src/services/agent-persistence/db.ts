@@ -34,6 +34,7 @@ import {
   type AgentMessage,
 } from '../../types/agent';
 import type { ToolApprovalMode } from '../../types/tool-approval';
+import { serializeAgentStatePersistMessage } from '../../agents/state-persistence';
 
 export interface AgentPersistenceDBDeps {
   host: HostPaths;
@@ -43,6 +44,11 @@ export interface AgentPersistenceDBDeps {
 
 export interface StoreAgentInstanceOptions {
   throwOnError?: boolean;
+  expectedMessageBindings?: readonly {
+    messageIndex: number;
+    messageId: string;
+    expectedSerializedMessage: string;
+  }[];
 }
 
 type WorkspaceUsageRow = {
@@ -450,6 +456,42 @@ export class AgentPersistenceDB {
     delete mutableAgentInstance.archivedAt;
 
     try {
+      const dirtyMessageIndexSet = new Set(dirtyMessageIndices ?? []);
+      const expectedMessageBindings = new Map<
+        number,
+        { messageId: string; expectedSerializedMessage: string }
+      >();
+      for (const binding of options.expectedMessageBindings ?? []) {
+        const message = history[binding.messageIndex];
+        if (
+          !Number.isSafeInteger(binding.messageIndex) ||
+          binding.messageIndex < 0 ||
+          message?.id !== binding.messageId ||
+          !dirtyMessageIndexSet.has(binding.messageIndex) ||
+          serializeAgentStatePersistMessage(message) !==
+            binding.expectedSerializedMessage
+        ) {
+          throw new Error(
+            `Agent persistence expected message binding is invalid at index ${binding.messageIndex}`,
+          );
+        }
+        const priorBinding = expectedMessageBindings.get(binding.messageIndex);
+        if (
+          priorBinding &&
+          (priorBinding.messageId !== binding.messageId ||
+            priorBinding.expectedSerializedMessage !==
+              binding.expectedSerializedMessage)
+        ) {
+          throw new Error(
+            `Agent persistence has conflicting expected bindings at index ${binding.messageIndex}`,
+          );
+        }
+        expectedMessageBindings.set(binding.messageIndex, {
+          messageId: binding.messageId,
+          expectedSerializedMessage: binding.expectedSerializedMessage,
+        });
+      }
+
       await this._db.transaction(async (tx) => {
         // 1. Upsert scalar metadata and protected JSON fields.
         await tx
@@ -551,6 +593,58 @@ export class AgentPersistenceDB {
               );
           }
         }
+
+        if (expectedMessageBindings.size > 0) {
+          const expectedIndices = [...expectedMessageBindings.keys()];
+          const committedMessages = new Map<number, string>();
+          for (let offset = 0; offset < expectedIndices.length; offset += 500) {
+            const committedRows = await tx
+              .select({
+                seq: schema.agentMessages.seq,
+                messageId: schema.agentMessages.messageId,
+                role: schema.agentMessages.role,
+                parts: schema.agentMessages.parts,
+                metadata: schema.agentMessages.metadata,
+              })
+              .from(schema.agentMessages)
+              .where(
+                and(
+                  eq(schema.agentMessages.agentInstanceId, id),
+                  inArray(
+                    schema.agentMessages.seq,
+                    expectedIndices.slice(offset, offset + 500),
+                  ),
+                ),
+              );
+            for (const row of committedRows) {
+              committedMessages.set(
+                row.seq,
+                serializeAgentStatePersistMessage({
+                  id: row.messageId,
+                  role: row.role,
+                  parts: this._unprotectJson(
+                    row.parts,
+                    agentMessageFieldContext(id, row.seq, 'parts'),
+                  ),
+                  metadata: this._unprotectJson(
+                    row.metadata,
+                    agentMessageFieldContext(id, row.seq, 'metadata'),
+                  ),
+                }),
+              );
+            }
+          }
+          for (const [messageIndex, binding] of expectedMessageBindings) {
+            if (
+              committedMessages.get(messageIndex) !==
+              binding.expectedSerializedMessage
+            ) {
+              throw new Error(
+                `Agent persistence did not commit expected message '${binding.messageId}' at index ${messageIndex}`,
+              );
+            }
+          }
+        }
       });
 
       // Update dirty-tracking state only after successful commit
@@ -562,14 +656,20 @@ export class AgentPersistenceDB {
       this._logger.error(
         `[AgentPersistenceDB] Failed to store agent instance: ${(error as Error).message}, ${(error as Error).stack}`,
       );
-      if (options.throwOnError) throw error;
+      if (
+        options.throwOnError ||
+        (options.expectedMessageBindings?.length ?? 0) > 0
+      ) {
+        throw error;
+      }
     }
   }
 
   /**
    * Finds the first index where the current history diverges from the
-   * last-persisted message IDs.  Optimises for the common case (pure
-   * append) with a single comparison at the tail of the shared range.
+   * last-persisted message IDs. Every shared position is checked: matching
+   * only the final shared ID is insufficient when an earlier row was replaced
+   * or reordered.
    */
   private _findDivergencePoint<TMessage extends { id: string }>(
     history: TMessage[],
@@ -577,11 +677,6 @@ export class AgentPersistenceDB {
   ): number {
     const minLen = Math.min(history.length, lastIds.length);
     if (minLen === 0) return 0;
-    // Fast path: if the last shared position matches, no undo occurred
-    if (history[minLen - 1]!.id === lastIds[minLen - 1]) {
-      return minLen;
-    }
-    // Slow path: linear scan for the divergence point
     for (let i = 0; i < minLen; i++) {
       if (history[i]!.id !== lastIds[i]) return i;
     }

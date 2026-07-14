@@ -12,6 +12,21 @@ import type { ArtifactBridgeAuditRecorder } from './audit-ledger';
 import { ArtifactBridgeService, type ArtifactBridgePersistence } from './index';
 import { TRUSTED_UI_REVIEWER_CONNECTION_ID } from '../trusted-ui-karton-transport';
 import { createArtifactBridgeAgentAskModelAdapterIdentity } from './effect-commitment';
+import type { TrustedMcpFinalAuthority } from '../mcp/trusted-dispatch-gateway';
+
+type TestMcpCallOptions = {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  agentInstanceId?: string;
+  beforeDispatch?: () => void;
+  finalAuthority?: TrustedMcpFinalAuthority;
+};
+
+function passMcpFinalDispatch(options: TestMcpCallOptions | undefined): void {
+  options?.beforeDispatch?.();
+  options?.finalAuthority?.prepareFinalCheck();
+  options?.finalAuthority?.assertAndConsume(undefined as never);
+}
 
 function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
   let store: unknown = structuredClone(initialStore);
@@ -36,14 +51,9 @@ function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
       _serverId?: string,
       _toolName?: string,
       _arguments?: Record<string, unknown>,
-      _options?: {
-        timeoutMs?: number;
-        signal?: AbortSignal;
-        agentInstanceId?: string;
-        beforeDispatch?: () => void;
-      },
+      _options?: TestMcpCallOptions,
     ): Promise<unknown> => {
-      _options?.beforeDispatch?.();
+      passMcpFinalDispatch(_options);
       return { content: [{ type: 'text', text: 'ok' }] };
     },
   );
@@ -407,7 +417,7 @@ describe('ArtifactBridgeService', () => {
       expect.objectContaining({
         timeoutMs: 30_000,
         agentInstanceId: 'agent-1',
-        beforeDispatch: expect.any(Function),
+        finalAuthority: expect.any(Object),
       }),
     );
     await service.teardown();
@@ -2050,7 +2060,7 @@ describe('ArtifactBridgeService', () => {
         agentInstanceId: expect.stringMatching(
           /^generated-app-package:[a-f0-9]{32}$/,
         ),
-        beforeDispatch: expect.any(Function),
+        finalAuthority: expect.any(Object),
       },
     );
     await expect(
@@ -2255,7 +2265,7 @@ describe('ArtifactBridgeService', () => {
       expect.objectContaining({
         timeoutMs: 30_000,
         agentInstanceId: 'agent-1',
-        beforeDispatch: expect.any(Function),
+        finalAuthority: expect.any(Object),
       }),
     );
     await service.teardown();

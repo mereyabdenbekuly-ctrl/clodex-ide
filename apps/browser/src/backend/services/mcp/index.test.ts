@@ -3,6 +3,7 @@ import type { CredentialsService } from '../credentials';
 import type { Logger } from '../logger';
 import type { McpOAuthService } from './oauth';
 import type { McpHostController, McpRegistryServiceOptions } from './index';
+import { createTrustedMcpFenceAuthority } from './trusted-dispatch-gateway';
 
 const persisted = vi.hoisted(() => ({
   value: {
@@ -484,8 +485,9 @@ describe('McpRegistryService', () => {
     await service.teardown();
   });
 
-  it('delegates the dispatch fence to the host final-dispatch boundary', async () => {
+  it('delegates trusted final authority to the host final-dispatch boundary', async () => {
     const host = makeHost();
+    host.listTools.mockResolvedValue([readDataTool()]);
     let releaseHostReadiness!: () => void;
     const hostReadiness = new Promise<void>((resolve) => {
       releaseHostReadiness = resolve;
@@ -510,34 +512,35 @@ describe('McpRegistryService', () => {
       createHost: async () => host,
     });
     await service.upsertServer(enabledLocalServer());
+    await service.listTools('local-test');
 
     let revoked = false;
-    const beforeDispatch = vi.fn(() => {
+    const finalFence = vi.fn(() => {
       if (revoked) throw new Error('Host generation was revoked');
     });
     const result = service.callTool(
       'local-test',
       'read_data',
       {},
-      { beforeDispatch },
+      { finalAuthority: createTrustedMcpFenceAuthority(finalFence) },
     );
     const rejection = expect(result).rejects.toThrow(
       'Host generation was revoked',
     );
     await vi.waitFor(() => expect(host.callTool).toHaveBeenCalledTimes(1));
 
-    expect(beforeDispatch).not.toHaveBeenCalled();
+    expect(finalFence).not.toHaveBeenCalled();
     expect(host.callTool).toHaveBeenCalledWith(
       'local-test',
       'read_data',
       {},
-      expect.objectContaining({ beforeDispatch }),
+      expect.objectContaining({ beforeDispatch: expect.any(Function) }),
     );
 
     revoked = true;
     releaseHostReadiness();
     await rejection;
-    expect(beforeDispatch).toHaveBeenCalledTimes(1);
+    expect(finalFence).toHaveBeenCalledTimes(1);
     expect(hostDispatch).not.toHaveBeenCalled();
     await service.teardown();
   });
@@ -667,7 +670,7 @@ describe('McpRegistryService', () => {
         'read_data',
         {},
         {
-          beforeDispatch: finalFence,
+          finalAuthority: createTrustedMcpFenceAuthority(finalFence),
         },
       ),
     ).rejects.toThrow('MCP server configuration generation changed');
@@ -735,7 +738,14 @@ describe('McpRegistryService', () => {
     );
     expect(dispatchSnapshot.descriptor.title).toBe('Descriptor from B');
     await expect(
-      service.callTool('local-test', 'read_data', {}),
+      service.callTool(
+        'local-test',
+        'read_data',
+        {},
+        {
+          finalAuthority: createTrustedMcpFenceAuthority(() => {}),
+        },
+      ),
     ).resolves.toEqual({ activeConnection: 'B' });
     await service.teardown();
   });

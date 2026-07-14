@@ -10,6 +10,18 @@ export {
   type AgentCtor,
 } from './agents-registry';
 export type { AgentMessage, AgentToolUIPart } from '../types/agent';
+export type {
+  ToolApprovalDecisionCommit,
+  ToolApprovalDecisionIntent,
+  ToolApprovalInvalidationIntent,
+  ToolApprovalInvalidationReason,
+  ToolApprovalLifecycleHooks,
+} from './tool-approval-lifecycle';
+export type {
+  AgentStatePersistMessageBinding,
+  AgentStatePersistOptions,
+  AgentStatePersistRequest,
+} from './state-persistence';
 export { type AgentsMap, toAgentsMap } from './agents-map';
 export {
   BaseAgent,

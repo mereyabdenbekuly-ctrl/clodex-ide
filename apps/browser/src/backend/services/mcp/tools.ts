@@ -1,8 +1,5 @@
 import { createHash } from 'node:crypto';
-import {
-  type McpServerConfig,
-  type McpToolDescriptor,
-} from '@clodex/mcp-runtime';
+import type { McpServerConfig, McpToolDescriptor } from '@clodex/mcp-runtime';
 import { jsonSchema, tool, type Tool } from 'ai';
 import type {
   GuardianAssessment,
@@ -10,10 +7,10 @@ import type {
 } from '@shared/guardian';
 import { createMcpGuardianRequest } from '@/services/guardian/requests';
 import type { McpRegistryService } from './index';
-import {
-  type TrustedMcpDescriptorCommitment,
-  type TrustedMcpDispatchCommitment,
-  type TrustedMcpFinalAuthority,
+import type {
+  TrustedMcpDescriptorCommitment,
+  TrustedMcpDispatchCommitment,
+  TrustedMcpFinalAuthority,
 } from './trusted-dispatch-gateway';
 import type {
   ClaimTrustedMcpApprovalInput,
@@ -28,8 +25,9 @@ export interface CreateRegistryMcpToolsOptions {
   recordPendingApproval?: (toolCallId: string, explanation: string) => void;
   claimApprovalAuthority?: (
     input: ClaimTrustedMcpApprovalInput,
-  ) => TrustedMcpFinalAuthority | null;
-  stageApproval?: (input: StageTrustedMcpApprovalInput) => void;
+  ) => Promise<TrustedMcpFinalAuthority | null>;
+  stageApproval?: (input: StageTrustedMcpApprovalInput) => Promise<void>;
+  assertApprovalLifecycleCurrent?: () => void;
 }
 
 export async function createRegistryMcpTools(
@@ -103,11 +101,11 @@ function toAiTool(
     ),
     strict: false,
     needsApproval: async (args, { toolCallId }) => {
-      const stageApproval = (): true => {
+      const requireApproval = async (explanation: string): Promise<true> => {
         if (!options.stageApproval) {
           throw new Error('MCP approval broker is unavailable');
         }
-        options.stageApproval({
+        await options.stageApproval({
           agentInstanceId: options.agentInstanceId,
           toolCallId,
           aiToolName,
@@ -115,6 +113,7 @@ function toAiTool(
           descriptor: descriptorCommitment,
           approvalContextDigest: expectedDispatch.digest,
         });
+        options.recordPendingApproval?.(toolCallId, explanation);
         return true;
       };
       if (options.assessGuardian) {
@@ -129,11 +128,9 @@ function toAiTool(
             }),
           );
         } catch {
-          options.recordPendingApproval?.(
-            toolCallId,
+          return await requireApproval(
             'Guardian assessment failed. Approving manually to stay safe.',
           );
-          return stageApproval();
         }
         if (assessment) {
           if (assessment.decision === 'deny') {
@@ -146,19 +143,16 @@ function toAiTool(
             assessment.irreversible ||
             assessment.decision === 'escalate'
           ) {
-            options.recordPendingApproval?.(toolCallId, assessment.explanation);
-            return stageApproval();
+            return await requireApproval(assessment.explanation);
           }
           return false;
         }
       }
 
       if (!requiresApproval) return false;
-      options.recordPendingApproval?.(
-        toolCallId,
+      return await requireApproval(
         buildApprovalExplanation(server, definition),
       );
-      return stageApproval();
     },
     execute: async (args, executionOptions) => {
       const toolCallId = (
@@ -166,14 +160,14 @@ function toAiTool(
       )?.toolCallId;
       const finalAuthority =
         toolCallId && options.claimApprovalAuthority
-          ? (options.claimApprovalAuthority({
+          ? ((await options.claimApprovalAuthority({
               agentInstanceId: options.agentInstanceId,
               toolCallId,
               aiToolName,
               arguments: args,
               descriptor: descriptorCommitment,
               approvalContextDigest: expectedDispatch.digest,
-            }) ?? undefined)
+            })) ?? undefined)
           : undefined;
       try {
         const result = await options.registry.callTool(
@@ -186,6 +180,9 @@ function toAiTool(
             expectedDispatchCommitment: expectedDispatch,
             ...(toolCallId ? { toolCallId } : {}),
             ...(finalAuthority ? { finalAuthority } : {}),
+            ...(options.assertApprovalLifecycleCurrent
+              ? { beforeDispatch: options.assertApprovalLifecycleCurrent }
+              : {}),
           },
         );
         const capped = capToolOutput({

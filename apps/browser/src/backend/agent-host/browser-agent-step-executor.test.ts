@@ -22,6 +22,8 @@ const logger = {
   warn: vi.fn(),
 };
 
+const allowLocalExecution = () => {};
+
 function createRequest(
   overrides: Partial<AgentStepExecutionRequest['options']> = {},
 ): AgentStepExecutionRequest {
@@ -149,12 +151,21 @@ describe('BrowserAgentStepExecutor', () => {
       process: createInMemoryProcess(),
       logger,
       isEnabled: () => false,
+      assertLocalExecutionAllowed: allowLocalExecution,
       telemetry: telemetry.telemetry,
       localExecutor: local.executor,
     });
 
     await expect(executor.execute(request)).resolves.toBe(local.execution);
-    expect(local.executor.execute).toHaveBeenCalledWith(request);
+    expect(local.executor.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: request.context,
+        options: expect.objectContaining({
+          model: request.options.model,
+          messages: request.options.messages,
+        }),
+      }),
+    );
     expect(telemetry.capture).toHaveBeenCalledWith(
       'agent-step-runtime-selected',
       expect.objectContaining({
@@ -177,6 +188,7 @@ describe('BrowserAgentStepExecutor', () => {
       logger,
       isEnabled: () => true,
       isKillSwitchActive: () => true,
+      assertLocalExecutionAllowed: allowLocalExecution,
       telemetry: telemetry.telemetry,
       localExecutor: local.executor,
     });
@@ -213,6 +225,7 @@ describe('BrowserAgentStepExecutor', () => {
       process,
       logger,
       isEnabled: () => true,
+      assertLocalExecutionAllowed: allowLocalExecution,
       telemetry: telemetry.telemetry,
       localExecutor: local.executor,
     });
@@ -279,6 +292,7 @@ describe('BrowserAgentStepExecutor', () => {
       process,
       logger,
       isEnabled: () => true,
+      assertLocalExecutionAllowed: allowLocalExecution,
       telemetry: telemetry.telemetry,
       localExecutor: local.executor,
       streamTextFn,
@@ -411,6 +425,7 @@ describe('BrowserAgentStepExecutor', () => {
       process,
       logger,
       isEnabled: () => true,
+      assertLocalExecutionAllowed: allowLocalExecution,
       streamTextFn,
     });
 
@@ -442,6 +457,7 @@ describe('BrowserAgentStepExecutor', () => {
       process,
       logger,
       isEnabled: () => true,
+      assertLocalExecutionAllowed: allowLocalExecution,
       telemetry: telemetry.telemetry,
       localExecutor: local.executor,
       streamTextFn: vi.fn() as never,
@@ -518,6 +534,7 @@ describe('BrowserAgentStepExecutor', () => {
       process,
       logger,
       isEnabled: () => true,
+      assertLocalExecutionAllowed: allowLocalExecution,
       telemetry: telemetry.telemetry,
       circuitBreaker: {
         failureThreshold: 2,
@@ -600,6 +617,7 @@ describe('BrowserAgentStepExecutor', () => {
       process,
       logger,
       isEnabled: () => true,
+      assertLocalExecutionAllowed: allowLocalExecution,
       telemetry: telemetry.telemetry,
       localExecutor: local.executor,
       streamTextFn: vi.fn() as never,

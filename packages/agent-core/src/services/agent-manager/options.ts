@@ -16,6 +16,7 @@ import type { AgentHistoryEntry } from '../../types/agent';
 import type { AgentManagerToolboxPort } from './ports';
 import type { AgentManagerStartupPolicy } from './startup-policy';
 import type { AgentStepExecutor } from '../../agents/agent-step-executor';
+import type { ToolApprovalLifecycleHooks } from '../../agents/tool-approval-lifecycle';
 
 /**
  * Live-state seam for the canonical {@link AgentStore} agent slice.
@@ -87,6 +88,13 @@ export interface AgentManagerHooksOptions {
     event: AgentNotificationEvent,
     agentId: string,
   ) => void | Promise<void>;
+  /**
+   * Optional host-owned durable lifecycle for explicit tool-approval
+   * responses. Core supplies an immutable approval binding and keeps the
+   * returned commit token opaque; no host-specific broker API crosses this
+   * boundary.
+   */
+  toolApprovalLifecycle?: ToolApprovalLifecycleHooks;
   /**
    * Renders host-specific mention markup that core doesn't recognise
    * (e.g. browser-tab mentions in the chat input). Returning

@@ -20,6 +20,7 @@ const SETTLED_PART_STATES = new Set([
   'output-available',
   'output-error',
   'output-denied',
+  'approval-responded',
   'done',
 ]);
 
@@ -65,6 +66,25 @@ export function mergeUIMessageStream(
       } else {
         const ep = existing[i] as Record<string, unknown>;
         const ip = incoming[i] as Record<string, unknown>;
+        const existingApproval = ep.approval as
+          | { id?: unknown }
+          | null
+          | undefined;
+        const incomingApproval = ip.approval as
+          | { id?: unknown }
+          | null
+          | undefined;
+        if (
+          (ep.type === 'dynamic-tool' ||
+            (typeof ep.type === 'string' && ep.type.startsWith('tool-'))) &&
+          ep.type === ip.type &&
+          ep.toolCallId === ip.toolCallId &&
+          existingApproval?.id === incomingApproval?.id &&
+          ep.state === 'approval-responded' &&
+          ip.state === 'approval-requested'
+        ) {
+          continue;
+        }
         if (
           ep.type === ip.type &&
           ep.state === ip.state &&

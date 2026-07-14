@@ -131,7 +131,7 @@ describe('state-mutations/approvals', () => {
     expect(updated.pendingApprovals).toEqual({});
   });
 
-  it('terminateNonTerminalToolPartsInLastAssistant leaves already-terminal tool parts untouched', () => {
+  it('terminateNonTerminalToolPartsInLastAssistant closes approval decisions that have not produced an effect', () => {
     const store = new AgentStore(emptySystemState());
     const deniedPart = {
       type: 'tool-doThing',
@@ -173,7 +173,8 @@ describe('state-mutations/approvals', () => {
     const after = store.get().agents.instances.a1!.state;
     const parts = after.history[0]!.parts as AgentToolUIPart[];
     expect(parts[0]!.state).toBe('output-denied');
-    expect(parts[1]!.state).toBe('approval-responded');
+    expect(parts[1]!.state).toBe('output-error');
+    expect(parts[1]!.approval).toBeUndefined();
   });
 
   it('terminateNonTerminalToolPartsInLastAssistant removes the empty assistant tail', () => {

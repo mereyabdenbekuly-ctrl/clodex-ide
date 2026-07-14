@@ -2,6 +2,10 @@ import type { AgentStore } from '../../../store/agent-store';
 import {
   denyAllNonTerminalToolPartsInHistory,
   resolveApproval,
+  rollbackApprovalResolution,
+  snapshotApprovalRequest,
+  snapshotPendingApprovalRequests,
+  snapshotPendingApprovalToolCallIds,
   terminateNonTerminalToolPartsInLastAssistant,
 } from './approvals';
 import {
@@ -106,6 +110,16 @@ export function bindStateMutations(store: AgentStore, agentInstanceId: string) {
       ),
     resolveApproval: (args: Parameters<typeof resolveApproval>[2]) =>
       resolveApproval(store, agentInstanceId, args),
+    rollbackApprovalResolution: (
+      args: Parameters<typeof rollbackApprovalResolution>[2],
+    ) => rollbackApprovalResolution(store, agentInstanceId, args),
+    snapshotApprovalRequest: (
+      args: Parameters<typeof snapshotApprovalRequest>[2],
+    ) => snapshotApprovalRequest(store, agentInstanceId, args),
+    snapshotPendingApprovalRequests: () =>
+      snapshotPendingApprovalRequests(store, agentInstanceId),
+    snapshotPendingApprovalToolCallIds: () =>
+      snapshotPendingApprovalToolCallIds(store, agentInstanceId),
 
     mergeUIMessageStream: (args: Parameters<typeof mergeUIMessageStream>[2]) =>
       mergeUIMessageStream(store, agentInstanceId, args),

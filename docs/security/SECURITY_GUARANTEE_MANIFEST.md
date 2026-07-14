@@ -1,6 +1,6 @@
 # CLODEx Security Guarantee Manifest
 
-- **Version:** 0.11
+- **Version:** 0.13
 - **Date:** July 14, 2026
 - **Rule:** only ENFORCED claims may be described as runtime guarantees.
 - **Source specification:** ../INTENT_CONTRACT_SPEC.md
@@ -48,7 +48,7 @@
 | INV-DESC-001          | Reviewed MCP descriptor matches the current local dispatch snapshot immediately before IPC dispatch  | Artifact Bridge MCP effects      | IMPLEMENTED_UNVERIFIED | changed source recomputes exact descriptor, authority, classification, runtime, Guardian revision, argument, and policy commitments at final dispatch                              | Central MCP integration and approval authority are unexecuted; remote MCP still does not accept a descriptor digest, so remote semantics are not claimed   |
 | INV-RETRY-001         | Result processing failure cannot replay a committed effect                                           | modeled browser effects          | IMPLEMENTED_UNVERIFIED | universal Artifact Bridge WAL covers direct ask-agent, automation, reviewed/ordinary async MCP; AutomationService adds one-shot manual/timer/resume/startup occurrence closure and never replays `DISPATCHING` | Current changes were intentionally not tested; external-provider atomicity and protected WAL anti-rollback remain outside the claim                        |
 | INV-WAL-001           | Every modeled irreversible browser effect has a durable preparation/dispatch/terminal record         | effect ledgers                   | IMPLEMENTED_UNVERIFIED | encrypted Artifact Bridge WAL classes include `agent-ask`, `automation`, and `mcp-read-async`; AutomationService adds `PREPARED → DISPATCHING → SUCCEEDED/FAILED_PRE_EFFECT/UNCERTAIN` for every scheduled/manual entry path | Current changes were intentionally not tested; synchronous read-MCP external semantics and effects outside modeled paths are not universally covered      |
-| INV-ATOMIC-001        | Authorization remains exact through the final dispatch boundary for every effect                     | effect adapters                  | IMPLEMENTED_UNVERIFIED | final commitments bind ask model/adapter inputs, complete automation definition/composite state, cloud ownership state, and MCP descriptor/runtime state; partial composite failure closes `UNCERTAIN` | No transaction is atomic with the external model provider, MCP target, or agent store; current implementation and prepared tests are unexecuted            |
+| INV-ATOMIC-001        | Authorization remains exact through the final dispatch boundary for every effect                     | effect adapters                  | IMPLEMENTED_UNVERIFIED | final commitments bind ask model/adapter inputs, complete automation definition/composite state, cloud ownership state, and MCP descriptor/runtime state; partial composite failure closes `UNCERTAIN` | No transaction is atomic across the MCP broker JSON store, Agent SQLite, final dispatch, or an external provider/target; current implementation and prepared tests are unexecuted |
 | INV-TICKET-001        | Execution Ticket is short-lived, exact-action, and single-use                                        | independent control-plane slice  | TESTED    | closed ticket validation, Guardian issuance/revalidation, kernel registration and synchronous one-shot `COMMIT_PERMIT`, plus focused contracts/Guardian/kernel/runtime tests    | Recording-only and memory-only; runner registry digest is bound, but concrete runner membership is not verified                                           |
 | INV-REF-CLOSURE-001   | The recording-only runtime owns PREPARE, final authority, permit, and one post-permit execute        | Session 5 reference runtime      | TESTED    | closed prepared-effect/permit shapes; accessors are not evaluated; prototype/symbol/non-enumerable/extra permit drift closes `UNCERTAIN` before execute                         | Non-durable reference only; PREPARE is trusted inert behavior, with no host effect, crash-safe transaction, cross-process commit, or production promotion |
 | INV-APPROVAL-REF-001  | Canonical approval binds only machine-readable authority and current commitments                     | independent approval reference   | TESTED    | canonical render model/artifact, DSSE verification, trusted reviewer snapshot, final trust/commitment fences, and one-shot replay tests                                         | No production UI, key custody, signing service, or durable replay store                                                                                   |
@@ -68,7 +68,8 @@
 | INV-EFFECT-001        | Every modeled effect reaches one durable terminal closure state                                      | effect adapters                  | BLOCKED   | tested isolated ledger/evidence/runtime references plus unverified universal Artifact Bridge WAL and atomic local control-plane implementations narrow the gap | External effects, independently stored trust/evidence/checkpoints, protected heads, and packaged production wiring still do not share one atomic authority/effect transaction |
 | INV-MEM-001           | Memory cannot mint authority                                                                         | memory/control plane             | SPEC_ONLY | Intent Contract authority model                                                                                                                                                 | Complete semantic lineage and universal runtime mediation are not claimed                                                                                 |
 | INV-SANDBOX-001       | Test execution has no host filesystem, credential, or network escape                                 | sandbox/test adapter             | BLOCKED   | reference profile plus unverified `@clodex/adapters-node` implementation require digest-only images, `--pull=never`, no network/credentials, read-only workspace/root, disposable scratch, dropped capabilities, LSM/seccomp and limits | No target-platform execution evidence exists; daemon endpoint protection, loaded LSM state, container escape testing, and packaged production wiring remain blocking |
-| INV-MCP-001           | Every agent-reachable MCP tool call is mediated by exact descriptor/runtime commitment, approval authority, Guardian policy, and a final fence | MCP tool dispatch | IMPLEMENTED_UNVERIFIED | registry and Clodex-cloud agent tools now use the central trusted-dispatch gateway; Toolbox wires an approval broker that stages intent but claims authority only from one exact affirmative AgentStore record | Source was not tested; pending/claimed approval state is process-memory only, durable reuse prevention across restart is absent, and resource/prompt agent tools remain disabled/settings-only |
+| INV-MCP-001           | Every agent-reachable MCP tool call is mediated by exact descriptor/runtime commitment, approval authority where required, Guardian policy, and a final fence | MCP tool dispatch | IMPLEMENTED_UNVERIFIED | registry tools and the allowlisted read-only Clodex-cloud tool use the central trusted-dispatch gateway; effectful cloud tools remain unregistered; Toolbox's encrypted approval store persists exact bounded identity/descriptor/context/effect/decision digests and the lifecycle `STAGED → RESPONSE_RECORDED → APPROVED → CLAIMED`, with `DENIED`, `EXPIRED`, and `INVALIDATED` terminal closure; `claim()` accepts only `APPROVED`, retains replay tombstones, and reconciles ambiguous saves by exact read-back without treating a rejected save as authority success | Source was not tested; `APPROVED` does not prove dispatch and `CLAIMED` does not prove final-authority consumption, IPC/network send, or effect commit; no cross-process/cross-store atomicity exists; deletion/reset, wall-clock rollback, Windows directory-fsync absence, SQLite power-loss durability, and the same-file revision's lack of protected anti-rollback/existence anchors remain outside the claim; resource/prompt agent tools remain disabled/settings-only |
+| INV-APPROVAL-RESP-001 | A broker-managed MCP approval on a persistent agent cannot authorize continuation before its exact decision is durably bound in the broker and the exact AgentStore message is strictly committed | browser persistent-agent MCP approval continuation | IMPLEMENTED_UNVERIFIED | the common `BaseAgent` ingress snapshots exactly one `approval-requested` part, waits for the originating step to settle, prepares the durable broker decision, performs an exact state mutation, and enters a strict per-agent serialized Agent SQLite save that binds the enqueue-time full message and reads back exact ID/role/parts/metadata inside the transaction before broker commit and continuation; `RESPONSE_RECORDED` is non-authorizing; new-message/stop/flush/system cancellation invalidates open broker records, a per-agent Toolbox epoch rejects/cleans late stale staging and pending-index publication, and rejected sweep saves retain dirty rows behind a retry barrier | Source was not tested; broker JSON and Agent SQLite do not share a transaction; rollback can conservatively leave a sticky admission barrier; ordinary restart neither reconstructs ephemeral `pendingApprovals` UI nor automatically continues the turn; coordinated rollback/deletion of both stores and cross-process writers remain outside the claim |
 | INV-CLOUD-001         | Stale local owner cannot execute after cloud handoff                                                 | execution lanes                  | IMPLEMENTED_UNVERIFIED | router/browser-executor omission defaults deny; final checks cover local/remote turn, host model/tool, wrapped local tool, and intended Swarm model/tool/history dispatches        | Source-only changes were not tested across lease races, awaits, Swarm direct paths, restart, or packaged execution                                          |
 
 ## Session 1 evidence
@@ -243,19 +244,66 @@
   `PREPARED` as `FAILED_PRE_EFFECT` and `DISPATCHING` as `UNCERTAIN`; no startup
   path replays an occurrence.
 - The same source tranche adds the central MCP commitment/final-fence gateway
-  and exact approval-broker design; ShellCapabilityBroker production wiring;
+  and an encrypted durable approval broker. The broker persists only bounded
+  identifiers and exact digests, writes `STAGED` before `needsApproval` returns
+  true or the host pending-approval record is published, and then records an
+  explicit response through `STAGED → RESPONSE_RECORDED → APPROVED` or
+  `STAGED → RESPONSE_RECORDED → DENIED`. `RESPONSE_RECORDED` never authorizes
+  execution. The common approval ingress snapshots one exact pending part,
+  waits for the originating step to settle, performs the broker prepare, exact
+  AgentStore mutation, and a strict serialized Agent SQLite save of the full
+  affected message with enqueue-time/fresh-store binding plus in-transaction
+  ID/role/parts/metadata read-back. Broker commit and continuation follow only
+  after that barrier. Automatic new-message, stop, queue-flush, and system
+  cancellation closes open records as `INVALIDATED`, not as broker `DENIED`,
+  and a per-agent host epoch rejects/cleans late stale MCP staging plus generic
+  pending-index publication; failed sweep saves retain their dirty rows for a
+  fail-closed retry. User-message, destructive history, and recovered-replay
+  lifecycles are serialized per agent. Priority cancellation preempts the
+  current step synchronously before queued durable cleanup; replace/revert stay
+  fenced across host undo and synchronous history mutation, while replay uses a
+  session generation and bounded closed-execution tombstones. Pending priority
+  work rejects and tombstones replay ingress before admission. At replay
+  `beginStep`, synchronous AgentStore subscriber preemption is generation-fenced
+  before session identity publication, and a subscriber throw still burns the
+  bounded session-local tombstone in `finally`; no late chunk may reopen that
+  execution.
+  `claim()` accepts only `APPROVED`, saves `CLAIMED` before returning
+  one-shot authority, rechecks the exact decision evidence after persistence,
+  retains replay tombstones, and closes expiry or invalid evidence as
+  `EXPIRED`/`INVALIDATED`. Ambiguous broker writes are reconciled by exact
+  read-back, but every rejected save still rejects authority issuance; an
+  intended read-back remains durability-pending for an idempotent retry, while
+  read-back divergence faults the broker. This tranche also adds
+  ShellCapabilityBroker production wiring;
   removal of remote module import and ambient filesystem authority from the JS
   sandbox; fail-closed OpenManus without an OS-confined brokered adapter;
   cloud-ownership checks at model/tool/turn/local dispatch boundaries; exact
   per-agent mount permission lookup; and removal of Swarm ambient workspace
   auto-mounting. `INV-MCP-001` is `IMPLEMENTED_UNVERIFIED`: source now wires
-  the broker for registry and Clodex-cloud tools, but executable evidence must
-  still prove every path claims authority only from exact affirmative approval.
+  the durable broker for registry tools and the allowlisted read-only
+  Clodex-cloud path; effectful cloud tools remain unregistered. Executable
+  evidence must still prove every approval path stages before `needsApproval`
+  returns true and before the host pending-approval record is published,
+  persists the exact response in both ordered durability barriers before
+  continuation, claims only exact committed affirmative evidence, and cannot
+  reuse a terminal identity after restart. `APPROVED` is not evidence of
+  dispatch. `CLAIMED` is intentionally only a conservative replay tombstone;
+  it is not evidence of final-fence consumption, dispatch, or external effect.
 - None of those later changes was tested, typechecked, linted, built, packaged,
   or smoke-tested. The green CI head `1ad58e67` is the pre-tranche baseline
   only. Package/plugin authority, write defaults, and ephemeral-grant defaults
-  remain unpromoted. External-effect atomicity, protected heads, target-OS
-  confinement evidence, and packaged Electron smoke remain non-claims.
+  remain unpromoted. The approval-store revision is stored in the same
+  encrypted file and has no independent monotonic/existence anchor, so hostile
+  rollback, deletion, or reset to a fresh store remains a non-claim. There is
+  no atomic transaction between the broker JSON file, Agent SQLite, MCP
+  dispatch, or the external effect, and there is no cross-process writer
+  serialization. Expiry is wall-clock based; restart neither reconstructs the
+  ephemeral pending-approval UI nor automatically continues a response;
+  SQLite power-loss durability was not established; and Windows has no
+  containing-directory fsync for the broker file. External-effect atomicity,
+  protected heads, target-OS confinement evidence, and packaged Electron smoke
+  remain non-claims.
 
 ## Session 5 checkpoint evidence
 
@@ -386,6 +434,7 @@ gate MUST also remain default-off while any of these rows is not `ENFORCED`:
 
 - INV-PRODUCTION-BOOTSTRAP-001;
 - INV-MCP-001;
+- INV-APPROVAL-RESP-001;
 - INV-CLOUD-001;
 - INV-SHELL-001;
 - INV-JS-SANDBOX-001;

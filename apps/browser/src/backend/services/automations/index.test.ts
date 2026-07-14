@@ -3,12 +3,24 @@ import type { AutomationStoreData } from '@shared/automations';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import type { NotificationService } from '../notification';
+import type { AutomationDispatchWalPersistence } from './dispatch-wal';
 import {
   AutomationService,
   type AutomationBeforeDispatchInput,
   type AutomationDispatchInput,
   type AutomationPersistence,
 } from './index';
+
+vi.mock('electron', () => ({
+  app: {
+    getPath: (name: string) => `/tmp/clodex-automation-test/${name}`,
+  },
+  safeStorage: {
+    isEncryptionAvailable: () => true,
+    encryptString: (value: string) => Buffer.from(value, 'utf8'),
+    decryptString: (value: Buffer) => value.toString('utf8'),
+  },
+}));
 
 function createHarness(options?: {
   initial?: AutomationStoreData;
@@ -23,6 +35,13 @@ function createHarness(options?: {
     load: async () => structuredClone(data),
     save: async (value) => {
       data = structuredClone(value);
+    },
+  };
+  let dispatchWalData: unknown = { version: 1, records: {} };
+  const dispatchWalPersistence: AutomationDispatchWalPersistence = {
+    load: async () => structuredClone(dispatchWalData),
+    save: async (value) => {
+      dispatchWalData = structuredClone(value);
     },
   };
   const karton = {
@@ -46,6 +65,7 @@ function createHarness(options?: {
   return {
     handlers,
     persistence,
+    dispatchWalPersistence,
     karton,
     notifications,
     dispatch,
@@ -73,6 +93,7 @@ describe('AutomationService', () => {
       karton: harness.karton,
       notifications: harness.notifications,
       persistence: harness.persistence,
+      dispatchWalPersistence: harness.dispatchWalPersistence,
       isFeatureEnabled: () => true,
       dispatch: harness.dispatch,
       nativeWakeScheduler,
@@ -102,7 +123,7 @@ describe('AutomationService', () => {
     await service.teardown();
   });
 
-  it('runs an automation with retries and records the submitted agent', async () => {
+  it('does not retry an automation effect after the first dispatch failure', async () => {
     let attempts = 0;
     const harness = createHarness({
       dispatch: async () => {
@@ -116,6 +137,7 @@ describe('AutomationService', () => {
       karton: harness.karton,
       notifications: harness.notifications,
       persistence: harness.persistence,
+      dispatchWalPersistence: harness.dispatchWalPersistence,
       isFeatureEnabled: () => true,
       dispatch: harness.dispatch,
       now: () => harness.now,
@@ -139,10 +161,11 @@ describe('AutomationService', () => {
 
     expect(result.snapshot.recentRuns[0]).toMatchObject({
       automationId: id,
-      status: 'succeeded',
-      attemptCount: 2,
-      agentId: 'agent-retry',
+      status: 'uncertain',
+      attemptCount: 1,
+      agentId: null,
     });
+    expect(attempts).toBe(1);
     await service.teardown();
   });
 
@@ -162,6 +185,7 @@ describe('AutomationService', () => {
       karton: harness.karton,
       notifications: harness.notifications,
       persistence: harness.persistence,
+      dispatchWalPersistence: harness.dispatchWalPersistence,
       isFeatureEnabled: () => true,
       dispatch: harness.dispatch,
       now: () => harness.now,
@@ -218,6 +242,7 @@ describe('AutomationService', () => {
       karton: harness.karton,
       notifications: harness.notifications,
       persistence: harness.persistence,
+      dispatchWalPersistence: harness.dispatchWalPersistence,
       isFeatureEnabled: () => true,
       dispatch: harness.dispatch,
       now: () => harness.now,
@@ -268,13 +293,13 @@ describe('AutomationService', () => {
       automationId: targetId,
       status: 'failed',
       attemptCount: 1,
-      reason: 'Artifact Bridge grant revoked',
+      reason: 'FAILED_PRE_EFFECT: Artifact Bridge grant revoked',
     });
     expect(harness.getData().runs[0]).toMatchObject({
       automationId: targetId,
       status: 'failed',
       attemptCount: 1,
-      reason: 'Artifact Bridge grant revoked',
+      reason: 'FAILED_PRE_EFFECT: Artifact Bridge grant revoked',
     });
     await service.teardown();
   });
@@ -292,6 +317,7 @@ describe('AutomationService', () => {
       karton: harness.karton,
       notifications: harness.notifications,
       persistence: harness.persistence,
+      dispatchWalPersistence: harness.dispatchWalPersistence,
       isFeatureEnabled: () => true,
       dispatch: harness.dispatch,
       now: () => harness.now,
@@ -321,15 +347,15 @@ describe('AutomationService', () => {
     expect(attempts).toBe(1);
     expect(service.getSnapshot().recentRuns[0]).toMatchObject({
       automationId: id,
-      status: 'failed',
+      status: 'uncertain',
       attemptCount: 1,
-      reason: 'dispatch result unavailable after transport close',
+      reason: 'UNCERTAIN: dispatch result unavailable after transport close',
     });
     expect(harness.getData().runs[0]).toMatchObject({
       automationId: id,
-      status: 'failed',
+      status: 'uncertain',
       attemptCount: 1,
-      reason: 'dispatch result unavailable after transport close',
+      reason: 'UNCERTAIN: dispatch result unavailable after transport close',
     });
     await service.teardown();
   });
@@ -341,6 +367,7 @@ describe('AutomationService', () => {
       karton: harness.karton,
       notifications: harness.notifications,
       persistence: harness.persistence,
+      dispatchWalPersistence: harness.dispatchWalPersistence,
       isFeatureEnabled: () => true,
       dispatch: harness.dispatch,
       now: () => harness.now,
@@ -355,10 +382,9 @@ describe('AutomationService', () => {
     });
 
     await expect(
-      harness.handlers.get('automations.runNow')?.(
-        'ui',
-        created.snapshot.automations[0].id,
-      ),
+      service.runAutomationNow(created.snapshot.automations[0].id, {
+        failureMode: 'propagate',
+      }),
     ).rejects.toThrow('explicit capability grant');
     await service.teardown();
   });
@@ -370,6 +396,7 @@ describe('AutomationService', () => {
       karton: harness.karton,
       notifications: harness.notifications,
       persistence: harness.persistence,
+      dispatchWalPersistence: harness.dispatchWalPersistence,
       isFeatureEnabled: () => false,
       dispatch: harness.dispatch,
       now: () => harness.now,
@@ -392,6 +419,7 @@ describe('AutomationService', () => {
       karton: seedHarness.karton,
       notifications: seedHarness.notifications,
       persistence: seedHarness.persistence,
+      dispatchWalPersistence: seedHarness.dispatchWalPersistence,
       isFeatureEnabled: () => true,
       dispatch: seedHarness.dispatch,
       now: () => seedHarness.now,
@@ -415,6 +443,7 @@ describe('AutomationService', () => {
       karton: harness.karton,
       notifications: harness.notifications,
       persistence: harness.persistence,
+      dispatchWalPersistence: harness.dispatchWalPersistence,
       isFeatureEnabled: () => false,
       dispatch: harness.dispatch,
       now: () => harness.now,
@@ -451,6 +480,7 @@ describe('AutomationService', () => {
       karton: harness.karton,
       notifications: harness.notifications,
       persistence: harness.persistence,
+      dispatchWalPersistence: harness.dispatchWalPersistence,
       isFeatureEnabled: () => enabled,
       dispatch: harness.dispatch,
       now: () => harness.now,

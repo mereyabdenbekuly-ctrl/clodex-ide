@@ -15,7 +15,7 @@
 | 1. CI and protocol truth                     | COMPLETE    | Pages is in mandatory typecheck; shared v2 protocol scaffolding is tested but is not the production generated-app bridge                                                     |
 | 2. Session and navigation boundary           | COMPLETE    | Document-bound transport is wired fail-closed in main, has ordered teardown, and passed 111/111 focused tests plus all required typechecks                                   |
 | 3. Resolver and canonical authority approval | COMPLETE    | Local-agent resolver, trusted reviewer, canonical current-profile review, exact-byte revision lifecycle, and isolated-app egress controls passed 252/252 tests               |
-| 4. Atomic authorization-to-effect safety     | IMPLEMENTED_UNVERIFIED | Universal ask-agent/async-MCP WAL, universal scheduled/manual Automation WAL, central MCP dispatch fencing, shell brokering, sandbox/OpenManus fail-closed changes, cloud lease checks, and mount narrowing are source-complete but intentionally unexecuted; external atomicity and protected heads remain blocked |
+| 4. Atomic authorization-to-effect safety     | IMPLEMENTED_UNVERIFIED | Universal ask-agent/async-MCP WAL, universal scheduled/manual Automation WAL, central MCP dispatch fencing with a durable approval-response lifecycle and replay tombstones, shell brokering, sandbox/OpenManus fail-closed changes, cloud lease checks, and mount narrowing are source-complete but intentionally unexecuted; cross-store/external atomicity and protected heads remain blocked |
 | 5. Safe Coding vertical slice and promotion  | IMPLEMENTED_UNVERIFIED | Tested reference baseline remains historical; atomic control plane, signed registry, Linux adapters, and fail-closed production bootstrap now have browser composition with `provider: null` and ordered admission teardown, but the tranche is unexecuted and gates remain default-off |
 
 ## Session 1 — CI and protocol truth
@@ -241,7 +241,8 @@ Implemented and verified:
   reconciled on startup before authority can be published;
 - prepared-only grant audit semantics (`grant.save-prepared` and
   `grant.revoke-prepared`), production audit recorder/reader wiring, sticky
-  integrity failure, and file plus directory fsync for audit/persisted writes;
+  integrity failure, and file plus supported-platform directory fsync for
+  audit/persisted writes;
 - final MCP dispatch validation inside `McpHostSupervisor`, after
   `ensureReady()` and immediately before the synchronous IPC request;
 - MCP host protocol v6 connection identity, serialized per-server lifecycle,
@@ -283,14 +284,74 @@ Session 4 source is now `IMPLEMENTED_UNVERIFIED`. The closure tranche adds:
   system-resume, and startup-reconciliation occurrences. It commits the exact
   definition and attempt, writes `PREPARED` before `DISPATCHING`, and recovers
   `PREPARED → FAILED_PRE_EFFECT` and `DISPATCHING → UNCERTAIN` without replay;
-- a central MCP trusted **tool-call** dispatch boundary intended to cover
-  registry MCP and Clodex-cloud MCP. It binds the exact descriptor, trusted classification,
-  authority binding, runtime generation, and Guardian revision; any
-  approval-required dispatch must claim a single exact affirmative approval
-  record and consume it at the final synchronous fence. Annotation or
-  `requiresApproval` metadata may escalate risk but cannot grant authority;
-  resource/prompt access must remain settings-only while corresponding agent
-  tools are disabled;
+- a central MCP trusted **tool-call** dispatch boundary covering registry MCP
+  and the host-allowlisted read-only Clodex-cloud path. Effectful/
+  approval-required cloud tools remain intentionally unregistered, so their
+  durable-approval path is wiring only unless Guardian escalates the allowlisted
+  read-only tool. The boundary binds the exact descriptor, trusted
+  classification, authority binding, runtime generation, and Guardian
+  revision. The approval broker durably stages bounded identifiers and exact
+  descriptor/context/effect digests before `needsApproval` returns true or the
+  host pending-approval record is published;
+- an `IMPLEMENTED_UNVERIFIED` durable approval-response lifecycle. Affirmative
+  responses follow
+  `STAGED → RESPONSE_RECORDED → APPROVED → CLAIMED`; negative responses follow
+  `STAGED → RESPONSE_RECORDED → DENIED`; and any still-open `STAGED`,
+  `RESPONSE_RECORDED`, or `APPROVED` record can close as `EXPIRED` or
+  `INVALIDATED`. `RESPONSE_RECORDED` records only a bound response intent and
+  never authorizes claim or dispatch. The decision digest binds the agent,
+  tool-call ID and real tool name, descriptor/context/effect digests, approval
+  ID, and exact approve/deny decision. Exact duplicate decisions are
+  idempotent at the broker boundary, while the common ingress rejects a second
+  already-resolved response and conflicting approve/deny attempts fail closed;
+- the explicit response path waits for the originating step's UI stream and
+  final best-effort save attempt/post-step bookkeeping to settle without a step
+  failure, then orders broker prepare, exact AgentStore part
+  mutation, strict serialized persistence of the exact full dirty message into
+  `AgentPersistenceDB` SQLite, broker commit to `APPROVED` or `DENIED`, and only
+  then agent continuation. Persistence uses a per-agent queue, binds the exact
+  enqueue-time payload, reads the fresh AgentStore snapshot inside that queue,
+  and verifies message ID, role, parts, and metadata at the exact SQLite
+  sequence before transaction commit. It propagates
+  failure instead of using the legacy best-effort save path. Unknown or
+  ambiguous approval IDs fail closed. A persistence or broker-commit failure
+  restores the exact
+  `approval-requested` part and pending-approval entry when possible; an
+  unrecoverable rollback leaves a sticky admission barrier rather than
+  permitting continuation;
+- `claim()` accepts final authority only from the exact durable `APPROVED`
+  record and writes the encrypted durable `CLAIMED` replay tombstone before
+  returning the one-shot authority object. Broker writes use atomic replacement,
+  file fsync, containing-directory fsync where supported, and post-save evidence
+  checks; a rejected or ambiguous save never returns authority;
+- automatic cancellation is represented as `INVALIDATED`, not as a fabricated
+  human denial. A new user message records `new-user-message`; stop/flush paths
+  record `user-stop`, `queue-flush`, or `system-interrupted`. The broker closes
+  the listed records and any still-open unpublished record for the same agent
+  durably before the corresponding AgentStore sweep; orphan pending-approval
+  keys are cleared and affected history rows are strictly persisted. A rejected
+  sweep save, including a synchronous subscriber failure after AgentStore
+  commit, retains conservative dirty rows behind a fail-closed retry barrier.
+  User-message, queue, stop/recovery, retry, replace, revert, and recovered
+  replay operations are serialized per agent. Priority stop/flush/recovery
+  synchronously aborts and advances the step/approval generations before its
+  durable worker waits for that queue. Replace/revert keep step, replay, and
+  approval admission fenced across asynchronous host undo and the final history
+  mutation; recovered replay is session-generation-bound and tombstoned after
+  close or preemption.
+  Replay ingress that overlaps a queued priority action is tombstoned before
+  admission. Replay also snapshots the history-preemption generation before
+  subscriber-visible `beginStep`; synchronous priority stop/flush/recovery wins
+  before session identity publication, and the execution is tombstoned in a
+  `finally` path even if the subscriber throws.
+  Toolbox captures a per-agent approval lifecycle epoch in every host approval
+  publication closure, rechecks it before/after MCP broker staging, and fences
+  pending-index publication for MCP, remote, shell, and sandbox callbacks. A
+  stale post-cancellation `needsApproval` callback therefore cannot resurrect
+  an unpublished `STAGED` record or orphan `pendingApprovals` key;
+  Annotation or `requiresApproval` metadata may escalate risk but cannot grant
+  authority; resource/prompt access must remain settings-only while
+  corresponding agent tools are disabled;
 - production construction of `ShellCapabilityBroker`, injected as a required
   Toolbox shell security dependency with a dedicated audit path; PTY creation
   and command/stdin/kill/poll all stage and one-shot consume exact authority;
@@ -311,12 +372,31 @@ Session 4 source is now `IMPLEMENTED_UNVERIFIED`. The closure tranche adds:
 
 No item in that list was tested, typechecked, linted, built, or smoke-tested in
 the current tranche. The green GitHub CI head `1ad58e67` predates these changes.
-Synchronous read-MCP external semantics, atomicity with the external provider/
-MCP/agent store, independently protected anti-rollback heads, target-OS
-confinement evidence, and packaged Electron smoke remain outside the claim. No
-feature-gate default or write/package/plugin promotion changed. Production
-authority remains absent unless a separately reviewed, verified composition is
-installed.
+Synchronous read-MCP external semantics, atomicity with the external provider,
+target-OS confinement evidence, and packaged Electron smoke remain outside the
+claim. The lifecycle does not provide one transaction across the encrypted
+approval-broker store and AgentPersistenceDB SQLite, nor atomicity with MCP
+IPC/network dispatch or the external effect. Its persistence queue serializes
+writers only within one process; cross-process writer serialization is not
+implemented. Neither store has an independently protected monotonic
+anti-rollback/existence head, so coordinated rollback or deletion of both
+stores is not claimed to be detected or prevented. Expiry uses the wall clock,
+so clock rollback can extend an open record. Ordinary restart does not
+reconstruct `pendingApprovals`, automatically continue a previously approved
+turn, or prove recovery of the UI approval prompt. SQLite power-loss durability
+for the strict exact-index save has not been demonstrated, and Windows still
+lacks containing-directory fsync for the broker file.
+
+For MCP approval specifically, durable `APPROVED` means only that the exact
+bound affirmative response survived originating-step settlement, broker
+prepare, exact AgentStore mutation, strict full-payload SQLite save, and broker
+commit sequence; it does **not** mean
+that dispatch occurred. `CLAIMED` remains a conservative durable replay
+tombstone written before authority return; it does **not** attest that the
+in-memory authority was consumed, that IPC/network dispatch occurred, or that
+the external effect committed. No feature-gate default or write/package/plugin
+promotion changed. Production authority remains absent unless a separately
+reviewed, verified composition is installed.
 
 ## Session 5 — Safe Coding vertical slice and promotion
 
