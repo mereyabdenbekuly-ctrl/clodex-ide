@@ -49,7 +49,7 @@ import {
 import { useOpenAgent } from '@ui/hooks/use-open-chat';
 import { useContentCollapsed } from '../../../_components/content-collapsed-context';
 import type { Content } from '@tiptap/core';
-import { IconMagicWandSparkle } from 'nucleo-micro-bold';
+import { IconMagicWandSparkle } from '@clodex/icons';
 import { MessageUserPlanAction } from './message-user-plan-action';
 import { Button } from '@clodex/stage-ui/components/button';
 import { GitForkIcon, LoaderCircleIcon } from 'lucide-react';

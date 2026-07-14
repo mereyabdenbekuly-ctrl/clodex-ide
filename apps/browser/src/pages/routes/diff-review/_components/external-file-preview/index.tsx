@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, type FC } from 'react';
-import { IconDatabaseFillDuo18 } from 'nucleo-ui-fill-duo-18';
-import { IconArrowRightFill18 } from 'nucleo-ui-fill-18';
+import { IconArrowRightFill18, IconDatabaseFillDuo18 } from '@clodex/icons';
 import { useKartonProcedure } from '@pages/hooks/use-karton';
 import type { ExternalFileDiff } from '@shared/karton-contracts/ui/shared-types';
 import type { ExternalFileContentResult } from '@shared/karton-contracts/pages-api/types';

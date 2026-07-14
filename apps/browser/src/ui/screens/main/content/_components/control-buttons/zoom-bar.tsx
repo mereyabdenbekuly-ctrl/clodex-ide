@@ -3,7 +3,7 @@ import { Button } from '@clodex/stage-ui/components/button';
 import {
   IconMagnifierMinusOutline18,
   IconMagnifierPlusOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import { HotkeyCombo } from '@ui/components/hotkey-combo';
 import {
   Tooltip,

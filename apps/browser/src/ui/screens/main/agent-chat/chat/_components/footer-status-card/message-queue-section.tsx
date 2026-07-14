@@ -1,8 +1,5 @@
 import { Button } from '@clodex/stage-ui/components/button';
-import {
-  IconTrash2Outline24,
-  IconArrowUpOutline24,
-} from 'nucleo-core-outline-24';
+import { IconTrash2Outline24, IconArrowUpOutline24 } from '@clodex/icons';
 import { ChevronDownIcon } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@ui/utils';

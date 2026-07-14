@@ -9,8 +9,7 @@ import {
   DEFAULT_TOOL_APPROVAL_MODE,
   type ToolApprovalMode,
 } from '@shared/karton-contracts/ui/shared-types';
-import { IconChevronDownFill18 } from 'nucleo-ui-fill-18';
-import { IconSparkleOutline18 } from 'nucleo-ui-outline-18';
+import { IconChevronDownFill18, IconSparkleOutline18 } from '@clodex/icons';
 import { useKartonProcedure, useKartonState } from '@ui/hooks/use-karton';
 import { useOpenAgent } from '@ui/hooks/use-open-chat';
 import {

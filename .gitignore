@@ -12,6 +12,32 @@ node_modules
 .env.*
 !.env.example
 
+# CLODEx private/commercial material. Defense in depth only: agents must still
+# inspect every untracked file before staging, and private work must live
+# outside public Git worktrees.
+/CLODEx_Private_Data_Room/
+/private-data-room/
+/data-room/
+/clodex-agent-gateway-private/
+/clodex-enterprise-private/
+/clodex-cloud-private/
+/customer-data/
+/customer-artifacts/
+/customer-policy-packs/
+/private-threat-intelligence/
+/private-benchmark-holdout/
+/private-incident-reports/
+/commercial-private/
+/investor-private/
+/contracts-private/
+/pricing-private/
+/PITCH_DECK_TECHNICAL_FOUNDATION.md
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.key
+
 # Testing
 coverage
 test-data

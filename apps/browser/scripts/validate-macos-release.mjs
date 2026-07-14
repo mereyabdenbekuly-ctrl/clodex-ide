@@ -24,6 +24,11 @@ import {
   inspectUpdateServerOrigin,
   parseCodesignAuthorities,
 } from '../../../scripts/release/signing-readiness.mjs';
+import {
+  ATTRIBUTION_DIRECTORY_NAME,
+  inspectPackagedAttribution,
+  writeFinalArtifactSbom,
+} from './release-attribution.mjs';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const browserDirectory = path.resolve(scriptDirectory, '..');
@@ -818,6 +823,15 @@ async function main() {
 
     printStep('Verifying ASAR integrity, Electron fuses, and entitlements');
     const asarIntegrity = await inspectAsarIntegrity(appPath, infoPlistPath);
+    const packagedAttribution = inspectPackagedAttribution({
+      attributionDirectory: path.join(
+        appPath,
+        'Contents',
+        'Resources',
+        ATTRIBUTION_DIRECTORY_NAME,
+      ),
+      requireReady: options.channel !== 'dev',
+    });
     const fuses = inspectElectronFuses(appPath);
     const entitlements =
       options.allowAdhoc && packageSignature.isAdhoc
@@ -878,6 +892,22 @@ async function main() {
         mountPath,
         config.displayName,
       );
+      const mountedAttribution = inspectPackagedAttribution({
+        attributionDirectory: path.join(
+          mountedAppPath,
+          'Contents',
+          'Resources',
+          ATTRIBUTION_DIRECTORY_NAME,
+        ),
+        requireReady: options.channel !== 'dev',
+      });
+      if (
+        mountedAttribution.manifestSha256 !== packagedAttribution.manifestSha256
+      ) {
+        throw new Error(
+          'Mounted DMG application attribution manifest differs from the packaged application',
+        );
+      }
       mountedSignature = inspectSignature(mountedAppPath);
       assertSignatureSecurity(
         mountedSignature,
@@ -908,6 +938,22 @@ async function main() {
     }
 
     const copiedSignature = inspectSignature(copiedAppPath);
+    const copiedAttribution = inspectPackagedAttribution({
+      attributionDirectory: path.join(
+        copiedAppPath,
+        'Contents',
+        'Resources',
+        ATTRIBUTION_DIRECTORY_NAME,
+      ),
+      requireReady: options.channel !== 'dev',
+    });
+    if (
+      copiedAttribution.manifestSha256 !== packagedAttribution.manifestSha256
+    ) {
+      throw new Error(
+        'Copied application attribution manifest differs from the packaged application',
+      );
+    }
     assertSignatureSecurity(
       copiedSignature,
       options.allowAdhoc,
@@ -955,6 +1001,21 @@ async function main() {
       );
     }
 
+    const sbomPath = path.join(
+      validationDirectory,
+      `macos-${options.arch}-${version}.cdx.json`,
+    );
+    const sbom = await writeFinalArtifactSbom({
+      applicationDirectory: appPath,
+      appName: config.displayName,
+      appVersion: version,
+      arch: options.arch,
+      attribution: packagedAttribution,
+      outputPath: sbomPath,
+      platform: 'macos',
+      resourcesDirectory: path.join(appPath, 'Contents', 'Resources'),
+    });
+
     const artifacts = {};
     for (const [name, artifactPath] of Object.entries({
       dmg: dmgPath,
@@ -973,6 +1034,7 @@ async function main() {
         ) * 1024,
       path: appPath,
     };
+    artifacts.sbom = sbom;
 
     const manifest = {
       schemaVersion: 1,
@@ -1002,8 +1064,15 @@ async function main() {
         dmgStapler,
       },
       checks: {
+        attribution: {
+          dependencyCount: packagedAttribution.dependencyCount,
+          manifestSha256: packagedAttribution.manifestSha256,
+          noticePaths: packagedAttribution.noticePaths,
+          status: packagedAttribution.manifest.status,
+        },
         cleanProfileUiLaunch: uiLaunch,
         dmgVerified: true,
+        sbom,
         smoke,
         zipVerified: true,
       },
@@ -1023,6 +1092,7 @@ async function main() {
       [
         `${artifacts.dmg.sha256}  ${path.basename(dmgPath)}`,
         `${artifacts.zip.sha256}  ${path.basename(zipPath)}`,
+        `${artifacts.sbom.sha256}  ${path.basename(sbomPath)}`,
         '',
       ].join('\n'),
     );

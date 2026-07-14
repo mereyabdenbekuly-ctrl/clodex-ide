@@ -1,4 +1,4 @@
-import { IconCodeBranchOutline18 } from 'nucleo-ui-outline-18';
+import { IconCodeBranchOutline18 } from '@clodex/icons';
 import { CheckIcon, XIcon } from 'lucide-react';
 import type { MountEntry } from '@shared/karton-contracts/ui';
 

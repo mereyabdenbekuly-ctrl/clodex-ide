@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useSession } from '@/lib/auth-client';
-import { IconDownload4FillDuo18 } from 'nucleo-ui-fill-duo-18';
+import { IconDownload4FillDuo18 } from '@clodex/icons';
 
 type Locale = 'ru' | 'en';
 

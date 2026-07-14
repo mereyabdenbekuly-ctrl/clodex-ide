@@ -1,8 +1,9 @@
 import type { WritePart } from '.';
 import {
   IconClipboardContentOutline18,
+  IconClipboardOutline18,
   IconXmarkOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import {
   parsePlanContent,
   type PlanTask,
@@ -18,7 +19,6 @@ import { Button } from '@clodex/stage-ui/components/button';
 import { Checkbox } from '@clodex/stage-ui/components/checkbox';
 import { useScrollFadeMask } from '@ui/hooks/use-scroll-fade-mask';
 import { cn } from '@ui/utils';
-import { IconClipboardOutline18 } from 'nucleo-ui-outline-18';
 import { usePlanPhase } from '@ui/hooks/use-plan-phase';
 import { useSendImplement } from '@ui/hooks/use-send-implement';
 import { HotkeyCombo } from '@ui/components/hotkey-combo';

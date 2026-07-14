@@ -31,6 +31,15 @@ declared MIT licensing and Stagewise authorship; their current package metadata
 preserves that origin. A complete package-level notice and license audit is
 required before any of those packages are published independently.
 
+## Lucide
+
+The local `@clodex/icons` compatibility package delegates icon rendering to
+[`lucide-react`](https://github.com/lucide-icons/lucide), distributed under the
+ISC license. Its historical export names are compatibility aliases only; the
+desktop dependency graph contains no `nucleo-*` package and no Nucleo vendor
+asset. The exact Lucide version and license text are recorded in the generated
+desktop dependency inventory and CycloneDX SBOM.
+
 ## class-variance-authority
 
 This repository contains code derived from

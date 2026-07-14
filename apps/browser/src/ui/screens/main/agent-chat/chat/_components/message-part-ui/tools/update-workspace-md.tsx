@@ -4,7 +4,7 @@ import {
   TooltipContent,
 } from '@clodex/stage-ui/components/tooltip';
 import { ToolPartUINotCollapsible } from './shared/tool-part-ui-not-collapsible';
-import { IconMagicWandOutline18 } from 'nucleo-ui-outline-18';
+import { IconMagicWandOutline18 } from '@clodex/icons';
 import type { AgentToolUIPart } from '@shared/karton-contracts/ui/agent';
 
 export const UpdateWorkspaceMdToolPart = ({

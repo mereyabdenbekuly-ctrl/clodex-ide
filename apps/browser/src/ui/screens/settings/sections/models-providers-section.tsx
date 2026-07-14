@@ -78,7 +78,7 @@ import {
   IconPlusOutline18,
   IconPenOutline18,
   IconTrashOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import { BoxesIcon, KeyRoundIcon, ServerCogIcon } from 'lucide-react';
 import {
   SettingsPage,

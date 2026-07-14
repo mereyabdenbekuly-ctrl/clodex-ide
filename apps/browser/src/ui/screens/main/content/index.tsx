@@ -45,11 +45,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@clodex/stage-ui/components/tooltip';
-import { IconVolumeUpFill18, IconVolumeXmarkFill18 } from 'nucleo-ui-fill-18';
 import {
   IconPinTackOutline18,
   IconPinTackSlashOutline18,
-} from 'nucleo-ui-outline-18';
+  IconVolumeUpFill18,
+  IconVolumeXmarkFill18,
+} from '@clodex/icons';
 import { NewTabButtons } from '../_components/new-tab-buttons';
 import { Tutorial } from '@ui/components/tutorial';
 import { useTutorial } from '@ui/contexts/tutorial';

@@ -1,5 +1,5 @@
 import { useKartonProcedure, useKartonState } from '@ui/hooks/use-karton';
-import { IconSunOutline18, IconMoonOutline18 } from 'nucleo-ui-outline-18';
+import { IconSunOutline18, IconMoonOutline18 } from '@clodex/icons';
 import { cn } from '@clodex/stage-ui/lib/utils';
 import { useCallback } from 'react';
 import type { TabState } from '@shared/karton-contracts/ui';

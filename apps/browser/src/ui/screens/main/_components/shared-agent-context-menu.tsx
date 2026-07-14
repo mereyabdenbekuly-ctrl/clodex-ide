@@ -2,14 +2,14 @@ import { Menu as MenuBase } from '@base-ui/react/menu';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@clodex/stage-ui/lib/utils';
 import { useKartonProcedure, useKartonState } from '@ui/hooks/use-karton';
-import { IconTrash2Outline24 } from 'nucleo-core-outline-24';
 import {
   IconCopyIdOutline18,
   IconFolderOpenOutline18,
   IconPen2Outline18,
   IconPinTackOutline18,
   IconPinTackSlashOutline18,
-} from 'nucleo-ui-outline-18';
+  IconTrash2Outline24,
+} from '@clodex/icons';
 import { useFloatingIsolation } from './use-floating-isolation';
 import {
   ArchiveIcon,

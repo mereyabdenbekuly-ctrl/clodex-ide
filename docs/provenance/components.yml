@@ -258,6 +258,15 @@
       "replacement": "planned",
       "enforce_dependency_allowlist": false
     },
+    "clodex-icons-compat": {
+      "status": "migration",
+      "owner": "desktop",
+      "paths": ["packages/clodex-icons/**"],
+      "package_name": "@clodex/icons",
+      "source_of_truth": "lucide-react components behind legacy local symbol aliases",
+      "removal_issue": "Replace compatibility symbol names with direct Lucide imports after UI migration",
+      "enforce_dependency_allowlist": false
+    },
     "stage-ui-legacy": {
       "status": "legacy",
       "owner": "desktop",

@@ -42,7 +42,7 @@ import {
   IconBranchOutOutline18,
   IconCircleQuestionOutline18,
   IconTrashOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import { FileIcon } from '@ui/components/file-icon';
 import { FileContextMenu } from '@ui/components/file-context-menu';
 import {

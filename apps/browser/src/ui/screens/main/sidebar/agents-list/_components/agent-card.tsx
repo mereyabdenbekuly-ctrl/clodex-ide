@@ -10,10 +10,7 @@ import {
   type SharedAgentContextMenuState,
   buildAgentContextMenuHandler,
 } from '../../../_components/shared-agent-context-menu';
-import {
-  IconPinTackOutline18,
-  IconPinTackSlashOutline18,
-} from 'nucleo-ui-outline-18';
+import { IconPinTackOutline18, IconPinTackSlashOutline18 } from '@clodex/icons';
 import { AgentTypes } from '@shared/karton-contracts/ui/agent';
 import { useInlineTitleEdit } from '../../../_lib/use-inline-title-edit';
 import { AGENT_STATUS_COLOR_CLASSES } from '@ui/lib/agent-status-colors';

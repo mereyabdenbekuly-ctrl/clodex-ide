@@ -2,8 +2,7 @@ import { useMemo, useRef } from 'react';
 import { Button } from '@clodex/stage-ui/components/button';
 import { useKartonProcedure, useKartonState } from '@ui/hooks/use-karton';
 import { useScrollFadeMask } from '@ui/hooks/use-scroll-fade-mask';
-import { IconTrash2Outline24 } from 'nucleo-core-outline-24';
-import { IconBranchOutOutline18 } from 'nucleo-ui-outline-18';
+import { IconBranchOutOutline18, IconTrash2Outline24 } from '@clodex/icons';
 import { SidebarToast } from '../_components/sidebar-toast';
 
 function getBaseName(value: string): string {

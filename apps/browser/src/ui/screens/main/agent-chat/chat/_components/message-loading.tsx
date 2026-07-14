@@ -1,8 +1,5 @@
 import { cn } from '@ui/utils';
-import {
-  IconBranchOutOutline18,
-  IconCodeBranchOutline18,
-} from 'nucleo-ui-outline-18';
+import { IconBranchOutOutline18, IconCodeBranchOutline18 } from '@clodex/icons';
 import { BrainIcon } from 'lucide-react';
 
 type MessageLoadingVariant = 'working' | 'worktree' | 'branch';

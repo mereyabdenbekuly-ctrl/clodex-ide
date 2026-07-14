@@ -110,7 +110,7 @@ import {
   IconSquareDashedOutline18,
   IconTrashOutline18,
   IconTriangleWarningOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import { cn } from '@ui/utils';
 import { useEmptyAgentId } from '@ui/hooks/use-empty-agent';
 import { useTrack } from '@ui/hooks/use-track';

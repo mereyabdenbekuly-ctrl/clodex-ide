@@ -30,7 +30,7 @@ import {
   IconPenOutline18,
   IconTrashOutline18,
   IconChevronLeftOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import { ServerCogIcon, WaypointsIcon } from 'lucide-react';
 import {
   SettingsPage,

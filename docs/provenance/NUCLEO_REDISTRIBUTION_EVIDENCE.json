@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "status": "NOT_REQUIRED",
+  "recordedAt": "2026-07-15",
+  "licenseName": null,
+  "packageNames": [],
+  "redistributionScope": [],
+  "evidenceReferences": [],
+  "approvedBy": null,
+  "approvedAt": null,
+  "expiresAt": null,
+  "decision": "No Nucleo redistribution right is asserted. The local nucleo-* compatibility packages and custom placeholder/SVG sources were removed from the distributable dependency graph. The replacement @clodex/icons package contains only AGPL compatibility aliases backed by the separately inventoried lucide-react dependency. Any future nucleo-* dependency makes this gate applicable and fail-closed again until independently reviewed evidence is APPROVED."
+}

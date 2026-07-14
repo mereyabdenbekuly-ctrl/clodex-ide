@@ -59,8 +59,6 @@ jobs:
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
-        env:
-          NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
 
       # For karton: validate prerelease is not requested
       - name: Validate karton channel

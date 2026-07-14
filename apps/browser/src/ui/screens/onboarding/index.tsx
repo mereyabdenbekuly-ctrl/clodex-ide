@@ -5,7 +5,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '@clodex/stage-ui/components/tooltip';
-import { IconArrowLeftFill18, IconArrowRightFill18 } from 'nucleo-ui-fill-18';
+import { IconArrowLeftFill18, IconArrowRightFill18 } from '@clodex/icons';
 import { useKartonProcedure } from '@ui/hooks/use-karton';
 import { cn } from '@ui/utils';
 import { StepWelcome } from './steps/01-welcome';

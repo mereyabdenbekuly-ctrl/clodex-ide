@@ -14,7 +14,7 @@ import {
 } from '@clodex/stage-ui/components/tooltip';
 import { HotkeyCombo } from '@ui/components/hotkey-combo';
 import { HotkeyActions } from '@shared/hotkeys';
-import { IconPenPlusOutline18 } from 'nucleo-ui-outline-18';
+import { IconPenPlusOutline18 } from '@clodex/icons';
 import { useKartonState } from '@ui/hooks/use-karton';
 
 /**

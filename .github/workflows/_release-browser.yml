@@ -20,8 +20,6 @@ on:
         type: string
         description: "Immutable 40-character commit SHA to tag, build, and release"
     secrets:
-      NUCLEO_LICENSE_KEY:
-        required: false
       POSTHOG_API_KEY:
         required: false
       SUPABASE_URL:
@@ -143,23 +141,23 @@ jobs:
         run: echo "Nightly uses its separately validated default-on canary policy."
 
       - name: Setup pnpm
-        if: inputs.channel != 'nightly'
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 10.30.3
 
       - name: Setup Node.js
-        if: inputs.channel != 'nightly'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: ".node-version"
           cache: "pnpm"
 
       - name: Install dependencies
-        if: inputs.channel != 'nightly'
         run: pnpm install --frozen-lockfile
-        env:
-          NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
+
+      - name: Validate desktop attribution and redistribution rights
+        run: >-
+          pnpm --dir apps/browser release:attribution:check --
+          --channel=${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
 
       - name: Validate isolated agent runtime promotion evidence
         if: inputs.channel == 'release'
@@ -302,7 +300,6 @@ jobs:
 
     env:
       NODE_OPTIONS: "--max-old-space-size=8192"
-      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
       POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
       VITE_POSTHOG_API_KEY: ${{ secrets.VITE_POSTHOG_API_KEY }}
       API_URL: ${{ vars.API_URL }}
@@ -552,7 +549,7 @@ jobs:
           find artifacts -type f
 
           # Copy all release files to flat directory
-          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.nupkg" -o -name "RELEASES*" -o -name "*.deb" -o -name "*.rpm" -o -name "*.zip" -o -name "macos-*.json" -o -name "macos-*.sha256" -o -name "windows-*.json" -o -name "windows-*.sha256" -o -name "linux-*.json" -o -name "linux-*.sha256" \) -exec cp {} release/ \;
+          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.nupkg" -o -name "RELEASES*" -o -name "*.deb" -o -name "*.rpm" -o -name "*.zip" -o -name "*.cdx.json" -o -name "macos-*.json" -o -name "macos-*.sha256" -o -name "windows-*.json" -o -name "windows-*.sha256" -o -name "linux-*.json" -o -name "linux-*.sha256" \) -exec cp {} release/ \;
 
           echo "Release artifacts:"
           ls -la release/

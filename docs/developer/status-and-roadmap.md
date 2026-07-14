@@ -1,5 +1,10 @@
 # Status and roadmap
 
+For release sequencing, provenance/Protocol v0 gates, and the rule that the
+private managed Gateway starts only after those gates, see
+[`RELEASE_GATES_AND_ROADMAP.md`](./RELEASE_GATES_AND_ROADMAP.md). The feature
+list below is not release authorization.
+
 ## 1. Implemented platform
 
 The current integration baseline contains:

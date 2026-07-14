@@ -13,6 +13,12 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import yauzl from 'yauzl';
 import { toSquirrelInternalVersion } from '../etc/squirrel-version.mjs';
+import {
+  ATTRIBUTION_DIRECTORY_NAME,
+  inspectPackagedAttribution,
+  REQUIRED_ATTRIBUTION_PATHS,
+  writeFinalArtifactSbom,
+} from './release-attribution.mjs';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const browserDirectory = path.resolve(scriptDirectory, '..');
@@ -229,6 +235,38 @@ function inspectNupkg(nupkgPath, expectedBaseName, expectedVersion) {
           reject(new Error('nupkg does not contain a readable .nuspec'));
           return;
         }
+        const missingAttributionEntries = REQUIRED_ATTRIBUTION_PATHS.filter(
+          (relativePath) =>
+            !lowerEntries.some((entry) =>
+              entry.endsWith(
+                `/resources/${ATTRIBUTION_DIRECTORY_NAME}/${relativePath}`.toLowerCase(),
+              ),
+            ),
+        );
+        if (missingAttributionEntries.length > 0) {
+          reject(
+            new Error(
+              `nupkg is missing packaged attribution files: ${missingAttributionEntries.join(', ')}`,
+            ),
+          );
+          return;
+        }
+        for (const electronNotice of ['LICENSE', 'LICENSES.chromium.html']) {
+          const acceptedLocations = [
+            `lib/net45/${electronNotice}`,
+            `lib/net45/resources/${electronNotice}`,
+          ].map((entry) => entry.toLowerCase());
+          if (
+            !lowerEntries.some((entry) =>
+              acceptedLocations.some((location) => entry.endsWith(location)),
+            )
+          ) {
+            reject(
+              new Error(`nupkg is missing Electron notice: ${electronNotice}`),
+            );
+            return;
+          }
+        }
         if (
           !new RegExp(
             `<version>\\s*${escapeRegExp(expectedVersion)}\\s*</version>`,
@@ -401,6 +439,20 @@ async function validateLinux({
   if (!debContents.includes(`/usr/bin/${baseName}`)) {
     throw new Error(`Debian package does not install /usr/bin/${baseName}`);
   }
+  for (const relativePath of REQUIRED_ATTRIBUTION_PATHS) {
+    if (
+      !debContents.includes(
+        `/resources/${ATTRIBUTION_DIRECTORY_NAME}/${relativePath}`,
+      )
+    ) {
+      throw new Error(
+        `Debian package is missing attribution file: ${relativePath}`,
+      );
+    }
+  }
+  if (!debContents.includes('/LICENSES.chromium.html')) {
+    throw new Error('Debian package is missing LICENSES.chromium.html');
+  }
 
   const rpmQuery = run('rpm', [
     '-qp',
@@ -430,6 +482,20 @@ async function validateLinux({
   const rpmContents = run('rpm', ['-qlp', rpmPath]).stdout;
   if (!rpmContents.includes(`/usr/bin/${baseName}`)) {
     throw new Error(`RPM package does not install /usr/bin/${baseName}`);
+  }
+  for (const relativePath of REQUIRED_ATTRIBUTION_PATHS) {
+    if (
+      !rpmContents.includes(
+        `/resources/${ATTRIBUTION_DIRECTORY_NAME}/${relativePath}`,
+      )
+    ) {
+      throw new Error(
+        `RPM package is missing attribution file: ${relativePath}`,
+      );
+    }
+  }
+  if (!rpmContents.includes('/LICENSES.chromium.html')) {
+    throw new Error('RPM package is missing LICENSES.chromium.html');
   }
 
   return {
@@ -500,6 +566,42 @@ async function main() {
           outputRoot,
           version,
         });
+
+  const packagedPlatform = options.platform === 'windows' ? 'win32' : 'linux';
+  const packagedRoot = path.join(
+    outputRoot,
+    `${baseName}-${packagedPlatform}-${options.arch}`,
+  );
+  const resourcesDirectory = path.join(packagedRoot, 'resources');
+  const attribution = inspectPackagedAttribution({
+    attributionDirectory: path.join(
+      resourcesDirectory,
+      ATTRIBUTION_DIRECTORY_NAME,
+    ),
+    requireReady: options.channel !== 'dev',
+  });
+  const sbomPath = path.join(
+    validationDirectory,
+    `${options.platform}-${options.arch}-${version}.cdx.json`,
+  );
+  const sbom = await writeFinalArtifactSbom({
+    applicationDirectory: packagedRoot,
+    appName: baseName,
+    appVersion: version,
+    arch: options.arch,
+    attribution,
+    outputPath: sbomPath,
+    platform: options.platform,
+    resourcesDirectory,
+  });
+  validation.checks.attribution = {
+    dependencyCount: attribution.dependencyCount,
+    manifestSha256: attribution.manifestSha256,
+    noticePaths: attribution.noticePaths,
+    status: attribution.manifest.status,
+  };
+  validation.checks.sbom = sbom;
+  validation.artifacts.push(sbomPath);
 
   const artifacts = [];
   for (const artifactPath of validation.artifacts) {

@@ -97,9 +97,6 @@ importers:
       node-pty:
         specifier: ^1.1.0
         version: 1.1.0
-      nucleo-ui-outline-12:
-        specifier: workspace:*
-        version: link:packages/nucleo-ui-outline-12
       tsx:
         specifier: ^4.20.3
         version: 4.21.0
@@ -291,9 +288,6 @@ importers:
       node-pty:
         specifier: ^1.1.0
         version: 1.1.0
-      nucleo-ui-outline-12:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-ui-outline-12
       pdfjs-dist:
         specifier: ^5.7.284
         version: 5.7.284
@@ -361,6 +355,9 @@ importers:
       '@clodex/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
+      '@clodex/icons':
+        specifier: workspace:*
+        version: link:../../packages/clodex-icons
       '@clodex/karton':
         specifier: workspace:*
         version: link:../../packages/karton
@@ -598,33 +595,6 @@ importers:
       mermaid:
         specifier: ^11.15.0
         version: 11.15.0
-      nucleo-core-fill-24:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-core-fill-24
-      nucleo-core-outline-24:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-core-outline-24
-      nucleo-glass:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-glass
-      nucleo-micro-bold:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-micro-bold
-      nucleo-social-media:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-social-media
-      nucleo-ui-fill-18:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-ui-fill-18
-      nucleo-ui-fill-duo-18:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-ui-fill-duo-18
-      nucleo-ui-outline-18:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-ui-outline-18
-      nucleo-ui-outline-duo-18:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-ui-outline-duo-18
       ogl:
         specifier: ^1.0.11
         version: 1.0.11
@@ -780,6 +750,9 @@ importers:
 
   apps/website:
     dependencies:
+      '@clodex/icons':
+        specifier: workspace:*
+        version: link:../../packages/clodex-icons
       '@clodex/stage-ui':
         specifier: workspace:*
         version: link:../../packages/stage-ui
@@ -825,33 +798,6 @@ importers:
       next-mdx-remote:
         specifier: ^6.0.0
         version: 6.0.0(@types/react@19.2.14)(react@19.2.3)
-      nucleo-core-fill-24:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-core-fill-24
-      nucleo-core-outline-24:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-core-outline-24
-      nucleo-glass:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-glass
-      nucleo-micro-bold:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-micro-bold
-      nucleo-social-media:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-social-media
-      nucleo-ui-fill-18:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-ui-fill-18
-      nucleo-ui-fill-duo-18:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-ui-fill-duo-18
-      nucleo-ui-outline-18:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-ui-outline-18
-      nucleo-ui-outline-duo-18:
-        specifier: workspace:*
-        version: link:../../packages/nucleo-ui-outline-duo-18
       posthog-js:
         specifier: 1.379.1
         version: 1.379.1
@@ -1181,6 +1127,15 @@ importers:
         specifier: ^3.2.6
         version: 3.2.6(@types/debug@4.1.12)(@types/node@24.10.9)(jiti@2.7.0)(jsdom@26.1.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.9.0)
 
+  packages/clodex-icons:
+    dependencies:
+      lucide-react:
+        specifier: 0.554.0
+        version: 0.554.0(react@19.2.3)
+      react:
+        specifier: ^19.1.0
+        version: 19.2.3
+
   packages/clodex-kernel:
     dependencies:
       '@clodex/contracts':
@@ -1419,81 +1374,6 @@ importers:
         specifier: ^3.2.6
         version: 3.2.6(@types/debug@4.1.12)(@types/node@22.15.2)(jiti@2.7.0)(jsdom@26.1.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.9.0)
 
-  packages/nucleo-core-fill-24:
-    dependencies:
-      react:
-        specifier: ^19.1.0
-        version: 19.2.3
-
-  packages/nucleo-core-outline-24:
-    dependencies:
-      lucide-react:
-        specifier: 0.554.0
-        version: 0.554.0(react@19.2.3)
-      react:
-        specifier: ^19.1.0
-        version: 19.2.3
-
-  packages/nucleo-glass:
-    dependencies:
-      react:
-        specifier: ^19.1.0
-        version: 19.2.3
-
-  packages/nucleo-micro-bold:
-    dependencies:
-      lucide-react:
-        specifier: 0.554.0
-        version: 0.554.0(react@19.2.3)
-      react:
-        specifier: ^19.1.0
-        version: 19.2.3
-
-  packages/nucleo-social-media:
-    dependencies:
-      react:
-        specifier: ^19.1.0
-        version: 19.2.3
-
-  packages/nucleo-ui-fill-18:
-    dependencies:
-      lucide-react:
-        specifier: 0.554.0
-        version: 0.554.0(react@19.2.3)
-      react:
-        specifier: ^19.1.0
-        version: 19.2.3
-
-  packages/nucleo-ui-fill-duo-18:
-    dependencies:
-      lucide-react:
-        specifier: 0.554.0
-        version: 0.554.0(react@19.2.3)
-      react:
-        specifier: ^19.1.0
-        version: 19.2.3
-
-  packages/nucleo-ui-outline-12:
-    dependencies:
-      react:
-        specifier: ^19.1.0
-        version: 19.2.3
-
-  packages/nucleo-ui-outline-18:
-    dependencies:
-      lucide-react:
-        specifier: 0.554.0
-        version: 0.554.0(react@19.2.3)
-      react:
-        specifier: ^19.1.0
-        version: 19.2.3
-
-  packages/nucleo-ui-outline-duo-18:
-    dependencies:
-      react:
-        specifier: ^19.1.0
-        version: 19.2.3
-
   packages/runner-sdk:
     dependencies:
       '@clodex/agent-shell':
@@ -1521,6 +1401,9 @@ importers:
       '@base-ui/react':
         specifier: 1.4.1
         version: 1.4.1(@types/react@19.2.14)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@clodex/icons':
+        specifier: workspace:*
+        version: link:../clodex-icons
       '@clodex/tailwindcss-color-modifiers':
         specifier: workspace:*
         version: link:../tailwindcss-color-modifiers
@@ -1557,15 +1440,6 @@ importers:
       lucide-react:
         specifier: 0.554.0
         version: 0.554.0(react@19.2.3)
-      nucleo-micro-bold:
-        specifier: workspace:*
-        version: link:../nucleo-micro-bold
-      nucleo-ui-fill-18:
-        specifier: workspace:*
-        version: link:../nucleo-ui-fill-18
-      nucleo-ui-outline-18:
-        specifier: workspace:*
-        version: link:../nucleo-ui-outline-18
       overlayscrollbars:
         specifier: ^2.16.0
         version: 2.16.0

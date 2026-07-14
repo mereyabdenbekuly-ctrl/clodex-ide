@@ -29,7 +29,7 @@ import {
   IconPuzzlePieceOutline18,
   IconChevronRightOutline18,
   IconChevronLeftOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import {
   CheckCircle2Icon,
   CircleOffIcon,

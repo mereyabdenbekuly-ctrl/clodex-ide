@@ -32,6 +32,8 @@
     "version:clodex:beta": "tsx scripts/release/index.ts --package clodex --channel beta",
     "version:clodex:release": "tsx scripts/release/index.ts --package clodex --channel release",
     "release:validate:macos": "pnpm --dir apps/browser release:validate:macos",
+    "release:attribution:check": "pnpm --dir apps/browser release:attribution:check",
+    "release:attribution:test": "pnpm --dir apps/browser release:attribution:test",
     "release:signing:readiness": "node scripts/release/signing-readiness.mjs",
     "release:signing:readiness:test": "node --test scripts/release/signing-readiness.test.mjs scripts/release/release-plumbing.test.mjs",
     "release:preview:validate": "node scripts/release/validate-technical-preview-plan.mjs --manifest=.release-notes/clodex-technical-preview.json",
@@ -86,13 +88,6 @@
       "lefthook",
       "libsql",
       "macos-alias",
-      "nucleo-core-fill-24",
-      "nucleo-core-outline-24",
-      "nucleo-micro-bold",
-      "nucleo-ui-fill-18",
-      "nucleo-ui-fill-duo-18",
-      "nucleo-ui-outline-18",
-      "nucleo-ui-outline-duo-18",
       "node-pty",
       "sharp",
       "utf-8-validate"
@@ -158,7 +153,6 @@
     "better-auth": "1.6.13",
     "gray-matter": "^4.0.3",
     "node-pty": "^1.1.0",
-    "nucleo-ui-outline-12": "workspace:*",
     "tsx": "^4.20.3"
   },
   "config": {

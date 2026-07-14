@@ -5,7 +5,7 @@ import {
   IconSquareCodeOutline18,
   IconFileSearchOutline18,
   IconMagnifierOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import { stripMountPrefix } from '@ui/utils';
 
 export const SearchProjectSymbolsToolPart = ({
