@@ -19,6 +19,7 @@ import { useCmdEnterTarget } from '@ui/hooks/use-cmd-enter-target';
 import { CmdEnterPriority } from '@ui/utils/cmd-enter-registry';
 import { HotkeyCombo } from '@ui/components/hotkey-combo';
 import { HotkeyActions } from '@shared/hotkeys';
+import { stripWorkspaceMountPrefix } from '@shared/utils/mount-prefix';
 import {
   type StatusCardSection,
   type FormattedFileDiff,
@@ -102,10 +103,6 @@ function getDiffBatchFingerprint(diffs: FormattedFileDiff[]): string {
     .join('::');
 }
 
-function stripWorkspaceMountName(path: string): string {
-  return path.replace(/^w[0-9a-f]{1,8}(?:\/|$)/, '');
-}
-
 /**
  * Derive the parent directory path relative to its workspace mount.
  * Returns the directory portion only (no filename), or empty string
@@ -127,7 +124,7 @@ function getRelativeDir(absoluteFilePath: string, mounts: Mount[]): string {
     }
     if (parentDir === mountRoot) return '';
   }
-  return stripWorkspaceMountName(stripMountPrefix(parentDir));
+  return stripWorkspaceMountPrefix(stripMountPrefix(parentDir));
 }
 
 /**

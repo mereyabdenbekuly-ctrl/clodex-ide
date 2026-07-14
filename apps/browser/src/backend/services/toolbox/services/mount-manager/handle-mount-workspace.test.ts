@@ -20,6 +20,7 @@ import type { Logger } from '@/services/logger';
 import type { TelemetryService } from '@/services/telemetry';
 import type { UserExperienceService } from '@/services/experience';
 import { AgentStore, createInitialAgentSystemState } from '@clodex/agent-core';
+import { mountPrefixForPath } from '@clodex/agent-core/mount-manager';
 
 const services: MountManagerService[] = [];
 
@@ -136,6 +137,116 @@ describe('MountManagerService.handleMountWorkspace existsSync guard', () => {
       expect(
         userExperienceService.saveRecentlyOpenedWorkspace,
       ).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.rm(realPath, { recursive: true, force: true });
+    }
+  });
+
+  it('restores existing permissions when core rejects a mount', async () => {
+    const { service } = createHarness();
+    const realPath = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'mount-permission-rollback-'),
+    );
+    try {
+      await service.handleMountWorkspace('agent1', realPath, ['read']);
+      const prefix = mountPrefixForPath(realPath);
+      const core = (
+        service as unknown as {
+          core: { mountWorkspace: (agentId: string, wsPath: string) => void };
+        }
+      ).core;
+      vi.spyOn(core, 'mountWorkspace').mockRejectedValueOnce(
+        new Error(`Workspace mount prefix collision for ${prefix}`),
+      );
+
+      await expect(
+        service.handleMountWorkspace('agent1', realPath, ['edit']),
+      ).rejects.toThrow('Workspace mount prefix collision');
+
+      expect(service.getMountPermissionsForPrefix('agent1', prefix)).toEqual([
+        'read',
+      ]);
+    } finally {
+      await fs.rm(realPath, { recursive: true, force: true });
+    }
+  });
+
+  it('removes speculative permissions when a new mount is rejected', async () => {
+    const { service } = createHarness();
+    const realPath = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'mount-permission-new-rollback-'),
+    );
+    try {
+      const prefix = mountPrefixForPath(realPath);
+      const core = (
+        service as unknown as {
+          core: { mountWorkspace: (agentId: string, wsPath: string) => void };
+        }
+      ).core;
+      vi.spyOn(core, 'mountWorkspace').mockRejectedValueOnce(
+        new Error(`Workspace mount prefix collision for ${prefix}`),
+      );
+
+      await expect(
+        service.handleMountWorkspace('agent1', realPath, ['edit']),
+      ).rejects.toThrow('Workspace mount prefix collision');
+
+      expect(
+        service.getMountPermissionsForPrefix('agent1', prefix),
+      ).toBeUndefined();
+    } finally {
+      await fs.rm(realPath, { recursive: true, force: true });
+    }
+  });
+
+  it('does not let a failed concurrent mount delete later permissions', async () => {
+    const { service } = createHarness();
+    const realPath = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'mount-permission-concurrent-'),
+    );
+    try {
+      const prefix = mountPrefixForPath(realPath);
+      const core = (
+        service as unknown as {
+          core: {
+            mountWorkspace: (agentId: string, wsPath: string) => Promise<void>;
+          };
+        }
+      ).core;
+      let rejectFirst: ((error: Error) => void) | undefined;
+      let resolveSecond: (() => void) | undefined;
+      const firstGate = new Promise<void>((_resolve, reject) => {
+        rejectFirst = reject;
+      });
+      const secondGate = new Promise<void>((resolve) => {
+        resolveSecond = resolve;
+      });
+      const mountSpy = vi
+        .spyOn(core, 'mountWorkspace')
+        .mockImplementationOnce(() => firstGate)
+        .mockImplementationOnce(() => secondGate);
+
+      const first = service.handleMountWorkspace('agent1', realPath, ['read']);
+      await vi.waitFor(() => expect(mountSpy).toHaveBeenCalledTimes(1));
+      const firstRejection = expect(first).rejects.toThrow(
+        'Workspace mount prefix collision',
+      );
+      const second = service.handleMountWorkspace('agent1', realPath, ['edit']);
+      await Promise.resolve();
+
+      // Host-side permission mutation is serialized with the core call, so
+      // the later operation cannot be erased by the earlier rollback.
+      expect(mountSpy).toHaveBeenCalledTimes(1);
+      rejectFirst?.(new Error('Workspace mount prefix collision'));
+      await firstRejection;
+
+      await vi.waitFor(() => expect(mountSpy).toHaveBeenCalledTimes(2));
+      resolveSecond?.();
+      await second;
+
+      expect(service.getMountPermissionsForPrefix('agent1', prefix)).toEqual([
+        'edit',
+      ]);
     } finally {
       await fs.rm(realPath, { recursive: true, force: true });
     }

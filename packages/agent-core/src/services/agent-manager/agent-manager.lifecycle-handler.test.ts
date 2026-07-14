@@ -3,6 +3,10 @@ import { AgentTypeRegistry } from '../../agents/agents-registry';
 import { CommandRegistry } from '../../commands/command-registry';
 import { createTestAgentHost } from '../../host/test-utils';
 import { AgentTypes } from '../../types/agent';
+import {
+  legacyMountPrefixForPath,
+  mountPrefixForPath,
+} from '../mount-manager/mount-registry';
 import { AgentManager } from './agent-manager';
 
 function createHarness(isWorking = false) {
@@ -25,6 +29,7 @@ function createHarness(isWorking = false) {
     deleteAgentBlobs: vi.fn(async () => {}),
   };
   const toolbox = {
+    handleMountWorkspace: vi.fn(async () => {}),
     cancelQuestion: vi.fn(),
     getWorkspaceSnapshotForPersistence: vi.fn(() => []),
     setWorkspaceMdContent: vi.fn(),
@@ -53,7 +58,7 @@ function createHarness(isWorking = false) {
     },
   });
 
-  return { registry, manager, persistenceDb, attachments };
+  return { registry, manager, persistenceDb, attachments, toolbox };
 }
 
 describe('AgentManager task lifecycle handlers', () => {
@@ -140,6 +145,63 @@ describe('AgentManager task lifecycle handlers', () => {
       'must be restored before it can be resumed',
     );
     expect(createSpy).not.toHaveBeenCalled();
+
+    await harness.manager.teardown();
+  });
+
+  it('migrates legacy mount prefixes before restoring persisted history', async () => {
+    const harness = createHarness(false);
+    const workspacePath = '/tmp/persisted-prefix-workspace';
+    const legacyPrefix = legacyMountPrefixForPath(workspacePath);
+    const currentPrefix = mountPrefixForPath(workspacePath);
+    harness.persistenceDb.getStoredAgentInstanceById.mockResolvedValue({
+      id: 'source-task',
+      type: AgentTypes.CHAT,
+      instanceConfig: {},
+      title: 'Persisted task',
+      titleLockedByUser: false,
+      history: [
+        {
+          id: 'message-1',
+          role: 'user',
+          parts: [{ type: 'text', text: `Read ${legacyPrefix}/src/app.ts` }],
+        },
+      ],
+      queuedMessages: [
+        {
+          id: 'message-2',
+          role: 'user',
+          parts: [{ type: 'text', text: `Test ${legacyPrefix}/src/app.ts` }],
+        },
+      ],
+      activeModelId: '',
+      toolApprovalMode: null,
+      inputState: `Open ${legacyPrefix}/README.md`,
+      usedTokens: 42,
+      goal: null,
+      parentAgentInstanceId: null,
+      archivedAt: null,
+      mountedWorkspaces: [{ path: workspacePath, permissions: ['read'] }],
+    } as any);
+    const createSpy = vi
+      .spyOn(harness.manager, 'createAgent')
+      .mockResolvedValue({ instanceId: 'source-task' } as any);
+
+    await harness.manager.resumeAgent('source-task');
+
+    const initialState = createSpy.mock.calls[0]?.[3];
+    expect(initialState?.history?.[0]?.parts).toEqual([
+      { type: 'text', text: `Read ${currentPrefix}/src/app.ts` },
+    ]);
+    expect(initialState?.queuedMessages?.[0]?.parts).toEqual([
+      { type: 'text', text: `Test ${currentPrefix}/src/app.ts` },
+    ]);
+    expect(initialState?.inputState).toBe(`Open ${currentPrefix}/README.md`);
+    expect(harness.toolbox.handleMountWorkspace).toHaveBeenCalledWith(
+      'source-task',
+      workspacePath,
+      ['read'],
+    );
 
     await harness.manager.teardown();
   });

@@ -6,6 +6,7 @@
  */
 export {
   MountManager,
+  legacyMountPrefixForPath,
   mountPrefixForPath,
   type MountManagerOptions,
 } from './mount-registry';
