@@ -16,8 +16,8 @@
       "default": "./src/index.ts"
     }
   },
-  "peerDependencies": {
-    "lucide-react": "^0.554.0",
+  "dependencies": {
+    "lucide-react": "0.554.0",
     "react": "^19.1.0"
   }
 }

@@ -4,19 +4,33 @@ export interface AttributionBlocker {
 }
 
 export interface AttributionEntry {
-  kind: 'open_source' | 'commercial_asset';
+  kind: 'open_source' | 'custom_license' | 'commercial_asset';
   name: string;
   version: string;
   license: string;
   repository: string;
   publisher: string;
   licenseText: string;
+  licenseEvidence?: {
+    basis: string;
+    licenseTextSha256: string;
+    registryIdentity: string;
+    reviewStatus: string;
+    sourceReferences: string[];
+    sourceType: string;
+  };
   evidenceReferences?: string[];
 }
 
 export interface DependencyInventory {
   blockers: AttributionBlocker[];
   entries: AttributionEntry[];
+  licenseOverrides: {
+    appliedCount: number;
+    entryCount: number;
+    registryPath: string;
+    status: string;
+  };
   nucleo: {
     evidencePath: string;
     packageNames: string[];
@@ -29,6 +43,7 @@ export class AttributionGateError extends Error {
 }
 
 export const ATTRIBUTION_DIRECTORY_NAME: string;
+export const LICENSE_OVERRIDE_REGISTRY_RELATIVE_PATH: string;
 export const NUCLEO_EVIDENCE_RELATIVE_PATH: string;
 export const REQUIRED_ATTRIBUTION_PATHS: string[];
 
@@ -50,6 +65,9 @@ export function prepareReleaseAttributionBundle(options: {
   manifest: {
     blockerCount: number;
     dependencyCount: number;
+    licenseOverrideAppliedCount: number;
+    licenseOverrideEntryCount: number;
+    licenseOverrideStatus: string;
     status: string;
   };
   outputDirectory: string;
@@ -73,6 +91,7 @@ export function inspectPackagedAttribution(options: {
   dependencyCount: number;
   inventory: {
     entries: AttributionEntry[];
+    licenseOverrides: DependencyInventory['licenseOverrides'];
     status: string;
   };
   manifest: Record<string, unknown>;

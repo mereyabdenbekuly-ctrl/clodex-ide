@@ -69,6 +69,16 @@ function makeFixture() {
       expiresAt: null,
     },
   );
+  writeJson(
+    path.join(root, 'docs/provenance/DEPENDENCY_LICENSE_OVERRIDES.json'),
+    {
+      schemaVersion: 1,
+      status: 'ENGINEERING_REVIEWED',
+      reviewedAt: '2026-07-15',
+      legalConclusion: false,
+      entries: [],
+    },
+  );
   writeJson(path.join(appDirectory, 'package.json'), {
     name: 'fixture-app',
     version: '1.0.0',
@@ -170,6 +180,7 @@ test('builds a deterministic notice and dependency-license bundle', () => {
       'CLODEX_VS_UPSTREAM.md',
       'CONTRIBUTORS.md',
       'packages/karton/LICENSE.md',
+      'provenance/DEPENDENCY_LICENSE_OVERRIDES.json',
       'dependency-licenses.json',
       'manifest.json',
     ]) {
@@ -212,6 +223,181 @@ test('fails closed on a missing license declaration or license text', () => {
         );
         return true;
       },
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('recognizes common LICENSE-* file names shipped by exact packages', () => {
+  const fixture = makeFixture();
+  try {
+    const packageDirectory = path.join(
+      fixture.appDirectory,
+      'node_modules/good-dep',
+    );
+    const licenseText = readFileSync(path.join(packageDirectory, 'LICENSE'));
+    rmSync(path.join(packageDirectory, 'LICENSE'));
+    writeFileSync(path.join(packageDirectory, 'LICENSE-MIT.txt'), licenseText);
+
+    const inventory = collectReleaseDependencyInventory({
+      appDirectory: fixture.appDirectory,
+      repositoryDirectory: fixture.root,
+      strict: true,
+    });
+    const entry = inventory.entries.find(
+      (candidate) => candidate.name === 'good-dep',
+    );
+    assert.match(entry.licenseText, /good dependency MIT license/);
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('applies only exact reviewed package-file overrides and rejects hash drift', () => {
+  const fixture = makeFixture();
+  try {
+    const packageDirectory = path.join(
+      fixture.appDirectory,
+      'node_modules/good-dep',
+    );
+    const manifestPath = path.join(packageDirectory, 'package.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    delete manifest.license;
+    writeJson(manifestPath, manifest);
+    const licensePath = path.join(packageDirectory, 'LICENSE');
+    const registryPath = path.join(
+      fixture.root,
+      'docs/provenance/DEPENDENCY_LICENSE_OVERRIDES.json',
+    );
+    writeJson(registryPath, {
+      schemaVersion: 1,
+      status: 'ENGINEERING_REVIEWED',
+      reviewedAt: '2026-07-15',
+      legalConclusion: false,
+      entries: [
+        {
+          package: 'good-dep',
+          version: '1.0.0',
+          license: 'MIT',
+          reviewStatus: 'ENGINEERING_REVIEWED',
+          reviewedAt: '2026-07-15',
+          basis: 'EXACT_PACKAGE_FILE',
+          packageSource: {
+            registry: 'npm',
+            tarball: 'https://registry.example/good-dep-1.0.0.tgz',
+            integrity: 'sha512-fixture',
+          },
+          licenseTextSource: {
+            type: 'package-file',
+            path: 'LICENSE',
+            sha256: sha256FileSync(licensePath),
+            sourceReferences: ['fixture:good-dep-license'],
+          },
+        },
+      ],
+    });
+
+    const inventory = collectReleaseDependencyInventory({
+      appDirectory: fixture.appDirectory,
+      repositoryDirectory: fixture.root,
+      strict: true,
+    });
+    const entry = inventory.entries.find(
+      (candidate) => candidate.name === 'good-dep',
+    );
+    assert.equal(entry.license, 'MIT');
+    assert.equal(entry.licenseEvidence.reviewStatus, 'ENGINEERING_REVIEWED');
+
+    writeFileSync(licensePath, 'tampered license\n');
+    assert.throws(
+      () =>
+        collectReleaseDependencyInventory({
+          appDirectory: fixture.appDirectory,
+          repositoryDirectory: fixture.root,
+          strict: true,
+        }),
+      (error) =>
+        error instanceof AttributionGateError &&
+        error.blockers.some(
+          (blocker) =>
+            blocker.code === 'LICENSE_OVERRIDE_PACKAGE_FILE_HASH_MISMATCH',
+        ),
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('rejects reviewed repository-license evidence after hash drift', () => {
+  const fixture = makeFixture();
+  try {
+    const packageDirectory = path.join(
+      fixture.appDirectory,
+      'node_modules/good-dep',
+    );
+    rmSync(path.join(packageDirectory, 'LICENSE'));
+    const evidenceRelativePath =
+      'docs/provenance/dependency-license-texts/good-dep-MIT.txt';
+    const evidencePath = path.join(fixture.root, evidenceRelativePath);
+    writeText(evidencePath, 'reviewed good dependency MIT terms\n');
+    writeJson(
+      path.join(
+        fixture.root,
+        'docs/provenance/DEPENDENCY_LICENSE_OVERRIDES.json',
+      ),
+      {
+        schemaVersion: 1,
+        status: 'ENGINEERING_REVIEWED',
+        reviewedAt: '2026-07-15',
+        legalConclusion: false,
+        entries: [
+          {
+            package: 'good-dep',
+            version: '1.0.0',
+            license: 'MIT',
+            reviewStatus: 'ENGINEERING_REVIEWED',
+            reviewedAt: '2026-07-15',
+            basis: 'PINNED_UPSTREAM_LICENSE',
+            packageSource: {
+              registry: 'npm',
+              tarball: 'https://registry.example/good-dep-1.0.0.tgz',
+              integrity: 'sha512-fixture',
+            },
+            licenseTextSource: {
+              type: 'repository-file',
+              path: evidenceRelativePath,
+              sha256: sha256FileSync(evidencePath),
+              sourceReferences: ['fixture:reviewed-upstream-license'],
+            },
+          },
+        ],
+      },
+    );
+
+    const inventory = collectReleaseDependencyInventory({
+      appDirectory: fixture.appDirectory,
+      repositoryDirectory: fixture.root,
+      strict: true,
+    });
+    assert.match(
+      inventory.entries.find((entry) => entry.name === 'good-dep').licenseText,
+      /reviewed good dependency MIT terms/,
+    );
+
+    writeText(evidencePath, 'tampered evidence\n');
+    assert.throws(
+      () =>
+        collectReleaseDependencyInventory({
+          appDirectory: fixture.appDirectory,
+          repositoryDirectory: fixture.root,
+          strict: true,
+        }),
+      (error) =>
+        error instanceof AttributionGateError &&
+        error.blockers.some(
+          (blocker) => blocker.code === 'LICENSE_OVERRIDE_SOURCE_HASH_MISMATCH',
+        ),
     );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
@@ -361,6 +547,48 @@ test('rejects a packaged attribution file after tampering', () => {
           attributionDirectory: fixture.outputDirectory,
         }),
       /Attribution (hash|size) mismatch/,
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('rejects packaged override-registry drift even with a recomputed manifest hash', () => {
+  const fixture = makeFixture();
+  try {
+    prepareReleaseAttributionBundle({
+      appDirectory: fixture.appDirectory,
+      outputDirectory: fixture.outputDirectory,
+      releaseChannel: 'release',
+      repositoryDirectory: fixture.root,
+    });
+    const registryPath = path.join(
+      fixture.outputDirectory,
+      'provenance/DEPENDENCY_LICENSE_OVERRIDES.json',
+    );
+    const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
+    registry.entries.push({
+      package: 'fabricated',
+      version: '1.0.0',
+      reviewStatus: 'ENGINEERING_REVIEWED',
+    });
+    writeJson(registryPath, registry);
+
+    const manifestPath = path.join(fixture.outputDirectory, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const registryRecord = manifest.files.find(
+      (entry) => entry.path === 'provenance/DEPENDENCY_LICENSE_OVERRIDES.json',
+    );
+    registryRecord.bytes = statSync(registryPath).size;
+    registryRecord.sha256 = sha256FileSync(registryPath);
+    writeJson(manifestPath, manifest);
+
+    assert.throws(
+      () =>
+        inspectPackagedAttribution({
+          attributionDirectory: fixture.outputDirectory,
+        }),
+      /override registry does not match/i,
     );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
@@ -521,6 +749,20 @@ test('release workflow and Forge packaging wire the attribution gate before publ
     /Validate desktop attribution and redistribution rights[\s\S]*release:attribution:check/,
   );
   assert.match(workflowSource, /\*\.cdx\.json/);
+});
+
+test('the exact installed repository dependency graph is strict-green', () => {
+  const inventory = collectReleaseDependencyInventory({
+    appDirectory: browserDirectory,
+    repositoryDirectory,
+    strict: true,
+  });
+  assert.equal(inventory.blockers.length, 0);
+  assert.equal(inventory.licenseOverrides.status, 'ENGINEERING_REVIEWED');
+  assert.equal(inventory.licenseOverrides.entryCount, 53);
+  assert.ok(inventory.licenseOverrides.appliedCount >= 44);
+  assert.deepEqual(inventory.nucleo.packageNames, []);
+  assert.equal(inventory.nucleo.status, 'NOT_REQUIRED');
 });
 
 test('the repository package graph has no nucleo-* package or import', () => {

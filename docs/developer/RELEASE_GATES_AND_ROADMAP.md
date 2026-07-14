@@ -1,6 +1,6 @@
 # CLODEx release gates and implementation roadmap
 
-**Updated:** 2026-07-15  
+**Updated:** 2026-07-15
 **Planning model:** gate-based; this document does not promise a calendar date
 or replace legal review.
 
@@ -53,11 +53,14 @@ Implemented in OCB-006:
 - retained Electron and Chromium runtime notices in packaged resources;
 - made future `nucleo-*` use fail closed without exact approved evidence.
 
-Current release blockers are emitted by
-`pnpm --dir apps/browser release:attribution:check -- --channel=release`.
-They must be resolved with real package-specific provenance and license text;
-the gate must not be weakened to make the list green.
-The current macOS-arm64 snapshot is
+The source-tree strict gate now reports 946 dependency versions and zero
+blockers on macOS arm64. That graph applies 44 reviewed exact-version records;
+the 53-record registry also covers supported release-matrix and exact lockfile
+variants not present in this host inventory. It supplies pinned public evidence
+only where an exact tarball
+omitted text or metadata; conflicts and hash drift fail closed. Final
+cross-platform app/installer validation is still required. The current result
+and residual release/legal decisions are
 [`OCB_006_RELEASE_LICENSE_BLOCKERS.md`](../provenance/OCB_006_RELEASE_LICENSE_BLOCKERS.md).
 
 **Exit criteria:**
@@ -68,6 +71,9 @@ The current macOS-arm64 snapshot is
 - final SBOMs match the packaged bytes and native manifests;
 - file-level provenance classification is GREEN for any code proposed for a
   future permissive repository.
+
+**Status:** source inventory GREEN; final macOS/Windows/Linux artifact evidence
+pending on the exact release commit.
 
 ## Gate 2 — Protocol v0
 
@@ -126,9 +132,9 @@ artifacts are reviewed. Stable `1.16.0` additionally requires the preview
 observation window, blocker triage, rollback readiness, and explicit human
 sign-off.
 
-No honest date can be assigned while the provenance gate is red and Protocol
-v0 is not frozen. Progress should be reported as completed gates and remaining
-blockers, not as percentage guesses.
+No honest date can be assigned while final cross-platform provenance evidence
+and Protocol v0 are not frozen. Progress should be reported as completed gates
+and remaining blockers, not as percentage guesses.
 
 ## Gate 4 — private managed Gateway (later)
 

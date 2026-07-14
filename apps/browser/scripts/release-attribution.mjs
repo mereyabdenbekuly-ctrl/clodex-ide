@@ -17,6 +17,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export const ATTRIBUTION_DIRECTORY_NAME = 'release-attribution';
 export const NUCLEO_EVIDENCE_RELATIVE_PATH =
   'docs/provenance/NUCLEO_REDISTRIBUTION_EVIDENCE.json';
+export const LICENSE_OVERRIDE_REGISTRY_RELATIVE_PATH =
+  'docs/provenance/DEPENDENCY_LICENSE_OVERRIDES.json';
 
 const REQUIRED_NOTICE_SOURCES = [
   { source: 'LICENSE', target: 'LICENSE' },
@@ -31,6 +33,10 @@ const REQUIRED_NOTICE_SOURCES = [
     source: NUCLEO_EVIDENCE_RELATIVE_PATH,
     target: 'provenance/NUCLEO_REDISTRIBUTION_EVIDENCE.json',
   },
+  {
+    source: LICENSE_OVERRIDE_REGISTRY_RELATIVE_PATH,
+    target: 'provenance/DEPENDENCY_LICENSE_OVERRIDES.json',
+  },
 ];
 
 export const REQUIRED_ATTRIBUTION_PATHS = [
@@ -40,10 +46,12 @@ export const REQUIRED_ATTRIBUTION_PATHS = [
 ];
 
 const LICENSE_FILE_PATTERNS = [
-  /^licen[cs]e(?:\.[^.]+)?$/i,
+  /^licen[cs]e(?:[-_.].*)?$/i,
   /^copying(?:\.[^.]+)?$/i,
   /^unlicense(?:\.[^.]+)?$/i,
 ];
+
+const LICENSE_OVERRIDE_REVIEW_STATUS = 'ENGINEERING_REVIEWED';
 
 const BUILD_ONLY_PATTERNS = [
   /^@types\//,
@@ -177,6 +185,286 @@ function readLicenseText(packageDirectory, repositoryDirectory, license) {
     return readFileSync(path.join(repositoryDirectory, 'LICENSE'), 'utf8');
   }
   return '';
+}
+
+function loadLicenseOverrideRegistry(repositoryDirectory) {
+  const registryPath = path.join(
+    repositoryDirectory,
+    LICENSE_OVERRIDE_REGISTRY_RELATIVE_PATH,
+  );
+  const blockers = [];
+  const byIdentity = new Map();
+  if (!existsSync(registryPath) || !statSync(registryPath).isFile()) {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_REGISTRY_MISSING',
+      message: `Reviewed dependency-license override registry is missing: ${registryPath}`,
+    });
+    return {
+      blockers,
+      byIdentity,
+      entryCount: 0,
+      registryPath,
+      status: 'MISSING',
+    };
+  }
+
+  const registry = readJson(
+    registryPath,
+    'Dependency license override registry',
+  );
+  if (registry.schemaVersion !== 1) {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_REGISTRY_SCHEMA_UNSUPPORTED',
+      message: `Dependency license override registry schemaVersion must be 1, got ${String(registry.schemaVersion ?? '<missing>')}.`,
+    });
+  }
+  if (registry.status !== LICENSE_OVERRIDE_REVIEW_STATUS) {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_REGISTRY_UNREVIEWED',
+      message: `Dependency license override registry status must be ${LICENSE_OVERRIDE_REVIEW_STATUS}.`,
+    });
+  }
+  if (!Array.isArray(registry.entries)) {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_REGISTRY_ENTRIES_INVALID',
+      message: 'Dependency license override registry entries must be an array.',
+    });
+  }
+
+  for (const record of Array.isArray(registry.entries)
+    ? registry.entries
+    : []) {
+    const packageName = String(record?.package ?? '').trim();
+    const version = String(record?.version ?? '').trim();
+    const identity = `${packageName}@${version}`;
+    const source = record?.licenseTextSource;
+    const recordBlockers = [];
+    if (!packageName || !version) {
+      recordBlockers.push({
+        code: 'LICENSE_OVERRIDE_IDENTITY_INVALID',
+        message: `A reviewed license override has an incomplete identity: ${identity}.`,
+      });
+    }
+    if (byIdentity.has(identity)) {
+      recordBlockers.push({
+        code: 'LICENSE_OVERRIDE_DUPLICATE',
+        message: `Dependency license override registry contains duplicate ${identity}.`,
+      });
+    }
+    if (record?.reviewStatus !== LICENSE_OVERRIDE_REVIEW_STATUS) {
+      recordBlockers.push({
+        code: 'LICENSE_OVERRIDE_UNREVIEWED',
+        message: `${identity} override is not ${LICENSE_OVERRIDE_REVIEW_STATUS}.`,
+      });
+    }
+    if (
+      typeof record?.license !== 'string' ||
+      !record.license.trim() ||
+      UNKNOWN_LICENSE_PATTERN.test(record.license.trim())
+    ) {
+      recordBlockers.push({
+        code: 'LICENSE_OVERRIDE_LICENSE_INVALID',
+        message: `${identity} override has a missing or Unknown license.`,
+      });
+    }
+    if (typeof record?.basis !== 'string' || !record.basis.trim()) {
+      recordBlockers.push({
+        code: 'LICENSE_OVERRIDE_BASIS_MISSING',
+        message: `${identity} override has no review basis.`,
+      });
+    }
+    if (
+      !source ||
+      !['package-file', 'repository-file'].includes(source.type) ||
+      typeof source.path !== 'string' ||
+      !source.path.trim() ||
+      !/^[a-f0-9]{64}$/.test(String(source.sha256 ?? '')) ||
+      !Array.isArray(source.sourceReferences) ||
+      source.sourceReferences.length === 0 ||
+      source.sourceReferences.some(
+        (reference) => typeof reference !== 'string' || !reference.trim(),
+      )
+    ) {
+      recordBlockers.push({
+        code: 'LICENSE_OVERRIDE_SOURCE_INVALID',
+        message: `${identity} override has incomplete source path, hash, type, or references.`,
+      });
+    }
+    if (
+      typeof record?.packageSource?.tarball !== 'string' ||
+      !record.packageSource.tarball.trim() ||
+      typeof record?.packageSource?.integrity !== 'string' ||
+      !record.packageSource.integrity.trim()
+    ) {
+      recordBlockers.push({
+        code: 'LICENSE_OVERRIDE_PACKAGE_SOURCE_INVALID',
+        message: `${identity} override has no exact npm tarball/integrity provenance.`,
+      });
+    }
+
+    let licenseText = '';
+    if (source?.type === 'repository-file' && typeof source.path === 'string') {
+      let relativePath = '';
+      try {
+        relativePath = safeRelativePath(source.path);
+      } catch (error) {
+        recordBlockers.push({
+          code: 'LICENSE_OVERRIDE_SOURCE_PATH_UNSAFE',
+          message: `${identity} override source path is unsafe: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+      if (relativePath) {
+        const sourcePath = path.join(repositoryDirectory, relativePath);
+        if (!existsSync(sourcePath) || !statSync(sourcePath).isFile()) {
+          recordBlockers.push({
+            code: 'LICENSE_OVERRIDE_SOURCE_MISSING',
+            message: `${identity} reviewed license text is missing: ${sourcePath}.`,
+          });
+        } else {
+          licenseText = readFileSync(sourcePath, 'utf8');
+          if (!licenseText.trim()) {
+            recordBlockers.push({
+              code: 'LICENSE_OVERRIDE_SOURCE_EMPTY',
+              message: `${identity} reviewed license text is empty: ${sourcePath}.`,
+            });
+          }
+          const actualHash = sha256FileSync(sourcePath);
+          if (actualHash !== source.sha256) {
+            recordBlockers.push({
+              code: 'LICENSE_OVERRIDE_SOURCE_HASH_MISMATCH',
+              message: `${identity} reviewed license text hash ${actualHash} does not match ${source.sha256}.`,
+            });
+          }
+        }
+      }
+    }
+
+    blockers.push(...recordBlockers);
+    if (recordBlockers.length === 0) {
+      byIdentity.set(identity, {
+        ...record,
+        license: record.license.trim(),
+        licenseText,
+      });
+    }
+  }
+
+  return {
+    blockers,
+    byIdentity,
+    entryCount: Array.isArray(registry.entries) ? registry.entries.length : 0,
+    registryPath,
+    status: registry.status ?? 'UNKNOWN',
+  };
+}
+
+function applyLicenseOverride({
+  declaredLicense,
+  existingLicenseText,
+  identity,
+  override,
+  packageDirectory,
+}) {
+  if (!override) {
+    return {
+      blockers: [],
+      evidence: undefined,
+      license: declaredLicense,
+      licenseText: existingLicenseText,
+    };
+  }
+  const needsLicense =
+    !declaredLicense || UNKNOWN_LICENSE_PATTERN.test(declaredLicense);
+  const needsLicenseText = !existingLicenseText.trim();
+  if (!needsLicense && !needsLicenseText) {
+    return {
+      blockers: [],
+      evidence: undefined,
+      license: declaredLicense,
+      licenseText: existingLicenseText,
+    };
+  }
+
+  const blockers = [];
+  if (
+    declaredLicense &&
+    !needsLicense &&
+    declaredLicense !== override.license
+  ) {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_CONFLICT',
+      message: `${identity} declares ${declaredLicense}, but its reviewed override declares ${override.license}.`,
+    });
+  }
+
+  let overrideText = override.licenseText;
+  if (override.licenseTextSource.type === 'package-file') {
+    let relativePath = '';
+    try {
+      relativePath = safeRelativePath(override.licenseTextSource.path);
+    } catch (error) {
+      blockers.push({
+        code: 'LICENSE_OVERRIDE_PACKAGE_PATH_UNSAFE',
+        message: `${identity} package license path is unsafe: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    if (relativePath) {
+      const sourcePath = path.join(packageDirectory, relativePath);
+      if (!existsSync(sourcePath) || !statSync(sourcePath).isFile()) {
+        blockers.push({
+          code: 'LICENSE_OVERRIDE_PACKAGE_FILE_MISSING',
+          message: `${identity} exact package license file is missing: ${sourcePath}.`,
+        });
+      } else {
+        overrideText = readFileSync(sourcePath, 'utf8');
+        const actualHash = sha256FileSync(sourcePath);
+        if (actualHash !== override.licenseTextSource.sha256) {
+          blockers.push({
+            code: 'LICENSE_OVERRIDE_PACKAGE_FILE_HASH_MISMATCH',
+            message: `${identity} package license hash ${actualHash} does not match ${override.licenseTextSource.sha256}.`,
+          });
+        }
+      }
+    }
+  }
+  if (!overrideText.trim()) {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_TEXT_EMPTY',
+      message: `${identity} reviewed override produced no distributable license text.`,
+    });
+  }
+
+  const licenseText = needsLicenseText ? overrideText : existingLicenseText;
+  const selectedTextHash = sha256Bytes(licenseText);
+  if (selectedTextHash !== override.licenseTextSource.sha256) {
+    blockers.push({
+      code: 'LICENSE_OVERRIDE_SELECTED_TEXT_HASH_MISMATCH',
+      message: `${identity} selected license text hash ${selectedTextHash} does not match ${override.licenseTextSource.sha256}.`,
+    });
+  }
+
+  if (blockers.length > 0) {
+    return {
+      blockers,
+      evidence: undefined,
+      license: declaredLicense,
+      licenseText: existingLicenseText,
+    };
+  }
+
+  return {
+    blockers,
+    evidence: {
+      basis: override.basis,
+      licenseTextSha256: sha256Bytes(licenseText),
+      registryIdentity: identity,
+      reviewStatus: override.reviewStatus,
+      sourceReferences: [...override.licenseTextSource.sourceReferences],
+      sourceType: override.licenseTextSource.type,
+    },
+    license: needsLicense ? override.license : declaredLicense,
+    licenseText,
+  };
 }
 
 function walkToPackageManifest(entryPath, expectedName) {
@@ -359,21 +647,43 @@ function validateNucleoEvidence(evidence, nucleoPackageNames, now) {
 }
 
 function makeOpenSourceEntry({
+  licenseOverride,
   packageDirectory,
   packageJson,
   repositoryDirectory,
 }) {
-  const license = normalizeLicense(packageJson);
+  const name = String(packageJson.name ?? '');
+  const version = String(packageJson.version ?? '');
+  const declaredLicense = normalizeLicense(packageJson);
+  const existingLicenseText = readLicenseText(
+    packageDirectory,
+    repositoryDirectory,
+    declaredLicense,
+  );
+  const appliedOverride = applyLicenseOverride({
+    declaredLicense,
+    existingLicenseText,
+    identity: `${name}@${version}`,
+    override: licenseOverride,
+    packageDirectory,
+  });
   return {
-    kind: 'open_source',
-    name: String(packageJson.name ?? ''),
-    version: String(packageJson.version ?? ''),
-    license,
-    repository: normalizeRepository(packageJson.repository),
-    publisher: normalizePublisher(packageJson.author),
-    licenseText: license
-      ? readLicenseText(packageDirectory, repositoryDirectory, license)
-      : '',
+    blockers: appliedOverride.blockers,
+    entry: {
+      kind:
+        appliedOverride.evidence?.basis === 'PINNED_CUSTOM_LICENSE'
+          ? 'custom_license'
+          : 'open_source',
+      name,
+      version,
+      license: appliedOverride.license,
+      repository: normalizeRepository(packageJson.repository),
+      publisher: normalizePublisher(packageJson.author),
+      licenseText: appliedOverride.licenseText,
+      ...(appliedOverride.evidence
+        ? { licenseEvidence: appliedOverride.evidence }
+        : {}),
+    },
   };
 }
 
@@ -397,6 +707,21 @@ function licenseEntryBlockers(entry) {
       message: `${entry.name}@${entry.version} has no distributable license text.`,
     });
   }
+  if (entry.licenseEvidence) {
+    const evidence = entry.licenseEvidence;
+    if (
+      evidence.reviewStatus !== LICENSE_OVERRIDE_REVIEW_STATUS ||
+      evidence.registryIdentity !== `${entry.name}@${entry.version}` ||
+      evidence.licenseTextSha256 !== sha256Bytes(entry.licenseText) ||
+      !Array.isArray(evidence.sourceReferences) ||
+      evidence.sourceReferences.length === 0
+    ) {
+      blockers.push({
+        code: 'PACKAGE_LICENSE_EVIDENCE_INVALID',
+        message: `${entry.name}@${entry.version} has invalid reviewed license evidence metadata.`,
+      });
+    }
+  }
   return blockers;
 }
 
@@ -416,6 +741,7 @@ export function collectReleaseDependencyInventory({
     evidencePath,
     'Nucleo redistribution evidence',
   );
+  const licenseOverrides = loadLicenseOverrideRegistry(repositoryDirectory);
   const rootDependencies = {
     ...(appManifest.dependencies ?? {}),
     ...(appManifest.devDependencies ?? {}),
@@ -430,7 +756,7 @@ export function collectReleaseDependencyInventory({
     }));
   const visitedManifests = new Set();
   const entries = [];
-  const blockers = [];
+  const blockers = [...licenseOverrides.blockers];
   const nucleoPackageNames = new Set();
 
   while (queue.length > 0) {
@@ -478,13 +804,15 @@ export function collectReleaseDependencyInventory({
           : [],
       });
     } else {
-      const entry = makeOpenSourceEntry({
+      const identity = `${packageName}@${String(packageJson.version ?? '')}`;
+      const result = makeOpenSourceEntry({
+        licenseOverride: licenseOverrides.byIdentity.get(identity),
         packageDirectory,
         packageJson,
         repositoryDirectory,
       });
-      entries.push(entry);
-      blockers.push(...licenseEntryBlockers(entry));
+      entries.push(result.entry);
+      blockers.push(...result.blockers, ...licenseEntryBlockers(result.entry));
     }
 
     const dependencies = packageJson.dependencies ?? {};
@@ -555,8 +883,15 @@ export function collectReleaseDependencyInventory({
   return {
     blockers: deduplicatedBlockers,
     entries: uniqueEntries,
+    licenseOverrides: {
+      appliedCount: uniqueEntries.filter((entry) => entry.licenseEvidence)
+        .length,
+      entryCount: licenseOverrides.entryCount,
+      registryPath: LICENSE_OVERRIDE_REGISTRY_RELATIVE_PATH,
+      status: licenseOverrides.status,
+    },
     nucleo: {
-      evidencePath,
+      evidencePath: NUCLEO_EVIDENCE_RELATIVE_PATH,
       packageNames: sortedNucleoPackages,
       status: nucleoEvidence.status ?? 'UNVERIFIED',
     },
@@ -611,6 +946,7 @@ export function prepareReleaseAttributionBundle({
     releaseChannel,
     blockers: inventory.blockers,
     entries: inventory.entries,
+    licenseOverrides: inventory.licenseOverrides,
     nucleo: inventory.nucleo,
   };
   writeJson(
@@ -646,6 +982,9 @@ export function prepareReleaseAttributionBundle({
     files,
     dependencyCount: inventory.entries.length,
     blockerCount: inventory.blockers.length,
+    licenseOverrideAppliedCount: inventory.licenseOverrides.appliedCount,
+    licenseOverrideEntryCount: inventory.licenseOverrides.entryCount,
+    licenseOverrideStatus: inventory.licenseOverrides.status,
     nucleoStatus: inventory.nucleo.status,
   };
   writeJson(path.join(outputDirectory, 'manifest.json'), manifest);
@@ -664,7 +1003,7 @@ export function writeLicenseUiJson({
     strict: releaseChannel !== 'dev',
   });
   const entries = inventory.entries
-    .filter((entry) => entry.kind === 'open_source')
+    .filter((entry) => entry.kind !== 'commercial_asset')
     .map(
       ({ kind: _kind, evidenceReferences: _evidenceReferences, ...entry }) =>
         entry,
@@ -744,6 +1083,72 @@ export function inspectPackagedAttribution({
   if (!Array.isArray(inventory.blockers)) {
     throw new Error('Dependency license inventory blockers must be an array');
   }
+  if (
+    !inventory.licenseOverrides ||
+    inventory.licenseOverrides.status !== LICENSE_OVERRIDE_REVIEW_STATUS
+  ) {
+    throw new Error(
+      `Dependency license override registry is not ${LICENSE_OVERRIDE_REVIEW_STATUS}.`,
+    );
+  }
+  const packagedOverrideRegistry = readJson(
+    path.join(
+      attributionDirectory,
+      'provenance/DEPENDENCY_LICENSE_OVERRIDES.json',
+    ),
+    'Packaged dependency license override registry',
+  );
+  if (
+    packagedOverrideRegistry.status !== LICENSE_OVERRIDE_REVIEW_STATUS ||
+    !Array.isArray(packagedOverrideRegistry.entries) ||
+    packagedOverrideRegistry.entries.length !==
+      inventory.licenseOverrides.entryCount
+  ) {
+    throw new Error(
+      'Packaged dependency license override registry does not match the reviewed inventory metadata.',
+    );
+  }
+  const packagedOverridesByIdentity = new Map(
+    packagedOverrideRegistry.entries.map((record) => [
+      `${String(record?.package ?? '')}@${String(record?.version ?? '')}`,
+      record,
+    ]),
+  );
+  if (
+    packagedOverridesByIdentity.size !== packagedOverrideRegistry.entries.length
+  ) {
+    throw new Error(
+      'Packaged dependency license override registry contains duplicate identities.',
+    );
+  }
+  const appliedOverrideCount = inventory.entries.filter(
+    (entry) => entry.licenseEvidence,
+  ).length;
+  if (appliedOverrideCount !== inventory.licenseOverrides.appliedCount) {
+    throw new Error(
+      `Packaged applied license override count mismatch: ${appliedOverrideCount} != ${inventory.licenseOverrides.appliedCount}`,
+    );
+  }
+  for (const entry of inventory.entries) {
+    if (!entry.licenseEvidence) continue;
+    const record = packagedOverridesByIdentity.get(
+      entry.licenseEvidence.registryIdentity,
+    );
+    if (
+      !record ||
+      record.reviewStatus !== LICENSE_OVERRIDE_REVIEW_STATUS ||
+      record.basis !== entry.licenseEvidence.basis ||
+      record.license !== entry.license ||
+      record.licenseTextSource?.sha256 !==
+        entry.licenseEvidence.licenseTextSha256 ||
+      JSON.stringify(record.licenseTextSource?.sourceReferences ?? []) !==
+        JSON.stringify(entry.licenseEvidence.sourceReferences)
+    ) {
+      throw new Error(
+        `Packaged reviewed license evidence does not match ${entry.name}@${entry.version}.`,
+      );
+    }
+  }
   if (requireReady && inventory.blockers.length > 0) {
     throw new AttributionGateError(inventory.blockers);
   }
@@ -757,8 +1162,19 @@ export function inspectPackagedAttribution({
       `Attribution blocker count mismatch: ${manifest.blockerCount} != ${inventory.blockers.length}`,
     );
   }
+  if (
+    manifest.licenseOverrideAppliedCount !==
+      inventory.licenseOverrides.appliedCount ||
+    manifest.licenseOverrideEntryCount !==
+      inventory.licenseOverrides.entryCount ||
+    manifest.licenseOverrideStatus !== inventory.licenseOverrides.status
+  ) {
+    throw new Error(
+      'Attribution manifest license-override metadata does not match the dependency inventory.',
+    );
+  }
   const blockers = inventory.entries
-    .filter((entry) => entry.kind === 'open_source')
+    .filter((entry) => entry.kind !== 'commercial_asset')
     .flatMap(licenseEntryBlockers);
   if (blockers.length > 0) throw new AttributionGateError(blockers);
 

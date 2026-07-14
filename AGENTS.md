@@ -111,6 +111,10 @@ permanently forbidden in this public repository even after those gates pass.
 10. **Record deferred verification honestly.** Implementation that has not yet
     passed the required audit, tests, and CI must be labeled
     `IMPLEMENTED_UNVERIFIED`; it is not release-ready.
+11. **Preserve redistribution evidence.** Keep upstream copyright, license,
+    attribution, NOTICE, DCO, and provenance records intact. Do not invent
+    rights or substitute guessed license text; any missing or ambiguous license
+    remains a release blocker.
 
 ## Stop conditions
 

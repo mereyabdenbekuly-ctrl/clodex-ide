@@ -12,7 +12,7 @@ function generateLicensesJson(appRoot: string, outPath: string): void {
     repositoryDirectory,
   });
   console.log(
-    `[license-plugin] Generated ${result.entries.length} verified/open-source inventory entries with ${result.blockers.length} blocker(s) → ${path.relative(appRoot, outPath)}`,
+    `[license-plugin] Generated ${result.entries.length} verified dependency-license entries with ${result.blockers.length} blocker(s) → ${path.relative(appRoot, outPath)}`,
   );
 }
 

@@ -70,5 +70,6 @@
     "./components/*": "./src/components/*.tsx",
     "./hooks/*": "./src/hooks/*.ts"
   },
-  "version": "0.0.1"
+  "version": "0.0.1",
+  "license": "AGPL-3.0-only"
 }
