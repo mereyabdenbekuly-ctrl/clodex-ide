@@ -173,7 +173,7 @@
     "@vscode/tree-sitter-wasm": "^0.3.0",
     "ai": "6.0.177",
     "chokidar": "^4.0.3",
-    "diff": "^8.0.2",
+    "diff": "^8.0.3",
     "drizzle-orm": "^0.45.1",
     "fzy.js": "^0.4.1",
     "gray-matter": "^4.0.3",
