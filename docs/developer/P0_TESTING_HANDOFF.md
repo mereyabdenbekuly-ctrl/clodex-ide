@@ -1,15 +1,70 @@
 # P0 Zero-Trust testing handoff
 
-- **Status:** `UNEXECUTED`
-- **Date:** July 14, 2026
-- **Owner:** next independent testing model
-- **Rule:** the implementation session intentionally did not run tests,
-  typechecks, linters, packaged smoke, or fault-injection commands after the
-  P0 source changes. GitHub CI is green for commit `1ad58e67`, but that commit
-  is the **pre-tranche baseline only**. Its results MUST NOT be attributed to
-  the current source-only closure tranche.
-- **Current claim:** `IMPLEMENTED_UNVERIFIED`. Nothing in this handoff upgrades
-  a manifest row to `ENFORCED`.
+- **Status:** `FOCUSED_LOCAL_PASS_BROAD_CI_PENDING`
+- **Date:** July 15, 2026
+- **Owner:** PR #16 remediation handoff to root reviewer and independent CI
+- **Worktree:** branch `security/p0-durable-mcp-approval-20260714`, based on
+  commit `94eadfadeb172898308136b95700aca75a8cbfd6`, with the remediation diff
+  still uncommitted at evidence capture time. The intended next step is root
+  review followed by a DCO-signed follow-up commit; no final commit SHA is
+  claimed here.
+- **Current claim:** focused source regression and typecheck evidence passed on
+  one local macOS arm64 host. Nothing in this handoff upgrades a manifest row
+  to `ENFORCED`, and nothing below claims packaged, Linux, Windows, native
+  helper, container, LSM, crash/power-loss, or external-effect coverage.
+
+## PR #16 focused remediation evidence
+
+Environment: Darwin 24.6.0 arm64, pinned Node.js `v22.23.1` from
+`/private/tmp/clodex-toolchains/node-v22.23.1-darwin-arm64/bin`, pnpm
+`10.30.3`.
+
+The following commands completed successfully against the uncommitted
+worktree described above:
+
+```sh
+export PATH=/private/tmp/clodex-toolchains/node-v22.23.1-darwin-arm64/bin:$PATH
+
+pnpm -F @clodex/agent-core exec vitest run \
+  src/services/agent-manager/state-mutations/approvals.test.ts
+# 1 file, 4 tests passed
+
+pnpm -F clodex exec vitest run \
+  src/backend/agent-host/openmanus-runtime.test.ts \
+  src/backend/services/toolbox/tools/agents/run-openmanus.test.ts \
+  src/backend/agent-host/supervisor.test.ts \
+  src/backend/startup/phases/platform-integration-services.test.ts \
+  src/backend/services/automations/index.test.ts \
+  src/backend/agent-host/browser-agent-step-executor.test.ts \
+  src/backend/agent-host/execution-target-router.test.ts \
+  src/backend/services/swarm-runtime/index.test.ts \
+  src/backend/services/toolbox/services/clodex-mcp/index.test.ts \
+  src/backend/services/mcp/index.test.ts \
+  src/backend/services/mcp/trusted-dispatch-gateway.test.ts \
+  src/backend/services/artifact-bridge/index.test.ts \
+  src/backend/services/artifact-bridge/session4-adversarial.test.ts \
+  src/backend/services/artifact-bridge/host-session.test.ts \
+  src/backend/services/artifact-bridge/async-operation-final-dispatch.test.ts \
+  src/backend/services/artifact-bridge/effect-wal-integration.test.ts
+# 16 files, 211 tests passed
+
+pnpm -F @clodex/agent-core typecheck
+# passed
+
+pnpm -F clodex typecheck
+# agent-core and agent-shell builds plus ui/pages/backend/preload/storybook/visual
+# TypeScript projects all passed
+
+pnpm check
+# exited 0 with three pre-existing website warnings; no Biome errors
+
+git diff --check
+# passed
+```
+
+This is **215 focused unit tests**, not the repository-wide test matrix. GitHub
+CI, the full repository test command, Windows, Linux, packaged Electron, and
+native/adversarial batches remain required independent evidence.
 
 ## Required testing principles
 
@@ -28,8 +83,11 @@
 
 ## Current source-only P0 closure tranche
 
-The following paths are present in source but were intentionally not executed,
-typechecked, linted, built, packaged, or smoke-tested in this tranche:
+The following source-only P0 claims are broader than the focused remediation
+matrix above. Only the exact files and commands recorded above were locally
+executed; the remainder still requires the independent broad, packaged,
+cross-platform, native, and fault-injection work described later in this
+handoff:
 
 - a durable one-shot Automation WAL covers manual, timer, system-resume, and
   startup-reconciliation dispatches, commits the exact definition/occurrence/

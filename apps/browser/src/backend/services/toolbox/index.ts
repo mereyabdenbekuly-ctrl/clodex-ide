@@ -83,7 +83,7 @@ import {
   makeUniversalTools,
   type AgentManagerToolboxPort,
   type AgentStore,
-  type MountPermission as CoreMountPermission,
+  type UniversalToolboxMountManager,
   type PendingEditService,
   ProjectIndexService,
 } from '@clodex/agent-core';
@@ -154,6 +154,11 @@ import { createShellGuardianRequest } from '@/services/guardian/requests';
 import type { DesktopAutomationService } from '@/services/agent-os/desktop-automation';
 export { getGlobalSkillsMounts, getEnabledGlobalSkillsMounts };
 
+type UniversalToolboxMountPermission = NonNullable<
+  ReturnType<
+    NonNullable<UniversalToolboxMountManager['getMountPermissionsForPrefix']>
+  >
+>[number];
 type MountedPrefix = string;
 type MountedPath = string;
 
@@ -267,6 +272,34 @@ export class ToolboxService
     return this.getMountedPathsForAgent(agentInstanceId).size > 0;
   }
 
+  private getUniversalToolboxMountManager(): UniversalToolboxMountManager | null {
+    const service = this.mountManagerService;
+    if (!service) return null;
+    return {
+      getMountPrefixes: (agentInstanceId) =>
+        service.getMountPrefixes(agentInstanceId),
+      getWorkspacePathForPrefix: (prefix) =>
+        service.getWorkspacePathForPrefix(prefix),
+      findWorkspaceForFile: (agentInstanceId, filePath) =>
+        service.findWorkspaceForFile(agentInstanceId, filePath),
+      getMountPermissionsForPrefix: (agentInstanceId, prefix) => {
+        const permissions = service.getMountPermissionsForPrefix(
+          agentInstanceId,
+          prefix,
+        );
+        if (!permissions) return undefined;
+        const translated = new Set<UniversalToolboxMountPermission>();
+        for (const permission of permissions) {
+          if (permission === 'read') translated.add('read');
+          if (permission === 'edit') translated.add('write');
+          if (permission === 'create') translated.add('create');
+          if (permission === 'delete') translated.add('delete');
+        }
+        return [...translated];
+      },
+    };
+  }
+
   private getUniversalTool(
     toolName: string,
     agentInstanceId: string,
@@ -275,13 +308,15 @@ export class ToolboxService
     const tools = makeUniversalTools({
       agentInstanceId,
       hostPaths: getBrowserHostPaths(),
-      mountManager: this.mountManagerService,
+      mountManager: this.getUniversalToolboxMountManager(),
       staticMounts: getEnabledGlobalSkillsMounts(
         this.uiKarton.state.preferences?.agent?.enabledGlobalSkillDirs ?? [],
       ).map((mount) => ({
         prefix: mount.prefix,
         absolutePath: mount.absolutePath,
-        permissions: ['read'] satisfies readonly CoreMountPermission[],
+        permissions: [
+          'read',
+        ] satisfies readonly UniversalToolboxMountPermission[],
       })),
       diffHistoryService: this.diffHistoryService,
       pendingEditService: this.pendingEditService,

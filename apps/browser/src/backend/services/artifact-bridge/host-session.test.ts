@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import type { McpRegistryService } from '../mcp';
+import type { TrustedMcpFinalAuthority } from '../mcp/trusted-dispatch-gateway';
 import { createArtifactBridgeAgentAskModelAdapterIdentity } from './effect-commitment';
 import { ArtifactBridgeService, type ArtifactBridgePersistence } from './index';
 
@@ -31,6 +32,20 @@ type HarnessFeatures = {
   asyncOperations?: boolean;
   lifecycleEvents?: boolean;
 };
+
+type TestMcpCallOptions = {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  agentInstanceId?: string;
+  beforeDispatch?: () => void;
+  finalAuthority?: TrustedMcpFinalAuthority;
+};
+
+function passMcpFinalDispatch(options: TestMcpCallOptions | undefined): void {
+  options?.beforeDispatch?.();
+  options?.finalAuthority?.prepareFinalCheck();
+  options?.finalAuthority?.assertAndConsume(undefined as never);
+}
 
 function createHarness(
   isFeatureEnabled: () => boolean = () => true,
@@ -73,14 +88,9 @@ function createHarness(
       serverId: string,
       toolName: string,
       args: Record<string, unknown>,
-      options?: {
-        timeoutMs?: number;
-        signal?: AbortSignal;
-        agentInstanceId?: string;
-        beforeDispatch?: () => void;
-      },
+      options?: TestMcpCallOptions,
     ) => {
-      options?.beforeDispatch?.();
+      passMcpFinalDispatch(options);
       return await hostCallTool(serverId, toolName, args);
     },
   );
@@ -1125,7 +1135,7 @@ describe('ArtifactBridgeService host-issued sessions', () => {
       async (serverId, toolName, args, options) => {
         markRegistryWaitStarted();
         await registryWait;
-        options?.beforeDispatch?.();
+        passMcpFinalDispatch(options);
         return await harness.hostCallTool(serverId, toolName, args);
       },
     );

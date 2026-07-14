@@ -1691,7 +1691,10 @@ function findApprovalResponses(
     if (message.role !== 'assistant') continue;
     for (const rawPart of message.parts) {
       if (!isRecord(rawPart)) continue;
-      const part = rawPart;
+      // `UIMessagePart` is a closed union, so TypeScript preserves the union
+      // even after the runtime record check. Treat only the validated non-array
+      // record as untrusted evidence and parse every field below.
+      const part = rawPart as unknown as Record<string, unknown>;
       if (
         part.toolCallId !== toolCallId ||
         part.state !== 'approval-responded'

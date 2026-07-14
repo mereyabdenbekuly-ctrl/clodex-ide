@@ -11,7 +11,6 @@ import {
   type AgentHostToMainMessage,
   type MainToAgentHostMessage,
   type OpenManusExecutionRequest,
-  type OpenManusExecutionResult,
 } from './protocol';
 import type {
   AgentTurnHostHandlers,
@@ -44,27 +43,8 @@ const logger = {
 const openManusRequest: OpenManusExecutionRequest = {
   prompt: 'Inspect the workspace',
   mountPrefix: 'w1234',
-  workspacePath: '/workspace/project',
-  openManusHome: '/opt/openmanus',
-  pythonExecutable: 'python3',
   timeoutMs: 60_000,
-  modelId: 'gpt-5.5',
-  baseUrl: 'https://example.test/v1',
-  apiKey: 'short-lived-secret',
   maxTokens: 8_192,
-  environment: {
-    PATH: '/usr/bin',
-  },
-};
-
-const openManusResult: OpenManusExecutionResult = {
-  message: 'OpenManus completed.',
-  exitCode: 0,
-  timedOut: false,
-  workspacePath: '/workspace/project',
-  openManusHome: '/opt/openmanus',
-  stdout: 'done',
-  stderr: '',
 };
 
 const isolatedTurnRequest: IsolatedAgentTurnRequest = {
@@ -341,30 +321,17 @@ describe('AgentHostProcessService', () => {
     });
   });
 
-  it('executes an isolated OpenManus workload over the typed IPC lane', async () => {
+  it('refuses to treat the utility process as an OpenManus confinement boundary', async () => {
     const harness = new AgentHostHarness();
     const service = await createService(harness);
     const child = harness.children[0];
 
-    const execution = service.executeOpenManus(openManusRequest);
-    const requestMessage = child?.messages.at(-1);
-    expect(requestMessage).toMatchObject({
-      type: 'execute-openmanus',
-      launchId: launchIdOf(child),
-      request: openManusRequest,
-    });
-    if (requestMessage?.type !== 'execute-openmanus') {
-      throw new Error('Expected execute-openmanus request');
-    }
-
-    child?.send({
-      type: 'execution-complete',
-      launchId: requestMessage.launchId,
-      requestId: requestMessage.requestId,
-      result: openManusResult,
-    });
-
-    await expect(execution).resolves.toEqual(openManusResult);
+    await expect(service.executeOpenManus(openManusRequest)).rejects.toThrow(
+      'not an OS-confined, credential-brokered adapter',
+    );
+    expect(
+      child?.messages.some((message) => message.type === 'execute-openmanus'),
+    ).toBe(false);
   });
 
   it('routes isolated turn model/tool RPC and streaming events through main', async () => {
@@ -597,40 +564,38 @@ describe('AgentHostProcessService', () => {
     ).toBe(false);
   });
 
-  it('forwards aborts to the worker and rejects the caller', async () => {
+  it('rejects an already-aborted OpenManus request before any IPC', async () => {
     const harness = new AgentHostHarness();
     const service = await createService(harness);
     const child = harness.children[0];
     const abortController = new AbortController();
-
-    const execution = service.executeOpenManus(openManusRequest, {
-      signal: abortController.signal,
-    });
-    const requestMessage = child?.messages.at(-1);
-    if (requestMessage?.type !== 'execute-openmanus') {
-      throw new Error('Expected execute-openmanus request');
-    }
-
     abortController.abort();
 
-    await expect(execution).rejects.toMatchObject({ name: 'AbortError' });
-    expect(child?.messages.at(-1)).toEqual({
-      type: 'cancel-execution',
-      launchId: requestMessage.launchId,
-      requestId: requestMessage.requestId,
-    });
+    await expect(
+      service.executeOpenManus(openManusRequest, {
+        signal: abortController.signal,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(
+      child?.messages.some(
+        (message) =>
+          message.type === 'execute-openmanus' ||
+          message.type === 'cancel-execution',
+      ),
+    ).toBe(false);
   });
 
-  it('rejects in-flight work on crash and never replays it', async () => {
+  it('does not queue or replay OpenManus work across a worker crash', async () => {
     const harness = new AgentHostHarness();
     const service = await createService(harness, {
       restartBaseDelayMs: 10,
     });
-    const execution = service.executeOpenManus(openManusRequest);
+    await expect(service.executeOpenManus(openManusRequest)).rejects.toThrow(
+      'not an OS-confined, credential-brokered adapter',
+    );
 
     harness.children[0]?.exit(9);
 
-    await expect(execution).rejects.toThrow('request was not replayed');
     await vi.advanceTimersByTimeAsync(10);
     await flushMicrotasks();
     expect(

@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import type { McpRegistryService } from '../mcp';
+import type { TrustedMcpFinalAuthority } from '../mcp/trusted-dispatch-gateway';
 import type { ArtifactBridgeAuditRecorder } from './audit-ledger';
 import { createArtifactBridgeAgentAskModelAdapterIdentity } from './effect-commitment';
 import { ArtifactBridgeService, type ArtifactBridgePersistence } from './index';
@@ -136,6 +137,20 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+type TestMcpCallOptions = {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  agentInstanceId?: string;
+  beforeDispatch?: () => void;
+  finalAuthority?: TrustedMcpFinalAuthority;
+};
+
+function passMcpFinalDispatch(options: TestMcpCallOptions | undefined): void {
+  options?.beforeDispatch?.();
+  options?.finalAuthority?.prepareFinalCheck();
+  options?.finalAuthority?.assertAndConsume(undefined as never);
+}
+
 function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
   let store: unknown = structuredClone(initialStore);
   const handlers = new Map<string, (...args: any[]) => Promise<any>>();
@@ -193,17 +208,12 @@ function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
       serverId: string,
       toolName: string,
       arguments_: Record<string, unknown>,
-      options?: {
-        timeoutMs?: number;
-        signal?: AbortSignal;
-        agentInstanceId?: string;
-        beforeDispatch?: () => void;
-      },
+      options?: TestMcpCallOptions,
     ) => {
       // Model the final adapter fence: no host effect occurs unless the
       // synchronous callback accepts the exact current commitment.
       beforeFinalDispatch?.();
-      options?.beforeDispatch?.();
+      passMcpFinalDispatch(options);
       return await mcpEffect(serverId, toolName, arguments_);
     },
   );
@@ -856,7 +866,7 @@ describe('ArtifactBridgeService Session 4 adversarial authorization', () => {
         try {
           entered.resolve();
           await releaseFinalCallback.promise;
-          options?.beforeDispatch?.();
+          passMcpFinalDispatch(options);
           return await harness.mcpEffect(serverId, toolName, arguments_);
         } finally {
           settled.resolve();
@@ -913,7 +923,7 @@ describe('ArtifactBridgeService Session 4 adversarial authorization', () => {
         try {
           entered.resolve();
           await releaseFinalCallback.promise;
-          options?.beforeDispatch?.();
+          passMcpFinalDispatch(options);
           return await harness.mcpEffect(serverId, toolName, arguments_);
         } finally {
           settled.resolve();

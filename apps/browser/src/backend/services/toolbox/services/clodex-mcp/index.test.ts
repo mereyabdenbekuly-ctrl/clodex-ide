@@ -76,7 +76,7 @@ describe('ClodexMcpService', () => {
     expect(connectMock).not.toHaveBeenCalled();
   });
 
-  it('registers read-only tools and explicitly approved destructive tools for the MVP', async () => {
+  it('registers only the host-maintained read-only allowlist for the MVP', async () => {
     listToolsMock.mockResolvedValueOnce({
       tools: [
         {
@@ -108,14 +108,12 @@ describe('ClodexMcpService', () => {
 
     const tools = await service.getTools('agent-1');
 
-    expect(Object.keys(tools).sort()).toEqual([
-      'mcp_clodex_ssh_exec',
-      'mcp_clodex_tcp_check',
-    ]);
+    expect(Object.keys(tools)).toEqual(['mcp_clodex_tcp_check']);
+    expect(tools.mcp_clodex_ssh_exec).toBeUndefined();
     expect(tools.mcp_clodex_write_remote_file).toBeUndefined();
   });
 
-  it('requires approval before executing ssh_exec and records a UI explanation', async () => {
+  it('withholds ssh_exec until the SDK exposes an atomic before-send hook', async () => {
     listToolsMock.mockResolvedValueOnce({
       tools: [
         {
@@ -136,16 +134,8 @@ describe('ClodexMcpService', () => {
     });
 
     const tools = await service.getTools('agent-1');
-    const sshExec = tools.mcp_clodex_ssh_exec as any;
-
-    await expect(
-      sshExec.needsApproval({ host: 'example.com' }, { toolCallId: 'tc_1' }),
-    ).resolves.toBe(true);
-    expect(recordPendingApproval).toHaveBeenCalledWith(
-      'agent-1',
-      'tc_1',
-      expect.stringContaining('remote SSH command'),
-    );
+    expect(tools.mcp_clodex_ssh_exec).toBeUndefined();
+    expect(recordPendingApproval).not.toHaveBeenCalled();
   });
 
   it('does not require approval for tcp_check', async () => {
@@ -177,14 +167,14 @@ describe('ClodexMcpService', () => {
     expect(recordPendingApproval).not.toHaveBeenCalled();
   });
 
-  it('routes MCP approval through content-free Guardian context', async () => {
+  it('routes Guardian escalation through content-free approval context', async () => {
     listToolsMock.mockResolvedValueOnce({
       tools: [
         {
-          name: 'ssh_exec',
-          description: 'Execute a command over SSH.',
+          name: 'tcp_check',
+          description: 'Check a TCP port from Clodex cloud.',
           inputSchema: objectSchema,
-          annotations: { destructiveHint: true },
+          annotations: { readOnlyHint: true },
         },
       ],
     });
@@ -198,39 +188,46 @@ describe('ClodexMcpService', () => {
       explanation: 'Remote execution requires explicit human approval.',
     }));
     const recordPendingApproval = vi.fn();
+    const stageApproval = vi.fn(async () => undefined);
     const service = new ClodexMcpService({
       authService: makeAuthService(),
       logger: makeLogger(),
       assessGuardian,
       recordPendingApproval,
+      stageApproval,
     });
 
     const tools = await service.getTools('agent-1');
-    const sshExec = tools.mcp_clodex_ssh_exec as any;
+    const tcpCheck = tools.mcp_clodex_tcp_check as any;
     await expect(
-      sshExec.needsApproval(
-        { host: 'secret.example.com', command: 'private command' },
+      tcpCheck.needsApproval(
+        { host: 'secret.example.com', port: 443 },
         { toolCallId: 'tc_1' },
       ),
     ).resolves.toBe(true);
 
     expect(assessGuardian).toHaveBeenCalledWith({
       kind: 'mcp',
-      summary: 'Run a remote MCP tool',
-      readOnly: false,
-      irreversible: true,
+      summary: 'Run a read-only remote MCP tool',
+      readOnly: true,
+      irreversible: false,
       context: {
         resourceScope: 'remote',
         targetTrust: 'known-remote',
-        operation: 'execute',
-        capabilities: ['network', 'remote-execution', 'delete'],
+        operation: 'inspect',
+        capabilities: ['network', 'read'],
       },
     });
     expect(JSON.stringify(assessGuardian.mock.calls)).not.toContain(
       'secret.example.com',
     );
-    expect(JSON.stringify(assessGuardian.mock.calls)).not.toContain(
-      'private command',
+    expect(JSON.stringify(assessGuardian.mock.calls)).not.toContain('443');
+    expect(stageApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentInstanceId: 'agent-1',
+        toolCallId: 'tc_1',
+        aiToolName: 'mcp_clodex_tcp_check',
+      }),
     );
     expect(recordPendingApproval).toHaveBeenCalledWith(
       'agent-1',
@@ -347,8 +344,7 @@ describe('ClodexMcpService', () => {
     const service = new ClodexMcpService({
       authService: makeAuthServiceWithoutToken(),
       logger: makeLogger(),
-      gatewayUrl:
-        'https://user:secret@clodex.xyz/tools-gateway/mcp?token=hidden',
+      gatewayUrl: 'https://clodex.xyz/tools-gateway/mcp',
     });
 
     const status = await service.getCapabilityStatus();
@@ -363,8 +359,8 @@ describe('ClodexMcpService', () => {
     listToolsMock.mockResolvedValueOnce({
       tools: [
         {
-          name: 'ssh_exec',
-          description: 'Execute a command over SSH.',
+          name: 'tcp_check',
+          description: 'Check a TCP port from Clodex cloud.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -372,11 +368,11 @@ describe('ClodexMcpService', () => {
                 type: 'string',
                 description: 'Remote host name.',
               },
-              command: { type: 'string' },
+              port: { type: 'number' },
             },
-            required: ['host', 'command'],
+            required: ['host', 'port'],
           },
-          annotations: { destructiveHint: true },
+          annotations: { readOnlyHint: true },
         },
       ],
     });
@@ -391,10 +387,10 @@ describe('ClodexMcpService', () => {
     expect(status.state).toBe('connected');
     expect(status.tools).toEqual([
       expect.objectContaining({
-        id: 'mcp_clodex_ssh_exec',
-        name: 'ssh_exec',
-        requiresApproval: true,
-        destructive: true,
+        id: 'mcp_clodex_tcp_check',
+        name: 'tcp_check',
+        requiresApproval: false,
+        destructive: false,
         inputFields: [
           {
             name: 'host',
@@ -403,8 +399,8 @@ describe('ClodexMcpService', () => {
             description: 'Remote host name.',
           },
           {
-            name: 'command',
-            type: 'string',
+            name: 'port',
+            type: 'number',
             required: true,
             description: undefined,
           },

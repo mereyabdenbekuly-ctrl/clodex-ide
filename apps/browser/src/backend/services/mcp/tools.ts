@@ -1,8 +1,5 @@
 import { createHash } from 'node:crypto';
-import {
-  type McpServerConfig,
-  type McpToolDescriptor,
-} from '@clodex/mcp-runtime';
+import type { McpServerConfig, McpToolDescriptor } from '@clodex/mcp-runtime';
 import { jsonSchema, tool, type Tool } from 'ai';
 import type {
   GuardianAssessment,
@@ -10,10 +7,10 @@ import type {
 } from '@shared/guardian';
 import { createMcpGuardianRequest } from '@/services/guardian/requests';
 import type { McpRegistryService } from './index';
-import {
-  type TrustedMcpDescriptorCommitment,
-  type TrustedMcpDispatchCommitment,
-  type TrustedMcpFinalAuthority,
+import type {
+  TrustedMcpDescriptorCommitment,
+  TrustedMcpDispatchCommitment,
+  TrustedMcpFinalAuthority,
 } from './trusted-dispatch-gateway';
 import type {
   ClaimTrustedMcpApprovalInput,

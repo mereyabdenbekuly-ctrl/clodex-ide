@@ -208,22 +208,25 @@ export function createTrustedMcpApprovalAuthority(input: {
   if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
     throw new Error('MCP final-authority TTL is invalid');
   }
+  const createdAt = readFinalAuthorityNow(now);
+  const expiresAt = addFinalAuthorityTtl(createdAt, ttlMs);
   const expectedEffectDigest = hashTrustedMcpFinalAuthorityEffect(
     input.descriptor,
     input.effect,
   );
-  const expiresAt = now() + ttlMs;
   let consumed = false;
 
   return Object.freeze({
     [trustedMcpFinalAuthorityBrand]: true as const,
     prepareFinalCheck(): void {},
-    assertAndConsume(current): void {
+    assertAndConsume(
+      current: Parameters<TrustedMcpFinalAuthority['assertAndConsume']>[0],
+    ): void {
       if (consumed) {
         throw new Error('MCP final authority was already consumed');
       }
       consumed = true;
-      if (now() > expiresAt) {
+      if (readFinalAuthorityNow(now) >= expiresAt) {
         throw new Error('MCP final authority expired before dispatch');
       }
       if (
@@ -256,7 +259,8 @@ export function createTrustedMcpFenceAuthority(
   if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
     throw new Error('MCP final-authority TTL is invalid');
   }
-  const expiresAt = now() + ttlMs;
+  const createdAt = readFinalAuthorityNow(now);
+  const expiresAt = addFinalAuthorityTtl(createdAt, ttlMs);
   let consumed = false;
   let prepared = false;
 
@@ -269,7 +273,7 @@ export function createTrustedMcpFenceAuthority(
       if (prepared) {
         throw new Error('MCP final authority fence was already prepared');
       }
-      if (now() > expiresAt) {
+      if (readFinalAuthorityNow(now) >= expiresAt) {
         throw new Error('MCP final authority expired before dispatch');
       }
       fence();
@@ -282,13 +286,28 @@ export function createTrustedMcpFenceAuthority(
       if (!prepared) {
         throw new Error('MCP final authority fence was not checked');
       }
-      if (now() > expiresAt) {
+      if (readFinalAuthorityNow(now) >= expiresAt) {
         throw new Error('MCP final authority expired before dispatch');
       }
       consumed = true;
       options.onConsumed?.();
     },
   });
+}
+
+function readFinalAuthorityNow(now: () => number): number {
+  const value = now();
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error('MCP final-authority clock is invalid');
+  }
+  return value;
+}
+
+function addFinalAuthorityTtl(createdAt: number, ttlMs: number): number {
+  if (ttlMs > Number.MAX_SAFE_INTEGER - createdAt) {
+    throw new Error('MCP final-authority expiry is invalid');
+  }
+  return createdAt + ttlMs;
 }
 
 export function assertTrustedMcpDescriptorCommitment(

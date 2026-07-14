@@ -266,9 +266,7 @@ function snapshotPendingApprovalBefore(
   state: AgentState,
   toolCallId: string,
 ): PendingApprovalBefore {
-  if (
-    !Object.prototype.hasOwnProperty.call(state.pendingApprovals, toolCallId)
-  ) {
+  if (!Object.hasOwn(state.pendingApprovals, toolCallId)) {
     return { present: false };
   }
   return {
@@ -281,10 +279,7 @@ function pendingApprovalMatchesBefore(
   state: AgentState,
   receipt: ApprovalResolutionReceipt,
 ): boolean {
-  const present = Object.prototype.hasOwnProperty.call(
-    state.pendingApprovals,
-    receipt.toolCallId,
-  );
+  const present = Object.hasOwn(state.pendingApprovals, receipt.toolCallId);
   if (present !== receipt.pendingApprovalBefore.present) return false;
   if (!present || !receipt.pendingApprovalBefore.present) return true;
   return structurallyEqualWithoutAccessors(
@@ -770,10 +765,7 @@ export function rollbackApprovalResolution(
       (part as ToolPart).state !== 'approval-responded' ||
       (part as ToolPart).approval?.id !== receipt.approvalId ||
       (part as ToolPart).toolCallId !== receipt.toolCallId ||
-      Object.prototype.hasOwnProperty.call(
-        state.pendingApprovals,
-        receipt.toolCallId,
-      ) ||
+      Object.hasOwn(state.pendingApprovals, receipt.toolCallId) ||
       !structurallyEqualWithoutAccessors(part, expectedRespondedPart)
     ) {
       return;

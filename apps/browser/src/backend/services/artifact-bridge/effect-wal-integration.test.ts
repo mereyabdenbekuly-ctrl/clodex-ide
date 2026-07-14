@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import type { McpRegistryService } from '../mcp';
+import type { TrustedMcpFinalAuthority } from '../mcp/trusted-dispatch-gateway';
 import type {
   ArtifactBridgeEffectWalPersistence,
   ArtifactBridgeEffectWalRecord,
@@ -121,6 +122,17 @@ const writeDescriptor: McpToolDescriptor = {
 
 type EffectKind = 'write' | 'sensitive';
 
+type TestMcpCallOptions = {
+  beforeDispatch?: () => void;
+  finalAuthority?: TrustedMcpFinalAuthority;
+};
+
+function passMcpFinalDispatch(options: TestMcpCallOptions | undefined): void {
+  options?.beforeDispatch?.();
+  options?.finalAuthority?.prepareFinalCheck();
+  options?.finalAuthority?.assertAndConsume(undefined as never);
+}
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -216,8 +228,8 @@ function createHarness() {
       _serverId: string,
       _toolName: string,
       _arguments: Record<string, unknown>,
-      options?: { beforeDispatch?: () => void },
-    ) => await adapterBehavior(options?.beforeDispatch),
+      options?: TestMcpCallOptions,
+    ) => await adapterBehavior(() => passMcpFinalDispatch(options)),
   );
   const mcpRegistry = {
     snapshot: () => ({

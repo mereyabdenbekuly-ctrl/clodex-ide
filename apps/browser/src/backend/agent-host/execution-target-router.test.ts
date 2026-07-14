@@ -120,6 +120,7 @@ describe('ExecutionTargetRouter', () => {
     const router = new ExecutionTargetRouter({
       localExecutor: local.executor,
       isCloudEnabled: () => false,
+      isLocalExecutionAllowed: () => true,
       createTaskId: () => 'task-local',
       now: sequenceClock(),
       audit,
@@ -296,6 +297,7 @@ describe('ExecutionTargetRouter', () => {
     const router = new ExecutionTargetRouter({
       localExecutor: local.executor,
       isCloudEnabled: () => false,
+      isLocalExecutionAllowed: () => true,
       createTaskId: () => 'task-abort',
       now: sequenceClock(),
     });
@@ -326,6 +328,7 @@ describe('ExecutionTargetRouter', () => {
     const router = new ExecutionTargetRouter({
       localExecutor: local.executor,
       isCloudEnabled: () => false,
+      isLocalExecutionAllowed: () => true,
       createTaskId: () => 'task-timeout',
       now: sequenceClock(),
     });
@@ -345,6 +348,7 @@ describe('ExecutionTargetRouter', () => {
     const router = new ExecutionTargetRouter({
       localExecutor: local.executor,
       isCloudEnabled: () => false,
+      isLocalExecutionAllowed: () => true,
       createTaskId: () => `task-${++task}`,
       now: sequenceClock(),
       maxRecentTasks: 2,

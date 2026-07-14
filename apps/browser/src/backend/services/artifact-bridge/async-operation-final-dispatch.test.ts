@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import type { McpRegistryService } from '../mcp';
+import type { TrustedMcpFinalAuthority } from '../mcp/trusted-dispatch-gateway';
 import { ArtifactBridgeService, type ArtifactBridgePersistence } from './index';
 
 const context: ArtifactBridgeContext = {
@@ -117,7 +118,14 @@ type McpCallOptions = {
   signal?: AbortSignal;
   agentInstanceId?: string;
   beforeDispatch?: () => void;
+  finalAuthority?: TrustedMcpFinalAuthority;
 };
+
+function passMcpFinalDispatch(options: McpCallOptions | undefined): void {
+  options?.beforeDispatch?.();
+  options?.finalAuthority?.prepareFinalCheck();
+  options?.finalAuthority?.assertAndConsume(undefined as never);
+}
 
 type AutomationRunOptions = {
   beforeDispatch?: (input: {
@@ -156,7 +164,7 @@ function createHarness() {
       _arguments: Record<string, unknown>,
       options?: McpCallOptions,
     ) => {
-      options?.beforeDispatch?.();
+      passMcpFinalDispatch(options);
       return await mcpEffect();
     },
   );
@@ -335,7 +343,7 @@ describe('ArtifactBridge async final-dispatch fence', () => {
         entered.resolve();
         try {
           await releaseFinalCallback.promise;
-          options?.beforeDispatch?.();
+          passMcpFinalDispatch(options);
           return await harness.mcpEffect();
         } finally {
           settled.resolve();
@@ -416,7 +424,7 @@ describe('ArtifactBridge async final-dispatch fence', () => {
       async (_serverId, _toolName, _arguments, options?: McpCallOptions) => {
         entered.resolve();
         await releaseFinalCallback.promise;
-        options?.beforeDispatch?.();
+        passMcpFinalDispatch(options);
         return await harness.mcpEffect();
       },
     );
@@ -465,7 +473,7 @@ describe('ArtifactBridge async final-dispatch fence', () => {
       async (_serverId, _toolName, _arguments, options?: McpCallOptions) => {
         entered.resolve();
         await releaseFinalCallback.promise;
-        options?.beforeDispatch?.();
+        passMcpFinalDispatch(options);
         return await harness.mcpEffect();
       },
     );
@@ -503,7 +511,7 @@ describe('ArtifactBridge async final-dispatch fence', () => {
         entered.resolve();
         try {
           await releaseFinalCallback.promise;
-          options?.beforeDispatch?.();
+          passMcpFinalDispatch(options);
           return await harness.mcpEffect();
         } finally {
           settled.resolve();
@@ -542,7 +550,7 @@ describe('ArtifactBridge async final-dispatch fence', () => {
     harness.callTool.mockImplementationOnce(
       async (_serverId, _toolName, _arguments, options?: McpCallOptions) => {
         try {
-          options?.beforeDispatch?.();
+          passMcpFinalDispatch(options);
           afterFinalCallback.resolve();
           return await harness.mcpEffect();
         } finally {
@@ -590,7 +598,7 @@ describe('ArtifactBridge async final-dispatch fence', () => {
         entered.resolve();
         try {
           await releaseFinalCallback.promise;
-          options?.beforeDispatch?.();
+          passMcpFinalDispatch(options);
           return await harness.mcpEffect();
         } finally {
           settled.resolve();
@@ -630,7 +638,7 @@ describe('ArtifactBridge async final-dispatch fence', () => {
     harness.callTool.mockImplementationOnce(
       async (_serverId, _toolName, _arguments, options?: McpCallOptions) => {
         try {
-          options?.beforeDispatch?.();
+          passMcpFinalDispatch(options);
           afterFinalCallback.resolve();
           return await harness.mcpEffect();
         } finally {
@@ -671,7 +679,7 @@ describe('ArtifactBridge async final-dispatch fence', () => {
         entered.resolve();
         try {
           await releaseFinalCallback.promise;
-          options?.beforeDispatch?.();
+          passMcpFinalDispatch(options);
           return await harness.mcpEffect();
         } finally {
           settled.resolve();
@@ -800,7 +808,7 @@ describe('ArtifactBridge async final-dispatch fence', () => {
     harness.callTool.mockImplementationOnce(
       async (_serverId, _toolName, _arguments, options?: McpCallOptions) => {
         try {
-          options?.beforeDispatch?.();
+          passMcpFinalDispatch(options);
           afterFinalCallback.resolve();
           return await harness.mcpEffect();
         } finally {

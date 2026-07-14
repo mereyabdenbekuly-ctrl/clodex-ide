@@ -265,6 +265,7 @@ vi.mock('../../services/uri-handler', () => ({
 vi.mock('../../utils/paths', () => ({
   getBuiltinSkillsPath: () => '/builtin-skills',
   getInstalledPluginsDir: () => '/installed-plugins',
+  getShellCapabilityAuditPath: () => '/tmp/shell-capability-audit.jsonl',
 }));
 
 import {
@@ -466,8 +467,8 @@ describe('runPlatformIntegrationServicesPhase', () => {
       harness.options.windowLayoutService,
       mocks.authService,
       harness.options.telemetryService,
-      expect.anything(),
-      expect.anything(),
+      { service: 'file-picker' },
+      { service: 'user-experience' },
       mocks.credentialsService,
       mocks.mcpRegistryService,
       harness.options.gitService,
@@ -478,7 +479,7 @@ describe('runPlatformIntegrationServicesPhase', () => {
       harness.options.hostAgentStateMutations,
       harness.options.attachments,
       harness.options.persistence.memoryNotes,
-      harness.options.agentHostProcessService,
+      expect.any(Object),
       harness.options.protectedFiles,
     );
     expect(mocks.toolboxService.setNetworkPolicyEvaluator).toHaveBeenCalledWith(
