@@ -3,12 +3,17 @@ import type { AutomationStoreData } from '@shared/automations';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import type { NotificationService } from '../notification';
-import { AutomationService, type AutomationPersistence } from './index';
+import {
+  AutomationService,
+  type AutomationBeforeDispatchInput,
+  type AutomationDispatchInput,
+  type AutomationPersistence,
+} from './index';
 
 function createHarness(options?: {
   initial?: AutomationStoreData;
   now?: number;
-  dispatch?: () => Promise<{ agentId: string }>;
+  dispatch?: (input: AutomationDispatchInput) => Promise<{ agentId: string }>;
 }) {
   let data: AutomationStoreData = structuredClone(
     options?.initial ?? { version: 1, automations: [], runs: [] },
@@ -30,9 +35,12 @@ function createHarness(options?: {
   const notifications = {
     showNotification: vi.fn(),
   } as unknown as NotificationService;
-  const dispatch = vi.fn(
-    options?.dispatch ?? (async () => ({ agentId: 'agent-1' })),
-  );
+  const configuredDispatch =
+    options?.dispatch ?? (async () => ({ agentId: 'agent-1' }));
+  const dispatch = vi.fn(async (input: AutomationDispatchInput) => {
+    input.beforeDispatch?.();
+    return await configuredDispatch(input);
+  });
   const now = options?.now ?? Date.parse('2026-07-11T10:00:00.000Z');
 
   return {
@@ -138,6 +146,194 @@ describe('AutomationService', () => {
     await service.teardown();
   });
 
+  it('invokes the manual-run fence immediately before adapter dispatch', async () => {
+    const events: string[] = [];
+    let fencedInput: AutomationBeforeDispatchInput | undefined;
+    let dispatchedInput: AutomationDispatchInput | undefined;
+    const harness = createHarness({
+      dispatch: async (input) => {
+        events.push('dispatch');
+        dispatchedInput = input;
+        return { agentId: 'agent-fenced' };
+      },
+    });
+    const service = await AutomationService.create({
+      logger: {} as Logger,
+      karton: harness.karton,
+      notifications: harness.notifications,
+      persistence: harness.persistence,
+      isFeatureEnabled: () => true,
+      dispatch: harness.dispatch,
+      now: () => harness.now,
+      setTimer: () => 1 as any,
+      clearTimer: vi.fn(),
+    });
+    const created = await harness.handlers.get('automations.create')?.('ui', {
+      title: 'Fenced task',
+      prompt: 'Dispatch only after the final fence.',
+      schedule: { kind: 'interval', everyMs: 60_000 },
+    });
+    const id = created.snapshot.automations[0].id;
+
+    await service.runAutomationNow(id, {
+      beforeDispatch: (input) => {
+        events.push(`before-dispatch:${input.attempt}`);
+        fencedInput = input;
+      },
+    });
+
+    expect(events).toEqual(['before-dispatch:1', 'dispatch']);
+    expect(fencedInput).toMatchObject({
+      attempt: 1,
+      prompt: 'Dispatch only after the final fence.',
+      automation: { id, title: 'Fenced task' },
+    });
+    expect(fencedInput?.automation).toBe(dispatchedInput?.automation);
+    await service.teardown();
+  });
+
+  it('rechecks a queued manual run after serialization and blocks revoked dispatch', async () => {
+    let releaseBlocker: (() => void) | undefined;
+    const blockerReleased = new Promise<void>((resolve) => {
+      releaseBlocker = resolve;
+    });
+    let markBlockerDispatched: (() => void) | undefined;
+    const blockerDispatched = new Promise<void>((resolve) => {
+      markBlockerDispatched = resolve;
+    });
+    let targetDispatches = 0;
+    const harness = createHarness({
+      dispatch: async ({ automation }) => {
+        if (automation.title === 'Serialization blocker') {
+          markBlockerDispatched?.();
+          await blockerReleased;
+          return { agentId: 'agent-blocker' };
+        }
+        targetDispatches += 1;
+        return { agentId: 'agent-revoked-target' };
+      },
+    });
+    const service = await AutomationService.create({
+      logger: {} as Logger,
+      karton: harness.karton,
+      notifications: harness.notifications,
+      persistence: harness.persistence,
+      isFeatureEnabled: () => true,
+      dispatch: harness.dispatch,
+      now: () => harness.now,
+      setTimer: () => 1 as any,
+      clearTimer: vi.fn(),
+    });
+    const blocker = await harness.handlers.get('automations.create')?.('ui', {
+      title: 'Serialization blocker',
+      prompt: 'Hold the serialized section.',
+      schedule: { kind: 'interval', everyMs: 60_000 },
+    });
+    const target = await harness.handlers.get('automations.create')?.('ui', {
+      title: 'Revoked target',
+      prompt: 'Must not dispatch after revocation.',
+      schedule: { kind: 'interval', everyMs: 60_000 },
+    });
+
+    const blockerRun = service.runAutomationNow(
+      blocker.snapshot.automations[0].id,
+    );
+    await blockerDispatched;
+
+    let revoked = false;
+    let fenceCalls = 0;
+    const targetId = target.snapshot.automations[1].id;
+    const targetRun = service.runAutomationNow(targetId, {
+      retryMode: 'no-blind-retry',
+      failureMode: 'propagate',
+      beforeDispatch: () => {
+        fenceCalls += 1;
+        if (revoked) throw new Error('Artifact Bridge grant revoked');
+      },
+    });
+    const targetRejected = expect(targetRun).rejects.toThrow(
+      'Artifact Bridge grant revoked',
+    );
+    await Promise.resolve();
+    expect(fenceCalls).toBe(0);
+
+    revoked = true;
+    releaseBlocker?.();
+    await blockerRun;
+    await targetRejected;
+
+    expect(fenceCalls).toBe(1);
+    expect(targetDispatches).toBe(0);
+    expect(service.getSnapshot().recentRuns[0]).toMatchObject({
+      automationId: targetId,
+      status: 'failed',
+      attemptCount: 1,
+      reason: 'Artifact Bridge grant revoked',
+    });
+    expect(harness.getData().runs[0]).toMatchObject({
+      automationId: targetId,
+      status: 'failed',
+      attemptCount: 1,
+      reason: 'Artifact Bridge grant revoked',
+    });
+    await service.teardown();
+  });
+
+  it('does not blindly retry an ambiguous bridge-safe dispatch failure', async () => {
+    let attempts = 0;
+    const harness = createHarness({
+      dispatch: async () => {
+        attempts += 1;
+        throw new Error('dispatch result unavailable after transport close');
+      },
+    });
+    const service = await AutomationService.create({
+      logger: {} as Logger,
+      karton: harness.karton,
+      notifications: harness.notifications,
+      persistence: harness.persistence,
+      isFeatureEnabled: () => true,
+      dispatch: harness.dispatch,
+      now: () => harness.now,
+      sleep: async () => undefined,
+      setTimer: () => 1 as any,
+      clearTimer: vi.fn(),
+    });
+    const created = await harness.handlers.get('automations.create')?.('ui', {
+      title: 'Ambiguous dispatch',
+      prompt: 'Do not repeat this effect.',
+      schedule: { kind: 'interval', everyMs: 60_000 },
+      retryPolicy: {
+        maxAttempts: 3,
+        initialBackoffMs: 1_000,
+        maxBackoffMs: 1_000,
+      },
+    });
+    const id = created.snapshot.automations[0].id;
+
+    await expect(
+      service.runAutomationNow(id, {
+        retryMode: 'no-blind-retry',
+        failureMode: 'propagate',
+      }),
+    ).rejects.toThrow('dispatch result unavailable after transport close');
+
+    expect(attempts).toBe(1);
+    expect(service.getSnapshot().recentRuns[0]).toMatchObject({
+      automationId: id,
+      status: 'failed',
+      attemptCount: 1,
+      reason: 'dispatch result unavailable after transport close',
+    });
+    expect(harness.getData().runs[0]).toMatchObject({
+      automationId: id,
+      status: 'failed',
+      attemptCount: 1,
+      reason: 'dispatch result unavailable after transport close',
+    });
+    await service.teardown();
+  });
+
   it('requires an explicit unexpired grant for alwaysAllow', async () => {
     const harness = createHarness();
     const service = await AutomationService.create({
@@ -184,6 +380,98 @@ describe('AutomationService', () => {
     await expect(
       harness.handlers.get('automations.getSnapshot')?.('ui'),
     ).rejects.toThrow('feature is disabled');
+    await service.teardown();
+  });
+
+  it('does not dispatch an overdue persisted automation while startup gate is disabled', async () => {
+    const seedHarness = createHarness({
+      now: Date.parse('2026-07-11T10:00:00.000Z'),
+    });
+    const seed = await AutomationService.create({
+      logger: {} as Logger,
+      karton: seedHarness.karton,
+      notifications: seedHarness.notifications,
+      persistence: seedHarness.persistence,
+      isFeatureEnabled: () => true,
+      dispatch: seedHarness.dispatch,
+      now: () => seedHarness.now,
+      setTimer: () => 1 as any,
+      clearTimer: vi.fn(),
+    });
+    await seedHarness.handlers.get('automations.create')?.('ui', {
+      title: 'Overdue startup task',
+      prompt: 'Must remain dormant while disabled.',
+      schedule: { kind: 'interval', everyMs: 60_000 },
+    });
+    const persisted = structuredClone(seedHarness.getData());
+    await seed.teardown();
+
+    const harness = createHarness({
+      initial: persisted,
+      now: Date.parse('2026-07-11T10:02:00.000Z'),
+    });
+    const service = await AutomationService.create({
+      logger: {} as Logger,
+      karton: harness.karton,
+      notifications: harness.notifications,
+      persistence: harness.persistence,
+      isFeatureEnabled: () => false,
+      dispatch: harness.dispatch,
+      now: () => harness.now,
+      setTimer: () => 1 as any,
+      clearTimer: vi.fn(),
+    });
+
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    expect(harness.getData().runs).toHaveLength(0);
+    await service.teardown();
+  });
+
+  it('rechecks the automation gate at the real adapter boundary', async () => {
+    let enabled = true;
+    let releaseAdapter!: () => void;
+    const adapterReleased = new Promise<void>((resolve) => {
+      releaseAdapter = resolve;
+    });
+    let markAdapterEntered!: () => void;
+    const adapterEntered = new Promise<void>((resolve) => {
+      markAdapterEntered = resolve;
+    });
+    let effectStarted = false;
+    const harness = createHarness();
+    harness.dispatch.mockImplementationOnce(async (input) => {
+      markAdapterEntered();
+      await adapterReleased;
+      input.beforeDispatch?.();
+      effectStarted = true;
+      return { agentId: 'must-not-exist' };
+    });
+    const service = await AutomationService.create({
+      logger: {} as Logger,
+      karton: harness.karton,
+      notifications: harness.notifications,
+      persistence: harness.persistence,
+      isFeatureEnabled: () => enabled,
+      dispatch: harness.dispatch,
+      now: () => harness.now,
+      setTimer: () => 1 as any,
+      clearTimer: vi.fn(),
+    });
+    const created = await harness.handlers.get('automations.create')?.('ui', {
+      title: 'Gate race',
+      prompt: 'Must not create an agent after disable.',
+      schedule: { kind: 'interval', everyMs: 60_000 },
+    });
+    const run = service.runAutomationNow(created.snapshot.automations[0].id, {
+      retryMode: 'no-blind-retry',
+      failureMode: 'propagate',
+    });
+    await adapterEntered;
+    enabled = false;
+    releaseAdapter();
+
+    await expect(run).rejects.toThrow('feature is disabled');
+    expect(effectStarted).toBe(false);
     await service.teardown();
   });
 });

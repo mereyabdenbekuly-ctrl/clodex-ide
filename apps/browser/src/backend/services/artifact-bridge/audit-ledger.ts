@@ -80,6 +80,8 @@ export class ArtifactBridgeAuditLedger
 {
   private queue = Promise.resolve();
   private initialized = false;
+  private initialization: Promise<void> | null = null;
+  private initializationError: Error | null = null;
   private sequence = 0;
   private previousHash = 'GENESIS';
   private readonly recentRecords: ArtifactBridgeAuditEntry[] = [];
@@ -124,20 +126,37 @@ export class ArtifactBridgeAuditLedger
     };
     const eventHash = hashRecord(payload.previousHash, payload);
     const record: AuditRecord = { ...payload, eventHash };
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    await fs.appendFile(this.filePath, `${JSON.stringify(record)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
+    const directory = path.dirname(this.filePath);
+    await fs.mkdir(directory, { recursive: true });
+    const handle = await fs.open(this.filePath, 'a', 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(record)}\n`, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await syncDirectory(directory);
     this.sequence = record.sequence;
     this.previousHash = record.eventHash;
     this.rememberRecord(toAuditEntry(record));
   }
 
   private async initialize(): Promise<void> {
+    if (this.initializationError) throw this.initializationError;
     if (this.initialized) return;
-    this.initialized = true;
+    this.initialization ??= this.loadAndVerify().then(
+      () => {
+        this.initialized = true;
+      },
+      (error: unknown) => {
+        this.initializationError = toError(error);
+        throw this.initializationError;
+      },
+    );
+    await this.initialization;
+  }
 
+  private async loadAndVerify(): Promise<void> {
     let content: string;
     try {
       content = await fs.readFile(this.filePath, 'utf8');
@@ -221,6 +240,20 @@ function hashRecord(previousHash: string, payload: object): string {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  if (process.platform === 'win32') return;
+  const handle = await fs.open(directory, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 export function auditContext(

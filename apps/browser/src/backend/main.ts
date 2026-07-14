@@ -2,7 +2,7 @@
  * This file stores the main setup for the CLI.
  */
 
-import { app, powerMonitor } from 'electron';
+import { app, ipcMain, powerMonitor } from 'electron';
 import { generateText } from 'ai';
 import { AgentManagerService } from './services/agent-manager';
 import { enrichHistoryEntryWorkspaces } from './services/agent-manager/history-workspace-enrichment';
@@ -35,6 +35,7 @@ import { wireSettingsBrowserRpc } from './wiring/settings-browser-rpc';
 import { wireWorkspaceCredentialsRpc } from './wiring/workspace-credentials-rpc';
 import {
   ensureDataDirectories,
+  getArtifactBridgeAuditPath,
   getNetworkPolicyAuditPath,
 } from './utils/paths';
 import { migrateLegacyPaths } from './utils/migrate-legacy-paths';
@@ -74,6 +75,9 @@ import {
 } from './services/automations';
 import { NativeWakeScheduler } from './services/automations/native-wake';
 import { ArtifactBridgeService } from './services/artifact-bridge';
+import { ArtifactBridgeAuditLedger } from './services/artifact-bridge/audit-ledger';
+import { ArtifactBridgeFrameBroker } from './services/artifact-bridge/frame-broker';
+import { GeneratedAppIdentityResolver } from './services/generated-app-library/identity-resolver';
 import { SpacesService } from './services/spaces';
 import {
   SessionContinuityService,
@@ -686,7 +690,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       },
     },
     nativeWakeScheduler,
-    dispatch: async ({ automation }) => {
+    dispatch: async ({ automation, beforeDispatch }) => {
       const created = await agentManagerService.dispatchCommand(
         'agents.create',
         [
@@ -697,6 +701,8 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
             ? automation.workspacePaths
             : undefined,
           automation.workspacePaths.length > 0,
+          undefined,
+          beforeDispatch,
         ],
         `automation:${automation.id}`,
       );
@@ -711,17 +717,25 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       return { agentId: created };
     },
   });
+  const generatedAppIdentityResolver = new GeneratedAppIdentityResolver();
+  const artifactBridgeAuditLedger = new ArtifactBridgeAuditLedger(
+    getArtifactBridgeAuditPath(),
+    logger,
+  );
+  await artifactBridgeAuditLedger.listRecent(1);
   const artifactBridgeService = await ArtifactBridgeService.create({
     logger,
     karton: uiKarton,
     mcpRegistry: mcpRegistryService,
+    auditRecorder: artifactBridgeAuditLedger,
+    auditReader: artifactBridgeAuditLedger,
     isFeatureEnabled: () =>
       resolveFeatureGate(
         'artifact-bridge',
         preferencesService.get().featureGates.overrides,
         __APP_RELEASE_CHANNEL__,
       ).enabled,
-    askAgent: async (context, prompt) => {
+    askAgent: async (context, prompt, options) => {
       if (context.kind !== 'agent') {
         throw new Error(
           'Packaged generated apps cannot impersonate or ask an agent',
@@ -735,6 +749,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
         modelId,
         `artifact-bridge:${context.agentId}:${context.appId}`,
       );
+      options?.beforeDispatch?.();
       const result = await generateText({
         model,
         prompt,
@@ -743,10 +758,16 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       });
       return result.text;
     },
-    runAutomation: async (automationId) =>
-      await automationService.runAutomationNow(automationId),
-    resolveApp: async () => null,
+    runAutomation: async (automationId, options) =>
+      await automationService.runAutomationNow(automationId, options),
+    resolveApp: async (context) =>
+      await generatedAppIdentityResolver.resolve(context),
   });
+  const artifactBridgeFrameBroker = new ArtifactBridgeFrameBroker({
+    ipc: ipcMain,
+    artifactBridge: artifactBridgeService,
+    logger,
+  }).start();
   const sessionSharingBaseUrl = process.env.CLODEX_SESSION_SHARING_URL?.trim();
   const sessionSharingAdapter: SessionSharingAdapter | undefined =
     sessionSharingBaseUrl &&
@@ -1523,6 +1544,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     },
     asynchronousServices: {
       automationService,
+      artifactBridgeFrameBroker,
       artifactBridgeService,
       spacesService,
       sessionContinuityService,

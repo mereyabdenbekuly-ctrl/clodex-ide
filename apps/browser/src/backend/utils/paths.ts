@@ -54,6 +54,7 @@ export type JsonName =
   | 'generated-app-library'
   | 'automations'
   | 'artifact-capability-grants'
+  | 'artifact-effect-wal'
   | 'generated-app-package-trust'
   | 'spaces'
   | 'session-shares'
@@ -136,6 +137,9 @@ export const getRemoteControlDir = (): string =>
 
 export const getNetworkPolicyAuditPath = (): string =>
   path.join(getAgentOsDir(), 'audit', 'network-policy.jsonl');
+
+export const getArtifactBridgeAuditPath = (): string =>
+  path.join(getAgentOsDir(), 'audit', 'artifact-bridge.jsonl');
 
 export const getRemoteControlSecretsPath = (): string =>
   path.join(getRemoteControlDir(), 'clients.json');

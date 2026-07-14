@@ -62,6 +62,7 @@ export interface MainShutdownCoordinatorOptions {
   };
   asynchronousServices: {
     automationService: TeardownResource;
+    artifactBridgeFrameBroker: TeardownResource;
     artifactBridgeService: TeardownResource;
     spacesService: TeardownResource;
     sessionContinuityService: TeardownResource;
@@ -280,10 +281,16 @@ export function createMainShutdownCoordinator(
     // ThreadSafeFunction crash during app.exit(). Telemetry flush shares it.
     asynchronousTeardowns: [
       teardownTask('automationService', asynchronousServices.automationService),
-      teardownTask(
-        'artifactBridgeService',
-        asynchronousServices.artifactBridgeService,
-      ),
+      {
+        name: 'artifactBridgeFrameBrokerAndService',
+        teardown: async () => {
+          try {
+            await asynchronousServices.artifactBridgeFrameBroker.teardown();
+          } finally {
+            await asynchronousServices.artifactBridgeService.teardown();
+          }
+        },
+      },
       teardownTask('spacesService', asynchronousServices.spacesService),
       teardownTask(
         'sessionContinuityService',

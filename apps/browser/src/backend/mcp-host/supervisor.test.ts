@@ -31,6 +31,8 @@ class FakeUtilityProcess extends EventEmitter {
   public stdout = null;
   public stderr = null;
   public readonly messages: MainToMcpHostMessage[] = [];
+  public autoReady = true;
+  public autoConnect = true;
   public ignoreToolCalls = false;
   public requireOAuth = false;
   public readonly kill = vi.fn(() => {
@@ -48,23 +50,20 @@ class FakeUtilityProcess extends EventEmitter {
     this.messages.push(message);
     switch (message.type) {
       case 'initialize':
+        if (!this.autoReady) break;
         queueMicrotask(() => {
-          this.send({
-            type: 'ready',
-            protocolVersion: MCP_HOST_PROTOCOL_VERSION,
-            launchId: message.launchId,
-            pid: this.pid ?? 0,
-            startedAt: Date.now(),
-          });
+          this.sendReady(message.launchId);
         });
         break;
       case 'connect-server':
+        if (!this.autoConnect) break;
         queueMicrotask(() => {
           this.send({
             type: 'connection-state',
             launchId: message.launchId,
             requestId: message.requestId,
             serverId: message.serverId,
+            connectionId: message.connectionId,
             state: this.requireOAuth ? 'authorization-required' : 'connected',
           });
         });
@@ -76,6 +75,7 @@ class FakeUtilityProcess extends EventEmitter {
             launchId: message.launchId,
             requestId: message.requestId,
             serverId: message.serverId,
+            connectionId: message.connectionId,
             state: 'disconnected',
           });
         });
@@ -225,6 +225,23 @@ class FakeUtilityProcess extends EventEmitter {
     this.emit('message', message);
   }
 
+  public sendReady(launchId?: string): void {
+    const initialize = this.messages.find(
+      (message) => message.type === 'initialize',
+    );
+    const activeLaunchId =
+      launchId ??
+      (initialize?.type === 'initialize' ? initialize.launchId : undefined);
+    if (!activeLaunchId) throw new Error('MCP host was not initialized');
+    this.send({
+      type: 'ready',
+      protocolVersion: MCP_HOST_PROTOCOL_VERSION,
+      launchId: activeLaunchId,
+      pid: this.pid ?? 0,
+      startedAt: Date.now(),
+    });
+  }
+
   public exit(code: number): void {
     if (this.exited) return;
     this.exited = true;
@@ -235,9 +252,13 @@ class FakeUtilityProcess extends EventEmitter {
 
 class Harness {
   public readonly children: FakeUtilityProcess[] = [];
+  public autoReady = true;
+  public autoConnect = true;
   public readonly fork = vi.fn(
     (_modulePath: string, _args: string[], _options: Electron.ForkOptions) => {
       const child = new FakeUtilityProcess(20_000 + this.children.length);
+      child.autoReady = this.autoReady;
+      child.autoConnect = this.autoConnect;
       this.children.push(child);
       queueMicrotask(() => child.emit('spawn'));
       return child;
@@ -328,6 +349,148 @@ describe('McpHostSupervisor', () => {
     });
   });
 
+  it('serializes connection generations and suppresses stale completion state', async () => {
+    const harness = new Harness();
+    const onConnectionState = vi.fn();
+    const supervisor = await createSupervisor(harness, { onConnectionState });
+    const child = harness.children[0]!;
+    child.autoConnect = false;
+
+    const first = supervisor.connectServer('local-test', {
+      type: 'stdio',
+      command: '/usr/local/bin/connection-a',
+      args: [],
+      env: {},
+    });
+    const firstRejection = expect(first).rejects.toThrow(
+      'connection was superseded',
+    );
+    await flushMicrotasks();
+    const firstRequest = child.messages.find(
+      (message) => message.type === 'connect-server',
+    );
+    expect(firstRequest?.type).toBe('connect-server');
+
+    const second = supervisor.connectServer('local-test', {
+      type: 'stdio',
+      command: '/usr/local/bin/connection-b',
+      args: [],
+      env: {},
+    });
+    await flushMicrotasks();
+    expect(
+      child.messages.filter((message) => message.type === 'connect-server'),
+    ).toHaveLength(1);
+
+    if (firstRequest?.type !== 'connect-server') {
+      throw new Error('Missing first connection request');
+    }
+    child.send({
+      type: 'connection-state',
+      launchId: firstRequest.launchId,
+      requestId: firstRequest.requestId,
+      serverId: firstRequest.serverId,
+      connectionId: firstRequest.connectionId,
+      state: 'connected',
+    });
+    await firstRejection;
+    await flushMicrotasks();
+
+    const connectRequests = child.messages.filter(
+      (message) => message.type === 'connect-server',
+    );
+    expect(connectRequests).toHaveLength(2);
+    expect(onConnectionState).not.toHaveBeenCalledWith(
+      'local-test',
+      'connected',
+      undefined,
+    );
+    const secondRequest = connectRequests[1];
+    if (secondRequest?.type !== 'connect-server') {
+      throw new Error('Missing second connection request');
+    }
+    child.send({
+      type: 'connection-state',
+      launchId: secondRequest.launchId,
+      requestId: secondRequest.requestId,
+      serverId: secondRequest.serverId,
+      connectionId: secondRequest.connectionId,
+      state: 'connected',
+    });
+
+    await expect(second).resolves.toBe('connected');
+    expect(onConnectionState).toHaveBeenCalledTimes(1);
+    expect(onConnectionState).toHaveBeenCalledWith(
+      'local-test',
+      'connected',
+      undefined,
+    );
+  });
+
+  it('runs the dispatch fence after readiness and immediately before tool IPC', async () => {
+    const harness = new Harness();
+    const supervisor = await createSupervisor(harness);
+    const child = harness.children[0]!;
+    const beforeDispatch = vi.fn(() => {
+      expect(
+        child.messages.some((message) => message.type === 'call-tool'),
+      ).toBe(false);
+    });
+
+    await expect(
+      supervisor.callTool('local-test', 'read_data', {}, { beforeDispatch }),
+    ).resolves.toEqual({
+      content: [{ type: 'text', text: 'ok' }],
+    });
+
+    expect(beforeDispatch).toHaveBeenCalledTimes(1);
+    const request = child.messages.find(
+      (message) => message.type === 'call-tool',
+    );
+    expect(request).toBeDefined();
+    expect(request).not.toHaveProperty('beforeDispatch');
+  });
+
+  it('rechecks the dispatch fence after waiting for host readiness', async () => {
+    const harness = new Harness();
+    const supervisor = await createSupervisor(harness);
+    harness.autoReady = false;
+    harness.children[0]!.exit(1);
+
+    let revoked = false;
+    const beforeDispatch = vi.fn(() => {
+      if (revoked) throw new Error('Host generation was revoked');
+    });
+    const result = supervisor.callTool(
+      'local-test',
+      'read_data',
+      {},
+      { beforeDispatch },
+    );
+    const rejection = expect(result).rejects.toThrow(
+      'Host generation was revoked',
+    );
+
+    await vi.advanceTimersByTimeAsync(250);
+    await flushMicrotasks();
+    const restarted = harness.children[1]!;
+    expect(restarted).toBeDefined();
+    expect(beforeDispatch).not.toHaveBeenCalled();
+    expect(
+      restarted.messages.some((message) => message.type === 'call-tool'),
+    ).toBe(false);
+
+    revoked = true;
+    restarted.sendReady();
+    await vi.advanceTimersByTimeAsync(25);
+    await rejection;
+
+    expect(beforeDispatch).toHaveBeenCalledTimes(1);
+    expect(
+      restarted.messages.some((message) => message.type === 'call-tool'),
+    ).toBe(false);
+  });
+
   it('proxies OAuth storage requests to the trusted main-process handler', async () => {
     const harness = new Harness();
     const onOAuthRequest = vi.fn(async () => ({ access_token: 'secret' }));
@@ -358,14 +521,27 @@ describe('McpHostSupervisor', () => {
   it('forwards typed tools, resources, and prompts list-changed events', async () => {
     const harness = new Harness();
     const onListChanged = vi.fn();
-    await createSupervisor(harness, { onListChanged });
+    const supervisor = await createSupervisor(harness, { onListChanged });
     const child = harness.children[0]!;
     const launchId = child.messages[0]!.launchId;
+    await supervisor.connectServer('local-test', {
+      type: 'stdio',
+      command: '/usr/local/bin/mcp-test',
+      args: [],
+      env: {},
+    });
+    const connection = child.messages
+      .filter((message) => message.type === 'connect-server')
+      .at(-1);
+    if (connection?.type !== 'connect-server') {
+      throw new Error('Missing active connection identity');
+    }
 
     child.send({
       type: 'list-changed',
       launchId,
       serverId: 'local-test',
+      connectionId: connection.connectionId,
       kind: 'tools',
       tools: [{ name: 'catalog_echo', inputSchema: { type: 'object' } }],
     });
@@ -373,6 +549,7 @@ describe('McpHostSupervisor', () => {
       type: 'list-changed',
       launchId,
       serverId: 'local-test',
+      connectionId: connection.connectionId,
       kind: 'resources',
       resources: [
         { uri: 'smoke://fixture/catalog-status', name: 'Catalog status' },
@@ -382,6 +559,7 @@ describe('McpHostSupervisor', () => {
       type: 'list-changed',
       launchId,
       serverId: 'local-test',
+      connectionId: connection.connectionId,
       kind: 'prompts',
       prompts: [{ name: 'catalog-review' }],
     });
@@ -398,6 +576,97 @@ describe('McpHostSupervisor', () => {
     );
     expect(onListChanged).toHaveBeenNthCalledWith(3, 'local-test', 'prompts', [
       expect.objectContaining({ name: 'catalog-review' }),
+    ]);
+  });
+
+  it('drops stale close and list-changed events from a superseded connection token', async () => {
+    const harness = new Harness();
+    const onConnectionState = vi.fn();
+    const onListChanged = vi.fn();
+    const supervisor = await createSupervisor(harness, {
+      onConnectionState,
+      onListChanged,
+    });
+    const child = harness.children[0]!;
+    child.autoConnect = false;
+
+    const first = supervisor.connectServer('local-test', {
+      type: 'stdio',
+      command: '/usr/local/bin/connection-a',
+      args: [],
+      env: {},
+    });
+    await flushMicrotasks();
+    const firstRequest = child.messages.find(
+      (message) => message.type === 'connect-server',
+    );
+    if (firstRequest?.type !== 'connect-server') {
+      throw new Error('Missing first connection request');
+    }
+    child.send({
+      type: 'connection-state',
+      launchId: firstRequest.launchId,
+      requestId: firstRequest.requestId,
+      serverId: firstRequest.serverId,
+      connectionId: firstRequest.connectionId,
+      state: 'connected',
+    });
+    await first;
+
+    const second = supervisor.connectServer('local-test', {
+      type: 'stdio',
+      command: '/usr/local/bin/connection-b',
+      args: [],
+      env: {},
+    });
+    await flushMicrotasks();
+    const secondRequest = child.messages
+      .filter((message) => message.type === 'connect-server')
+      .at(-1);
+    if (secondRequest?.type !== 'connect-server') {
+      throw new Error('Missing second connection request');
+    }
+    child.send({
+      type: 'connection-state',
+      launchId: secondRequest.launchId,
+      requestId: secondRequest.requestId,
+      serverId: secondRequest.serverId,
+      connectionId: secondRequest.connectionId,
+      state: 'connected',
+    });
+    await second;
+    onConnectionState.mockClear();
+    onListChanged.mockClear();
+
+    child.send({
+      type: 'connection-state',
+      launchId: firstRequest.launchId,
+      serverId: firstRequest.serverId,
+      connectionId: firstRequest.connectionId,
+      state: 'disconnected',
+    });
+    child.send({
+      type: 'list-changed',
+      launchId: firstRequest.launchId,
+      serverId: firstRequest.serverId,
+      connectionId: firstRequest.connectionId,
+      kind: 'tools',
+      tools: [{ name: 'stale_tool', inputSchema: { type: 'object' } }],
+    });
+    child.send({
+      type: 'list-changed',
+      launchId: secondRequest.launchId,
+      serverId: secondRequest.serverId,
+      connectionId: secondRequest.connectionId,
+      kind: 'tools',
+      tools: [{ name: 'current_tool', inputSchema: { type: 'object' } }],
+    });
+    await flushMicrotasks();
+
+    expect(onConnectionState).not.toHaveBeenCalled();
+    expect(onListChanged).toHaveBeenCalledTimes(1);
+    expect(onListChanged).toHaveBeenCalledWith('local-test', 'tools', [
+      expect.objectContaining({ name: 'current_tool' }),
     ]);
   });
 
@@ -568,6 +837,92 @@ describe('McpHostSupervisor', () => {
           message.serverId === 'local-test',
       ),
     ).toBe(true);
+  });
+
+  it('cannot let a stale restore overwrite a newer explicit connection', async () => {
+    const harness = new Harness();
+    const onConnectionState = vi.fn();
+    const supervisor = await createSupervisor(harness, { onConnectionState });
+    await supervisor.connectServer('local-test', {
+      type: 'stdio',
+      command: '/usr/local/bin/connection-a',
+      args: [],
+      env: {},
+    });
+    onConnectionState.mockClear();
+
+    harness.autoConnect = false;
+    harness.children[0]!.exit(1);
+    await vi.advanceTimersByTimeAsync(250);
+    await flushMicrotasks();
+    const restarted = harness.children[1]!;
+    const restoreRequest = restarted.messages.find(
+      (message) => message.type === 'connect-server',
+    );
+    if (restoreRequest?.type !== 'connect-server') {
+      throw new Error('Missing restore connection request');
+    }
+
+    const explicitConnection = supervisor.connectServer('local-test', {
+      type: 'stdio',
+      command: '/usr/local/bin/connection-b',
+      args: [],
+      env: {},
+    });
+    const explicitResolution =
+      expect(explicitConnection).resolves.toBe('connected');
+    await flushMicrotasks();
+    expect(
+      restarted.messages.filter((message) => message.type === 'connect-server'),
+    ).toHaveLength(1);
+
+    restarted.send({
+      type: 'connection-state',
+      launchId: restoreRequest.launchId,
+      requestId: restoreRequest.requestId,
+      serverId: restoreRequest.serverId,
+      connectionId: restoreRequest.connectionId,
+      state: 'connected',
+    });
+    for (let index = 0; index < 10; index += 1) {
+      await flushMicrotasks();
+      if (
+        restarted.messages.filter(
+          (message) => message.type === 'connect-server',
+        ).length === 2
+      ) {
+        break;
+      }
+    }
+    const connectRequests = restarted.messages.filter(
+      (message) => message.type === 'connect-server',
+    );
+    expect(connectRequests).toHaveLength(2);
+    expect(onConnectionState).not.toHaveBeenCalledWith(
+      'local-test',
+      'connected',
+      undefined,
+    );
+
+    const explicitRequest = connectRequests[1];
+    if (explicitRequest?.type !== 'connect-server') {
+      throw new Error('Missing explicit connection request');
+    }
+    restarted.send({
+      type: 'connection-state',
+      launchId: explicitRequest.launchId,
+      requestId: explicitRequest.requestId,
+      serverId: explicitRequest.serverId,
+      connectionId: explicitRequest.connectionId,
+      state: 'connected',
+    });
+    await explicitResolution;
+    expect(onConnectionState).toHaveBeenCalledTimes(1);
+    expect(onConnectionState).toHaveBeenCalledWith(
+      'local-test',
+      'connected',
+      undefined,
+    );
   });
 
   it('attaches and revokes a scoped proxy for remote transports', async () => {

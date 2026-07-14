@@ -10,6 +10,14 @@ const flush = async () => {
   await Promise.resolve();
 };
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function createDeps() {
   const toolbox = {
     handleMountWorkspace: vi.fn(async () => {}),
@@ -23,6 +31,7 @@ function createDeps() {
   };
   const persistenceDb = {
     getLastChatWorkspacePaths: vi.fn(async () => null),
+    getLastChatModelId: vi.fn(async () => null),
   };
   return {
     registry: new CommandRegistry(),
@@ -79,7 +88,8 @@ describe('AgentManager agents.create handler', () => {
     expect(id).toBe('a1');
     expect(createAgentSpy).toHaveBeenCalledTimes(1);
     const args = createAgentSpy.mock.calls[0]!;
-    // Positional contract: (type, instanceConfig, parent, initialState, instanceId, initialInputState)
+    // Positional contract: (type, instanceConfig, parent, initialState,
+    // instanceId, initialInputState, beforeDispatch)
     expect(args[0]).toBe(AgentTypes.CHAT);
     expect(args[3]).toEqual({
       activeModelId: 'claude-sonnet-4.6',
@@ -87,6 +97,69 @@ describe('AgentManager agents.create handler', () => {
     });
     expect(args[5]).toBe('hello');
 
+    await manager.teardown();
+  });
+
+  it('threads an internal final-dispatch callback into createAgent', async () => {
+    const createAgentSpy = vi
+      .spyOn(AgentManager.prototype, 'createAgent')
+      .mockResolvedValue({ instanceId: 'a-fenced' } as any);
+    const beforeDispatch = vi.fn();
+    const deps = createDeps();
+    const manager = buildManager(deps);
+    await flush();
+
+    await deps.registry.dispatch<unknown[], string>(
+      'agents.create',
+      { callerId: 'artifact-bridge-automation' },
+      [
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        beforeDispatch,
+      ],
+    );
+
+    expect(createAgentSpy.mock.calls[0]?.[6]).toBe(beforeDispatch);
+    await manager.teardown();
+  });
+
+  it('runs the final callback after model lookup and before agent-store upsert', async () => {
+    const deps = createDeps();
+    const modelLookup = deferred<string | null>();
+    deps.persistenceDb.getLastChatModelId.mockImplementationOnce(
+      async () => await modelLookup.promise,
+    );
+    const beforeDispatch = vi.fn(() => {
+      throw new Error('final fence denied');
+    });
+    const manager = buildManager(deps);
+    await flush();
+
+    const creation = deps.registry.dispatch<unknown[], string>(
+      'agents.create',
+      { callerId: 'artifact-bridge-automation' },
+      [
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        beforeDispatch,
+      ],
+    );
+    await flush();
+    expect(beforeDispatch).not.toHaveBeenCalled();
+    expect(deps.agentStore.update).not.toHaveBeenCalled();
+
+    modelLookup.resolve(null);
+    await expect(creation).rejects.toThrow('final fence denied');
+    expect(beforeDispatch).toHaveBeenCalledTimes(1);
+    expect(deps.agentStore.update).not.toHaveBeenCalled();
     await manager.teardown();
   });
 

@@ -34,6 +34,8 @@ import {
 import type { HistoryService } from '../history';
 import type { FaviconService } from '../favicon';
 import type { TelemetryService } from '../telemetry';
+import { shouldBlockIsolatedAppFrameNavigation } from '../app-protocol-security';
+import { shouldBlockIsolatedAppWindowOpen } from '../isolated-app-window-open-policy';
 import {
   type ControlledBrowserTabEgressOptions,
   enforceControlledBrowserWebRtcPolicy,
@@ -1354,6 +1356,39 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
   private setupEventListeners() {
     const wc = this.webContentsView.webContents;
 
+    // webRequest does not reliably observe non-network schemes such as mailto:
+    // or tel:. Enforce the isolated app boundary at Electron's frame navigation
+    // choke point before any generic external-protocol handler can run.
+    wc.on('will-frame-navigate', (event) => {
+      let initiatorUrl: string | null = null;
+      let frameUrl: string | null = null;
+      try {
+        initiatorUrl = event.initiator?.url ?? null;
+      } catch {
+        // A detached initiating frame may no longer expose its URL.
+      }
+      try {
+        frameUrl = event.frame?.url ?? null;
+      } catch {
+        // A destroyed target frame may no longer expose its current URL.
+      }
+
+      if (
+        !shouldBlockIsolatedAppFrameNavigation({
+          targetUrl: event.url,
+          initiatorUrl,
+          frameUrl,
+        })
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      this.logger.debug(
+        `[TabController] Blocked isolated app frame navigation to: ${event.url}`,
+      );
+    });
+
     // Intercept clodex://reveal-file/ to show file in native file manager
     wc.on('will-navigate', (event, url) => {
       if (url.startsWith('clodex://reveal-file/')) {
@@ -1630,6 +1665,43 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
     });
 
     wc.setWindowOpenHandler((details) => {
+      const frameUrls: string[] = [];
+      const frameOrigins: string[] = [];
+      let sourceInspectionFailed = false;
+      try {
+        for (const frame of wc.mainFrame.framesInSubtree) {
+          try {
+            frameUrls.push(frame.url);
+            frameOrigins.push(frame.origin);
+          } catch {
+            sourceInspectionFailed = true;
+          }
+        }
+      } catch {
+        sourceInspectionFailed = true;
+      }
+      let topLevelUrl: string | null = null;
+      try {
+        topLevelUrl = wc.getURL();
+      } catch {
+        sourceInspectionFailed = true;
+      }
+      if (
+        shouldBlockIsolatedAppWindowOpen({
+          targetUrl: details.url,
+          referrerUrl: details.referrer.url,
+          topLevelUrl,
+          frameUrls,
+          frameOrigins,
+          sourceInspectionFailed,
+        })
+      ) {
+        this.logger.debug(
+          `[TabController] Blocked isolated app window-open request to: ${details.url}`,
+        );
+        return { action: 'deny' };
+      }
+
       // Intercept clodex://reveal-file/ to show file in native file manager
       if (details.url.startsWith('clodex://reveal-file/')) {
         const filePath = decodeURIComponent(

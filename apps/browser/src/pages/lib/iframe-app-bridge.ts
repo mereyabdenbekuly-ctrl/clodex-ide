@@ -1,9 +1,13 @@
 import { useCallback, useEffect, type RefObject } from 'react';
 import { useKartonProcedure, useKartonState } from '@pages/hooks/use-karton';
-import {
-  artifactBridgeEnvelopeSchema,
-  type ArtifactBridgeResponse,
-} from '@shared/artifact-bridge';
+
+function hasOwnArtifactBridgeMarker(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Object.hasOwn(value, '__clodexArtifactBridge')
+  );
+}
 
 export function useIframeAppBridge({
   iframeRef,
@@ -22,10 +26,6 @@ export function useIframeAppBridge({
   const clearPendingAppMessage = useKartonProcedure(
     (p) => p.clearPendingAppMessage,
   );
-  const invokeArtifactBridge = useKartonProcedure(
-    (p) => p.artifactBridge.invoke,
-  );
-
   const pendingAppMessage = useKartonState((s) => {
     if (!agentId) return null;
     return s.pendingAppMessagesByAgentInstanceId[agentId] ?? null;
@@ -60,62 +60,15 @@ export function useIframeAppBridge({
       if (!iframe?.contentWindow) return;
       if (event.source !== iframe.contentWindow) return;
 
-      const bridgeEnvelope = artifactBridgeEnvelopeSchema.safeParse(event.data);
-      if (bridgeEnvelope.success) {
-        const request = bridgeEnvelope.data.request;
-        if (!agentId) {
-          iframe.contentWindow.postMessage(
-            {
-              __clodexArtifactBridge: 1,
-              type: 'response',
-              id: request.id,
-              ok: false,
-              error: 'Capability bridge requires an agent-owned app.',
-            } satisfies ArtifactBridgeResponse,
-            '*',
-          );
-          return;
-        }
-        void invokeArtifactBridge({ agentId, appId, pluginId }, request).then(
-          (result) => {
-            iframe.contentWindow?.postMessage(
-              {
-                __clodexArtifactBridge: 1,
-                type: 'response',
-                id: request.id,
-                ok: true,
-                result,
-              } satisfies ArtifactBridgeResponse,
-              '*',
-            );
-          },
-          (error) => {
-            iframe.contentWindow?.postMessage(
-              {
-                __clodexArtifactBridge: 1,
-                type: 'response',
-                id: request.id,
-                ok: false,
-                error: error instanceof Error ? error.message : String(error),
-              } satisfies ArtifactBridgeResponse,
-              '*',
-            );
-          },
-        );
-        return;
-      }
+      // Artifact Bridge authority is available only through the isolated
+      // subframe preload/main broker. Never forward bridge-shaped messages to
+      // the generic sandbox channel, including malformed or downgrade probes.
+      if (hasOwnArtifactBridgeMarker(event.data)) return;
 
       if (!agentId) return;
       void forwardAppMessage(agentId, appId, pluginId, event.data);
     },
-    [
-      agentId,
-      appId,
-      pluginId,
-      iframeRef,
-      forwardAppMessage,
-      invokeArtifactBridge,
-    ],
+    [agentId, appId, pluginId, iframeRef, forwardAppMessage],
   );
 
   useEffect(() => {

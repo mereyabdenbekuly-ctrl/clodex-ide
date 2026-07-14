@@ -174,3 +174,6 @@ export interface PersistencePort {
   saveTask(snapshot: TaskSnapshot): Promise<void>;
   appendEvidence(receipt: EvidenceReceipt): Promise<void>;
 }
+
+export * from './canonical-json.js';
+export * from './intent-contract.js';

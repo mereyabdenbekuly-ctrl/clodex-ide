@@ -52,6 +52,17 @@ type PendingRequest = {
   timeout: ReturnType<typeof setTimeout>;
 };
 
+type PendingConnectionRequest = {
+  serverId: string;
+  generation: number;
+  connectionId: string;
+};
+
+type ServerConnectionIdentity = Pick<
+  PendingConnectionRequest,
+  'generation' | 'connectionId'
+>;
+
 type DesiredServer = {
   transport: ResolvedMcpTransport;
   secretValues: string[];
@@ -174,8 +185,18 @@ export class McpHostSupervisor extends DisposableService {
   private restartTimeout: ReturnType<typeof setTimeout> | null = null;
   private restartTimestamps: number[] = [];
   private pendingRequests = new Map<string, PendingRequest>();
+  private pendingConnectionRequests = new Map<
+    string,
+    PendingConnectionRequest
+  >();
   private pendingElicitationRequests = new Map<string, AbortController>();
   private desiredServers = new Map<string, DesiredServer>();
+  private serverConnectionGenerations = new Map<string, number>();
+  private serverConnectionIdentities = new Map<
+    string,
+    ServerConnectionIdentity
+  >();
+  private serverConnectionQueues = new Map<string, Promise<void>>();
   private resolveReady: (() => void) | null = null;
   private rejectReady: ((error: Error) => void) | null = null;
 
@@ -232,57 +253,46 @@ export class McpHostSupervisor extends DisposableService {
     secretValues: string[] = [],
   ): Promise<'connected' | 'authorization-required'> {
     this.assertNotDisposed();
-    await this.ensureReady();
-    const previousProxy = this.desiredServers.get(serverId)?.networkProxy;
-    if (previousProxy) this.revokeNetworkProxy?.(serverId, previousProxy);
-    const networkProxy = this.resolveNetworkProxy?.(serverId, transport);
-    this.desiredServers.set(serverId, {
+    const desired: DesiredServer = {
       transport: structuredClone(transport),
       secretValues: [...secretValues],
-      networkProxy: networkProxy ? structuredClone(networkProxy) : undefined,
-    });
-    const response = await this.request(
-      {
-        type: 'connect-server',
-        serverId,
-        transport,
-        secretValues,
-        networkProxy,
-      },
-      this.requestTimeoutMs,
+    };
+    const networkProxy = this.resolveNetworkProxy?.(serverId, transport);
+    if (networkProxy) desired.networkProxy = structuredClone(networkProxy);
+    const previousProxy = this.desiredServers.get(serverId)?.networkProxy;
+    if (previousProxy) this.revokeNetworkProxy?.(serverId, previousProxy);
+    this.desiredServers.set(serverId, desired);
+    const generation = this.advanceServerConnectionGeneration(serverId);
+    const identity: ServerConnectionIdentity = {
+      generation,
+      connectionId: randomUUID(),
+    };
+    this.serverConnectionIdentities.set(serverId, identity);
+    return await this.withServerConnectionMutation(
+      serverId,
+      async () => await this.connectDesiredServer(serverId, desired, identity),
     );
-    if (
-      response.type !== 'connection-state' ||
-      response.serverId !== serverId ||
-      (response.state !== 'connected' &&
-        response.state !== 'authorization-required')
-    ) {
-      throw response.type === 'connection-state' && response.error
-        ? toError(response.error)
-        : new Error(`MCP host failed to connect server "${serverId}"`);
-    }
-    return response.state;
   }
 
   public async disconnectServer(serverId: string): Promise<void> {
     this.assertNotDisposed();
+    const activeIdentity = this.serverConnectionIdentities.get(serverId);
+    const generation = this.advanceServerConnectionGeneration(serverId);
+    this.serverConnectionIdentities.delete(serverId);
     const desired = this.desiredServers.get(serverId);
     this.desiredServers.delete(serverId);
     if (desired?.networkProxy) {
       this.revokeNetworkProxy?.(serverId, desired.networkProxy);
     }
-    if (this.status !== 'ready') return;
-    const response = await this.request({
-      type: 'disconnect-server',
-      serverId,
+    await this.withServerConnectionMutation(serverId, async () => {
+      if (!this.isCurrentServerConnectionGeneration(serverId, generation)) {
+        return;
+      }
+      await this.disconnectHostServer(serverId, {
+        generation,
+        connectionId: activeIdentity?.connectionId ?? randomUUID(),
+      });
     });
-    if (
-      response.type !== 'connection-state' ||
-      response.serverId !== serverId ||
-      response.state !== 'disconnected'
-    ) {
-      throw new Error(`MCP host failed to disconnect server "${serverId}"`);
-    }
   }
 
   public async listTools(serverId: string): Promise<McpToolDescriptor[]> {
@@ -448,11 +458,15 @@ export class McpHostSupervisor extends DisposableService {
       timeoutMs?: number;
       signal?: AbortSignal;
       agentInstanceId?: string;
+      beforeDispatch?: () => void;
     } = {},
   ): Promise<unknown> {
     this.assertNotDisposed();
     await this.ensureReady();
     const timeoutMs = options.timeoutMs ?? 60_000;
+    // Keep the authority check on the main-process side of the last await.
+    // `request` performs no asynchronous work before posting the IPC message.
+    options.beforeDispatch?.();
     const response = await this.request(
       {
         type: 'call-tool',
@@ -580,16 +594,161 @@ export class McpHostSupervisor extends DisposableService {
     await this.start();
   }
 
+  private async connectDesiredServer(
+    serverId: string,
+    desired: DesiredServer,
+    identity: ServerConnectionIdentity,
+  ): Promise<'connected' | 'authorization-required'> {
+    this.requireCurrentServerConnectionIdentity(serverId, identity);
+    await this.ensureReady();
+    this.requireCurrentServerConnectionIdentity(serverId, identity);
+    let response: McpHostToMainMessage;
+    try {
+      response = await this.request(
+        {
+          type: 'connect-server',
+          serverId,
+          connectionId: identity.connectionId,
+          transport: desired.transport,
+          secretValues: desired.secretValues,
+          networkProxy: desired.networkProxy,
+        },
+        this.requestTimeoutMs,
+        undefined,
+        { serverId, ...identity },
+      );
+    } catch (error) {
+      if (!this.isCurrentServerConnectionIdentity(serverId, identity)) {
+        this.throwSupersededServerConnection(serverId);
+      }
+      throw error;
+    }
+    if (!this.isCurrentServerConnectionIdentity(serverId, identity)) {
+      // A newer desired connection is queued behind this attempt. Remove the
+      // stale host-side replacement before the newer generation can start.
+      await this.disconnectHostServer(serverId, identity).catch(
+        () => undefined,
+      );
+      this.throwSupersededServerConnection(serverId);
+    }
+    if (
+      response.type !== 'connection-state' ||
+      response.serverId !== serverId ||
+      response.connectionId !== identity.connectionId ||
+      (response.state !== 'connected' &&
+        response.state !== 'authorization-required')
+    ) {
+      throw response.type === 'connection-state' && response.error
+        ? toError(response.error)
+        : new Error(`MCP host failed to connect server "${serverId}"`);
+    }
+    return response.state;
+  }
+
+  private async disconnectHostServer(
+    serverId: string,
+    identity: ServerConnectionIdentity,
+  ): Promise<void> {
+    if (this.status !== 'ready') return;
+    const response = await this.request(
+      {
+        type: 'disconnect-server',
+        serverId,
+        connectionId: identity.connectionId,
+      },
+      this.requestTimeoutMs,
+      undefined,
+      { serverId, ...identity },
+    );
+    if (
+      response.type !== 'connection-state' ||
+      response.serverId !== serverId ||
+      response.connectionId !== identity.connectionId ||
+      response.state !== 'disconnected'
+    ) {
+      throw new Error(`MCP host failed to disconnect server "${serverId}"`);
+    }
+  }
+
+  private advanceServerConnectionGeneration(serverId: string): number {
+    const current = this.serverConnectionGenerations.get(serverId) ?? 0;
+    if (current >= Number.MAX_SAFE_INTEGER) {
+      throw new Error(`MCP server "${serverId}" generation is exhausted`);
+    }
+    const next = current + 1;
+    this.serverConnectionGenerations.set(serverId, next);
+    return next;
+  }
+
+  private isCurrentServerConnectionGeneration(
+    serverId: string,
+    generation: number,
+  ): boolean {
+    return this.serverConnectionGenerations.get(serverId) === generation;
+  }
+
+  private isCurrentServerConnectionIdentity(
+    serverId: string,
+    expected: ServerConnectionIdentity,
+  ): boolean {
+    const current = this.serverConnectionIdentities.get(serverId);
+    return Boolean(
+      current &&
+        current.generation === expected.generation &&
+        current.connectionId === expected.connectionId &&
+        this.isCurrentServerConnectionGeneration(serverId, expected.generation),
+    );
+  }
+
+  private requireCurrentServerConnectionIdentity(
+    serverId: string,
+    expected: ServerConnectionIdentity,
+  ): void {
+    if (!this.isCurrentServerConnectionIdentity(serverId, expected)) {
+      this.throwSupersededServerConnection(serverId);
+    }
+  }
+
+  private throwSupersededServerConnection(serverId: string): never {
+    throw new Error(`MCP server "${serverId}" connection was superseded`);
+  }
+
+  private async withServerConnectionMutation<T>(
+    serverId: string,
+    mutation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.serverConnectionQueues.get(serverId);
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = (previous ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => await released);
+    this.serverConnectionQueues.set(serverId, queued);
+
+    if (previous) await previous.catch(() => undefined);
+    try {
+      return await mutation();
+    } finally {
+      release();
+      if (this.serverConnectionQueues.get(serverId) === queued) {
+        this.serverConnectionQueues.delete(serverId);
+      }
+    }
+  }
+
   private request(
     payload:
       | {
           type: 'connect-server';
           serverId: string;
+          connectionId: string;
           transport: ResolvedMcpTransport;
           secretValues: string[];
           networkProxy?: McpNetworkProxyConfig;
         }
-      | { type: 'disconnect-server'; serverId: string }
+      | { type: 'disconnect-server'; serverId: string; connectionId: string }
       | { type: 'list-tools'; serverId: string }
       | { type: 'list-resources'; serverId: string; cursor?: string }
       | {
@@ -626,6 +785,7 @@ export class McpHostSupervisor extends DisposableService {
         },
     timeoutMs = this.requestTimeoutMs,
     signal?: AbortSignal,
+    connectionRequest?: PendingConnectionRequest,
   ): Promise<McpHostToMainMessage> {
     if (!this.child || !this.launchId || this.status !== 'ready') {
       return Promise.reject(new Error('MCP host is not ready'));
@@ -639,6 +799,7 @@ export class McpHostSupervisor extends DisposableService {
         const pending = this.pendingRequests.get(requestId);
         if (pending) clearTimeout(pending.timeout);
         this.pendingRequests.delete(requestId);
+        this.pendingConnectionRequests.delete(requestId);
         signal?.removeEventListener('abort', handleAbort);
       };
       const handleAbort = () => {
@@ -670,6 +831,9 @@ export class McpHostSupervisor extends DisposableService {
         },
         timeout,
       });
+      if (connectionRequest) {
+        this.pendingConnectionRequests.set(requestId, connectionRequest);
+      }
       signal?.addEventListener('abort', handleAbort, { once: true });
       if (
         !this.safeSend({
@@ -711,7 +875,37 @@ export class McpHostSupervisor extends DisposableService {
         break;
       case 'connection-state': {
         const error = raw.error ? toError(raw.error) : undefined;
-        this.onConnectionState?.(raw.serverId, raw.state, error);
+        const connectionRequest = raw.requestId
+          ? this.pendingConnectionRequests.get(raw.requestId)
+          : undefined;
+        const matchesConnectionRequest = Boolean(
+          connectionRequest &&
+            connectionRequest.serverId === raw.serverId &&
+            connectionRequest.connectionId === raw.connectionId,
+        );
+        const activeIdentity = this.serverConnectionIdentities.get(
+          raw.serverId,
+        );
+        const isCurrentRequestState = Boolean(
+          matchesConnectionRequest &&
+            connectionRequest &&
+            this.isCurrentServerConnectionGeneration(
+              raw.serverId,
+              connectionRequest.generation,
+            ),
+        );
+        const isCurrentUnsolicitedState = Boolean(
+          !raw.requestId &&
+            activeIdentity &&
+            activeIdentity.connectionId === raw.connectionId &&
+            this.isCurrentServerConnectionIdentity(
+              raw.serverId,
+              activeIdentity,
+            ),
+        );
+        if (isCurrentRequestState || isCurrentUnsolicitedState) {
+          this.onConnectionState?.(raw.serverId, raw.state, error);
+        }
         if (
           raw.requestId &&
           (raw.state === 'connected' ||
@@ -720,7 +914,13 @@ export class McpHostSupervisor extends DisposableService {
             raw.state === 'disconnected')
         ) {
           const pending = this.pendingRequests.get(raw.requestId);
-          if (raw.state === 'failed') {
+          if (!matchesConnectionRequest) {
+            pending?.reject(
+              new Error(
+                `MCP host returned a mismatched connection identity for "${raw.serverId}"`,
+              ),
+            );
+          } else if (raw.state === 'failed') {
             pending?.reject(error ?? new Error('MCP server connection failed'));
           } else {
             pending?.resolve(raw);
@@ -757,6 +957,16 @@ export class McpHostSupervisor extends DisposableService {
         this.pendingElicitationRequests.delete(raw.elicitationRequestId);
         break;
       case 'list-changed': {
+        const activeIdentity = this.serverConnectionIdentities.get(
+          raw.serverId,
+        );
+        if (
+          !activeIdentity ||
+          activeIdentity.connectionId !== raw.connectionId ||
+          !this.isCurrentServerConnectionIdentity(raw.serverId, activeIdentity)
+        ) {
+          break;
+        }
         const items =
           raw.kind === 'tools'
             ? raw.tools!
@@ -921,11 +1131,17 @@ export class McpHostSupervisor extends DisposableService {
 
   private async restoreDesiredServers(): Promise<void> {
     for (const [serverId, desired] of this.desiredServers) {
+      const identity = this.serverConnectionIdentities.get(serverId);
+      if (!identity) continue;
       try {
-        await this.connectServer(
+        await this.withServerConnectionMutation(
           serverId,
-          desired.transport,
-          desired.secretValues,
+          async () =>
+            await this.connectDesiredServer(
+              serverId,
+              structuredClone(desired),
+              identity,
+            ),
         );
       } catch (error) {
         this.logger.warn(`[McpHost] Failed to restore server ${serverId}`, {
@@ -997,6 +1213,10 @@ export class McpHostSupervisor extends DisposableService {
       }
     }
     this.desiredServers.clear();
+    this.serverConnectionGenerations.clear();
+    this.serverConnectionIdentities.clear();
+    this.serverConnectionQueues.clear();
+    this.pendingConnectionRequests.clear();
     if (this.restartTimeout) {
       clearTimeout(this.restartTimeout);
       this.restartTimeout = null;

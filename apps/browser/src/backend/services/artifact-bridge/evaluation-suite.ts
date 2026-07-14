@@ -718,38 +718,59 @@ async function createEvaluationHarness(options?: {
   let toolHandler: () => Promise<unknown> = async () => ({
     content: [{ type: 'text', text: 'ok' }],
   });
+  const mcpServer = {
+    id: 'docs',
+    displayName: 'Docs',
+    enabled: true,
+    source: { kind: 'builtin', builtinId: 'docs' },
+    transport: {
+      type: 'streamable-http',
+      url: 'https://example.com',
+    },
+    policy: { default: 'allow-read-only', tools: {} },
+  } as const;
+  const mcpTools = [
+    {
+      name: 'search',
+      description: 'Search docs',
+      inputSchema: { type: 'object' },
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    {
+      name: 'update',
+      description: 'Update docs',
+      inputSchema: { type: 'object' },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+  ];
   const mcpRegistry = {
     snapshot: () => ({
       schemaVersion: 1,
       servers: {
-        docs: {
-          id: 'docs',
-          displayName: 'Docs',
-          enabled: true,
-          source: { kind: 'builtin', builtinId: 'docs' },
-          transport: {
-            type: 'streamable-http',
-            url: 'https://example.com',
-          },
-          policy: { default: 'allow-read-only', tools: {} },
-        },
+        docs: structuredClone(mcpServer),
       },
     }),
-    listTools: async () => [
-      {
-        name: 'search',
-        description: 'Search docs',
-        inputSchema: { type: 'object' },
-        annotations: { readOnlyHint: true, destructiveHint: false },
-      },
-      {
-        name: 'update',
-        description: 'Update docs',
-        inputSchema: { type: 'object' },
-        annotations: { readOnlyHint: false, destructiveHint: true },
-      },
-    ],
-    callTool: async () => {
+    listTools: async () => structuredClone(mcpTools),
+    getToolDispatchSnapshot: (_serverId: string, toolName: string) => {
+      const descriptor = mcpTools.find((tool) => tool.name === toolName);
+      if (!descriptor) throw new Error('MCP tool is unavailable');
+      return {
+        server: structuredClone(mcpServer),
+        runtime: {
+          restartCount: 0,
+          catalogRevision: 1,
+          configurationRevision: 1,
+        },
+        descriptor: structuredClone(descriptor),
+      };
+    },
+    callTool: async (
+      _serverId: string,
+      _toolName: string,
+      _arguments: Record<string, unknown>,
+      callOptions?: { beforeDispatch?: () => void },
+    ) => {
+      callOptions?.beforeDispatch?.();
       toolCalls += 1;
       return await toolHandler();
     },

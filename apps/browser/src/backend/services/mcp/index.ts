@@ -66,6 +66,14 @@ export interface McpServerLogEntry {
   message: string;
 }
 
+export interface McpToolDispatchSnapshot {
+  server: McpServerConfig;
+  runtime: Pick<McpServerRuntimeState, 'restartCount' | 'catalogRevision'> & {
+    configurationRevision: number;
+  };
+  descriptor: McpToolDescriptor;
+}
+
 export interface McpHostController {
   connectServer(
     serverId: string,
@@ -111,6 +119,7 @@ export interface McpHostController {
       timeoutMs?: number;
       signal?: AbortSignal;
       agentInstanceId?: string;
+      beforeDispatch?: () => void;
     },
   ): Promise<unknown>;
   finishOAuth(serverId: string, authorizationCode: string): Promise<void>;
@@ -142,6 +151,8 @@ export class McpRegistryService extends DisposableService {
   private hostPromise: Promise<McpHostController> | null = null;
   private saveQueue: Promise<void> = Promise.resolve();
   private readonly runtimeStates = new Map<string, McpServerRuntimeState>();
+  private readonly serverConfigurationRevisions = new Map<string, number>();
+  private readonly serverConnectionQueues = new Map<string, Promise<void>>();
   private readonly logs = new Map<string, McpServerLogEntry[]>();
   private readonly toolCache = new Map<string, McpToolDescriptor[]>();
   private readonly resourceCache = new Map<string, McpResourceDescriptor[]>();
@@ -181,6 +192,39 @@ export class McpRegistryService extends DisposableService {
   public snapshot(): McpRegistryConfig {
     this.assertNotDisposed();
     return structuredClone(this.config);
+  }
+
+  /**
+   * Returns only already-resolved synchronous state for a final-dispatch
+   * commitment check. It deliberately refuses to fetch or reconnect: callers
+   * must use listTools first, then re-read this snapshot at the adapter fence.
+   */
+  public getToolDispatchSnapshot(
+    serverId: string,
+    toolName: string,
+  ): McpToolDispatchSnapshot {
+    this.assertNotDisposed();
+    const server = this.requireServer(serverId);
+    const runtime = this.runtimeStates.get(serverId);
+    if (!server.enabled || runtime?.status !== 'connected') {
+      throw new Error(`MCP server "${serverId}" is not dispatch-ready`);
+    }
+    const descriptor = this.toolCache
+      .get(serverId)
+      ?.find((candidate) => candidate.name === toolName);
+    if (!descriptor) {
+      throw new Error(`MCP tool "${serverId}/${toolName}" is not committed`);
+    }
+    return {
+      server: structuredClone(server),
+      runtime: {
+        restartCount: runtime.restartCount,
+        catalogRevision: runtime.catalogRevision,
+        configurationRevision:
+          this.serverConfigurationRevisions.get(serverId) ?? 0,
+      },
+      descriptor: structuredClone(descriptor),
+    };
   }
 
   public setElicitationHandler(
@@ -244,9 +288,9 @@ export class McpRegistryService extends DisposableService {
     }
 
     const previous = this.config.servers[server.id];
-    if (previous && this.host) {
-      await this.host.disconnectServer(server.id).catch(() => undefined);
-    }
+    this.bumpServerConfigurationRevision(server.id);
+    if (previous && this.host)
+      await this.disconnectServer(server.id).catch(() => undefined);
     if (previous) this.clearCatalogCache(server.id);
     if (
       previous &&
@@ -280,7 +324,8 @@ export class McpRegistryService extends DisposableService {
     if (server.source.kind === 'builtin') {
       throw new Error('Builtin MCP servers cannot be removed');
     }
-    await this.host?.disconnectServer(serverId).catch(() => undefined);
+    this.bumpServerConfigurationRevision(serverId);
+    await this.disconnectServer(serverId).catch(() => undefined);
     delete this.config.servers[serverId];
     this.runtimeStates.delete(serverId);
     this.logs.delete(serverId);
@@ -311,7 +356,8 @@ export class McpRegistryService extends DisposableService {
       .map((server) => server.id);
 
     for (const serverId of removedIds) {
-      await this.host?.disconnectServer(serverId).catch(() => undefined);
+      this.bumpServerConfigurationRevision(serverId);
+      await this.disconnectServer(serverId).catch(() => undefined);
       delete this.config.servers[serverId];
       this.runtimeStates.delete(serverId);
       this.logs.delete(serverId);
@@ -328,8 +374,11 @@ export class McpRegistryService extends DisposableService {
               policy: existing.policy,
             }
           : discovered;
-      if (existing && JSON.stringify(existing) !== JSON.stringify(merged)) {
-        await this.host?.disconnectServer(discovered.id).catch(() => undefined);
+      const changed =
+        !existing || JSON.stringify(existing) !== JSON.stringify(merged);
+      if (changed) this.bumpServerConfigurationRevision(discovered.id);
+      if (existing && changed) {
+        await this.disconnectServer(discovered.id).catch(() => undefined);
         this.clearCatalogCache(discovered.id);
       }
       this.config.servers[discovered.id] = merged;
@@ -359,15 +408,11 @@ export class McpRegistryService extends DisposableService {
   public async setEnabled(serverId: string, enabled: boolean): Promise<void> {
     this.assertNotDisposed();
     const server = this.requireServer(serverId);
+    this.bumpServerConfigurationRevision(serverId);
     server.enabled = enabled;
     await this.save();
     if (!enabled) {
-      await this.host?.disconnectServer(serverId).catch(() => undefined);
-      this.setRuntimeState(serverId, {
-        status: 'disabled',
-        lastError: null,
-        connectedAt: null,
-      });
+      await this.disconnectServer(serverId).catch(() => undefined);
       return;
     }
     this.setRuntimeState(serverId, {
@@ -384,54 +429,100 @@ export class McpRegistryService extends DisposableService {
   ): Promise<void> {
     this.assertNotDisposed();
     const server = this.requireServer(serverId);
+    this.bumpServerConfigurationRevision(serverId);
     server.policy = structuredClone(policy);
     await this.save();
   }
 
   public async connectServer(serverId: string): Promise<void> {
     this.assertNotDisposed();
-    const server = this.requireServer(serverId);
+    const server = structuredClone(this.requireServer(serverId));
     if (!server.enabled)
       throw new Error(`MCP server "${serverId}" is disabled`);
 
+    const requestedRevision = this.bumpServerConfigurationRevision(serverId);
     this.clearCatalogCache(serverId);
     this.setRuntimeState(serverId, {
       status: 'connecting',
       lastError: null,
       connectedAt: null,
     });
-    try {
-      const resolved = await this.resolveTransport(server);
-      const host = await this.ensureHost();
-      const connectionState = await host.connectServer(
-        serverId,
-        resolved.transport,
-        resolved.secretValues,
-      );
-      this.setRuntimeState(serverId, {
-        status: connectionState,
-        lastError: null,
-        connectedAt: connectionState === 'connected' ? Date.now() : null,
-      });
-    } catch (error) {
-      const message = toSafeErrorMessage(error);
-      this.setRuntimeState(serverId, {
-        status: 'failed',
-        lastError: message,
-        connectedAt: null,
-      });
-      throw error;
-    }
+    await this.withServerConnectionMutation(serverId, async () => {
+      try {
+        this.assertNotDisposed();
+        this.requireCurrentServerConfigurationRevision(
+          serverId,
+          requestedRevision,
+        );
+        const resolved = await this.resolveTransport(server);
+        this.assertNotDisposed();
+        this.requireCurrentServerConfigurationRevision(
+          serverId,
+          requestedRevision,
+        );
+        const host = await this.ensureHost();
+        this.assertNotDisposed();
+        this.requireCurrentServerConfigurationRevision(
+          serverId,
+          requestedRevision,
+        );
+        const connectionState = await host.connectServer(
+          serverId,
+          resolved.transport,
+          resolved.secretValues,
+        );
+        this.assertNotDisposed();
+        if (
+          !this.isCurrentServerConfigurationRevision(
+            serverId,
+            requestedRevision,
+          )
+        ) {
+          // No newer registry connection can enter the per-server critical
+          // section before this cleanup. Remove the stale host replacement
+          // before the current request is allowed to connect.
+          await host.disconnectServer(serverId).catch(() => undefined);
+          this.throwSupersededServerConnection(serverId);
+        }
+        this.bumpServerConfigurationRevision(serverId);
+        this.setRuntimeState(serverId, {
+          status: connectionState,
+          lastError: null,
+          connectedAt: connectionState === 'connected' ? Date.now() : null,
+        });
+      } catch (error) {
+        if (
+          this.isCurrentServerConfigurationRevision(serverId, requestedRevision)
+        ) {
+          this.setRuntimeState(serverId, {
+            status: 'failed',
+            lastError: toSafeErrorMessage(error),
+            connectedAt: null,
+          });
+        }
+        throw error;
+      }
+    });
   }
 
   public async disconnectServer(serverId: string): Promise<void> {
     this.assertNotDisposed();
     const server = this.requireServer(serverId);
-    await this.host?.disconnectServer(serverId);
     this.setRuntimeState(serverId, {
       status: server.enabled ? 'disconnected' : 'disabled',
       lastError: null,
       connectedAt: null,
+    });
+    const requestedRevision = this.bumpServerConfigurationRevision(serverId);
+    this.clearCatalogCache(serverId);
+    await this.withServerConnectionMutation(serverId, async () => {
+      this.assertNotDisposed();
+      if (
+        !this.isCurrentServerConfigurationRevision(serverId, requestedRevision)
+      ) {
+        return;
+      }
+      await this.host?.disconnectServer(serverId);
     });
   }
 
@@ -441,12 +532,7 @@ export class McpRegistryService extends DisposableService {
     if (!server.enabled) {
       throw new Error(`MCP server "${serverId}" is disabled`);
     }
-    await this.host?.disconnectServer(serverId).catch(() => undefined);
-    this.setRuntimeState(serverId, {
-      status: 'disconnected',
-      lastError: null,
-      connectedAt: null,
-    });
+    await this.disconnectServer(serverId).catch(() => undefined);
     await this.connectServer(serverId);
   }
 
@@ -503,10 +589,12 @@ export class McpRegistryService extends DisposableService {
   public async listTools(serverId: string): Promise<McpToolDescriptor[]> {
     this.assertNotDisposed();
     await this.ensureConnected(serverId);
+    const requestedRevision = this.captureServerConfigurationRevision(serverId);
     const cached = this.toolCache.get(serverId);
     if (cached) return structuredClone(cached);
     const host = await this.ensureHost();
     const tools = await host.listTools(serverId);
+    this.requireCurrentServerConfigurationRevision(serverId, requestedRevision);
     this.toolCache.set(serverId, structuredClone(tools));
     return tools;
   }
@@ -516,13 +604,23 @@ export class McpRegistryService extends DisposableService {
   ): Promise<McpResourceDescriptor[]> {
     this.assertNotDisposed();
     await this.ensureConnected(serverId);
+    const requestedRevision = this.captureServerConfigurationRevision(serverId);
     const cached = this.resourceCache.get(serverId);
     if (cached) return structuredClone(cached);
     const host = await this.ensureHost();
     const resources = await collectMcpCatalogPages(async (cursor) => {
+      this.requireCurrentServerConfigurationRevision(
+        serverId,
+        requestedRevision,
+      );
       const page = await host.listResources(serverId, cursor);
+      this.requireCurrentServerConfigurationRevision(
+        serverId,
+        requestedRevision,
+      );
       return { items: page.resources, nextCursor: page.nextCursor };
     });
+    this.requireCurrentServerConfigurationRevision(serverId, requestedRevision);
     this.resourceCache.set(serverId, structuredClone(resources));
     return resources;
   }
@@ -532,16 +630,26 @@ export class McpRegistryService extends DisposableService {
   ): Promise<McpResourceTemplateDescriptor[]> {
     this.assertNotDisposed();
     await this.ensureConnected(serverId);
+    const requestedRevision = this.captureServerConfigurationRevision(serverId);
     const cached = this.resourceTemplateCache.get(serverId);
     if (cached) return structuredClone(cached);
     const host = await this.ensureHost();
     const resourceTemplates = await collectMcpCatalogPages(async (cursor) => {
+      this.requireCurrentServerConfigurationRevision(
+        serverId,
+        requestedRevision,
+      );
       const page = await host.listResourceTemplates(serverId, cursor);
+      this.requireCurrentServerConfigurationRevision(
+        serverId,
+        requestedRevision,
+      );
       return {
         items: page.resourceTemplates,
         nextCursor: page.nextCursor,
       };
     });
+    this.requireCurrentServerConfigurationRevision(serverId, requestedRevision);
     this.resourceTemplateCache.set(
       serverId,
       structuredClone(resourceTemplates),
@@ -556,19 +664,36 @@ export class McpRegistryService extends DisposableService {
   ): Promise<unknown> {
     this.assertNotDisposed();
     await this.ensureConnected(serverId);
-    return await (await this.ensureHost()).readResource(serverId, uri, options);
+    const requestedRevision = this.captureServerConfigurationRevision(serverId);
+    const result = await (await this.ensureHost()).readResource(
+      serverId,
+      uri,
+      options,
+    );
+    this.requireCurrentServerConfigurationRevision(serverId, requestedRevision);
+    return result;
   }
 
   public async listPrompts(serverId: string): Promise<McpPromptDescriptor[]> {
     this.assertNotDisposed();
     await this.ensureConnected(serverId);
+    const requestedRevision = this.captureServerConfigurationRevision(serverId);
     const cached = this.promptCache.get(serverId);
     if (cached) return structuredClone(cached);
     const host = await this.ensureHost();
     const prompts = await collectMcpCatalogPages(async (cursor) => {
+      this.requireCurrentServerConfigurationRevision(
+        serverId,
+        requestedRevision,
+      );
       const page = await host.listPrompts(serverId, cursor);
+      this.requireCurrentServerConfigurationRevision(
+        serverId,
+        requestedRevision,
+      );
       return { items: page.prompts, nextCursor: page.nextCursor };
     });
+    this.requireCurrentServerConfigurationRevision(serverId, requestedRevision);
     this.promptCache.set(serverId, structuredClone(prompts));
     return prompts;
   }
@@ -581,12 +706,15 @@ export class McpRegistryService extends DisposableService {
   ): Promise<unknown> {
     this.assertNotDisposed();
     await this.ensureConnected(serverId);
-    return await (await this.ensureHost()).getPrompt(
+    const requestedRevision = this.captureServerConfigurationRevision(serverId);
+    const result = await (await this.ensureHost()).getPrompt(
       serverId,
       promptName,
       args,
       options,
     );
+    this.requireCurrentServerConfigurationRevision(serverId, requestedRevision);
+    return result;
   }
 
   public async callTool(
@@ -597,6 +725,7 @@ export class McpRegistryService extends DisposableService {
       timeoutMs?: number;
       signal?: AbortSignal;
       agentInstanceId?: string;
+      beforeDispatch?: () => void;
     } = {},
   ): Promise<unknown> {
     this.assertNotDisposed();
@@ -650,10 +779,16 @@ export class McpRegistryService extends DisposableService {
   }
 
   private async ensureHost(): Promise<McpHostController> {
+    this.assertNotDisposed();
     if (this.host) return this.host;
     if (!this.hostPromise) {
-      this.hostPromise = this.createHost({
+      const hostPromise = this.createHost({
         onConnectionState: (serverId, state, error) => {
+          if (this.disposed) return;
+          // Request-scoped connection state is published by connectServer only
+          // after its generation check. Unsolicited host state (for example a
+          // restored connection after host restart) still flows through here.
+          if (this.serverConnectionQueues.has(serverId)) return;
           this.setRuntimeState(serverId, {
             status: state,
             lastError: error ? toSafeErrorMessage(error) : null,
@@ -664,9 +799,11 @@ export class McpRegistryService extends DisposableService {
           });
         },
         onServerLog: (serverId, level, message) => {
+          if (this.disposed) return;
           this.appendLog(serverId, level, message);
         },
         onHostRestart: (_restartCount, error) => {
+          if (this.disposed) return;
           for (const server of Object.values(this.config.servers)) {
             if (!server.enabled) continue;
             this.clearCatalogCache(server.id);
@@ -683,6 +820,7 @@ export class McpRegistryService extends DisposableService {
           serverId: string,
           request: McpOAuthHostRequest,
         ) => {
+          this.assertNotDisposed();
           const oauthService = this.options.oauthService;
           if (!oauthService) {
             throw new Error('MCP OAuth is unavailable');
@@ -697,16 +835,24 @@ export class McpRegistryService extends DisposableService {
           agentInstanceId,
           request,
           signal,
-        ) =>
-          this.elicitationHandler
+        ) => {
+          if (this.disposed) return { action: 'cancel' };
+          return this.elicitationHandler
             ? await this.elicitationHandler(
                 serverId,
                 agentInstanceId,
                 request,
                 signal,
               )
-            : { action: 'cancel' },
+            : { action: 'cancel' };
+        },
         onListChanged: (serverId, kind, items) => {
+          if (this.disposed) return;
+          // A registry-side reconnect can begin before the supervisor has
+          // replaced its host connection token. Drop notifications throughout
+          // that critical section; a subsequent explicit list call repopulates
+          // the cache from the committed connection.
+          if (this.serverConnectionQueues.has(serverId)) return;
           if (kind === 'tools') {
             this.toolCache.set(
               serverId,
@@ -734,14 +880,18 @@ export class McpRegistryService extends DisposableService {
           }
         },
       }).then((host) => {
-        this.host = host;
+        if (!this.disposed) this.host = host;
         return host;
       });
+      this.hostPromise = hostPromise;
     }
+    const hostPromise = this.hostPromise;
     try {
-      return await this.hostPromise;
+      const host = await hostPromise;
+      this.assertNotDisposed();
+      return host;
     } finally {
-      this.hostPromise = null;
+      if (this.hostPromise === hostPromise) this.hostPromise = null;
     }
   }
 
@@ -884,16 +1034,33 @@ export class McpRegistryService extends DisposableService {
   }
 
   protected async onTeardown(): Promise<void> {
-    await this.saveQueue.catch(() => undefined);
+    const connectionQueues = [...this.serverConnectionQueues.values()];
+    for (const serverId of this.serverConnectionQueues.keys()) {
+      // Poison every captured connection generation before any teardown await.
+      this.serverConfigurationRevisions.delete(serverId);
+    }
+    const hostPromise = this.hostPromise;
+    this.hostPromise = null;
     const host = this.host;
     this.host = null;
-    await host?.teardown();
+
+    await this.saveQueue.catch(() => undefined);
+    await Promise.allSettled(connectionQueues);
+    const pendingHost = await hostPromise?.catch(() => null);
+    const hosts = new Set(
+      [host, pendingHost].filter(
+        (candidate): candidate is McpHostController => candidate != null,
+      ),
+    );
+    for (const currentHost of hosts) await currentHost.teardown();
     this.runtimeStates.clear();
     this.logs.clear();
     this.toolCache.clear();
     this.resourceCache.clear();
     this.resourceTemplateCache.clear();
     this.promptCache.clear();
+    this.serverConfigurationRevisions.clear();
+    this.serverConnectionQueues.clear();
     this.elicitationHandler = null;
   }
 
@@ -902,6 +1069,71 @@ export class McpRegistryService extends DisposableService {
     this.resourceCache.delete(serverId);
     this.resourceTemplateCache.delete(serverId);
     this.promptCache.delete(serverId);
+  }
+
+  private bumpServerConfigurationRevision(serverId: string): number {
+    const current = this.serverConfigurationRevisions.get(serverId) ?? 0;
+    if (current >= Number.MAX_SAFE_INTEGER) {
+      throw new Error(`MCP server "${serverId}" revision space is exhausted`);
+    }
+    const next = current + 1;
+    this.serverConfigurationRevisions.set(serverId, next);
+    return next;
+  }
+
+  private captureServerConfigurationRevision(serverId: string): number {
+    const revision = this.serverConfigurationRevisions.get(serverId);
+    if (revision === undefined) {
+      throw new Error(
+        `MCP server "${serverId}" connection generation is unavailable`,
+      );
+    }
+    return revision;
+  }
+
+  private isCurrentServerConfigurationRevision(
+    serverId: string,
+    revision: number,
+  ): boolean {
+    return this.serverConfigurationRevisions.get(serverId) === revision;
+  }
+
+  private requireCurrentServerConfigurationRevision(
+    serverId: string,
+    revision: number,
+  ): void {
+    if (!this.isCurrentServerConfigurationRevision(serverId, revision)) {
+      this.throwSupersededServerConnection(serverId);
+    }
+  }
+
+  private throwSupersededServerConnection(serverId: string): never {
+    throw new Error(`MCP server "${serverId}" connection was superseded`);
+  }
+
+  private async withServerConnectionMutation<T>(
+    serverId: string,
+    mutation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.serverConnectionQueues.get(serverId);
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = (previous ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => await released);
+    this.serverConnectionQueues.set(serverId, queued);
+
+    if (previous) await previous.catch(() => undefined);
+    try {
+      return await mutation();
+    } finally {
+      release();
+      if (this.serverConnectionQueues.get(serverId) === queued) {
+        this.serverConnectionQueues.delete(serverId);
+      }
+    }
   }
 }
 

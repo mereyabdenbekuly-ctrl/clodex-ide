@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { generatedAppIdentitySchema } from './generated-app-manifest';
 
+export const ARTIFACT_BRIDGE_FRAME_CONNECT_CHANNEL =
+  'artifact-bridge-frame-connect';
+
 export const artifactBridgeCapabilitySchema = z.enum([
   'mcp:call',
   'mcp:write',
@@ -27,6 +30,40 @@ export const artifactBridgeContextSchema = z.discriminatedUnion('kind', [
   packageArtifactBridgeContextSchema,
 ]);
 export type ArtifactBridgeContext = z.infer<typeof artifactBridgeContextSchema>;
+
+export const artifactBridgeSessionIdSchema = z.string().uuid();
+export type ArtifactBridgeSessionId = z.infer<
+  typeof artifactBridgeSessionIdSchema
+>;
+export const artifactBridgeNavigationEpochSchema = z
+  .number()
+  .int()
+  .positive()
+  .safe();
+export type ArtifactBridgeNavigationEpoch = z.infer<
+  typeof artifactBridgeNavigationEpochSchema
+>;
+
+export const artifactBridgeSessionBindingSchema = z
+  .object({
+    sessionId: artifactBridgeSessionIdSchema,
+    navigationEpoch: artifactBridgeNavigationEpochSchema,
+  })
+  .strict();
+export type ArtifactBridgeSessionBinding = z.infer<
+  typeof artifactBridgeSessionBindingSchema
+>;
+
+// The child transfers its MessagePort out-of-band with this hello. The host
+// sends connect, and both sides exchange requests/responses, only on that port.
+export const artifactBridgeHelloSchema = z
+  .object({
+    __clodexArtifactBridge: z.literal(2),
+    type: z.literal('hello'),
+    contentRevision: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+export type ArtifactBridgeHello = z.infer<typeof artifactBridgeHelloSchema>;
 
 export const artifactBridgeRequestSchema = z.discriminatedUnion('method', [
   z.object({
@@ -129,25 +166,42 @@ export const artifactBridgeRequestSchema = z.discriminatedUnion('method', [
 ]);
 export type ArtifactBridgeRequest = z.infer<typeof artifactBridgeRequestSchema>;
 
-export const artifactBridgeEnvelopeSchema = z.object({
-  __clodexArtifactBridge: z.literal(2),
-  type: z.literal('request'),
-  sessionId: z.string().uuid(),
-  request: artifactBridgeRequestSchema,
-});
+export const artifactBridgeEnvelopeSchema = z
+  .object({
+    __clodexArtifactBridge: z.literal(2),
+    type: z.literal('request'),
+    ...artifactBridgeSessionBindingSchema.shape,
+    request: artifactBridgeRequestSchema,
+  })
+  .strict();
 export type ArtifactBridgeEnvelope = z.infer<
   typeof artifactBridgeEnvelopeSchema
 >;
 
-export type ArtifactBridgeResponse = {
-  __clodexArtifactBridge: 2;
-  type: 'response';
-  sessionId: string;
-  id: string;
-  ok: boolean;
-  result?: unknown;
-  error?: string;
-};
+const artifactBridgeResponseBaseSchema = z.object({
+  __clodexArtifactBridge: z.literal(2),
+  type: z.literal('response'),
+  ...artifactBridgeSessionBindingSchema.shape,
+  id: z.string().min(1).max(128),
+});
+
+export const artifactBridgeResponseSchema = z.discriminatedUnion('ok', [
+  artifactBridgeResponseBaseSchema
+    .extend({
+      ok: z.literal(true),
+      result: z.unknown().optional(),
+    })
+    .strict(),
+  artifactBridgeResponseBaseSchema
+    .extend({
+      ok: z.literal(false),
+      error: z.string(),
+    })
+    .strict(),
+]);
+export type ArtifactBridgeResponse = z.infer<
+  typeof artifactBridgeResponseSchema
+>;
 
 const artifactBridgeLifecycleEventBaseSchema = z.object({
   eventId: z.string().uuid(),
@@ -167,6 +221,7 @@ export const artifactBridgeOperationStatusSchema = z.enum([
   'failed',
   'cancelled',
   'timed-out',
+  'uncertain',
 ]);
 export type ArtifactBridgeOperationStatus = z.infer<
   typeof artifactBridgeOperationStatusSchema
@@ -256,11 +311,14 @@ export type ArtifactBridgeRuntimeQuotaSnapshot = z.infer<
   typeof artifactBridgeRuntimeQuotaSnapshotSchema
 >;
 
-export type ArtifactBridgeConnect = {
-  __clodexArtifactBridge: 2;
-  type: 'connect';
-  sessionId: string;
-};
+export const artifactBridgeConnectSchema = z
+  .object({
+    __clodexArtifactBridge: z.literal(2),
+    type: z.literal('connect'),
+    ...artifactBridgeSessionBindingSchema.shape,
+  })
+  .strict();
+export type ArtifactBridgeConnect = z.infer<typeof artifactBridgeConnectSchema>;
 
 const artifactBridgeMcpToolScopeSchema = z.object({
   serverId: z.string().min(1).max(256),
@@ -332,6 +390,11 @@ export type ArtifactBridgeSessionSnapshot = z.infer<
 >;
 
 export const artifactBridgeAuditActionSchema = z.enum([
+  'grant.save-prepared',
+  'grant.revoke-prepared',
+  // Retained so existing audit ledgers remain readable. New persistent grant
+  // mutations use prepared events because the audit file and encrypted grant
+  // store are not one atomic transaction.
   'grant.saved',
   'grant.revoked',
   'capability.invoked',
@@ -498,6 +561,9 @@ const artifactBridgeInspectorReviewStatusSchema = z.enum([
   'approved',
   'committing',
   'committed',
+  'result-unavailable',
+  'uncertain',
+  'failed-pre-effect',
 ]);
 
 export const artifactBridgeInspectorReviewSchema = z.object({

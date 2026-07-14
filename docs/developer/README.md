@@ -6,24 +6,28 @@ testing, packaging, and operational work.
 
 ## Documentation map
 
-| Document | Purpose |
-| --- | --- |
-| [Architecture](architecture.md) | Processes, trust boundaries, runtime flow, and state ownership |
-| [Repository map](repository-map.md) | Applications, packages, source roots, and primary entry points |
-| [Local development](local-development.md) | Toolchain, installation, startup, environment variables, and daily workflow |
-| [Product capabilities](capabilities.md) | Complete user-facing feature inventory and source ownership |
-| [Agent platform](agent-platform.md) | Agent lifecycle, Context Ledger, model routing, execution, continuity, and generated apps |
-| [Security and data](security-and-data.md) | Permissions, network policy, protected storage, audit, and privacy invariants |
-| [Extensions and integrations](extensions-and-integrations.md) | MCP, skills, plugins, runners, providers, and generated-app SDK boundaries |
-| [Testing and release](testing-and-release.md) | Test layers, typechecks, packaging, evidence gates, signing, and release channels |
-| [Operations and troubleshooting](operations-and-troubleshooting.md) | Common failures, recovery procedures, logs, and diagnostics |
-| [Status and roadmap](status-and-roadmap.md) | Implemented, gated, operationally pending, and planned work |
-| [Architecture decision records](../adr/README.md) | Durable trust-boundary and evidence constraints for contributors |
-| [Hybrid migration](../migration/README.md) | Strangler stages, parity matrix, provenance ledger, and cutover rules |
-| [Architecture boundaries](../architecture/BOUNDARIES.md) | Independent, migration, and legacy zones plus dependency and shadow-mode rules |
-| [Provenance policy](../governance/PROVENANCE_POLICY.md) | Independent implementation, AI assistance, third-party material, and DCO expectations |
-| [Security invariants](../security/INVARIANTS.md) | Authority, isolation, credentials, egress, replay, and side-effect constraints |
-| [Component registry](../provenance/components.yml) | Machine-readable component status, ownership, and dependency allowlists |
+| Document                                                                         | Purpose                                                                                                                |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| [Architecture](architecture.md)                                                  | Processes, trust boundaries, runtime flow, and state ownership                                                         |
+| [Repository map](repository-map.md)                                              | Applications, packages, source roots, and primary entry points                                                         |
+| [Local development](local-development.md)                                        | Toolchain, installation, startup, environment variables, and daily workflow                                            |
+| [Product capabilities](capabilities.md)                                          | Complete user-facing feature inventory and source ownership                                                            |
+| [Agent platform](agent-platform.md)                                              | Agent lifecycle, Context Ledger, model routing, execution, continuity, and generated apps                              |
+| [Security and data](security-and-data.md)                                        | Permissions, network policy, protected storage, audit, and privacy invariants                                          |
+| [Extensions and integrations](extensions-and-integrations.md)                    | MCP, skills, plugins, runners, providers, and generated-app SDK boundaries                                             |
+| [Testing and release](testing-and-release.md)                                    | Test layers, typechecks, packaging, evidence gates, signing, and release channels                                      |
+| [Operations and troubleshooting](operations-and-troubleshooting.md)              | Common failures, recovery procedures, logs, and diagnostics                                                            |
+| [Status and roadmap](status-and-roadmap.md)                                      | Implemented, gated, operationally pending, and planned work                                                            |
+| [Architecture decision records](../adr/README.md)                                | Durable trust-boundary and evidence constraints for contributors                                                       |
+| [Hybrid migration](../migration/README.md)                                       | Strangler stages, parity matrix, provenance ledger, and cutover rules                                                  |
+| [Architecture boundaries](../architecture/BOUNDARIES.md)                         | Independent, migration, and legacy zones plus dependency and shadow-mode rules                                         |
+| [Provenance policy](../governance/PROVENANCE_POLICY.md)                          | Independent implementation, AI assistance, third-party material, and DCO expectations                                  |
+| [Security invariants](../security/INVARIANTS.md)                                 | Authority, isolation, credentials, egress, replay, and side-effect constraints                                         |
+| [Intent Contract specification](../INTENT_CONTRACT_SPEC.md)                      | Draft signed authority envelope, one-shot execution tickets, effect attestations, and Artifact Bridge security profile |
+| [Zero-Trust Execution five-session plan](ZERO_TRUST_EXECUTION_5_SESSION_PLAN.md) | Staged implementation, session boundaries, exit criteria, and promotion rules                                          |
+| [Safe Coding Autopilot MVP](SAFE_CODING_AUTOPILOT_MVP.md)                        | Session 5 contracts, Guardian, kernel, runtime, approval, ledger/evidence, scoped adapters, promotion, and blockers    |
+| [Security Guarantee Manifest](../security/SECURITY_GUARANTEE_MANIFEST.md)        | Evidence-based status of runtime security claims, blockers, and promotion requirements                                 |
+| [Component registry](../provenance/components.yml)                               | Machine-readable component status, ownership, and dependency allowlists                                                |
 
 ## Engineering principles
 

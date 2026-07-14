@@ -637,15 +637,26 @@ export class UIController extends EventEmitter<UIControllerEventMap> {
     return view;
   }
 
-  private loadApp() {
+  private getPackagedUiEntryPath(): string {
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
-    // and load the index.html of the app.
+    return path.join(
+      __dirname,
+      `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`,
+    );
+  }
+
+  /** Exact build-authorized main-frame URL for trusted UI IPC admission. */
+  public getTrustedMainFrameUrl(): string {
+    return MAIN_WINDOW_VITE_DEV_SERVER_URL
+      ? new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).href
+      : pathToFileURL(this.getPackagedUiEntryPath()).href;
+  }
+
+  private loadApp() {
     if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-      this.view.webContents.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+      this.view.webContents.loadURL(this.getTrustedMainFrameUrl());
     } else {
-      this.view.webContents.loadFile(
-        path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
-      );
+      this.view.webContents.loadFile(this.getPackagedUiEntryPath());
     }
     this.logger.debug('[UIController] UI content view loaded');
   }

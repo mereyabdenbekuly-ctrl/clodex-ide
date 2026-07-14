@@ -6,6 +6,7 @@ import {
   artifactBridgeGrantInputSchema,
   artifactBridgeGrantRevokeScopeSchema,
   artifactBridgeGrantSchema,
+  artifactBridgeNavigationEpochSchema,
   artifactBridgePolicySchema,
   artifactBridgeRequestSchema,
   artifactBridgeRuntimeInspectorSnapshotSchema,
@@ -25,11 +26,14 @@ import {
   type ArtifactBridgeSensitiveEgressReason,
   type ArtifactBridgeSensitiveMcpApproval,
   type ArtifactBridgeSensitiveMcpProposal,
+  type ArtifactBridgeSessionBinding,
   type ArtifactBridgeSessionSnapshot,
   type ArtifactBridgeWriteApproval,
   type ArtifactBridgeWriteProposal,
 } from '@shared/artifact-bridge';
 import {
+  generatedAppIdentitySchema,
+  generatedAppManifestSchema,
   getManifestAutomationIds,
   getManifestCapabilityTypes,
   getManifestMcpTools,
@@ -37,12 +41,18 @@ import {
   type GeneratedAppIdentity,
   type GeneratedAppManifest,
 } from '@shared/generated-app-manifest';
+import type {
+  ArtifactBridgeGrantReviewSelection,
+  ArtifactBridgeGrantReviewSnapshot,
+  ArtifactBridgeGrantReviewSubmission,
+} from '@shared/artifact-bridge-grant-review';
 import type { AgenticAppRuntimeDogfoodTelemetry } from '@shared/agentic-app-runtime-telemetry';
 import { z } from 'zod';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import type { McpRegistryService } from '../mcp';
 import { DisposableService } from '../disposable';
+import { TRUSTED_UI_REVIEWER_CONNECTION_ID } from '../trusted-ui-karton-transport';
 import {
   artifactBridgeAuditResource,
   auditContext,
@@ -50,23 +60,49 @@ import {
   type ArtifactBridgeAuditRecorder,
 } from './audit-ledger';
 import {
+  canonicalizeArtifactBridgeJson,
+  hashArtifactBridgeJson,
+} from './canonical-json';
+import {
   assertNoRawSecrets,
   classifySensitiveMcpOperation,
   redactSensitiveText,
   sanitizeSensitiveValue,
 } from './sensitive-egress';
+import { ArtifactBridgeGrantReviewRegistry } from './grant-review-registry';
+import {
+  artifactBridgeMcpCommitmentsEqual,
+  createArtifactBridgeMcpEffectCommitment,
+  type ArtifactBridgeMcpEffectCommitment,
+  type ArtifactBridgeTrustedMcpClassification,
+} from './effect-commitment';
+import {
+  ArtifactBridgeEffectWal,
+  MemoryArtifactBridgeEffectWal,
+  PersistedArtifactBridgeEffectWal,
+  type ArtifactBridgeEffectWalPersistence,
+} from './effect-wal';
 
 const MAX_RESULT_BYTES = 1_000_000;
 const MAX_CALLS_PER_MINUTE = 30;
 type ParsedArtifactBridgeGrantInput = z.output<
   typeof artifactBridgeGrantInputSchema
 >;
+const resolvedArtifactBridgeAppSchema = z
+  .object({
+    identity: generatedAppIdentitySchema,
+    manifest: generatedAppManifestSchema,
+  })
+  .strict();
+type ResolvedArtifactBridgeApp = z.output<
+  typeof resolvedArtifactBridgeAppSchema
+>;
 const PROCEDURES = [
-  'artifactBridge.invoke',
   'artifactBridge.getGrant',
   'artifactBridge.getActiveSessions',
   'artifactBridge.getRuntimeInspector',
-  'artifactBridge.setGrant',
+  'artifactBridge.openGrantReview',
+  'artifactBridge.submitGrantReview',
   'artifactBridge.revokeGrant',
   'artifactBridge.getPolicy',
   'artifactBridge.approveWrite',
@@ -75,10 +111,23 @@ const PROCEDURES = [
   'artifactBridge.rejectSensitiveMcpCall',
 ] as const;
 
-const grantStoreSchema = z.object({
-  version: z.literal(5),
-  grants: z.record(z.string(), artifactBridgeGrantSchema),
-});
+const pendingGrantMutationSchema = z
+  .object({
+    mutationId: z.string().uuid(),
+    kind: z.enum(['set', 'revoke']),
+    context: artifactBridgeContextSchema,
+    startedAt: z.string().datetime(),
+  })
+  .strict();
+const grantStoreSchema = z
+  .object({
+    version: z.literal(5),
+    grants: z.record(z.string(), artifactBridgeGrantSchema),
+    pendingMutations: z
+      .record(z.string(), pendingGrantMutationSchema)
+      .optional(),
+  })
+  .strict();
 type GrantStore = z.infer<typeof grantStoreSchema>;
 
 const legacyAgentContextSchema = z.object({
@@ -121,6 +170,43 @@ export interface ArtifactBridgePersistence {
   save(store: GrantStore): Promise<void>;
 }
 
+/**
+ * Backend-issued identity for one generated-app document lifetime.
+ *
+ * The context is deliberately not repeated in the value returned to the
+ * caller: it remains an independent, trusted argument at every backend
+ * boundary and is checked against the stored session record.
+ */
+export interface ArtifactBridgeHostSessionBinding
+  extends ArtifactBridgeSessionBinding {
+  documentSlotId: string;
+  openedAt: string;
+  assetHash: string;
+}
+
+interface ValidatedArtifactBridgeHostSessionBinding
+  extends ArtifactBridgeHostSessionBinding {
+  identity: GeneratedAppIdentity;
+  dispatchFence: HostDispatchFence;
+}
+
+interface HostDispatchFence {
+  readonly generationId: string;
+  revoked: boolean;
+}
+
+interface GrantDispatchFence {
+  readonly grantId: string;
+  readonly revision: number;
+  revoked: boolean;
+}
+
+interface ValidatedGrantBinding {
+  readonly key: string;
+  readonly grant: ArtifactBridgeGrant;
+  readonly dispatchFence: GrantDispatchFence;
+}
+
 export interface ArtifactBridgeServiceOptions {
   logger: Logger;
   karton: KartonService;
@@ -141,8 +227,23 @@ export interface ArtifactBridgeServiceOptions {
       'principal_kind' | 'app_instance_hash'
     >,
   ) => void;
-  askAgent: (context: ArtifactBridgeContext, prompt: string) => Promise<string>;
-  runAutomation: (automationId: string) => Promise<unknown>;
+  askAgent: (
+    context: ArtifactBridgeContext,
+    prompt: string,
+    options?: { beforeDispatch?: () => void },
+  ) => Promise<string>;
+  runAutomation: (
+    automationId: string,
+    options?: {
+      beforeDispatch?: (input: {
+        automation: unknown;
+        prompt: string;
+        attempt: number;
+      }) => void;
+      retryMode?: 'configured' | 'no-blind-retry';
+      failureMode?: 'record' | 'propagate';
+    },
+  ) => Promise<unknown>;
   resolveApp: (context: ArtifactBridgeContext) => Promise<{
     identity: GeneratedAppIdentity;
     manifest: GeneratedAppManifest;
@@ -152,6 +253,7 @@ export interface ArtifactBridgeServiceOptions {
   getPolicy?: (context: ArtifactBridgeContext) => ArtifactBridgePolicy;
   areWritesEnabled?: () => boolean;
   persistence?: ArtifactBridgePersistence;
+  effectWalPersistence?: ArtifactBridgeEffectWalPersistence;
   now?: () => number;
 }
 
@@ -207,24 +309,103 @@ export class ArtifactBridgeService extends DisposableService {
   private readonly lifecycleInvalidationSignals = new Set<string>();
   private readonly activeSessions = new Map<
     string,
-    { context: ArtifactBridgeContext; openedAt: string }
+    | {
+        context: ArtifactBridgeContext;
+        openedAt: string;
+        hostIssued: false;
+        navigationEpoch: null;
+      }
+    | {
+        context: ArtifactBridgeContext;
+        openedAt: string;
+        hostIssued: true;
+        documentSlotId: string;
+        navigationEpoch: number;
+        identity: GeneratedAppIdentity;
+        dispatchFence: HostDispatchFence;
+      }
   >();
+  private readonly hostDocumentSlots = new Map<
+    string,
+    {
+      context: ArtifactBridgeContext;
+      navigationEpoch: number;
+      sessionId: string;
+    }
+  >();
+  private readonly hostSessionMutationQueues = new Map<string, Promise<void>>();
   private readonly ephemeralGrants = new Map<string, ArtifactBridgeGrant>();
+  private readonly grantDispatchFences = new Map<
+    string,
+    { grant: ArtifactBridgeGrant; dispatchFence: GrantDispatchFence }
+  >();
+  private readonly validatedGrantBindings = new WeakMap<
+    ArtifactBridgeGrant,
+    ValidatedGrantBinding
+  >();
+  private readonly grantMutationEpochs = new Map<string, number>();
+  private readonly grantReviewMutationEpochs = new Map<
+    string,
+    { contextKey: string; epoch: number }
+  >();
+  private readonly pendingPersistentGrantMutations = new Map<string, number>();
+  private readonly pendingPersistentGrantRevocations = new Map<
+    string,
+    ArtifactBridgeContext
+  >();
+  private readonly dirtyPersistentGrantContexts = new Set<string>();
+  private nextGrantRevision = 0;
+  private effectWal!: ArtifactBridgeEffectWal;
+  private readonly grantReviews: ArtifactBridgeGrantReviewRegistry;
 
   private constructor(private readonly options: ArtifactBridgeServiceOptions) {
     super();
     this.persistence = options.persistence ?? new PersistedGrantStore();
     this.now = options.now ?? Date.now;
+    this.grantReviews = new ArtifactBridgeGrantReviewRegistry({
+      resolveApp: async (context) => await this.resolveValidatedApp(context),
+      getPolicy: (context) => this.getGrantReviewPolicy(context),
+      now: this.now,
+    });
   }
 
   public static async create(
     options: ArtifactBridgeServiceOptions,
   ): Promise<ArtifactBridgeService> {
     const service = new ArtifactBridgeService(options);
+    service.effectWal = await ArtifactBridgeEffectWal.create(
+      options.effectWalPersistence ??
+        (options.persistence
+          ? new MemoryArtifactBridgeEffectWal()
+          : new PersistedArtifactBridgeEffectWal()),
+      service.now,
+    );
     const persisted = await service.persistence.load();
     const parsed = grantStoreSchema.safeParse(persisted);
     if (parsed.success) {
       service.store = parsed.data;
+      const pendingMutations = Object.entries(
+        service.store.pendingMutations ?? {},
+      );
+      if (pendingMutations.length > 0) {
+        const reconciled = structuredClone(service.store);
+        for (const [storedKey, mutation] of pendingMutations) {
+          delete reconciled.grants[storedKey];
+          delete reconciled.grants[service.contextKey(mutation.context)];
+        }
+        delete reconciled.pendingMutations;
+        grantStoreSchema.parse(reconciled);
+        await service.persistence.save(reconciled);
+        service.store = reconciled;
+        for (const [, mutation] of pendingMutations) {
+          await options.auditRecorder?.record({
+            action: 'grant.revoked',
+            outcome: 'success',
+            context: auditContext(mutation.context),
+            resource: `recovery:incomplete-${mutation.kind}-mutation`,
+          });
+        }
+      }
     } else {
       const v4 = v4GrantStoreSchema.safeParse(persisted);
       if (v4.success) {
@@ -302,14 +483,11 @@ export class ArtifactBridgeService extends DisposableService {
 
   private registerProcedures(): void {
     this.options.karton.registerServerProcedureHandler(
-      'artifactBridge.invoke',
-      async (_clientId, context, request, sessionId) =>
-        await this.invoke(context, request, sessionId),
-    );
-    this.options.karton.registerServerProcedureHandler(
       'artifactBridge.getGrant',
-      async (_clientId, context, sessionId) =>
-        await this.getGrant(context, sessionId),
+      async (clientId, context, sessionId) => {
+        assertTrustedReviewer(clientId);
+        return await this.getGrant(context, sessionId);
+      },
     );
     this.options.karton.registerServerProcedureHandler(
       'artifactBridge.getActiveSessions',
@@ -326,10 +504,17 @@ export class ArtifactBridgeService extends DisposableService {
       },
     );
     this.options.karton.registerServerProcedureHandler(
-      'artifactBridge.setGrant',
-      async (clientId, input) => {
+      'artifactBridge.openGrantReview',
+      async (clientId, context, selection) => {
         assertTrustedReviewer(clientId);
-        return await this.setGrant(input);
+        return await this.openGrantReview(context, selection);
+      },
+    );
+    this.options.karton.registerServerProcedureHandler(
+      'artifactBridge.submitGrantReview',
+      async (clientId, submission) => {
+        assertTrustedReviewer(clientId);
+        return await this.submitGrantReview(submission);
       },
     );
     this.options.karton.registerServerProcedureHandler(
@@ -341,7 +526,12 @@ export class ArtifactBridgeService extends DisposableService {
     );
     this.options.karton.registerServerProcedureHandler(
       'artifactBridge.getPolicy',
-      async (_clientId, context) => this.getPolicy(context),
+      async (clientId, context) => {
+        assertTrustedReviewer(clientId);
+        return this.getGrantReviewPolicy(
+          artifactBridgeContextSchema.parse(context),
+        );
+      },
     );
     this.options.karton.registerServerProcedureHandler(
       'artifactBridge.approveWrite',
@@ -382,6 +572,15 @@ export class ArtifactBridgeService extends DisposableService {
     rawRequest: ArtifactBridgeRequest,
     rawSessionId?: string,
   ): Promise<unknown> {
+    return await this.invokeInternal(rawContext, rawRequest, rawSessionId);
+  }
+
+  private async invokeInternal(
+    rawContext: ArtifactBridgeContext,
+    rawRequest: ArtifactBridgeRequest,
+    rawSessionId?: string,
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
+  ): Promise<unknown> {
     this.assertEnabled();
     const context = artifactBridgeContextSchema.parse(rawContext);
     this.assertContextEnabled(context);
@@ -397,6 +596,7 @@ export class ArtifactBridgeService extends DisposableService {
       let result: unknown;
       if (request.method === 'getCapabilities') {
         const grant = await this.getGrant(context, sessionId);
+        this.requireExactHostSessionBinding(context, exactHostBinding);
         const policy = this.getPolicy(context);
         result = {
           version: 2,
@@ -415,13 +615,21 @@ export class ArtifactBridgeService extends DisposableService {
         };
       } else {
         const grant = await this.requireGrant(context, sessionId);
+        const grantBinding = this.requireValidatedGrantBinding(grant);
+        this.requireGrantDispatchBinding(context, grantBinding);
+        this.requireExactHostSessionBinding(context, exactHostBinding);
         const policy = this.getPolicy(context);
         assertPolicyEnabled(policy);
         switch (request.method) {
           case 'callMcpTool':
             assertCapabilityAllowedByPolicy(policy, 'mcp:call');
             this.requireCapability(grant, 'mcp:call');
-            result = await this.callMcpTool(context, grant, request.params);
+            result = await this.callMcpTool(
+              context,
+              grant,
+              request.params,
+              exactHostBinding,
+            );
             break;
           case 'prepareSensitiveMcpCall':
             this.assertSensitiveEgressEnabled();
@@ -432,6 +640,7 @@ export class ArtifactBridgeService extends DisposableService {
               grant,
               request.params,
               sessionId,
+              exactHostBinding,
             );
             break;
           case 'commitSensitiveMcpCall':
@@ -443,6 +652,7 @@ export class ArtifactBridgeService extends DisposableService {
               grant,
               request.params,
               sessionId,
+              exactHostBinding,
             );
             break;
           case 'startMcpOperation':
@@ -454,6 +664,7 @@ export class ArtifactBridgeService extends DisposableService {
               grant,
               request.params,
               sessionId,
+              exactHostBinding,
             );
             break;
           case 'startAutomationOperation':
@@ -465,6 +676,7 @@ export class ArtifactBridgeService extends DisposableService {
               grant,
               request.params,
               sessionId,
+              exactHostBinding,
             );
             break;
           case 'getOperation':
@@ -500,6 +712,7 @@ export class ArtifactBridgeService extends DisposableService {
               grant,
               request.params,
               sessionId,
+              exactHostBinding,
             );
             break;
           case 'commitMcpWrite':
@@ -511,6 +724,7 @@ export class ArtifactBridgeService extends DisposableService {
               grant,
               request.params,
               sessionId,
+              exactHostBinding,
             );
             break;
           case 'askAgent':
@@ -521,16 +735,29 @@ export class ArtifactBridgeService extends DisposableService {
             }
             assertCapabilityAllowedByPolicy(policy, 'agent:ask');
             this.requireCapability(grant, 'agent:ask');
-            if (this.options.isSensitiveEgressEnabled?.() ?? false) {
-              assertNoRawSecrets(request.params.prompt);
-            }
+            // Generated-app prompts are always treated as an egress boundary.
+            // A rollout gate must never make credential protection weaker.
+            assertNoRawSecrets(request.params.prompt);
             this.consumeOperationQuota(
               context,
               'agent:ask',
               policy.maxAgentAsksPerHour,
             );
+            this.requireExactHostSessionBinding(context, exactHostBinding);
             result = this.protectResult({
-              text: await this.options.askAgent(context, request.params.prompt),
+              text: await this.options.askAgent(
+                context,
+                request.params.prompt,
+                {
+                  beforeDispatch: () => {
+                    this.requireGrantDispatchBinding(context, grantBinding);
+                    this.requireExactHostSessionBinding(
+                      context,
+                      exactHostBinding,
+                    );
+                  },
+                },
+              ),
             });
             break;
           case 'runAutomation':
@@ -547,9 +774,21 @@ export class ArtifactBridgeService extends DisposableService {
               policy.maxAutomationRunsPerHour,
             );
             try {
-              result = this.protectResult(
-                await this.options.runAutomation(request.params.automationId),
-              );
+              this.requireExactHostSessionBinding(context, exactHostBinding);
+              await this.options.runAutomation(request.params.automationId, {
+                beforeDispatch: () => {
+                  this.requireGrantDispatchBinding(context, grantBinding);
+                  this.requireExactHostSessionBinding(
+                    context,
+                    exactHostBinding,
+                  );
+                },
+                retryMode: 'no-blind-retry',
+                failureMode: 'propagate',
+              });
+              // AutomationService returns its complete control-plane snapshot.
+              // Never forward that cross-principal data to a generated app.
+              result = this.protectResult({ ok: true });
               await this.emitLifecycleEvent({
                 type: 'automationCompleted',
                 context,
@@ -585,6 +824,13 @@ export class ArtifactBridgeService extends DisposableService {
       });
       return result;
     } catch (error) {
+      const rawErrorMessage =
+        error instanceof Error
+          ? error.message
+          : typeof error === 'string'
+            ? error
+            : 'Unknown generated app capability error';
+      const sanitizedErrorMessage = this.sanitizeErrorMessage(rawErrorMessage);
       const denied = isAuthorizationError(error);
       await this.audit({
         action: 'capability.invoked',
@@ -593,33 +839,21 @@ export class ArtifactBridgeService extends DisposableService {
         requestId: hashAuditIdentifier(request.id),
         method: request.method,
         resource: artifactBridgeAuditResource(request.method, request.params),
-        error:
-          error instanceof Error
-            ? this.sanitizeErrorMessage(error.message).slice(0, 500)
-            : 'Unknown',
+        error: sanitizedErrorMessage.slice(0, 500),
       });
       this.captureDogfoodTelemetry(context, {
         activity: 'capability-invocation',
         outcome: denied ? 'denied' : 'failure',
         capability_kind: capabilityKindForRequest(request.method),
       });
-      if (
-        error instanceof Error &&
-        /raw credentials|credential-shaped|secret/i.test(error.message)
-      ) {
+      if (/raw credentials|credential-shaped|secret/i.test(rawErrorMessage)) {
         this.captureDogfoodTelemetry(context, {
           activity: 'security-control',
           outcome: 'blocked',
           security_control: 'secret-egress',
         });
       }
-      if (error instanceof Error) {
-        const sanitizedMessage = this.sanitizeErrorMessage(error.message);
-        if (sanitizedMessage !== error.message) {
-          throw new Error(sanitizedMessage);
-        }
-      }
-      throw error;
+      throw new Error(sanitizedErrorMessage);
     } finally {
       if (enteredInvocation) this.leaveInvocation(context);
     }
@@ -635,13 +869,17 @@ export class ArtifactBridgeService extends DisposableService {
     const sessionId = rawSessionId
       ? z.string().uuid().parse(rawSessionId)
       : undefined;
+    const persistentGrant = this.currentGrantForDispatchKey(
+      this.contextKey(context),
+    );
     const grant =
       sessionId && (this.options.areEphemeralGrantsEnabled?.() ?? false)
         ? (this.ephemeralGrants.get(
             this.ephemeralGrantKey(context, sessionId),
-          ) ?? this.store.grants[this.contextKey(context)])
-        : this.store.grants[this.contextKey(context)];
+          ) ?? persistentGrant)
+        : persistentGrant;
     if (!grant) return null;
+    const binding = this.captureGrantBinding(grant);
     if (
       grant.scope.kind === 'session' &&
       (!sessionId ||
@@ -651,7 +889,7 @@ export class ArtifactBridgeService extends DisposableService {
       return null;
     }
     if (grant.expiresAt && Date.parse(grant.expiresAt) <= this.now()) {
-      this.deleteGrant(grant);
+      await this.deleteGrant(grant);
       await this.emitLifecycleEvent({
         type: 'revoked',
         context,
@@ -660,8 +898,18 @@ export class ArtifactBridgeService extends DisposableService {
       return null;
     }
     const current = await this.options.resolveApp(context);
+    if (!this.isGrantBindingCurrent(binding)) return null;
+    if (grant.expiresAt && Date.parse(grant.expiresAt) <= this.now()) {
+      await this.deleteGrant(grant);
+      await this.emitLifecycleEvent({
+        type: 'revoked',
+        context,
+        reason: 'grant-expired',
+      });
+      return null;
+    }
     if (!current) {
-      this.deleteGrant(grant);
+      await this.deleteGrant(grant);
       await this.emitLifecycleEvent({
         type: 'identityChanged',
         context,
@@ -670,7 +918,7 @@ export class ArtifactBridgeService extends DisposableService {
       return null;
     }
     if (!identitiesMatch(grant.identity, current.identity)) {
-      this.deleteGrant(grant);
+      await this.deleteGrant(grant);
       await this.emitLifecycleEvent({
         type: 'identityChanged',
         context,
@@ -678,12 +926,23 @@ export class ArtifactBridgeService extends DisposableService {
       });
       return null;
     }
+    if (!this.isGrantBindingCurrent(binding)) return null;
     this.clearLifecycleInvalidationSignals(context);
-    return structuredClone(grant);
+    const cloned = structuredClone(grant);
+    this.validatedGrantBindings.set(cloned, binding);
+    return cloned;
   }
 
   public async setGrant(
     rawInput: ArtifactBridgeGrantInput,
+  ): Promise<ArtifactBridgeGrant> {
+    return await this.setGrantInternal(rawInput);
+  }
+
+  private async setGrantInternal(
+    rawInput: ArtifactBridgeGrantInput,
+    expectedMutationEpoch?: number,
+    reviewExpiresAt?: string,
   ): Promise<ArtifactBridgeGrant> {
     this.assertEnabled();
     const input = artifactBridgeGrantInputSchema.parse(rawInput);
@@ -708,7 +967,15 @@ export class ArtifactBridgeService extends DisposableService {
     if (input.expiresAt && Date.parse(input.expiresAt) <= this.now()) {
       throw new Error('Artifact capability grant expiry must be in the future');
     }
+    this.assertGrantReviewNotExpired(reviewExpiresAt);
+    this.assertPersistentGrantStoreWritable(input.context);
+    if (expectedMutationEpoch !== undefined) {
+      this.requireGrantMutationEpoch(input.context, expectedMutationEpoch);
+    }
+    const grantMutationEpoch = this.advanceGrantMutationEpoch(input.context);
+    this.clearGrantReviewsForContext(input.context);
     const current = await this.options.resolveApp(input.context);
+    this.requireGrantMutationEpoch(input.context, grantMutationEpoch);
     if (!current) {
       throw new Error(
         'Generated app must have a valid capability manifest before grants can be saved',
@@ -720,6 +987,26 @@ export class ArtifactBridgeService extends DisposableService {
       );
     }
     assertGrantMatchesManifest(input, current.manifest);
+
+    // Resolution is asynchronous. Re-check every mutable admission boundary
+    // after it completes so a gate or policy change cannot persist a latent
+    // grant that becomes usable if the old policy is restored later.
+    this.assertEnabled();
+    this.assertContextEnabled(input.context);
+    if (
+      input.capabilities.includes('mcp:write') ||
+      input.mcpWriteTools.length > 0
+    ) {
+      this.assertWritesEnabled();
+    }
+    const currentPolicy = this.getPolicy(input.context);
+    assertPolicyEnabled(currentPolicy);
+    assertGrantMatchesPolicy(input, currentPolicy, this.now());
+    if (input.expiresAt && Date.parse(input.expiresAt) <= this.now()) {
+      throw new Error('Artifact capability grant expiry must be in the future');
+    }
+    this.assertGrantReviewNotExpired(reviewExpiresAt);
+    this.assertPersistentGrantStoreWritable(input.context);
     if (input.scope.kind === 'session') {
       this.assertEphemeralGrantsEnabled();
       if (!this.isActiveSession(input.context, input.scope.sessionId)) {
@@ -728,41 +1015,136 @@ export class ArtifactBridgeService extends DisposableService {
         );
       }
     }
+    // A replacement grant is a new authority epoch even if its visible fields
+    // are identical. Block publication while the encrypted snapshot is being
+    // durably written; no caller may observe authority that save() can still
+    // reject or ambiguously persist.
+    const persistentKey = this.contextKey(input.context);
+    this.pendingPersistentGrantMutations.set(persistentKey, grantMutationEpoch);
+    this.invalidateGrantFencesForContext(input.context);
+    this.deleteWritesForContext(input.context);
+    this.deleteSensitiveCallsForContext(input.context);
+    this.deleteOperationsForContext(input.context);
     const grant = artifactBridgeGrantSchema.parse({
       ...input,
       schemaVersion: 5,
       identity: current.identity,
       updatedAt: new Date(this.now()).toISOString(),
     });
-    if (grant.scope.kind === 'session') {
-      const persistentChanged = Boolean(
-        this.store.grants[this.contextKey(grant.context)],
-      );
-      delete this.store.grants[this.contextKey(grant.context)];
+    try {
       this.deleteEphemeralGrantsForContext(grant.context);
-      this.ephemeralGrants.set(
-        this.ephemeralGrantKey(grant.context, grant.scope.sessionId),
-        grant,
+      await this.persistGrantStoreMutation(
+        grant.context,
+        grantMutationEpoch,
+        'set',
+        (store) => {
+          if (grant.scope.kind === 'session') {
+            delete store.grants[persistentKey];
+          } else {
+            store.grants[persistentKey] = grant;
+          }
+          return store;
+        },
+        () =>
+          this.validateGrantPublication(
+            input,
+            grantMutationEpoch,
+            reviewExpiresAt,
+          ),
+        async () => {
+          await this.audit({
+            // This record attests that the staged mutation passed review and
+            // is authorized to commit. It deliberately does not claim that
+            // the separate grant-store transaction has already committed.
+            action: 'grant.save-prepared',
+            outcome: 'success',
+            context: auditContext(grant.context),
+            resource: `scope:${grant.scope.kind}`,
+          });
+        },
+        () => {
+          if (
+            this.pendingPersistentGrantMutations.get(persistentKey) ===
+            grantMutationEpoch
+          ) {
+            this.pendingPersistentGrantMutations.delete(persistentKey);
+          }
+          if (grant.scope.kind === 'session') {
+            this.ephemeralGrants.set(
+              this.ephemeralGrantKey(grant.context, grant.scope.sessionId),
+              grant,
+            );
+          }
+          this.captureGrantBinding(grant);
+        },
       );
-      if (persistentChanged) await this.persist();
-    } else {
-      this.deleteEphemeralGrantsForContext(grant.context);
-      this.store.grants[this.contextKey(grant.context)] = grant;
-      await this.persist();
+    } finally {
+      if (
+        this.pendingPersistentGrantMutations.get(persistentKey) ===
+        grantMutationEpoch
+      ) {
+        this.pendingPersistentGrantMutations.delete(persistentKey);
+      }
     }
     this.clearLifecycleInvalidationSignals(grant.context);
-    await this.audit({
-      action: 'grant.saved',
-      outcome: 'success',
-      context: auditContext(grant.context),
-      resource: `scope:${grant.scope.kind}`,
-    });
     await this.emitLifecycleEvent({
       type: 'capabilitiesChanged',
       context: grant.context,
       reason: 'grant-saved',
     });
     return structuredClone(grant);
+  }
+
+  public async openGrantReview(
+    rawContext: ArtifactBridgeContext,
+    rawSelection: ArtifactBridgeGrantReviewSelection,
+  ): Promise<ArtifactBridgeGrantReviewSnapshot> {
+    this.assertEnabled();
+    const context = artifactBridgeContextSchema.parse(rawContext);
+    this.assertContextEnabled(context);
+    this.assertPersistentGrantStoreWritable(context);
+    const reviewEpoch = this.advanceGrantMutationEpoch(context);
+    this.clearGrantReviewsForContext(context);
+    const snapshot = await this.grantReviews.open(context, rawSelection);
+    try {
+      this.requireGrantMutationEpoch(context, reviewEpoch);
+    } catch (error) {
+      this.grantReviews.delete(snapshot.reviewId);
+      throw error;
+    }
+    this.grantReviewMutationEpochs.set(snapshot.reviewId, {
+      contextKey: this.contextKey(context),
+      epoch: reviewEpoch,
+    });
+    return snapshot;
+  }
+
+  public async submitGrantReview(
+    rawSubmission: ArtifactBridgeGrantReviewSubmission,
+  ): Promise<ArtifactBridgeGrant> {
+    this.assertEnabled();
+    const reviewBinding = this.grantReviewMutationEpochs.get(
+      rawSubmission.reviewId,
+    );
+    if (!reviewBinding) {
+      throw new Error('Artifact Bridge grant review is unavailable or used');
+    }
+    this.grantReviewMutationEpochs.delete(rawSubmission.reviewId);
+    const { snapshot, selection } =
+      await this.grantReviews.consume(rawSubmission);
+    if (reviewBinding.contextKey !== this.contextKey(snapshot.context)) {
+      throw new Error('Artifact Bridge grant review authority is mismatched');
+    }
+    this.requireGrantMutationEpoch(snapshot.context, reviewBinding.epoch);
+    return await this.setGrantInternal(
+      {
+        context: snapshot.context,
+        identity: snapshot.identity,
+        ...selection,
+      },
+      reviewBinding.epoch,
+      snapshot.expiresAt,
+    );
   }
 
   public async revokeGrant(
@@ -775,11 +1157,24 @@ export class ArtifactBridgeService extends DisposableService {
     const scope = artifactBridgeGrantRevokeScopeSchema.parse(
       rawScope ?? { kind: 'all' },
     );
-    this.clearLifecycleInvalidationSignals(context);
-    let persistentChanged = false;
+    const grantMutationEpoch = this.advanceGrantMutationEpoch(context);
+    this.clearGrantReviewsForContext(context);
+    const persistentKey = this.contextKey(context);
     if (scope.kind === 'all' || scope.kind === 'persistent') {
-      persistentChanged = Boolean(this.store.grants[this.contextKey(context)]);
-      delete this.store.grants[this.contextKey(context)];
+      this.pendingPersistentGrantRevocations.set(
+        persistentKey,
+        structuredClone(context),
+      );
+    }
+    this.clearLifecycleInvalidationSignals(context);
+    if (scope.kind === 'all') {
+      this.invalidateGrantFencesForContext(context);
+    } else if (scope.kind === 'persistent') {
+      this.invalidateGrantFence(this.contextKey(context));
+    } else {
+      this.invalidateGrantFence(
+        this.ephemeralGrantKey(context, scope.sessionId),
+      );
     }
     if (scope.kind === 'all') {
       this.deleteEphemeralGrantsForContext(context);
@@ -804,13 +1199,21 @@ export class ArtifactBridgeService extends DisposableService {
     this.recentCalls.delete(this.contextKey(context));
     this.operationCalls.delete(`${this.contextKey(context)}:agent:ask`);
     this.operationCalls.delete(`${this.contextKey(context)}:automation:run`);
-    if (persistentChanged) await this.persist();
-    await this.audit({
-      action: 'grant.revoked',
-      outcome: 'success',
-      context: auditContext(context),
-      resource: `scope:${scope.kind}`,
-    });
+    if (scope.kind === 'all' || scope.kind === 'persistent') {
+      await this.persistPersistentGrantRevocation(
+        context,
+        grantMutationEpoch,
+        `scope:${scope.kind}`,
+      );
+    }
+    if (scope.kind === 'session') {
+      await this.audit({
+        action: 'grant.revoked',
+        outcome: 'success',
+        context: auditContext(context),
+        resource: `scope:${scope.kind}`,
+      });
+    }
     await this.emitLifecycleEvent({
       type: 'revoked',
       context,
@@ -966,6 +1369,231 @@ export class ArtifactBridgeService extends DisposableService {
     return snapshot;
   }
 
+  /**
+   * Opens the production session boundary for a generated-app document.
+   * Session identifiers are created only by the backend and epochs increase
+   * independently for each backend-issued document slot.
+   */
+  public async openHostSession(
+    rawContext: ArtifactBridgeContext,
+    rawDocumentSlotId?: string,
+  ): Promise<ArtifactBridgeHostSessionBinding> {
+    this.assertEnabled();
+    const context = artifactBridgeContextSchema.parse(rawContext);
+    this.assertContextEnabled(context);
+    const suppliedDocumentSlotId =
+      rawDocumentSlotId === undefined
+        ? undefined
+        : z.string().uuid().parse(rawDocumentSlotId);
+    const documentSlotId =
+      suppliedDocumentSlotId ?? this.generateUniqueDocumentSlotId();
+
+    return await this.withHostSessionMutation(documentSlotId, async () => {
+      // The feature gate can change while a same-slot mutation is queued.
+      // Re-check it immediately before creating any authority-bearing state.
+      this.assertEnabled();
+      this.assertContextEnabled(context);
+
+      const slot = this.hostDocumentSlots.get(documentSlotId);
+      if (
+        suppliedDocumentSlotId &&
+        (!slot || !artifactBridgeContextsEqual(slot.context, context))
+      ) {
+        this.captureDogfoodTelemetry(context, {
+          activity: 'security-control',
+          outcome: 'blocked',
+          security_control: 'principal-isolation',
+        });
+        throw new Error(
+          'Generated app host document slot is inactive or mismatched',
+        );
+      }
+
+      const current = await this.resolveValidatedApp(context);
+      if (!current) {
+        throw new Error(
+          'Generated app must resolve to a valid identity before a host session can open',
+        );
+      }
+
+      // Resolution is asynchronous. Re-check gates before committing a new
+      // session so a mid-resolution disable cannot create authority.
+      this.assertEnabled();
+      this.assertContextEnabled(context);
+
+      const previous = [...this.activeSessions.entries()].find(
+        ([, session]) =>
+          session.hostIssued && session.documentSlotId === documentSlotId,
+      );
+      if (previous) {
+        await this.unregisterSession(context, previous[0]);
+      }
+
+      const previousEpoch = slot?.navigationEpoch ?? 0;
+      if (previousEpoch >= Number.MAX_SAFE_INTEGER) {
+        throw new Error('Generated app navigation epoch space is exhausted');
+      }
+      const navigationEpoch = previousEpoch + 1;
+      const sessionId = this.generateUniqueSessionId();
+      const openedAt = new Date(this.now()).toISOString();
+      const dispatchFence: HostDispatchFence = {
+        generationId: randomUUID(),
+        revoked: false,
+      };
+
+      this.hostDocumentSlots.set(documentSlotId, {
+        context,
+        navigationEpoch,
+        sessionId,
+      });
+      this.activeSessions.set(sessionId, {
+        context,
+        openedAt,
+        hostIssued: true,
+        documentSlotId,
+        navigationEpoch,
+        identity: structuredClone(current.identity),
+        dispatchFence,
+      });
+      this.captureDogfoodTelemetry(context, {
+        activity: 'preview-session',
+        outcome: 'started',
+      });
+
+      return {
+        documentSlotId,
+        sessionId,
+        navigationEpoch,
+        openedAt,
+        assetHash: current.identity.assetHash,
+      };
+    });
+  }
+
+  /**
+   * Invokes through an exact backend-issued document binding. Validation is
+   * intentionally performed before request parsing, grant resolution, quota
+   * accounting, or any effect adapter can run.
+   */
+  public async invokeHostSession(
+    rawContext: ArtifactBridgeContext,
+    rawRequest: ArtifactBridgeRequest,
+    rawSessionId: string,
+    rawNavigationEpoch: number,
+  ): Promise<unknown> {
+    this.assertEnabled();
+    const context = artifactBridgeContextSchema.parse(rawContext);
+    this.assertContextEnabled(context);
+    const binding = this.requireHostSessionBinding(
+      context,
+      rawSessionId,
+      rawNavigationEpoch,
+    );
+
+    const current = await this.resolveValidatedApp(context);
+    if (!current) {
+      await this.invalidateExactHostSession(
+        context,
+        binding,
+        'app-unavailable',
+      );
+      throw new Error('Generated app host session identity is unavailable');
+    }
+    if (!identitiesMatch(binding.identity, current.identity)) {
+      await this.invalidateExactHostSession(
+        context,
+        binding,
+        'identity-mismatch',
+      );
+      throw new Error('Generated app host session identity changed');
+    }
+
+    // Resolution may race navigation/rotation. Revalidate the exact original
+    // binding immediately before request parsing or effect dispatch.
+    this.requireExactHostSessionBinding(context, binding);
+    return await this.invokeInternal(
+      context,
+      rawRequest,
+      binding.sessionId,
+      binding,
+    );
+  }
+
+  /**
+   * Closes only the exact active document binding supplied by the host. A
+   * stale epoch, session ID, or context cannot revoke a newer session.
+   */
+  public async closeHostSession(
+    rawContext: ArtifactBridgeContext,
+    rawDocumentSlotId: string,
+    rawSessionId: string,
+    rawNavigationEpoch: number,
+  ): Promise<void> {
+    const context = artifactBridgeContextSchema.parse(rawContext);
+    const documentSlotId = z.string().uuid().parse(rawDocumentSlotId);
+    const sessionId = z.string().uuid().parse(rawSessionId);
+    const navigationEpoch =
+      artifactBridgeNavigationEpochSchema.parse(rawNavigationEpoch);
+    await this.withHostSessionMutation(documentSlotId, async () => {
+      const slot = this.requireExactHostDocumentSlot(
+        context,
+        documentSlotId,
+        sessionId,
+        navigationEpoch,
+      );
+      const active = this.activeSessions.get(sessionId);
+      if (
+        !active &&
+        [...this.activeSessions.values()].some(
+          (candidate) =>
+            candidate.hostIssued && candidate.documentSlotId === documentSlotId,
+        )
+      ) {
+        throw new Error(
+          'Generated app host session binding is inactive or mismatched',
+        );
+      }
+      try {
+        if (active) {
+          this.requireHostSessionBinding(
+            context,
+            sessionId,
+            navigationEpoch,
+            documentSlotId,
+          );
+          await this.unregisterSession(context, sessionId);
+        }
+      } finally {
+        if (this.hostDocumentSlots.get(documentSlotId) === slot) {
+          this.hostDocumentSlots.delete(documentSlotId);
+        }
+      }
+    });
+  }
+
+  /**
+   * Immediately removes effect authority while retaining only exact slot/epoch
+   * metadata for a bounded same-frame reconnect.
+   */
+  public async suspendHostSession(
+    rawContext: ArtifactBridgeContext,
+    rawDocumentSlotId: string,
+    rawSessionId: string,
+    rawNavigationEpoch: number,
+  ): Promise<void> {
+    const context = artifactBridgeContextSchema.parse(rawContext);
+    const documentSlotId = z.string().uuid().parse(rawDocumentSlotId);
+    await this.withHostSessionMutation(documentSlotId, async () => {
+      const binding = this.requireHostSessionBinding(
+        context,
+        rawSessionId,
+        rawNavigationEpoch,
+        documentSlotId,
+      );
+      await this.unregisterSession(context, binding.sessionId);
+    });
+  }
+
   public registerSession(
     rawContext: ArtifactBridgeContext,
     rawSessionId: string,
@@ -990,16 +1618,17 @@ export class ArtifactBridgeService extends DisposableService {
       });
       throw new Error('Generated app session identity collision');
     }
+    if (existing) return true;
     this.activeSessions.set(sessionId, {
       context,
-      openedAt: existing?.openedAt ?? new Date(this.now()).toISOString(),
+      openedAt: new Date(this.now()).toISOString(),
+      hostIssued: false,
+      navigationEpoch: null,
     });
-    if (!existing) {
-      this.captureDogfoodTelemetry(context, {
-        activity: 'preview-session',
-        outcome: 'started',
-      });
-    }
+    this.captureDogfoodTelemetry(context, {
+      activity: 'preview-session',
+      outcome: 'started',
+    });
     return true;
   }
 
@@ -1014,15 +1643,16 @@ export class ArtifactBridgeService extends DisposableService {
       existing && artifactBridgeContextsEqual(existing.context, context),
     );
     if (registered) {
+      if (existing?.hostIssued) existing.dispatchFence.revoked = true;
       this.activeSessions.delete(sessionId);
       this.captureDogfoodTelemetry(context, {
         activity: 'preview-session',
         outcome: 'closed',
       });
     }
-    const hadGrant = this.ephemeralGrants.delete(
-      this.ephemeralGrantKey(context, sessionId),
-    );
+    const ephemeralKey = this.ephemeralGrantKey(context, sessionId);
+    this.invalidateGrantFence(ephemeralKey);
+    const hadGrant = this.ephemeralGrants.delete(ephemeralKey);
     this.deleteWritesForSession(context, sessionId);
     this.deleteSensitiveCallsForSession(context, sessionId);
     this.deleteOperationsForSession(context, sessionId);
@@ -1051,6 +1681,20 @@ export class ArtifactBridgeService extends DisposableService {
     );
   }
 
+  private getGrantReviewPolicy(
+    context: ArtifactBridgeContext,
+  ): ArtifactBridgePolicy {
+    const policy = this.getPolicy(context);
+    if (this.options.areWritesEnabled?.() ?? false) return policy;
+    return artifactBridgePolicySchema.parse({
+      ...policy,
+      allowedCapabilities: policy.allowedCapabilities.filter(
+        (capability) => capability !== 'mcp:write',
+      ),
+      allowedMcpWriteTools: [],
+    });
+  }
+
   public async approveWrite(
     rawContext: ArtifactBridgeContext,
     proposalId: string,
@@ -1064,6 +1708,7 @@ export class ArtifactBridgeService extends DisposableService {
       : undefined;
     const prepared = this.requirePreparedWrite(context, proposalId, sessionId);
     await this.requireGrant(context, prepared.sessionId ?? undefined);
+    this.requireGrantDispatchBinding(context, prepared.grantBinding);
     assertPolicyEnabled(this.getPolicy(context));
     if (prepared.status === 'committed') {
       throw new Error('Generated app write proposal was already committed');
@@ -1073,23 +1718,31 @@ export class ArtifactBridgeService extends DisposableService {
         'Generated app write proposal is already being committed',
       );
     }
-    if (prepared.status === 'approved' && prepared.commitToken) {
+    if (
+      prepared.status === 'approved' &&
+      prepared.commitToken &&
+      prepared.approvalAuditRecorded
+    ) {
       return {
         proposal: structuredClone(prepared.proposal),
         commitToken: prepared.commitToken,
       };
     }
+    if (prepared.status !== 'prepared' && prepared.status !== 'approved') {
+      throw new Error('Generated app write proposal can no longer be approved');
+    }
     if (!prepared.commitToken) prepared.commitToken = randomUUID();
-    prepared.status = 'approved';
-    await this.audit({
+    await this.ensurePreparedEffectApprovalAudit(prepared, {
+      kind: 'mcp-write',
       action: 'write.approved',
-      outcome: 'success',
-      context: auditContext(context),
-      resource: safeMcpAuditResource(
-        prepared.proposal.serverId,
-        prepared.proposal.toolName,
-      ),
+      context,
     });
+    if (
+      this.requirePreparedWrite(context, proposalId, sessionId) !== prepared
+    ) {
+      throw new Error('Generated app write proposal is no longer current');
+    }
+    this.requireGrantDispatchBinding(context, prepared.grantBinding);
     this.captureDogfoodTelemetry(context, {
       activity: 'write-approval',
       outcome: 'success',
@@ -1112,8 +1765,14 @@ export class ArtifactBridgeService extends DisposableService {
       ? z.string().uuid().parse(rawSessionId)
       : undefined;
     const prepared = this.requirePreparedWrite(context, proposalId, sessionId);
-    if (prepared.status === 'committing' || prepared.status === 'committed') {
+    if (prepared.status !== 'prepared' && prepared.status !== 'approved') {
       throw new Error('Generated app write proposal can no longer be rejected');
+    }
+    if (prepared.status === 'approved' && prepared.commitToken) {
+      await this.effectWal.markFailedPreEffect(
+        prepared.proposal.id,
+        'Reviewer rejected the prepared effect',
+      );
     }
     this.writes.delete(proposalId);
     await this.audit({
@@ -1144,6 +1803,7 @@ export class ArtifactBridgeService extends DisposableService {
       sessionId,
     );
     await this.requireGrant(context, prepared.sessionId ?? undefined);
+    this.requireGrantDispatchBinding(context, prepared.grantBinding);
     assertPolicyEnabled(this.getPolicy(context));
     if (prepared.status === 'committed') {
       throw new Error('Sensitive MCP call was already committed');
@@ -1151,23 +1811,33 @@ export class ArtifactBridgeService extends DisposableService {
     if (prepared.status === 'committing') {
       throw new Error('Sensitive MCP call is already being committed');
     }
-    if (prepared.status === 'approved' && prepared.commitToken) {
+    if (
+      prepared.status === 'approved' &&
+      prepared.commitToken &&
+      prepared.approvalAuditRecorded
+    ) {
       return {
         proposal: structuredClone(prepared.proposal),
         commitToken: prepared.commitToken,
       };
     }
+    if (prepared.status !== 'prepared' && prepared.status !== 'approved') {
+      throw new Error('Sensitive MCP call can no longer be approved');
+    }
     if (!prepared.commitToken) prepared.commitToken = randomUUID();
-    prepared.status = 'approved';
-    await this.audit({
+    await this.ensurePreparedEffectApprovalAudit(prepared, {
+      kind: 'sensitive-mcp',
       action: 'sensitive-egress.approved',
-      outcome: 'success',
-      context: auditContext(context),
-      resource: safeMcpAuditResource(
-        prepared.proposal.serverId,
-        prepared.proposal.toolName,
-      ),
+      context,
     });
+    if (
+      this.requirePreparedSensitiveMcpCall(context, proposalId, sessionId) !==
+      prepared
+    ) {
+      throw new Error('Sensitive MCP proposal is no longer current');
+    }
+    this.assertSensitiveEgressEnabled();
+    this.requireGrantDispatchBinding(context, prepared.grantBinding);
     this.captureDogfoodTelemetry(context, {
       activity: 'sensitive-approval',
       outcome: 'success',
@@ -1194,8 +1864,14 @@ export class ArtifactBridgeService extends DisposableService {
       proposalId,
       sessionId,
     );
-    if (prepared.status === 'committing' || prepared.status === 'committed') {
+    if (prepared.status !== 'prepared' && prepared.status !== 'approved') {
       throw new Error('Sensitive MCP call can no longer be rejected');
+    }
+    if (prepared.status === 'approved' && prepared.commitToken) {
+      await this.effectWal.markFailedPreEffect(
+        prepared.proposal.id,
+        'Reviewer rejected the prepared effect',
+      );
     }
     this.sensitiveMcpCalls.delete(proposalId);
     await this.audit({
@@ -1217,7 +1893,9 @@ export class ArtifactBridgeService extends DisposableService {
       toolName: string;
       arguments: Record<string, unknown>;
     },
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
   ): Promise<unknown> {
+    const grantBinding = this.requireValidatedGrantBinding(grant);
     const allowed = grant.mcpTools.some(
       (tool) =>
         tool.serverId === request.serverId &&
@@ -1250,11 +1928,34 @@ export class ArtifactBridgeService extends DisposableService {
       }
     }
 
+    const classification: ArtifactBridgeTrustedMcpClassification = {
+      kind: 'read',
+    };
+    const effectCommitment = this.createCurrentMcpEffectCommitment({
+      context,
+      grantBinding,
+      exactHostBinding,
+      serverId: request.serverId,
+      toolName: request.toolName,
+      arguments: request.arguments,
+      classification,
+    });
+    // Descriptor lookup is asynchronous. A document can close or rotate while
+    // it is in flight, so revalidate the exact host generation immediately
+    // before the current read-profile effect adapter is entered.
+    this.requireExactHostSessionBinding(context, exactHostBinding);
+    this.requireGrantDispatchBinding(context, grantBinding);
     const result = await this.executeMcpTool(
       context,
       request.serverId,
       request.toolName,
       request.arguments,
+      undefined,
+      undefined,
+      exactHostBinding,
+      grantBinding,
+      effectCommitment,
+      classification,
     );
     return this.protectResult(result);
   }
@@ -1269,7 +1970,9 @@ export class ArtifactBridgeService extends DisposableService {
       timeoutMs?: number;
     },
     sessionId?: string,
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
   ): Promise<ArtifactBridgeOperationSnapshot> {
+    const grantBinding = this.requireValidatedGrantBinding(grant);
     const allowed = grant.mcpTools.some(
       (tool) =>
         tool.serverId === request.serverId &&
@@ -1301,18 +2004,34 @@ export class ArtifactBridgeService extends DisposableService {
         );
       }
     }
-    const encodedArguments = JSON.stringify(request.arguments);
+    const encodedArguments = canonicalizeArtifactBridgeJson(request.arguments);
     if (Buffer.byteLength(encodedArguments, 'utf8') > 100_000) {
       throw new Error('Generated app MCP arguments exceed the size limit');
     }
+    const classification: ArtifactBridgeTrustedMcpClassification = {
+      kind: 'read',
+    };
+    const effectCommitment = this.createCurrentMcpEffectCommitment({
+      context,
+      grantBinding,
+      exactHostBinding,
+      serverId: request.serverId,
+      toolName: request.toolName,
+      arguments: request.arguments,
+      classification,
+    });
+    this.requireExactHostSessionBinding(context, exactHostBinding);
+    this.requireGrantDispatchBinding(context, grantBinding);
     return await this.createOperation({
       context,
       sessionId,
+      exactHostBinding,
+      grantBinding,
       kind: 'mcp',
       label: `${request.serverId}/${request.toolName}`,
       timeoutMs: request.timeoutMs,
       cancellableWhenRunning: true,
-      execute: async (signal, timeoutMs) =>
+      execute: async (signal, timeoutMs, beforeDispatch) =>
         this.protectResult(
           await this.executeMcpTool(
             context,
@@ -1321,6 +2040,14 @@ export class ArtifactBridgeService extends DisposableService {
             request.arguments,
             signal,
             timeoutMs,
+            exactHostBinding,
+            grantBinding,
+            effectCommitment,
+            classification,
+            () => {
+              this.assertAsyncOperationsEnabled();
+              beforeDispatch();
+            },
           ),
         ),
     });
@@ -1331,7 +2058,9 @@ export class ArtifactBridgeService extends DisposableService {
     grant: ArtifactBridgeGrant,
     request: { automationId: string; timeoutMs?: number },
     sessionId?: string,
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
   ): Promise<ArtifactBridgeOperationSnapshot> {
+    const grantBinding = this.requireValidatedGrantBinding(grant);
     if (!grant.automationIds.includes(request.automationId)) {
       throw new Error('Automation is not included in the generated app grant');
     }
@@ -1341,18 +2070,32 @@ export class ArtifactBridgeService extends DisposableService {
       'automation:run',
       policy.maxAutomationRunsPerHour,
     );
+    this.requireExactHostSessionBinding(context, exactHostBinding);
+    this.requireGrantDispatchBinding(context, grantBinding);
     return await this.createOperation({
       context,
       sessionId,
+      exactHostBinding,
+      grantBinding,
       kind: 'automation',
       label: `automation:${request.automationId}`,
       timeoutMs: request.timeoutMs,
       cancellableWhenRunning: false,
-      execute: async () => {
+      execute: async (_signal, _timeoutMs, beforeDispatch) => {
         try {
-          const result = this.protectResult(
-            await this.options.runAutomation(request.automationId),
-          );
+          this.requireExactHostSessionBinding(context, exactHostBinding);
+          this.requireGrantDispatchBinding(context, grantBinding);
+          await this.options.runAutomation(request.automationId, {
+            beforeDispatch: () => {
+              this.assertAsyncOperationsEnabled();
+              this.requireGrantDispatchBinding(context, grantBinding);
+              this.requireExactHostSessionBinding(context, exactHostBinding);
+              beforeDispatch();
+            },
+            retryMode: 'no-blind-retry',
+            failureMode: 'propagate',
+          });
+          const result = this.protectResult({ ok: true });
           await this.emitLifecycleEvent({
             type: 'automationCompleted',
             context,
@@ -1376,11 +2119,17 @@ export class ArtifactBridgeService extends DisposableService {
   private async createOperation(input: {
     context: ArtifactBridgeContext;
     sessionId?: string;
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding;
+    grantBinding: ValidatedGrantBinding;
     kind: ArtifactBridgeOperationKind;
     label: string;
     timeoutMs?: number;
     cancellableWhenRunning: boolean;
-    execute: (signal: AbortSignal, timeoutMs: number) => Promise<unknown>;
+    execute: (
+      signal: AbortSignal,
+      timeoutMs: number,
+      beforeDispatch: () => void,
+    ) => Promise<unknown>;
   }): Promise<ArtifactBridgeOperationSnapshot> {
     this.cleanupExpiredOperations();
     const policy = this.getPolicy(input.context);
@@ -1427,35 +2176,55 @@ export class ArtifactBridgeService extends DisposableService {
         error: null,
       },
       sessionId: input.sessionId ?? null,
+      exactHostBinding: input.exactHostBinding,
+      grantBinding: input.grantBinding,
       controller,
       active: true,
+      finalDispatchPassed: false,
+      retentionSeconds: policy.asyncOperationRetentionSeconds,
       result: undefined,
       timeout: null,
     };
+    this.requireExactHostSessionBinding(input.context, input.exactHostBinding);
+    this.requireGrantDispatchBinding(input.context, input.grantBinding);
     this.operations.set(operation.snapshot.id, operation);
     this.captureDogfoodTelemetry(input.context, {
       activity: 'async-operation',
       outcome: 'started',
       operation_kind: input.kind,
     });
-    await this.audit({
-      action: 'operation.started',
-      outcome: 'success',
-      context: auditContext(input.context),
-      resource: `kind:${input.kind}`,
-    });
-    await this.emitOperationChanged(operation);
-
-    queueMicrotask(() => {
-      void this.runOperation(
-        operation,
-        timeoutMs,
-        policy.asyncOperationRetentionSeconds,
-        input.cancellableWhenRunning,
-        input.execute,
+    try {
+      await this.audit({
+        action: 'operation.started',
+        outcome: 'success',
+        context: auditContext(input.context),
+        resource: `kind:${input.kind}`,
+      });
+      await this.emitOperationChanged(operation);
+      this.requireExactHostSessionBinding(
+        input.context,
+        input.exactHostBinding,
       );
-    });
-    return structuredClone(operation.snapshot);
+      this.requireGrantDispatchBinding(input.context, input.grantBinding);
+      if (!operation.active || operation.snapshot.status !== 'queued') {
+        throw new Error('Generated app async operation was revoked');
+      }
+
+      queueMicrotask(() => {
+        void this.runOperation(
+          operation,
+          timeoutMs,
+          policy.asyncOperationRetentionSeconds,
+          input.cancellableWhenRunning,
+          input.execute,
+        );
+      });
+      return structuredClone(operation.snapshot);
+    } catch (error) {
+      this.disposeOperation(operation);
+      this.operations.delete(operation.snapshot.id);
+      throw error;
+    }
   }
 
   private async runOperation(
@@ -1463,31 +2232,53 @@ export class ArtifactBridgeService extends DisposableService {
     timeoutMs: number,
     retentionSeconds: number,
     cancellableWhenRunning: boolean,
-    execute: (signal: AbortSignal, timeoutMs: number) => Promise<unknown>,
+    execute: (
+      signal: AbortSignal,
+      timeoutMs: number,
+      beforeDispatch: () => void,
+    ) => Promise<unknown>,
   ): Promise<void> {
     if (!operation.active || operation.snapshot.status !== 'queued') return;
+    if (!this.operationFenceAllowsDispatch(operation)) return;
     operation.snapshot.status = 'running';
     operation.snapshot.startedAt = new Date(this.now()).toISOString();
     operation.snapshot.progress = { phase: 'running', percent: null };
     operation.snapshot.cancellable = cancellableWhenRunning;
     await this.emitOperationChanged(operation);
+    if (!operation.active || operation.snapshot.status !== 'running') return;
+    if (!this.operationFenceAllowsDispatch(operation)) return;
 
     operation.timeout = setTimeout(() => {
       if (!operation.active || operation.snapshot.status !== 'running') {
         return;
       }
+      const status = operation.finalDispatchPassed
+        ? ('uncertain' as const)
+        : ('timed-out' as const);
       operation.controller.abort();
       void this.finishOperation(
         operation,
-        'timed-out',
+        status,
         retentionSeconds,
         undefined,
-        'Generated app async operation timed out',
+        operation.finalDispatchPassed
+          ? 'Generated app async operation timed out after final dispatch; effect outcome is uncertain'
+          : 'Generated app async operation timed out before final dispatch',
       );
     }, timeoutMs);
 
     try {
-      const result = await execute(operation.controller.signal, timeoutMs);
+      this.requireExactHostSessionBinding(
+        operation.snapshot.context,
+        operation.exactHostBinding,
+      );
+      this.requireGrantDispatchBinding(
+        operation.snapshot.context,
+        operation.grantBinding,
+      );
+      const result = await execute(operation.controller.signal, timeoutMs, () =>
+        this.passOperationFinalDispatchFence(operation),
+      );
       if (!operation.active || operation.snapshot.status !== 'running') return;
       operation.snapshot.progress = { phase: 'finalizing', percent: 95 };
       await this.emitOperationChanged(operation);
@@ -1502,28 +2293,80 @@ export class ArtifactBridgeService extends DisposableService {
       if (operation.controller.signal.aborted) {
         await this.finishOperation(
           operation,
-          'cancelled',
+          operation.finalDispatchPassed ? 'uncertain' : 'cancelled',
           retentionSeconds,
           undefined,
-          'Generated app async operation was cancelled',
+          operation.finalDispatchPassed
+            ? 'Generated app async operation was cancelled after final dispatch; effect outcome is uncertain'
+            : 'Generated app async operation was cancelled before final dispatch',
         );
         return;
       }
       await this.finishOperation(
         operation,
-        'failed',
+        operation.finalDispatchPassed ? 'uncertain' : 'failed',
         retentionSeconds,
         undefined,
-        this.sanitizeErrorMessage(
-          error instanceof Error ? error.message : String(error),
-        ),
+        operation.finalDispatchPassed
+          ? 'Generated app async adapter failed after final dispatch; effect outcome is uncertain'
+          : this.sanitizeErrorMessage(
+              error instanceof Error ? error.message : String(error),
+            ),
       );
     }
   }
 
+  private operationFenceAllowsDispatch(
+    operation: ArtifactBridgeOperation,
+  ): boolean {
+    try {
+      this.requireExactHostSessionBinding(
+        operation.snapshot.context,
+        operation.exactHostBinding,
+      );
+      this.requireGrantDispatchBinding(
+        operation.snapshot.context,
+        operation.grantBinding,
+      );
+      return true;
+    } catch {
+      this.disposeOperation(operation);
+      this.operations.delete(operation.snapshot.id);
+      return false;
+    }
+  }
+
+  private passOperationFinalDispatchFence(
+    operation: ArtifactBridgeOperation,
+  ): void {
+    if (
+      !operation.active ||
+      operation.snapshot.status !== 'running' ||
+      operation.controller.signal.aborted
+    ) {
+      throw new Error(
+        'Generated app async operation is no longer dispatch-authorized',
+      );
+    }
+    if (operation.finalDispatchPassed) {
+      throw new Error(
+        'Generated app async operation final dispatch fence was already consumed',
+      );
+    }
+    this.requireExactHostSessionBinding(
+      operation.snapshot.context,
+      operation.exactHostBinding,
+    );
+    this.requireGrantDispatchBinding(
+      operation.snapshot.context,
+      operation.grantBinding,
+    );
+    operation.finalDispatchPassed = true;
+  }
+
   private async finishOperation(
     operation: ArtifactBridgeOperation,
-    status: 'completed' | 'failed' | 'cancelled' | 'timed-out',
+    status: 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'uncertain',
     retentionSeconds: number,
     result?: unknown,
     error?: string,
@@ -1584,6 +2427,10 @@ export class ArtifactBridgeService extends DisposableService {
         throw new Error('Async operation was cancelled');
       case 'timed-out':
         throw new Error('Async operation timed out');
+      case 'uncertain':
+        throw new Error(
+          'Async operation effect outcome is uncertain; retry is forbidden',
+        );
       case 'queued':
       case 'running':
         throw new Error('Async operation has not completed');
@@ -1605,10 +2452,12 @@ export class ArtifactBridgeService extends DisposableService {
     operation.controller.abort();
     await this.finishOperation(
       operation,
-      'cancelled',
+      operation.finalDispatchPassed ? 'uncertain' : 'cancelled',
       this.getPolicy(context).asyncOperationRetentionSeconds,
       undefined,
-      'Generated app async operation was cancelled',
+      operation.finalDispatchPassed
+        ? 'Generated app async operation was cancelled after final dispatch; effect outcome is uncertain'
+        : 'Generated app async operation was cancelled before final dispatch',
     );
     return structuredClone(operation.snapshot);
   }
@@ -1663,12 +2512,41 @@ export class ArtifactBridgeService extends DisposableService {
     this.operations.delete(terminal.snapshot.id);
   }
 
-  private disposeOperation(operation: ArtifactBridgeOperation): void {
+  private disposeOperation(
+    operation: ArtifactBridgeOperation,
+    options: {
+      preserveUncertainAfterFinalDispatch?: boolean;
+      reason?: string;
+    } = {},
+  ): boolean {
+    if (
+      options.preserveUncertainAfterFinalDispatch &&
+      operation.active &&
+      operation.finalDispatchPassed &&
+      !isTerminalOperation(operation.snapshot.status)
+    ) {
+      operation.controller.abort();
+      void this.finishOperation(
+        operation,
+        'uncertain',
+        operation.retentionSeconds,
+        undefined,
+        options.reason ??
+          'Generated app async authority ended after final dispatch; effect outcome is uncertain',
+      ).catch((error) => {
+        this.options.logger.warn(
+          '[ArtifactBridge] Failed to record uncertain async operation',
+          { error },
+        );
+      });
+      return false;
+    }
     operation.active = false;
     operation.controller.abort();
     if (operation.timeout) clearTimeout(operation.timeout);
     operation.timeout = null;
     operation.result = undefined;
+    return true;
   }
 
   private async prepareSensitiveMcpCall(
@@ -1680,7 +2558,9 @@ export class ArtifactBridgeService extends DisposableService {
       arguments: Record<string, unknown>;
     },
     sessionId?: string,
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
   ): Promise<ArtifactBridgeSensitiveMcpProposal> {
+    const grantBinding = this.requireValidatedGrantBinding(grant);
     this.cleanupExpiredSensitiveMcpCalls();
     const allowed = grant.mcpTools.some(
       (tool) =>
@@ -1717,10 +2597,23 @@ export class ArtifactBridgeService extends DisposableService {
         'MCP operation is not classified as sensitive; use the ordinary call API',
       );
     }
-    const encodedArguments = JSON.stringify(request.arguments);
+    const encodedArguments = canonicalizeArtifactBridgeJson(request.arguments);
     if (Buffer.byteLength(encodedArguments, 'utf8') > 100_000) {
       throw new Error('Generated app MCP arguments exceed the size limit');
     }
+    const classification: ArtifactBridgeTrustedMcpClassification = {
+      kind: 'sensitive-read',
+      reasons,
+    };
+    const effectCommitment = this.createCurrentMcpEffectCommitment({
+      context,
+      grantBinding,
+      exactHostBinding,
+      serverId: request.serverId,
+      toolName: request.toolName,
+      arguments: request.arguments,
+      classification,
+    });
     const createdAt = new Date(this.now());
     const proposal: ArtifactBridgeSensitiveMcpProposal = {
       id: randomUUID(),
@@ -1735,14 +2628,22 @@ export class ArtifactBridgeService extends DisposableService {
         createdAt.getTime() + policy.sensitiveEgressProposalTtlSeconds * 1_000,
       ).toISOString(),
     };
+    this.requireExactHostSessionBinding(context, exactHostBinding);
+    this.requireGrantDispatchBinding(context, grantBinding);
     this.sensitiveMcpCalls.set(proposal.id, {
       proposal,
       sessionId: sessionId ?? null,
       identity: structuredClone(grant.identity),
       arguments: structuredClone(request.arguments),
       argumentsHash: hashJson(request.arguments),
+      grantBinding,
+      effectCommitment,
+      classification,
+      dispatchAuthorized: false,
       status: 'prepared',
       commitToken: null,
+      approvalAuditRecorded: false,
+      approvalAuditPromise: null,
       commitPromise: null,
       operationId: null,
       result: undefined,
@@ -1766,6 +2667,7 @@ export class ArtifactBridgeService extends DisposableService {
       timeoutMs?: number;
     },
     sessionId?: string,
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
   ): Promise<unknown> {
     const prepared = this.requirePreparedSensitiveMcpCall(
       context,
@@ -1777,6 +2679,12 @@ export class ArtifactBridgeService extends DisposableService {
       prepared.commitToken === request.commitToken
     ) {
       return structuredClone(prepared.result);
+    }
+    if (
+      prepared.commitToken === request.commitToken &&
+      isTerminalEffectFailureStatus(prepared.status)
+    ) {
+      throwTerminalEffectFailure(prepared.status);
     }
     if (
       request.asOperation &&
@@ -1797,6 +2705,15 @@ export class ArtifactBridgeService extends DisposableService {
       return structuredClone(await prepared.commitPromise);
     }
     if (
+      prepared.status === 'approved' &&
+      prepared.commitToken === request.commitToken &&
+      !prepared.approvalAuditRecorded
+    ) {
+      throw new Error(
+        'Sensitive MCP approval audit is incomplete; dispatch is forbidden',
+      );
+    }
+    if (
       prepared.status !== 'approved' ||
       prepared.commitToken !== request.commitToken
     ) {
@@ -1808,18 +2725,26 @@ export class ArtifactBridgeService extends DisposableService {
       const snapshot = await this.createOperation({
         context,
         sessionId,
+        grantBinding: prepared.grantBinding,
         kind: 'mcp',
         label: `${prepared.proposal.serverId}/${prepared.proposal.toolName}`,
         timeoutMs: request.timeoutMs,
         cancellableWhenRunning: true,
-        execute: async (signal) =>
-          await this.executePreparedSensitiveMcpCall(
-            context,
-            grant,
+        execute: async (signal, _timeoutMs, beforeDispatch) =>
+          await this.executePreparedEffectWithSettlement(
             prepared,
-            signal,
-            request.timeoutMs,
+            async () =>
+              await this.executePreparedSensitiveMcpCall(
+                context,
+                grant,
+                prepared,
+                signal,
+                request.timeoutMs,
+                exactHostBinding,
+                beforeDispatch,
+              ),
           ),
+        exactHostBinding,
       });
       prepared.operationId = snapshot.id;
       return snapshot;
@@ -1829,17 +2754,15 @@ export class ArtifactBridgeService extends DisposableService {
       context,
       grant,
       prepared,
+      undefined,
+      undefined,
+      exactHostBinding,
     );
     prepared.commitPromise = commitPromise;
     try {
       return structuredClone(await commitPromise);
     } catch (error) {
-      if (
-        (prepared.status as PreparedSensitiveMcpCall['status']) !== 'committed'
-      ) {
-        prepared.status = 'approved';
-        prepared.commitPromise = null;
-      }
+      await this.settlePreparedEffectFailure(prepared, error);
       throw error;
     }
   }
@@ -1850,7 +2773,10 @@ export class ArtifactBridgeService extends DisposableService {
     prepared: PreparedSensitiveMcpCall,
     signal?: AbortSignal,
     timeoutMs?: number,
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
+    onBeforeDispatchPassed?: () => void,
   ): Promise<unknown> {
+    this.requireGrantDispatchBinding(context, prepared.grantBinding);
     if (!identitiesMatch(prepared.identity, grant.identity)) {
       throw new Error('Generated app changed after sensitive call preparation');
     }
@@ -1890,18 +2816,67 @@ export class ArtifactBridgeService extends DisposableService {
     if (!sameSensitiveReasons(reasons, prepared.proposal.reasons)) {
       throw new Error('Sensitive MCP classification changed after approval');
     }
-    const result = this.protectResult(
-      await this.executeMcpTool(
-        context,
-        prepared.proposal.serverId,
-        prepared.proposal.toolName,
-        prepared.arguments,
-        signal,
-        timeoutMs,
-      ),
+    if (!prepared.commitToken) {
+      throw new Error('Sensitive MCP execution ticket is unavailable');
+    }
+    this.requireCurrentMcpEffectCommitment(prepared.effectCommitment, {
+      context,
+      grantBinding: prepared.grantBinding,
+      exactHostBinding,
+      serverId: prepared.proposal.serverId,
+      toolName: prepared.proposal.toolName,
+      arguments: prepared.arguments,
+      classification: prepared.classification,
+    });
+    prepared.dispatchAuthorized = false;
+    await this.effectWal.beginDispatch({
+      effectId: prepared.proposal.id,
+      commitmentHash: prepared.effectCommitment.hash,
+      ticketHash: effectTicketHash(prepared.commitToken),
+    });
+    this.requireExactHostSessionBinding(context, exactHostBinding);
+    const rawResult = await this.executeMcpTool(
+      context,
+      prepared.proposal.serverId,
+      prepared.proposal.toolName,
+      prepared.arguments,
+      signal,
+      timeoutMs,
+      exactHostBinding,
+      prepared.grantBinding,
+      prepared.effectCommitment,
+      prepared.classification,
+      () => {
+        this.assertSensitiveEgressEnabled();
+        if (onBeforeDispatchPassed) this.assertAsyncOperationsEnabled();
+        this.requirePreparedSensitiveDispatchAuthorization(prepared);
+        onBeforeDispatchPassed?.();
+        prepared.dispatchAuthorized = true;
+      },
     );
+    let result: unknown;
+    let storedResult: unknown;
+    let resultHash: string;
+    try {
+      result = this.protectResult(rawResult);
+      storedResult = structuredClone(result);
+      resultHash = hashArtifactBridgeJson(
+        'clodex.artifact-bridge.effect-result.v1',
+        storedResult,
+      );
+    } catch (error) {
+      await this.effectWal.markResultUnavailable(
+        prepared.proposal.id,
+        'Effect completed but its result was unavailable',
+      );
+      prepared.status = 'result-unavailable';
+      prepared.result = undefined;
+      prepared.commitPromise = null;
+      throw error;
+    }
+    await this.effectWal.markCommitted(prepared.proposal.id, resultHash);
     prepared.status = 'committed';
-    prepared.result = structuredClone(result);
+    prepared.result = storedResult;
     prepared.commitPromise = null;
     await this.audit({
       action: 'sensitive-egress.committed',
@@ -1924,7 +2899,9 @@ export class ArtifactBridgeService extends DisposableService {
       arguments: Record<string, unknown>;
     },
     sessionId?: string,
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
   ): Promise<ArtifactBridgeWriteProposal> {
+    const grantBinding = this.requireValidatedGrantBinding(grant);
     this.cleanupExpiredWrites();
     this.requireGrantedMcpWriteTool(grant, request);
     const policy = this.getPolicy(context);
@@ -1958,10 +2935,28 @@ export class ArtifactBridgeService extends DisposableService {
         );
       }
     }
-    const encodedArguments = JSON.stringify(request.arguments);
+    const encodedArguments = canonicalizeArtifactBridgeJson(request.arguments);
     if (Buffer.byteLength(encodedArguments, 'utf8') > 100_000) {
       throw new Error('Generated app write arguments exceed the size limit');
     }
+    const destructive = descriptor.annotations?.destructiveHint === true;
+    const classification: ArtifactBridgeTrustedMcpClassification =
+      sensitiveEgressReasons.length > 0
+        ? {
+            kind: 'sensitive-write',
+            destructive,
+            reasons: sensitiveEgressReasons,
+          }
+        : { kind: 'write', destructive };
+    const effectCommitment = this.createCurrentMcpEffectCommitment({
+      context,
+      grantBinding,
+      exactHostBinding,
+      serverId: request.serverId,
+      toolName: request.toolName,
+      arguments: request.arguments,
+      classification,
+    });
 
     const createdAt = new Date(this.now());
     const proposal: ArtifactBridgeWriteProposal = {
@@ -1974,24 +2969,29 @@ export class ArtifactBridgeService extends DisposableService {
           ? null
           : descriptor.description?.slice(0, 2_000) || null,
       argumentsPreview: createArgumentsPreview(request.arguments),
-      risk:
-        descriptor.annotations?.destructiveHint === true
-          ? 'destructive'
-          : 'write',
+      risk: destructive ? 'destructive' : 'write',
       sensitiveEgressReasons,
       createdAt: createdAt.toISOString(),
       expiresAt: new Date(
         createdAt.getTime() + policy.writeProposalTtlSeconds * 1_000,
       ).toISOString(),
     };
+    this.requireExactHostSessionBinding(context, exactHostBinding);
+    this.requireGrantDispatchBinding(context, grantBinding);
     this.writes.set(proposal.id, {
       proposal,
       sessionId: sessionId ?? null,
       identity: structuredClone(grant.identity),
       arguments: structuredClone(request.arguments),
       argumentsHash: hashJson(request.arguments),
+      grantBinding,
+      effectCommitment,
+      classification,
+      dispatchAuthorized: false,
       status: 'prepared',
       commitToken: null,
+      approvalAuditRecorded: false,
+      approvalAuditPromise: null,
       commitPromise: null,
       result: undefined,
     });
@@ -2009,6 +3009,7 @@ export class ArtifactBridgeService extends DisposableService {
     grant: ArtifactBridgeGrant,
     request: { proposalId: string; commitToken: string },
     sessionId?: string,
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
   ): Promise<unknown> {
     const prepared = this.requirePreparedWrite(
       context,
@@ -2022,11 +3023,26 @@ export class ArtifactBridgeService extends DisposableService {
       return structuredClone(prepared.result);
     }
     if (
+      prepared.commitToken === request.commitToken &&
+      isTerminalEffectFailureStatus(prepared.status)
+    ) {
+      throwTerminalEffectFailure(prepared.status);
+    }
+    if (
       prepared.status === 'committing' &&
       prepared.commitToken === request.commitToken &&
       prepared.commitPromise
     ) {
       return structuredClone(await prepared.commitPromise);
+    }
+    if (
+      prepared.status === 'approved' &&
+      prepared.commitToken === request.commitToken &&
+      !prepared.approvalAuditRecorded
+    ) {
+      throw new Error(
+        'Generated app write approval audit is incomplete; dispatch is forbidden',
+      );
     }
     if (
       prepared.status !== 'approved' ||
@@ -2035,18 +3051,17 @@ export class ArtifactBridgeService extends DisposableService {
       throw new Error('Generated app write proposal is not approved');
     }
     prepared.status = 'committing';
-    const commitPromise = this.executePreparedWrite(context, grant, prepared);
+    const commitPromise = this.executePreparedWrite(
+      context,
+      grant,
+      prepared,
+      exactHostBinding,
+    );
     prepared.commitPromise = commitPromise;
     try {
       return structuredClone(await commitPromise);
     } catch (error) {
-      // `executePreparedWrite` mutates the shared proposal across an await.
-      // TypeScript keeps the pre-await "committing" narrowing, so widen it
-      // before checking whether the commit completed and only audit failed.
-      if ((prepared.status as PreparedWrite['status']) !== 'committed') {
-        prepared.status = 'approved';
-        prepared.commitPromise = null;
-      }
+      await this.settlePreparedEffectFailure(prepared, error);
       throw error;
     }
   }
@@ -2055,7 +3070,9 @@ export class ArtifactBridgeService extends DisposableService {
     context: ArtifactBridgeContext,
     grant: ArtifactBridgeGrant,
     prepared: PreparedWrite,
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
   ): Promise<unknown> {
+    this.requireGrantDispatchBinding(context, prepared.grantBinding);
     if (!identitiesMatch(prepared.identity, grant.identity)) {
       throw new Error('Generated app changed after write preparation');
     }
@@ -2104,16 +3121,64 @@ export class ArtifactBridgeService extends DisposableService {
       }
     }
 
-    const result = this.protectResult(
-      await this.executeMcpTool(
-        context,
-        prepared.proposal.serverId,
-        prepared.proposal.toolName,
-        prepared.arguments,
-      ),
+    if (!prepared.commitToken) {
+      throw new Error('Generated app write execution ticket is unavailable');
+    }
+    this.requireCurrentMcpEffectCommitment(prepared.effectCommitment, {
+      context,
+      grantBinding: prepared.grantBinding,
+      exactHostBinding,
+      serverId: prepared.proposal.serverId,
+      toolName: prepared.proposal.toolName,
+      arguments: prepared.arguments,
+      classification: prepared.classification,
+    });
+    prepared.dispatchAuthorized = false;
+    await this.effectWal.beginDispatch({
+      effectId: prepared.proposal.id,
+      commitmentHash: prepared.effectCommitment.hash,
+      ticketHash: effectTicketHash(prepared.commitToken),
+    });
+    this.requireExactHostSessionBinding(context, exactHostBinding);
+    const rawResult = await this.executeMcpTool(
+      context,
+      prepared.proposal.serverId,
+      prepared.proposal.toolName,
+      prepared.arguments,
+      undefined,
+      undefined,
+      exactHostBinding,
+      prepared.grantBinding,
+      prepared.effectCommitment,
+      prepared.classification,
+      () => {
+        this.requirePreparedWriteDispatchAuthorization(prepared);
+        prepared.dispatchAuthorized = true;
+      },
     );
+    let result: unknown;
+    let storedResult: unknown;
+    let resultHash: string;
+    try {
+      result = this.protectResult(rawResult);
+      storedResult = structuredClone(result);
+      resultHash = hashArtifactBridgeJson(
+        'clodex.artifact-bridge.effect-result.v1',
+        storedResult,
+      );
+    } catch (error) {
+      await this.effectWal.markResultUnavailable(
+        prepared.proposal.id,
+        'Effect completed but its result was unavailable',
+      );
+      prepared.status = 'result-unavailable';
+      prepared.result = undefined;
+      prepared.commitPromise = null;
+      throw error;
+    }
+    await this.effectWal.markCommitted(prepared.proposal.id, resultHash);
     prepared.status = 'committed';
-    prepared.result = structuredClone(result);
+    prepared.result = storedResult;
     prepared.commitPromise = null;
     await this.audit({
       action: 'write.committed',
@@ -2174,6 +3239,69 @@ export class ArtifactBridgeService extends DisposableService {
     return { server, descriptor };
   }
 
+  private createCurrentMcpEffectCommitment(input: {
+    context: ArtifactBridgeContext;
+    grantBinding: ValidatedGrantBinding;
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding;
+    serverId: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+    classification: ArtifactBridgeTrustedMcpClassification;
+  }): ArtifactBridgeMcpEffectCommitment {
+    this.requireGrantDispatchBinding(input.context, input.grantBinding);
+    this.requireExactHostSessionBinding(input.context, input.exactHostBinding);
+    const snapshot = this.options.mcpRegistry.getToolDispatchSnapshot(
+      input.serverId,
+      input.toolName,
+    );
+    return createArtifactBridgeMcpEffectCommitment({
+      context: input.context,
+      identity: input.grantBinding.grant.identity,
+      session: input.exactHostBinding
+        ? {
+            sessionId: input.exactHostBinding.sessionId,
+            navigationEpoch: input.exactHostBinding.navigationEpoch,
+            documentSlotId: input.exactHostBinding.documentSlotId,
+            hostGenerationId: input.exactHostBinding.dispatchFence.generationId,
+          }
+        : null,
+      grant: {
+        grantId: input.grantBinding.dispatchFence.grantId,
+        revision: input.grantBinding.dispatchFence.revision,
+      },
+      server: snapshot.server,
+      runtime: snapshot.runtime,
+      descriptor: snapshot.descriptor,
+      classification: input.classification,
+      securityProfile: {
+        sensitiveEgressEnabled:
+          this.options.isSensitiveEgressEnabled?.() ?? false,
+      },
+      arguments: input.arguments,
+      policy: this.getPolicy(input.context),
+    });
+  }
+
+  private requireCurrentMcpEffectCommitment(
+    expected: ArtifactBridgeMcpEffectCommitment,
+    input: {
+      context: ArtifactBridgeContext;
+      grantBinding: ValidatedGrantBinding;
+      exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding;
+      serverId: string;
+      toolName: string;
+      arguments: Record<string, unknown>;
+      classification: ArtifactBridgeTrustedMcpClassification;
+    },
+  ): void {
+    const current = this.createCurrentMcpEffectCommitment(input);
+    if (!artifactBridgeMcpCommitmentsEqual(expected, current)) {
+      throw new Error(
+        'MCP effect commitment changed after authorization review',
+      );
+    }
+  }
+
   private async executeMcpTool(
     context: ArtifactBridgeContext,
     serverId: string,
@@ -2181,8 +3309,23 @@ export class ArtifactBridgeService extends DisposableService {
     arguments_: Record<string, unknown>,
     signal?: AbortSignal,
     timeoutMs?: number,
+    exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding,
+    grantBinding?: ValidatedGrantBinding,
+    effectCommitment?: ArtifactBridgeMcpEffectCommitment,
+    classification?: ArtifactBridgeTrustedMcpClassification,
+    onBeforeDispatchPassed?: () => void,
   ): Promise<unknown> {
+    const withholdSensitiveErrors =
+      this.options.isSensitiveEgressEnabled?.() ?? false;
     try {
+      if (grantBinding && (!effectCommitment || classification === undefined)) {
+        throw new Error('MCP effect commitment is required before dispatch');
+      }
+      if ((effectCommitment || classification) && !grantBinding) {
+        throw new Error('MCP effect grant binding is required before dispatch');
+      }
+      this.requireExactHostSessionBinding(context, exactHostBinding);
+      if (grantBinding) this.requireGrantDispatchBinding(context, grantBinding);
       return await this.options.mcpRegistry.callTool(
         serverId,
         toolName,
@@ -2191,10 +3334,38 @@ export class ArtifactBridgeService extends DisposableService {
           timeoutMs: timeoutMs ?? 30_000,
           ...(signal ? { signal } : {}),
           agentInstanceId: this.mcpPrincipalId(context),
+          ...(exactHostBinding || grantBinding
+            ? {
+                beforeDispatch: () => {
+                  if (grantBinding) {
+                    this.requireGrantDispatchBinding(context, grantBinding);
+                  }
+                  this.requireExactHostSessionBinding(
+                    context,
+                    exactHostBinding,
+                  );
+                  if (effectCommitment && grantBinding && classification) {
+                    this.requireCurrentMcpEffectCommitment(effectCommitment, {
+                      context,
+                      grantBinding,
+                      exactHostBinding,
+                      serverId,
+                      toolName,
+                      arguments: arguments_,
+                      classification,
+                    });
+                  }
+                  onBeforeDispatchPassed?.();
+                },
+              }
+            : {}),
         },
       );
     } catch (error) {
-      if (this.options.isSensitiveEgressEnabled?.() ?? false) {
+      if (
+        withholdSensitiveErrors ||
+        (this.options.isSensitiveEgressEnabled?.() ?? false)
+      ) {
         throw new Error(
           'MCP tool execution failed; sensitive details withheld',
         );
@@ -2217,6 +3388,156 @@ export class ArtifactBridgeService extends DisposableService {
     }
   }
 
+  private async ensurePreparedEffectApprovalAudit(
+    prepared: PreparedEffect,
+    input: {
+      kind: 'mcp-write' | 'sensitive-mcp';
+      action: 'write.approved' | 'sensitive-egress.approved';
+      context: ArtifactBridgeContext;
+    },
+  ): Promise<void> {
+    if (prepared.approvalAuditRecorded) return;
+    if (prepared.approvalAuditPromise) {
+      await prepared.approvalAuditPromise;
+      return;
+    }
+    if (!prepared.commitToken) {
+      throw new Error('Effect approval token is unavailable');
+    }
+
+    const commitToken = prepared.commitToken;
+    const approvalAuditPromise = (async () => {
+      const walRecord = await this.effectWal.prepare({
+        effectId: prepared.proposal.id,
+        kind: input.kind,
+        commitmentHash: prepared.effectCommitment.hash,
+        ticketHash: effectTicketHash(commitToken),
+      });
+      if (walRecord.state !== 'PREPARED') {
+        throw new Error(
+          'Effect approval WAL is no longer in a dispatchable state',
+        );
+      }
+
+      // `approved` means that the one-shot WAL ticket exists. The token is not
+      // released to the reviewer, and commit remains fail-closed, until the
+      // mandatory approval audit below has completed successfully.
+      prepared.status = 'approved';
+      try {
+        await this.audit({
+          action: input.action,
+          outcome: 'success',
+          context: auditContext(input.context),
+          resource: safeMcpAuditResource(
+            prepared.proposal.serverId,
+            prepared.proposal.toolName,
+          ),
+        });
+        prepared.approvalAuditRecorded = true;
+      } catch (auditError) {
+        // Recorder failures are write-ambiguous: retrying the same append could
+        // duplicate or corrupt an already-written record. Burn the one-shot WAL
+        // ticket instead. A fresh proposal/review is required after the audit
+        // sink is healthy again, and no caller ever receives this token.
+        try {
+          await this.effectWal.markFailedPreEffect(
+            prepared.proposal.id,
+            'Mandatory approval audit did not complete',
+          );
+          prepared.status = 'failed-pre-effect';
+        } catch (closureError) {
+          prepared.status = 'uncertain';
+          this.options.logger.warn(
+            '[ArtifactBridge] Failed to close an approval after audit failure',
+            { closureError },
+          );
+        }
+        prepared.commitToken = null;
+        throw auditError;
+      }
+    })();
+    prepared.approvalAuditPromise = approvalAuditPromise;
+    try {
+      await approvalAuditPromise;
+    } finally {
+      if (prepared.approvalAuditPromise === approvalAuditPromise) {
+        prepared.approvalAuditPromise = null;
+      }
+    }
+  }
+
+  private async executePreparedEffectWithSettlement<T>(
+    prepared: PreparedEffect,
+    execute: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await execute();
+    } catch (error) {
+      await this.settlePreparedEffectFailure(prepared, error);
+      throw error;
+    }
+  }
+
+  private async settlePreparedEffectFailure(
+    prepared: PreparedEffect,
+    _error: unknown,
+  ): Promise<void> {
+    if (
+      prepared.status === 'committed' ||
+      isTerminalEffectFailureStatus(prepared.status)
+    ) {
+      prepared.commitPromise = null;
+      return;
+    }
+    const record = this.effectWal.get(prepared.proposal.id);
+    try {
+      switch (record?.state) {
+        case 'PREPARED':
+          await this.effectWal.markFailedPreEffect(
+            prepared.proposal.id,
+            'Effect rejected before final dispatch',
+          );
+          prepared.status = 'failed-pre-effect';
+          break;
+        case 'DISPATCHING':
+          if (prepared.dispatchAuthorized) {
+            await this.effectWal.markUncertain(
+              prepared.proposal.id,
+              'Adapter result unavailable after final dispatch',
+            );
+            prepared.status = 'uncertain';
+          } else {
+            await this.effectWal.markFailedPreEffect(
+              prepared.proposal.id,
+              'Effect rejected before final dispatch',
+            );
+            prepared.status = 'failed-pre-effect';
+          }
+          break;
+        case 'COMMITTED':
+          prepared.status = 'committed';
+          break;
+        case 'RESULT_UNAVAILABLE':
+          prepared.status = 'result-unavailable';
+          break;
+        case 'UNCERTAIN':
+          prepared.status = 'uncertain';
+          break;
+        case 'FAILED_PRE_EFFECT':
+          prepared.status = 'failed-pre-effect';
+          break;
+        case undefined:
+          prepared.status = 'uncertain';
+          break;
+      }
+    } catch {
+      // If the terminal write itself fails, never make the one-shot token
+      // dispatchable again. A persisted DISPATCHING record recovers UNCERTAIN.
+      prepared.status = 'uncertain';
+    }
+    prepared.commitPromise = null;
+  }
+
   private requirePreparedWrite(
     context: ArtifactBridgeContext,
     proposalId: string,
@@ -2234,10 +3555,53 @@ export class ArtifactBridgeService extends DisposableService {
     return prepared;
   }
 
+  private requirePreparedWriteDispatchAuthorization(
+    prepared: PreparedWrite,
+  ): void {
+    if (!prepared.approvalAuditRecorded) {
+      throw new Error(
+        'Generated app write approval audit is incomplete; dispatch is forbidden',
+      );
+    }
+    if (
+      prepared.status !== 'committing' ||
+      !prepared.commitToken ||
+      Date.parse(prepared.proposal.expiresAt) <= this.now()
+    ) {
+      throw new Error(
+        'Generated app write execution ticket expired before final dispatch',
+      );
+    }
+  }
+
+  private invalidatePreparedEffect(
+    prepared: PreparedEffect,
+    reason: string,
+  ): void {
+    if (
+      prepared.status !== 'approved' ||
+      !prepared.commitToken ||
+      this.effectWal.get(prepared.proposal.id)?.state !== 'PREPARED'
+    ) {
+      return;
+    }
+    prepared.status = 'failed-pre-effect';
+    prepared.commitPromise = null;
+    void this.effectWal
+      .markFailedPreEffect(prepared.proposal.id, reason.slice(0, 500))
+      .catch((error) => {
+        this.options.logger.warn(
+          '[ArtifactBridge] Failed to close a prepared effect WAL record',
+          { error },
+        );
+      });
+  }
+
   private cleanupExpiredWrites(): void {
     const now = this.now();
     for (const [id, prepared] of this.writes) {
       if (Date.parse(prepared.proposal.expiresAt) <= now) {
+        this.invalidatePreparedEffect(prepared, 'Effect proposal expired');
         this.writes.delete(id);
       }
     }
@@ -2260,10 +3624,30 @@ export class ArtifactBridgeService extends DisposableService {
     return prepared;
   }
 
+  private requirePreparedSensitiveDispatchAuthorization(
+    prepared: PreparedSensitiveMcpCall,
+  ): void {
+    if (!prepared.approvalAuditRecorded) {
+      throw new Error(
+        'Sensitive MCP approval audit is incomplete; dispatch is forbidden',
+      );
+    }
+    if (
+      prepared.status !== 'committing' ||
+      !prepared.commitToken ||
+      Date.parse(prepared.proposal.expiresAt) <= this.now()
+    ) {
+      throw new Error(
+        'Sensitive MCP execution ticket expired before final dispatch',
+      );
+    }
+  }
+
   private cleanupExpiredSensitiveMcpCalls(): void {
     const now = this.now();
     for (const [id, prepared] of this.sensitiveMcpCalls) {
       if (Date.parse(prepared.proposal.expiresAt) <= now) {
+        this.invalidatePreparedEffect(prepared, 'Effect proposal expired');
         this.sensitiveMcpCalls.delete(id);
       }
     }
@@ -2273,6 +3657,7 @@ export class ArtifactBridgeService extends DisposableService {
     const key = this.contextKey(context);
     for (const [id, prepared] of this.writes) {
       if (this.contextKey(prepared.proposal.context) === key) {
+        this.invalidatePreparedEffect(prepared, 'Grant authority changed');
         this.writes.delete(id);
       }
     }
@@ -2288,6 +3673,7 @@ export class ArtifactBridgeService extends DisposableService {
         this.contextKey(prepared.proposal.context) === key &&
         prepared.sessionId === sessionId
       ) {
+        this.invalidatePreparedEffect(prepared, 'Session authority ended');
         this.writes.delete(id);
       }
     }
@@ -2302,6 +3688,7 @@ export class ArtifactBridgeService extends DisposableService {
         this.contextKey(prepared.proposal.context) === key &&
         prepared.sessionId === null
       ) {
+        this.invalidatePreparedEffect(prepared, 'Grant authority changed');
         this.writes.delete(id);
       }
     }
@@ -2311,6 +3698,7 @@ export class ArtifactBridgeService extends DisposableService {
     const key = this.contextKey(context);
     for (const [id, prepared] of this.sensitiveMcpCalls) {
       if (this.contextKey(prepared.proposal.context) === key) {
+        this.invalidatePreparedEffect(prepared, 'Grant authority changed');
         this.sensitiveMcpCalls.delete(id);
       }
     }
@@ -2326,6 +3714,7 @@ export class ArtifactBridgeService extends DisposableService {
         this.contextKey(prepared.proposal.context) === key &&
         prepared.sessionId === sessionId
       ) {
+        this.invalidatePreparedEffect(prepared, 'Session authority ended');
         this.sensitiveMcpCalls.delete(id);
       }
     }
@@ -2340,6 +3729,7 @@ export class ArtifactBridgeService extends DisposableService {
         this.contextKey(prepared.proposal.context) === key &&
         prepared.sessionId === null
       ) {
+        this.invalidatePreparedEffect(prepared, 'Grant authority changed');
         this.sensitiveMcpCalls.delete(id);
       }
     }
@@ -2349,8 +3739,15 @@ export class ArtifactBridgeService extends DisposableService {
     const key = this.contextKey(context);
     for (const [id, operation] of this.operations) {
       if (this.contextKey(operation.snapshot.context) === key) {
-        this.disposeOperation(operation);
-        this.operations.delete(id);
+        if (
+          this.disposeOperation(operation, {
+            preserveUncertainAfterFinalDispatch: true,
+            reason:
+              'Generated app async authority changed after final dispatch; effect outcome is uncertain',
+          })
+        ) {
+          this.operations.delete(id);
+        }
       }
     }
   }
@@ -2365,8 +3762,15 @@ export class ArtifactBridgeService extends DisposableService {
         this.contextKey(operation.snapshot.context) === key &&
         operation.sessionId === sessionId
       ) {
-        this.disposeOperation(operation);
-        this.operations.delete(id);
+        if (
+          this.disposeOperation(operation, {
+            preserveUncertainAfterFinalDispatch: true,
+            reason:
+              'Generated app async session closed after final dispatch; effect outcome is uncertain',
+          })
+        ) {
+          this.operations.delete(id);
+        }
       }
     }
   }
@@ -2380,8 +3784,15 @@ export class ArtifactBridgeService extends DisposableService {
         this.contextKey(operation.snapshot.context) === key &&
         operation.sessionId === null
       ) {
-        this.disposeOperation(operation);
-        this.operations.delete(id);
+        if (
+          this.disposeOperation(operation, {
+            preserveUncertainAfterFinalDispatch: true,
+            reason:
+              'Generated app async authority changed after final dispatch; effect outcome is uncertain',
+          })
+        ) {
+          this.operations.delete(id);
+        }
       }
     }
   }
@@ -2502,18 +3913,15 @@ export class ArtifactBridgeService extends DisposableService {
   }
 
   private protectResult<T>(result: T): T {
-    const protectedResult = (
-      this.options.isSensitiveEgressEnabled?.()
-        ? sanitizeSensitiveValue(result)
-        : result
-    ) as T;
+    // Output privacy is a permanent trust-boundary property, not a rollout
+    // feature. Using the live gate here would allow true -> false transitions
+    // after dispatch to expose raw provider/tool results.
+    const protectedResult = sanitizeSensitiveValue(result) as T;
     return this.capResult(protectedResult);
   }
 
   private sanitizeErrorMessage(message: string): string {
-    return this.options.isSensitiveEgressEnabled?.()
-      ? redactSensitiveText(message)
-      : message;
+    return redactSensitiveText(message);
   }
 
   private contextKey(context: ArtifactBridgeContext): string {
@@ -2534,6 +3942,351 @@ export class ArtifactBridgeService extends DisposableService {
     return `${this.contextKey(context)}:session:${sessionId}`;
   }
 
+  private grantDispatchKey(grant: ArtifactBridgeGrant): string {
+    return grant.scope.kind === 'session'
+      ? this.ephemeralGrantKey(grant.context, grant.scope.sessionId)
+      : this.contextKey(grant.context);
+  }
+
+  private currentGrantForDispatchKey(
+    key: string,
+  ): ArtifactBridgeGrant | undefined {
+    if (
+      this.pendingPersistentGrantMutations.has(key) ||
+      this.pendingPersistentGrantRevocations.has(key) ||
+      this.dirtyPersistentGrantContexts.has(key)
+    ) {
+      return undefined;
+    }
+    return this.ephemeralGrants.get(key) ?? this.store.grants[key];
+  }
+
+  private captureGrantBinding(
+    grant: ArtifactBridgeGrant,
+  ): ValidatedGrantBinding {
+    const key = this.grantDispatchKey(grant);
+    if (this.currentGrantForDispatchKey(key) !== grant) {
+      throw new Error('Generated app capability grant is no longer current');
+    }
+    const existing = this.grantDispatchFences.get(key);
+    if (existing?.grant === grant && !existing.dispatchFence.revoked) {
+      return { key, grant, dispatchFence: existing.dispatchFence };
+    }
+    if (existing) existing.dispatchFence.revoked = true;
+    if (this.nextGrantRevision >= Number.MAX_SAFE_INTEGER) {
+      throw new Error('Generated app grant revision space is exhausted');
+    }
+    const dispatchFence: GrantDispatchFence = {
+      grantId: randomUUID(),
+      revision: ++this.nextGrantRevision,
+      revoked: false,
+    };
+    this.grantDispatchFences.set(key, { grant, dispatchFence });
+    return { key, grant, dispatchFence };
+  }
+
+  private requireValidatedGrantBinding(
+    grant: ArtifactBridgeGrant,
+  ): ValidatedGrantBinding {
+    const binding = this.validatedGrantBindings.get(grant);
+    if (!binding) {
+      throw new Error('Generated app capability grant binding is unavailable');
+    }
+    return binding;
+  }
+
+  private isGrantBindingCurrent(binding: ValidatedGrantBinding): boolean {
+    const currentFence = this.grantDispatchFences.get(binding.key);
+    return Boolean(
+      !binding.dispatchFence.revoked &&
+        currentFence?.dispatchFence === binding.dispatchFence &&
+        currentFence.grant === binding.grant &&
+        this.currentGrantForDispatchKey(binding.key) === binding.grant,
+    );
+  }
+
+  private requireGrantDispatchBinding(
+    context: ArtifactBridgeContext,
+    binding: ValidatedGrantBinding,
+  ): void {
+    this.assertEnabled();
+    this.assertContextEnabled(context);
+    if (
+      !artifactBridgeContextsEqual(binding.grant.context, context) ||
+      !this.isGrantBindingCurrent(binding)
+    ) {
+      throw new Error('Generated app capability grant was revoked or replaced');
+    }
+    if (
+      binding.grant.expiresAt &&
+      Date.parse(binding.grant.expiresAt) <= this.now()
+    ) {
+      void this.deleteGrant(binding.grant).catch((error) => {
+        this.options.logger.warn(
+          '[ArtifactBridge] Failed to persist an expired grant tombstone',
+          { error },
+        );
+      });
+      throw new Error('Generated app capability grant expired before dispatch');
+    }
+    if (
+      binding.grant.scope.kind === 'session' &&
+      !this.isActiveSession(context, binding.grant.scope.sessionId)
+    ) {
+      throw new Error('Generated app session grant is no longer active');
+    }
+    if (
+      binding.grant.capabilities.includes('mcp:write') ||
+      binding.grant.mcpWriteTools.length > 0
+    ) {
+      this.assertWritesEnabled();
+    }
+    const policy = this.getPolicy(context);
+    assertPolicyEnabled(policy);
+    assertGrantMatchesPolicy(binding.grant, policy, this.now());
+  }
+
+  private invalidateGrantFence(key: string): void {
+    const current = this.grantDispatchFences.get(key);
+    if (current) current.dispatchFence.revoked = true;
+    this.grantDispatchFences.delete(key);
+  }
+
+  private invalidateGrantFencesForContext(
+    context: ArtifactBridgeContext,
+  ): void {
+    const persistentKey = this.contextKey(context);
+    const sessionPrefix = `${persistentKey}:session:`;
+    for (const key of [...this.grantDispatchFences.keys()]) {
+      if (key === persistentKey || key.startsWith(sessionPrefix)) {
+        this.invalidateGrantFence(key);
+      }
+    }
+  }
+
+  private advanceGrantMutationEpoch(context: ArtifactBridgeContext): number {
+    const key = this.contextKey(context);
+    const current = this.grantMutationEpochs.get(key) ?? 0;
+    if (current >= Number.MAX_SAFE_INTEGER) {
+      throw new Error('Generated app grant mutation epoch space is exhausted');
+    }
+    const next = current + 1;
+    this.grantMutationEpochs.set(key, next);
+    return next;
+  }
+
+  private requireGrantMutationEpoch(
+    context: ArtifactBridgeContext,
+    expected: number,
+  ): void {
+    if (
+      (this.grantMutationEpochs.get(this.contextKey(context)) ?? 0) !== expected
+    ) {
+      throw new Error(
+        'Generated app grant review became stale during publication',
+      );
+    }
+  }
+
+  private clearGrantReviewsForContext(context: ArtifactBridgeContext): void {
+    const key = this.contextKey(context);
+    this.grantReviews.deleteContext(context);
+    for (const [reviewId, binding] of this.grantReviewMutationEpochs) {
+      if (binding.contextKey === key) {
+        this.grantReviewMutationEpochs.delete(reviewId);
+      }
+    }
+  }
+
+  private generateUniqueSessionId(): string {
+    let sessionId = randomUUID();
+    while (this.activeSessions.has(sessionId)) sessionId = randomUUID();
+    return sessionId;
+  }
+
+  private generateUniqueDocumentSlotId(): string {
+    let documentSlotId = randomUUID();
+    while (this.hostDocumentSlots.has(documentSlotId)) {
+      documentSlotId = randomUUID();
+    }
+    return documentSlotId;
+  }
+
+  private async resolveValidatedApp(
+    context: ArtifactBridgeContext,
+  ): Promise<ResolvedArtifactBridgeApp | null> {
+    const resolved = await this.options.resolveApp(context);
+    if (!resolved) return null;
+    const parsed = resolvedArtifactBridgeAppSchema.safeParse(resolved);
+    if (!parsed.success) return null;
+    if (
+      parsed.data.manifest.id !== context.appId ||
+      parsed.data.identity.appVersion !== parsed.data.manifest.version ||
+      parsed.data.identity.manifestSchemaVersion !==
+        parsed.data.manifest.schemaVersion
+    ) {
+      return null;
+    }
+    return parsed.data;
+  }
+
+  private requireHostSessionBinding(
+    context: ArtifactBridgeContext,
+    rawSessionId: string,
+    rawNavigationEpoch: number,
+    documentSlotId?: string,
+  ): ValidatedArtifactBridgeHostSessionBinding {
+    const sessionId = z.string().uuid().parse(rawSessionId);
+    const navigationEpoch =
+      artifactBridgeNavigationEpochSchema.parse(rawNavigationEpoch);
+    const session = this.activeSessions.get(sessionId);
+    if (
+      !session?.hostIssued ||
+      session.dispatchFence.revoked ||
+      session.navigationEpoch !== navigationEpoch ||
+      (documentSlotId !== undefined &&
+        session.documentSlotId !== documentSlotId) ||
+      !artifactBridgeContextsEqual(session.context, context)
+    ) {
+      this.captureDogfoodTelemetry(context, {
+        activity: 'security-control',
+        outcome: 'blocked',
+        security_control: 'principal-isolation',
+      });
+      throw new Error(
+        'Generated app host session binding is inactive or mismatched',
+      );
+    }
+    return {
+      documentSlotId: session.documentSlotId,
+      sessionId,
+      navigationEpoch,
+      openedAt: session.openedAt,
+      assetHash: session.identity.assetHash,
+      identity: structuredClone(session.identity),
+      dispatchFence: session.dispatchFence,
+    };
+  }
+
+  private requireExactHostDocumentSlot(
+    context: ArtifactBridgeContext,
+    documentSlotId: string,
+    sessionId: string,
+    navigationEpoch: number,
+  ): {
+    context: ArtifactBridgeContext;
+    navigationEpoch: number;
+    sessionId: string;
+  } {
+    const slot = this.hostDocumentSlots.get(documentSlotId);
+    if (
+      !slot ||
+      slot.sessionId !== sessionId ||
+      slot.navigationEpoch !== navigationEpoch ||
+      !artifactBridgeContextsEqual(slot.context, context)
+    ) {
+      this.captureDogfoodTelemetry(context, {
+        activity: 'security-control',
+        outcome: 'blocked',
+        security_control: 'principal-isolation',
+      });
+      throw new Error(
+        'Generated app host session binding is inactive or mismatched',
+      );
+    }
+    return slot;
+  }
+
+  private requireExactHostSessionBinding(
+    context: ArtifactBridgeContext,
+    binding?: ValidatedArtifactBridgeHostSessionBinding,
+  ): void {
+    if (!binding) return;
+    if (binding.dispatchFence.revoked) {
+      this.rejectInactiveHostBinding(context);
+    }
+    const active = this.requireHostSessionBinding(
+      context,
+      binding.sessionId,
+      binding.navigationEpoch,
+      binding.documentSlotId,
+    );
+    if (
+      active.dispatchFence !== binding.dispatchFence ||
+      active.dispatchFence.generationId !==
+        binding.dispatchFence.generationId ||
+      !identitiesMatch(active.identity, binding.identity)
+    ) {
+      this.rejectInactiveHostBinding(context);
+    }
+  }
+
+  private rejectInactiveHostBinding(context: ArtifactBridgeContext): never {
+    this.captureDogfoodTelemetry(context, {
+      activity: 'security-control',
+      outcome: 'blocked',
+      security_control: 'principal-isolation',
+    });
+    throw new Error(
+      'Generated app host session binding is inactive or mismatched',
+    );
+  }
+
+  private async invalidateExactHostSession(
+    context: ArtifactBridgeContext,
+    binding: ValidatedArtifactBridgeHostSessionBinding,
+    reason: 'app-unavailable' | 'identity-mismatch',
+  ): Promise<void> {
+    let invalidated = false;
+    await this.withHostSessionMutation(binding.documentSlotId, async () => {
+      const active = this.activeSessions.get(binding.sessionId);
+      if (
+        !active?.hostIssued ||
+        active.documentSlotId !== binding.documentSlotId ||
+        active.navigationEpoch !== binding.navigationEpoch ||
+        !artifactBridgeContextsEqual(active.context, context) ||
+        !identitiesMatch(active.identity, binding.identity)
+      ) {
+        return;
+      }
+      await this.unregisterSession(context, binding.sessionId);
+      invalidated = true;
+    });
+
+    if (invalidated) {
+      await this.emitLifecycleEvent({
+        type: 'identityChanged',
+        context,
+        reason,
+      });
+    }
+  }
+
+  private async withHostSessionMutation<T>(
+    documentSlotId: string,
+    mutation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.hostSessionMutationQueues.get(documentSlotId);
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = (previous ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => await released);
+    this.hostSessionMutationQueues.set(documentSlotId, queued);
+
+    if (previous) await previous.catch(() => undefined);
+    try {
+      return await mutation();
+    } finally {
+      release();
+      if (this.hostSessionMutationQueues.get(documentSlotId) === queued) {
+        this.hostSessionMutationQueues.delete(documentSlotId);
+      }
+    }
+  }
+
   private isActiveSession(
     context: ArtifactBridgeContext,
     sessionId: string,
@@ -2544,19 +4297,37 @@ export class ArtifactBridgeService extends DisposableService {
     );
   }
 
-  private deleteGrant(grant: ArtifactBridgeGrant): void {
+  private async deleteGrant(grant: ArtifactBridgeGrant): Promise<void> {
+    const key = this.grantDispatchKey(grant);
+    const current = this.currentGrantForDispatchKey(key);
+    if (current !== grant) return;
+    const grantMutationEpoch = this.advanceGrantMutationEpoch(grant.context);
+    this.clearGrantReviewsForContext(grant.context);
     if (grant.scope.kind === 'session') {
+      this.deleteWritesForSession(grant.context, grant.scope.sessionId);
+      this.deleteSensitiveCallsForSession(grant.context, grant.scope.sessionId);
       this.deleteOperationsForSession(grant.context, grant.scope.sessionId);
     } else {
+      this.deletePersistentWritesForContext(grant.context);
+      this.deletePersistentSensitiveCallsForContext(grant.context);
       this.deletePersistentOperationsForContext(grant.context);
     }
+    this.invalidateGrantFence(key);
     if (grant.scope.kind === 'session') {
-      this.ephemeralGrants.delete(
-        this.ephemeralGrantKey(grant.context, grant.scope.sessionId),
-      );
+      this.ephemeralGrants.delete(key);
     } else {
-      delete this.store.grants[this.contextKey(grant.context)];
-      void this.persist().catch(() => undefined);
+      this.pendingPersistentGrantRevocations.set(
+        key,
+        structuredClone(grant.context),
+      );
+      // Do not report automatic invalidation as complete until the durable
+      // tombstone commits. A failed save leaves this context fenced and is
+      // surfaced to the caller; clean teardown performs a final retry.
+      await this.persistPersistentGrantRevocation(
+        grant.context,
+        grantMutationEpoch,
+        'reason:automatic-invalidation',
+      );
     }
   }
 
@@ -2564,8 +4335,10 @@ export class ArtifactBridgeService extends DisposableService {
     context: ArtifactBridgeContext,
   ): void {
     const prefix = `${this.contextKey(context)}:session:`;
-    for (const key of this.ephemeralGrants.keys()) {
-      if (key.startsWith(prefix)) this.ephemeralGrants.delete(key);
+    for (const key of [...this.ephemeralGrants.keys()]) {
+      if (!key.startsWith(prefix)) continue;
+      this.invalidateGrantFence(key);
+      this.ephemeralGrants.delete(key);
     }
   }
 
@@ -2578,6 +4351,7 @@ export class ArtifactBridgeService extends DisposableService {
   }
 
   private assertEnabled(): void {
+    this.assertNotDisposed();
     if (!this.options.isFeatureEnabled()) {
       throw new Error('Generated app capability bridge is disabled');
     }
@@ -2622,13 +4396,177 @@ export class ArtifactBridgeService extends DisposableService {
     }
   }
 
-  private async persist(): Promise<void> {
-    const snapshot = structuredClone(this.store);
-    this.saveQueue = this.saveQueue.then(
-      async () => await this.persistence.save(snapshot),
-      async () => await this.persistence.save(snapshot),
+  private assertPersistentGrantStoreWritable(
+    context: ArtifactBridgeContext,
+    expectedPendingMutationEpoch?: number,
+  ): void {
+    const key = this.contextKey(context);
+    const pendingMutationEpoch = this.pendingPersistentGrantMutations.get(key);
+    if (
+      pendingMutationEpoch !== undefined &&
+      pendingMutationEpoch !== expectedPendingMutationEpoch
+    ) {
+      throw new Error('Generated app grant publication is already in progress');
+    }
+    if (this.pendingPersistentGrantRevocations.has(key)) {
+      throw new Error(
+        'Generated app grant revocation is awaiting durable persistence',
+      );
+    }
+    if (this.dirtyPersistentGrantContexts.has(key)) {
+      throw new Error(
+        'Generated app grant store is fail-closed after a persistence error; revoke the grant to reconcile it',
+      );
+    }
+  }
+
+  private assertGrantReviewNotExpired(expiresAt?: string): void {
+    if (expiresAt && Date.parse(expiresAt) <= this.now()) {
+      throw new Error(
+        'Artifact Bridge grant review expired before publication',
+      );
+    }
+  }
+
+  private validateGrantPublication(
+    input: z.output<typeof artifactBridgeGrantInputSchema>,
+    expectedPendingMutationEpoch: number,
+    reviewExpiresAt?: string,
+  ): void {
+    this.assertEnabled();
+    this.assertContextEnabled(input.context);
+    this.assertPersistentGrantStoreWritable(
+      input.context,
+      expectedPendingMutationEpoch,
     );
-    await this.saveQueue;
+    if (
+      input.capabilities.includes('mcp:write') ||
+      input.mcpWriteTools.length > 0
+    ) {
+      this.assertWritesEnabled();
+    }
+    const policy = this.getPolicy(input.context);
+    assertPolicyEnabled(policy);
+    assertGrantMatchesPolicy(input, policy, this.now());
+    if (input.expiresAt && Date.parse(input.expiresAt) <= this.now()) {
+      throw new Error('Artifact capability grant expiry must be in the future');
+    }
+    this.assertGrantReviewNotExpired(reviewExpiresAt);
+    if (input.scope.kind === 'session') {
+      this.assertEphemeralGrantsEnabled();
+      if (!this.isActiveSession(input.context, input.scope.sessionId)) {
+        throw new Error(
+          'The selected generated app preview session is no longer active',
+        );
+      }
+    }
+  }
+
+  private async persistPersistentGrantRevocation(
+    context: ArtifactBridgeContext,
+    expectedMutationEpoch: number,
+    auditResource: string,
+  ): Promise<void> {
+    const key = this.contextKey(context);
+    await this.persistGrantStoreMutation(
+      context,
+      expectedMutationEpoch,
+      'revoke',
+      (store) => {
+        delete store.grants[key];
+        return store;
+      },
+      undefined,
+      async () => {
+        await this.audit({
+          action: 'grant.revoke-prepared',
+          outcome: 'success',
+          context: auditContext(context),
+          resource: auditResource,
+        });
+      },
+    );
+    this.pendingPersistentGrantRevocations.delete(key);
+  }
+
+  private async persistGrantStoreMutation(
+    context: ArtifactBridgeContext,
+    expectedMutationEpoch: number,
+    kind: 'set' | 'revoke',
+    mutate: (store: GrantStore) => GrantStore,
+    validateCurrent?: () => void,
+    beforePublish?: () => Promise<void>,
+    publish?: () => void,
+  ): Promise<void> {
+    const key = this.contextKey(context);
+    const run = async () => {
+      this.requireGrantMutationEpoch(context, expectedMutationEpoch);
+      validateCurrent?.();
+      const previous = structuredClone(this.store);
+      const candidate = mutate(structuredClone(previous));
+      candidate.pendingMutations = {
+        ...(candidate.pendingMutations ?? {}),
+        [key]: {
+          mutationId: randomUUID(),
+          kind,
+          context: structuredClone(context),
+          startedAt: new Date(this.now()).toISOString(),
+        },
+      };
+      grantStoreSchema.parse(candidate);
+      let committed: GrantStore | null = null;
+      try {
+        // A crash after this staged write is fail-closed on restart: startup
+        // removes every grant whose mutation marker was not finalized.
+        await this.persistence.save(candidate);
+        this.requireGrantMutationEpoch(context, expectedMutationEpoch);
+        validateCurrent?.();
+        await beforePublish?.();
+        this.requireGrantMutationEpoch(context, expectedMutationEpoch);
+        validateCurrent?.();
+
+        // Preserve the exact grant object that was validated above. Grant
+        // dispatch fences deliberately use object identity to distinguish an
+        // identical-looking replacement grant from the authority instance it
+        // replaces. Cloning here would make the freshly committed grant fail
+        // its own publication fence.
+        committed = candidate;
+        if (committed.pendingMutations) {
+          delete committed.pendingMutations[key];
+          if (Object.keys(committed.pendingMutations).length === 0) {
+            delete committed.pendingMutations;
+          }
+        }
+        grantStoreSchema.parse(committed);
+        await this.persistence.save(committed);
+      } catch (mutationError) {
+        // save() failures are ambiguous. Restore the last published snapshot
+        // when possible; otherwise leave the context dirty and the staged
+        // marker on disk for startup reconciliation.
+        this.dirtyPersistentGrantContexts.add(key);
+        try {
+          await this.persistence.save(previous);
+          this.dirtyPersistentGrantContexts.delete(key);
+        } catch (rollbackError) {
+          this.options.logger.warn(
+            '[ArtifactBridge] Failed to roll back a stale grant-store write',
+            { rollbackError },
+          );
+        }
+        throw mutationError;
+      }
+
+      this.store = committed;
+      this.dirtyPersistentGrantContexts.delete(key);
+      publish?.();
+    };
+
+    const task = this.saveQueue.then(run, run);
+    this.saveQueue = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    await task;
   }
 
   private async audit(
@@ -2726,6 +4664,9 @@ export class ArtifactBridgeService extends DisposableService {
   }
 
   protected async onTeardown(): Promise<void> {
+    for (const session of this.activeSessions.values()) {
+      if (session.hostIssued) session.dispatchFence.revoked = true;
+    }
     for (const procedure of PROCEDURES) {
       this.options.karton.removeServerProcedureHandler(procedure);
     }
@@ -2739,9 +4680,28 @@ export class ArtifactBridgeService extends DisposableService {
     }
     this.operations.clear();
     this.activeSessions.clear();
-    this.ephemeralGrants.clear();
-    this.lifecycleInvalidationSignals.clear();
+    this.hostDocumentSlots.clear();
+    this.hostSessionMutationQueues.clear();
     await this.saveQueue;
+    for (const context of [
+      ...this.pendingPersistentGrantRevocations.values(),
+    ]) {
+      const retryEpoch = this.advanceGrantMutationEpoch(context);
+      await this.persistPersistentGrantRevocation(
+        context,
+        retryEpoch,
+        'reason:teardown-retry',
+      );
+    }
+    this.ephemeralGrants.clear();
+    this.grantReviews.clear();
+    this.grantMutationEpochs.clear();
+    this.grantReviewMutationEpochs.clear();
+    this.pendingPersistentGrantMutations.clear();
+    this.pendingPersistentGrantRevocations.clear();
+    this.dirtyPersistentGrantContexts.clear();
+    this.lifecycleInvalidationSignals.clear();
+    await this.effectWal.flush();
   }
 }
 
@@ -2758,8 +4718,21 @@ type PreparedWrite = {
   identity: GeneratedAppIdentity;
   arguments: Record<string, unknown>;
   argumentsHash: string;
-  status: 'prepared' | 'approved' | 'committing' | 'committed';
+  grantBinding: ValidatedGrantBinding;
+  effectCommitment: ArtifactBridgeMcpEffectCommitment;
+  classification: ArtifactBridgeTrustedMcpClassification;
+  dispatchAuthorized: boolean;
+  status:
+    | 'prepared'
+    | 'approved'
+    | 'committing'
+    | 'committed'
+    | 'result-unavailable'
+    | 'uncertain'
+    | 'failed-pre-effect';
   commitToken: string | null;
+  approvalAuditRecorded: boolean;
+  approvalAuditPromise: Promise<void> | null;
   commitPromise: Promise<unknown> | null;
   result: unknown;
 };
@@ -2770,18 +4743,37 @@ type PreparedSensitiveMcpCall = {
   identity: GeneratedAppIdentity;
   arguments: Record<string, unknown>;
   argumentsHash: string;
-  status: 'prepared' | 'approved' | 'committing' | 'committed';
+  grantBinding: ValidatedGrantBinding;
+  effectCommitment: ArtifactBridgeMcpEffectCommitment;
+  classification: ArtifactBridgeTrustedMcpClassification;
+  dispatchAuthorized: boolean;
+  status:
+    | 'prepared'
+    | 'approved'
+    | 'committing'
+    | 'committed'
+    | 'result-unavailable'
+    | 'uncertain'
+    | 'failed-pre-effect';
   commitToken: string | null;
+  approvalAuditRecorded: boolean;
+  approvalAuditPromise: Promise<void> | null;
   commitPromise: Promise<unknown> | null;
   operationId: string | null;
   result: unknown;
 };
 
+type PreparedEffect = PreparedWrite | PreparedSensitiveMcpCall;
+
 type ArtifactBridgeOperation = {
   snapshot: ArtifactBridgeOperationSnapshot;
   sessionId: string | null;
+  exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding;
+  grantBinding: ValidatedGrantBinding;
   controller: AbortController;
   active: boolean;
+  finalDispatchPassed: boolean;
+  retentionSeconds: number;
   result: unknown;
   timeout: ReturnType<typeof setTimeout> | null;
 };
@@ -2793,8 +4785,36 @@ function isTerminalOperation(
     status === 'completed' ||
     status === 'failed' ||
     status === 'cancelled' ||
-    status === 'timed-out'
+    status === 'timed-out' ||
+    status === 'uncertain'
   );
+}
+
+function isTerminalEffectFailureStatus(
+  status: PreparedEffect['status'],
+): status is 'result-unavailable' | 'uncertain' | 'failed-pre-effect' {
+  return (
+    status === 'result-unavailable' ||
+    status === 'uncertain' ||
+    status === 'failed-pre-effect'
+  );
+}
+
+function throwTerminalEffectFailure(
+  status: 'result-unavailable' | 'uncertain' | 'failed-pre-effect',
+): never {
+  switch (status) {
+    case 'result-unavailable':
+      throw new Error(
+        'Effect completed but its result is unavailable; retry is forbidden',
+      );
+    case 'uncertain':
+      throw new Error('Effect outcome is uncertain; retry is forbidden');
+    case 'failed-pre-effect':
+      throw new Error(
+        'Execution ticket failed before effect dispatch; a new review is required',
+      );
+  }
 }
 
 function artifactBridgeContextsEqual(
@@ -2947,7 +4967,17 @@ function capabilityKindForRequest(
 }
 
 function hashJson(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  return hashArtifactBridgeJson(
+    'clodex.artifact-bridge.arguments-integrity.v1',
+    value,
+  );
+}
+
+function effectTicketHash(commitToken: string): string {
+  return hashArtifactBridgeJson(
+    'clodex.artifact-bridge.execution-ticket.v1',
+    commitToken,
+  );
 }
 
 function hashAuditIdentifier(value: string): string {
@@ -2967,7 +4997,7 @@ function createArgumentsPreview(arguments_: Record<string, unknown>): string {
 }
 
 function assertTrustedReviewer(clientId: string): void {
-  if (clientId !== 'ui') {
+  if (clientId !== TRUSTED_UI_REVIEWER_CONNECTION_ID) {
     throw new Error('Artifact capability grants require a trusted UI client');
   }
 }
@@ -2980,7 +5010,8 @@ function identitiesMatch(
     granted.manifestSchemaVersion === current.manifestSchemaVersion &&
     granted.appVersion === current.appVersion &&
     granted.manifestHash === current.manifestHash &&
-    granted.executableHash === current.executableHash
+    granted.executableHash === current.executableHash &&
+    granted.assetHash === current.assetHash
   );
 }
 

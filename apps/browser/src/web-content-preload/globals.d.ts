@@ -1,4 +1,5 @@
 import type { MessagePortProxy } from '@clodex/karton/client';
+import type { ClodexArtifactBridgeApi } from './artifact-bridge';
 
 // We simply use global variable shere in order to avoid any unnecessary overhead. We're in an isolated context anyway.
 export declare global {
@@ -24,6 +25,11 @@ export declare global {
           portProxy: MessagePortProxy;
         }
       | undefined;
+    /**
+     * Generated-app capability bridge exposed only by the isolated subframe
+     * preload. The backend session and MessagePort are not exposed.
+     */
+    clodexArtifactBridge?: ClodexArtifactBridgeApi | undefined;
     /**
      * Turnstile captcha proxy — only available on Clodex console origins
      * (clodex.xyz / localhost:4000).

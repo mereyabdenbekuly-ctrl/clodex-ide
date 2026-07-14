@@ -40,21 +40,24 @@ Create and edit app files (`index.html`, `styles.css`, `script.js`), then open o
 
 Use `API.openApp(appId, opts?)` from the sandbox. The sandbox is used **only** for opening apps and communicating with them.
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `pluginId` | `string` | — | Opens a plugin app instead of an agent app |
-| `title` | `string` | — | Human-readable tab breadcrumb label |
-| `target` | `'tab'` | `'tab'` | Explicit tab target; retained for compatibility/documentation |
-| `setActive` | `boolean` | `true` | Whether the preview tab should become active immediately |
+| Option      | Type      | Default | Description                                                   |
+| ----------- | --------- | ------- | ------------------------------------------------------------- |
+| `pluginId`  | `string`  | —       | Opens a plugin app instead of an agent app                    |
+| `title`     | `string`  | —       | Human-readable tab breadcrumb label                           |
+| `target`    | `'tab'`   | `'tab'` | Explicit tab target; retained for compatibility/documentation |
+| `setActive` | `boolean` | `true`  | Whether the preview tab should become active immediately      |
 
 - `API.openApp()` always opens an internal preview tab with a sandboxed `app://` iframe.
 - Calling with the **same `appId` opens a refreshed tab** — use after editing files.
 
 ---
 
-## Bidirectional Messaging
+## Non-authority UI Messaging
 
 Apps and the sandbox communicate via `postMessage`.
+
+This channel is only for ordinary app UI data. It does not carry Artifact
+Bridge authority, sessions, grants, or capability responses.
 
 **Sandbox → App:** `API.sendMessage(appId, data, opts?)` — sends a JSON-serializable message to the active app.
 
@@ -65,14 +68,22 @@ Apps and the sandbox communicate via `postMessage`.
 - Receive: `window.addEventListener("message", (e) => { /* e.data */ })`
 - Send: `window.parent.postMessage({ action: "clicked", id: 1 }, "*")`
 
-## Capability Bridge
+## Artifact Bridge
 
-Agent-owned apps can request explicitly granted Clodex capabilities through
-the versioned parent bridge. No capability is available by default. Grants are
-stored by the trusted Clodex UI, are scoped to `agentId + appId`, can expire,
-and can be revoked.
+Artifact Bridge is separate from the UI messaging channel above. When the
+current build, feature gates, and trusted host wiring permit it, an isolated
+app document receives one frozen API:
 
-Supported methods:
+```ts
+window.clodexArtifactBridge?: Readonly<{
+  request(method: string, params: Record<string, unknown>): Promise<unknown>;
+}>;
+```
+
+The API may be absent or every request may fail closed. Its presence is not a
+grant, and a previous successful request is not continuing permission.
+
+Protocol methods include:
 
 - `getCapabilities`
 - `callMcpTool` — only a specifically granted MCP tool whose effective policy
@@ -81,45 +92,35 @@ Supported methods:
 - `askAgent` — bounded prompt and response
 - `runAutomation` — launch an existing automation by ID
 
-Minimal client:
+### Client usage
+
+Minimal fail-closed client shape:
 
 ```js
-const pending = new Map();
-
-window.addEventListener("message", (event) => {
-  const message = event.data;
-  if (
-    message?.__clodexArtifactBridge !== 1 ||
-    message.type !== "response"
-  ) return;
-  const request = pending.get(message.id);
-  if (!request) return;
-  pending.delete(message.id);
-  if (message.ok) request.resolve(message.result);
-  else request.reject(new Error(message.error || "Capability request failed"));
-});
-
-function callClodex(method, params = {}) {
-  const id = crypto.randomUUID();
-  return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    window.parent.postMessage(
-      {
-        __clodexArtifactBridge: 1,
-        type: "request",
-        request: { id, method, params },
-      },
-      "*",
-    );
-  });
+async function callClodex(method, params = {}) {
+  const bridge = window.clodexArtifactBridge;
+  if (!bridge || typeof bridge.request !== "function") {
+    throw new Error("Artifact Bridge is unavailable");
+  }
+  return await bridge.request(method, params);
 }
 
-const capabilities = await callClodex("getCapabilities");
+try {
+  const capabilities = await callClodex("getCapabilities", {});
+  // Render only actions actually reported as available.
+} catch {
+  // Render a non-privileged fallback UI.
+}
 ```
 
-Never treat the presence of the bridge as permission. Always inspect
-`getCapabilities`, handle revocation/expiry errors, and provide a
-non-privileged fallback UI.
+Generated app JavaScript never receives the underlying `MessagePort`, session
+ID, navigation epoch, document binding, or connect envelope. Those values stay
+inside the isolated preload and trusted main-process broker. Do not implement
+an Artifact Bridge client with `window.postMessage`, do not invent or persist
+session values, and do not attempt to expose or transfer the hidden port.
+
+Handle denial, revocation, expiry, navigation, timeout, and unavailable-host
+errors. Always provide a non-privileged fallback UI.
 
 ---
 
@@ -132,6 +133,7 @@ non-privileged fallback UI.
 - **Message protocol:** Define a clear `action` field to distinguish message types.
 - **Cleanup listeners:** Unsubscribe from `API.onMessage` when interaction is complete.
 - **Error handling:** Validate incoming messages on both sides. Gracefully handle unexpected data.
+- **Artifact Bridge boundary:** Use only the frozen `window.clodexArtifactBridge.request` API; never use UI `postMessage` as a capability channel.
 
 ## References
 

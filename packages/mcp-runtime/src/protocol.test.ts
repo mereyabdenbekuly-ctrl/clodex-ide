@@ -6,6 +6,8 @@ import {
   MCP_HOST_PROTOCOL_VERSION,
 } from './protocol';
 
+const connectionId = '11111111-1111-4111-8111-111111111111';
+
 describe('MCP host protocol', () => {
   it('accepts a resolved stdio connect request', () => {
     expect(
@@ -14,6 +16,7 @@ describe('MCP host protocol', () => {
         launchId: 'launch-1',
         requestId: 'request-1',
         serverId: 'local-server',
+        connectionId,
         transport: {
           type: 'stdio',
           command: '/usr/local/bin/example-mcp',
@@ -32,6 +35,7 @@ describe('MCP host protocol', () => {
         launchId: 'launch-1',
         requestId: 'request-1',
         serverId: 'remote-server',
+        connectionId,
         transport: {
           type: 'streamable-http',
           url: 'https://mcp.example.com/v1',
@@ -53,6 +57,7 @@ describe('MCP host protocol', () => {
         launchId: 'launch-1',
         requestId: 'request-1',
         serverId: 'local-server',
+        connectionId,
         transport: {
           type: 'stdio',
           command: '/usr/local/bin/example-mcp',
@@ -119,6 +124,7 @@ describe('MCP host protocol', () => {
         type: 'list-changed',
         launchId: 'launch-1',
         serverId: 'remote-server',
+        connectionId,
         kind: 'prompts',
         prompts: [
           {
@@ -136,6 +142,7 @@ describe('MCP host protocol', () => {
         type: 'list-changed',
         launchId: 'launch-1',
         serverId: 'remote-server',
+        connectionId,
         kind: 'tools',
         tools: [{ name: 'read', inputSchema: { type: 'object' } }],
         prompts: [{ name: 'review' }],
@@ -146,6 +153,7 @@ describe('MCP host protocol', () => {
         type: 'list-changed',
         launchId: 'launch-1',
         serverId: 'remote-server',
+        connectionId,
         kind: 'resources',
         prompts: [{ name: 'review' }],
       }),
@@ -331,6 +339,7 @@ describe('MCP host protocol', () => {
         launchId: 'launch-1',
         requestId: 'request-1',
         serverId: 'remote-server',
+        connectionId,
         transport: {
           type: 'streamable-http',
           url: 'https://mcp.example.com/rpc',

@@ -70,6 +70,19 @@ describe('ArtifactBridgeAuditLedger', () => {
         context: { kind: 'agent', agentId: 'agent-a', appId: 'dashboard' },
       }),
     ).rejects.toThrow('integrity check failed');
+    await expect(
+      reopened.record({
+        action: 'grant.saved',
+        outcome: 'success',
+        context: { kind: 'agent', agentId: 'agent-a', appId: 'dashboard' },
+      }),
+    ).rejects.toThrow('integrity check failed');
+    await expect(reopened.listRecent(10)).rejects.toThrow(
+      'integrity check failed',
+    );
+    expect(await fs.readFile(filePath, 'utf8')).toBe(
+      content.replace('dashboard', 'tampered'),
+    );
     expect(logger.error).toHaveBeenCalled();
   });
 

@@ -41,10 +41,24 @@ export interface AutomationPersistence {
 export interface AutomationDispatchInput {
   automation: AutomationDefinition;
   prompt: string;
+  beforeDispatch?: () => void;
 }
 
 export interface AutomationDispatchResult {
   agentId: string;
+}
+
+export interface AutomationBeforeDispatchInput extends AutomationDispatchInput {
+  attempt: number;
+}
+
+export interface AutomationManualRunOptions {
+  /** Synchronous final authority check; it runs with no await before dispatch. */
+  beforeDispatch?: (input: AutomationBeforeDispatchInput) => void;
+  /** Artifact Bridge must use no-blind-retry for effects with ambiguous errors. */
+  retryMode?: 'configured' | 'no-blind-retry';
+  /** Artifact Bridge propagates adapter failure after run state is recorded. */
+  failureMode?: 'record' | 'propagate';
 }
 
 export interface AutomationWakeSource {
@@ -166,6 +180,10 @@ export class AutomationService extends DisposableService {
   }
 
   private assertEnabled(): void {
+    this.assertNotDisposed();
+    if (this.shuttingDown) {
+      throw new Error('Scheduled automations service is shutting down');
+    }
     if (!this.options.isFeatureEnabled()) {
       throw new Error('Scheduled automations feature is disabled');
     }
@@ -296,17 +314,37 @@ export class AutomationService extends DisposableService {
 
   public async runAutomationNow(
     id: string,
+    options: AutomationManualRunOptions = {},
   ): Promise<AutomationOperationResult> {
     this.assertEnabled();
+    const manualRunOptions: AutomationManualRunOptions = {
+      beforeDispatch: options.beforeDispatch,
+      retryMode: options.retryMode ?? 'configured',
+      failureMode: options.failureMode ?? 'record',
+    };
     return await this.serialize(async () => {
       const automation = this.getAutomation(id);
-      await this.executeAutomation(automation, this.now(), false);
+      let executionFailed = false;
+      let executionError: unknown;
+      try {
+        await this.executeAutomation(
+          automation,
+          this.now(),
+          false,
+          manualRunOptions,
+        );
+      } catch (error) {
+        executionFailed = true;
+        executionError = error;
+      }
       await this.persistAndReschedule();
+      if (executionFailed) throw executionError;
       return this.result(true, 'Automation submitted');
     });
   }
 
   private async reconcileStartup(): Promise<void> {
+    if (this.shuttingDown || !this.options.isFeatureEnabled()) return;
     await this.serialize(async () => {
       const now = this.now();
       let changed = false;
@@ -356,6 +394,7 @@ export class AutomationService extends DisposableService {
   }
 
   private async processDue(reason: 'timer' | 'system-resumed'): Promise<void> {
+    if (this.shuttingDown || !this.options.isFeatureEnabled()) return;
     await this.serialize(async () => {
       const now = this.now();
       const due = this.data.automations.filter(
@@ -390,6 +429,7 @@ export class AutomationService extends DisposableService {
     automation: AutomationDefinition,
     scheduledFor: number,
     advanceSchedule = true,
+    manualRunOptions?: AutomationManualRunOptions,
   ): Promise<void> {
     if (this.runningAutomationIds.has(automation.id)) {
       this.recordSkippedRun(automation, scheduledFor, 'already-running');
@@ -412,26 +452,51 @@ export class AutomationService extends DisposableService {
     };
     this.unshiftRun(run);
 
+    let propagateFailure = false;
+    let propagatedError: unknown;
     try {
       let lastError: unknown;
-      for (
-        let attempt = 1;
-        attempt <= automation.retryPolicy.maxAttempts;
-        attempt += 1
-      ) {
+      let succeeded = false;
+      const maxAttempts =
+        manualRunOptions?.retryMode === 'no-blind-retry'
+          ? 1
+          : automation.retryPolicy.maxAttempts;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         run.attemptCount = attempt;
         try {
-          const result = await this.options.dispatch({
-            automation: structuredClone(automation),
+          let finalDispatchPassed = false;
+          const dispatchAutomation = structuredClone(automation);
+          const dispatchInput: AutomationDispatchInput = {
+            automation: dispatchAutomation,
             prompt: automation.prompt,
-          });
+            beforeDispatch: () => {
+              if (finalDispatchPassed) {
+                throw new Error(
+                  'Automation final dispatch fence was already consumed',
+                );
+              }
+              this.assertEnabled();
+              manualRunOptions?.beforeDispatch?.({
+                automation: dispatchAutomation,
+                prompt: automation.prompt,
+                attempt,
+              });
+              finalDispatchPassed = true;
+            },
+          };
+          const result = await this.options.dispatch(dispatchInput);
+          if (!finalDispatchPassed) {
+            throw new Error(
+              'Automation adapter did not enforce the final dispatch fence',
+            );
+          }
           run.agentId = result.agentId;
           run.status = 'succeeded';
-          lastError = null;
+          succeeded = true;
           break;
         } catch (error) {
           lastError = error;
-          if (attempt >= automation.retryPolicy.maxAttempts) break;
+          if (attempt >= maxAttempts) break;
           const delay = Math.min(
             automation.retryPolicy.initialBackoffMs * 2 ** (attempt - 1),
             automation.retryPolicy.maxBackoffMs,
@@ -439,7 +504,7 @@ export class AutomationService extends DisposableService {
           await this.sleep(delay);
         }
       }
-      if (lastError) {
+      if (!succeeded) {
         run.status = 'failed';
         run.reason =
           lastError instanceof Error ? lastError.message : String(lastError);
@@ -450,6 +515,10 @@ export class AutomationService extends DisposableService {
           duration: 12_000,
           actions: [],
         });
+        if (manualRunOptions?.failureMode === 'propagate') {
+          propagateFailure = true;
+          propagatedError = lastError;
+        }
       }
     } finally {
       run.finishedAt = new Date(this.now()).toISOString();
@@ -457,6 +526,7 @@ export class AutomationService extends DisposableService {
       if (advanceSchedule) this.advanceSchedule(automation, this.now());
       this.runningAutomationIds.delete(automation.id);
     }
+    if (propagateFailure) throw propagatedError;
   }
 
   private assertGrantAllowsMode(automation: AutomationDefinition): void {

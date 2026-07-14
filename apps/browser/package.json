@@ -67,7 +67,7 @@
     "smoke:agent-host:fault": "pnpm typecheck:agent-host-smoke && pnpm build:agent-host && vite build --config vite.agent-host-fault-smoke.config.ts && electron scripts/agent-host-fault-smoke-app",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "pnpm -F @clodex/agent-core build && pnpm -F @clodex/agent-shell build && concurrently -n ui,backend,preload,storybook,visual -c blue,green,yellow,magenta,cyan \"tsc -p tsconfig.ui.json --noEmit\" \"tsc -p tsconfig.backend.json --noEmit\" \"tsc -p tsconfig.web-content-preload.json --noEmit\" \"tsc -p tsconfig.storybook.json --noEmit\" \"tsc -p tsconfig.visual.json --noEmit\""
+    "typecheck": "pnpm -F @clodex/agent-core build && pnpm -F @clodex/agent-shell build && concurrently -n ui,pages,backend,preload,storybook,visual -c blue,red,green,yellow,magenta,cyan \"tsc -p tsconfig.ui.json --noEmit\" \"tsc -p tsconfig.pages.json --noEmit\" \"tsc -p tsconfig.backend.json --noEmit\" \"tsc -p tsconfig.web-content-preload.json --noEmit\" \"tsc -p tsconfig.storybook.json --noEmit\" \"tsc -p tsconfig.visual.json --noEmit\""
   },
   "dependencies": {
     "@bokuweb/zstd-wasm": "^0.0.27",

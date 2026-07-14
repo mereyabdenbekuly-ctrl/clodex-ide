@@ -14,44 +14,62 @@ import { toast } from '@clodex/stage-ui/components/toaster';
 import type {
   ArtifactBridgeCapability,
   ArtifactBridgeContext,
+  ArtifactBridgeGrant,
 } from '@shared/artifact-bridge';
-import type { McpToolSettings } from '@shared/mcp-settings';
+import type {
+  ArtifactBridgeGrantReviewSelection,
+  ArtifactBridgeGrantReviewSnapshot,
+} from '@shared/artifact-bridge-grant-review';
 import { useKartonProcedure } from '@ui/hooks/use-karton';
 import {
   BotIcon,
   CalendarClockIcon,
+  CircleAlertIcon,
+  FingerprintIcon,
   Loader2Icon,
+  PenLineIcon,
   PlugZapIcon,
+  ScrollTextIcon,
   ShieldCheckIcon,
   Trash2Icon,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  createGeneratedAppGrantReviewSubmission,
+  createInitialGeneratedAppGrantReviewSelection,
+  getGeneratedAppGrantReviewAutomationOptions,
+  getGeneratedAppGrantReviewCapabilityOptions,
+  getGeneratedAppGrantReviewExpiryState,
+  getGeneratedAppGrantReviewMcpToolOptions,
+  hasUnsupportedGeneratedAppWriteSelection,
+  parseGeneratedAppGrantReviewSnapshot,
+  setGeneratedAppGrantReviewAutomation,
+  setGeneratedAppGrantReviewCapability,
+  setGeneratedAppGrantReviewExpiry,
+  setGeneratedAppGrantReviewMcpTool,
+} from './generated-app-capabilities-dialog-model';
 
-const CAPABILITIES = [
-  {
-    value: 'agent:ask',
+const CAPABILITY_PRESENTATION = {
+  'agent:ask': {
     label: 'Ask agent',
-    description: 'Bounded 10k-character prompts with a short response.',
     icon: BotIcon,
   },
-  {
-    value: 'automation:run',
-    label: 'Run automations',
-    description: 'Start an existing automation by its identifier.',
+  'automation:run': {
+    label: 'Run declared automations',
     icon: CalendarClockIcon,
   },
-  {
-    value: 'mcp:call',
-    label: 'Call approved MCP tools',
-    description: 'Only individually selected read-only, non-destructive tools.',
+  'mcp:call': {
+    label: 'Call declared MCP read tools',
     icon: PlugZapIcon,
   },
-] satisfies Array<{
-  value: ArtifactBridgeCapability;
-  label: string;
-  description: string;
-  icon: typeof BotIcon;
-}>;
+  'mcp:write': {
+    label: 'Call declared MCP write tools',
+    icon: PenLineIcon,
+  },
+} satisfies Record<
+  ArtifactBridgeCapability,
+  { label: string; icon: typeof BotIcon }
+>;
 
 function notify(
   title: string,
@@ -68,6 +86,33 @@ function notify(
   });
 }
 
+function ReviewFact({
+  label,
+  value,
+  code = false,
+}: {
+  label: string;
+  value: string;
+  code?: boolean;
+}) {
+  return (
+    <div className="grid gap-1">
+      <dt className="text-[10px] text-token-text-tertiary uppercase tracking-[0.08em]">
+        {label}
+      </dt>
+      <dd
+        className={
+          code
+            ? 'break-all font-mono text-[11px] text-token-text-primary'
+            : 'text-token-text-primary text-xs'
+        }
+      >
+        {value}
+      </dd>
+    </div>
+  );
+}
+
 export function GeneratedAppCapabilitiesDialog({
   context,
   open,
@@ -78,109 +123,145 @@ export function GeneratedAppCapabilitiesDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const getGrant = useKartonProcedure((p) => p.artifactBridge.getGrant);
-  const setGrant = useKartonProcedure((p) => p.artifactBridge.setGrant);
+  const getPolicy = useKartonProcedure((p) => p.artifactBridge.getPolicy);
+  const openGrantReview = useKartonProcedure(
+    (p) => p.artifactBridge.openGrantReview,
+  );
+  const submitGrantReview = useKartonProcedure(
+    (p) => p.artifactBridge.submitGrantReview,
+  );
   const revokeGrant = useKartonProcedure((p) => p.artifactBridge.revokeGrant);
-  const listServers = useKartonProcedure((p) => p.mcp.list);
-  const listTools = useKartonProcedure((p) => p.mcp.listTools);
 
-  const [capabilities, setCapabilities] = useState<ArtifactBridgeCapability[]>(
-    [],
-  );
-  const [selectedTools, setSelectedTools] = useState<
-    Array<{ serverId: string; toolName: string }>
-  >([]);
-  const [toolsByServer, setToolsByServer] = useState<
-    Array<{
-      serverId: string;
-      serverName: string;
-      tools: McpToolSettings[];
-    }>
-  >([]);
-  const [expiry, setExpiry] = useState<'never' | 'day' | 'week' | 'month'>(
-    'week',
-  );
+  const [snapshot, setSnapshot] =
+    useState<ArtifactBridgeGrantReviewSnapshot | null>(null);
+  const [selection, setSelection] =
+    useState<ArtifactBridgeGrantReviewSelection | null>(null);
   const [hasGrant, setHasGrant] = useState(false);
+  const [revokeTarget, setRevokeTarget] = useState<{
+    context: ArtifactBridgeContext;
+    scope: ArtifactBridgeGrant['scope'];
+  } | null>(null);
   const [busy, setBusy] = useState<'load' | 'save' | 'revoke' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
     setBusy('load');
     setError(null);
-    try {
-      const [grant, snapshot] = await Promise.all([
-        getGrant(context),
-        listServers(),
-      ]);
-      setHasGrant(grant !== null);
-      setCapabilities(grant?.capabilities ?? []);
-      setSelectedTools(grant?.mcpTools ?? []);
-      if (grant?.expiresAt) {
-        const hours =
-          (new Date(grant.expiresAt).getTime() - Date.now()) / 3_600_000;
-        setExpiry(hours <= 25 ? 'day' : hours <= 24 * 8 ? 'week' : 'month');
-      } else {
-        setExpiry('never');
+    setSnapshot(null);
+    setSelection(null);
+    setHasGrant(false);
+    setRevokeTarget(null);
+
+    void (async () => {
+      try {
+        const [grant, policy] = await Promise.all([
+          getGrant(context),
+          getPolicy(context),
+        ]);
+        if (!active) return;
+        setHasGrant(grant !== null);
+        setRevokeTarget(
+          grant ? { context: grant.context, scope: grant.scope } : null,
+        );
+        const initialSelection = createInitialGeneratedAppGrantReviewSelection(
+          grant,
+          policy,
+          Date.now(),
+        );
+        const nextSnapshot = parseGeneratedAppGrantReviewSnapshot(
+          await openGrantReview(context, initialSelection),
+        );
+        if (!active) return;
+        setSnapshot(nextSnapshot);
+        setSelection(nextSnapshot.selection);
+      } catch (cause) {
+        if (!active) return;
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : 'Canonical capability review could not be opened.',
+        );
+      } finally {
+        if (active) setBusy(null);
       }
+    })();
 
-      const enabledServers = snapshot.servers.filter(
-        (server) => server.enabled && server.runtime.status === 'connected',
-      );
-      const toolGroups = await Promise.all(
-        enabledServers.map(async (server) => ({
-          serverId: server.id,
-          serverName: server.displayName,
-          tools: (await listTools(server.id)).filter(
-            (tool) =>
-              tool.readOnly &&
-              !tool.destructive &&
-              tool.effectiveDecision === 'allow',
-          ),
-        })),
-      );
-      setToolsByServer(toolGroups.filter((group) => group.tools.length > 0));
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : 'Capabilities could not be loaded.',
-      );
-    } finally {
-      setBusy(null);
-    }
-  }, [context, getGrant, listServers, listTools]);
+    return () => {
+      active = false;
+    };
+  }, [context, getGrant, getPolicy, open, openGrantReview]);
 
-  useEffect(() => {
-    if (open) void load();
-  }, [load, open]);
+  const capabilityOptions = useMemo(
+    () =>
+      snapshot && selection
+        ? getGeneratedAppGrantReviewCapabilityOptions(snapshot, selection)
+        : [],
+    [selection, snapshot],
+  );
+  const mcpToolOptions = useMemo(
+    () =>
+      snapshot && selection
+        ? getGeneratedAppGrantReviewMcpToolOptions(snapshot, selection)
+        : [],
+    [selection, snapshot],
+  );
+  const automationOptions = useMemo(
+    () =>
+      snapshot && selection
+        ? getGeneratedAppGrantReviewAutomationOptions(snapshot, selection)
+        : [],
+    [selection, snapshot],
+  );
+  const expiryState = useMemo(
+    () =>
+      snapshot && selection
+        ? getGeneratedAppGrantReviewExpiryState(snapshot, selection)
+        : null,
+    [selection, snapshot],
+  );
+  const unsupportedWriteSelection = selection
+    ? hasUnsupportedGeneratedAppWriteSelection(selection)
+    : false;
 
   const save = async () => {
+    if (!snapshot || !selection) return;
     setBusy('save');
     try {
-      const expiryHours =
-        expiry === 'day'
-          ? 24
-          : expiry === 'week'
-            ? 24 * 7
-            : expiry === 'month'
-              ? 24 * 30
-              : null;
-      await setGrant({
-        context,
-        capabilities,
-        mcpTools: capabilities.includes('mcp:call') ? selectedTools : [],
-        expiresAt: expiryHours
-          ? new Date(Date.now() + expiryHours * 3_600_000).toISOString()
-          : null,
-      });
+      await submitGrantReview(
+        createGeneratedAppGrantReviewSubmission(snapshot, selection),
+      );
       setHasGrant(true);
       notify(
         'App capabilities updated',
-        'The capability manifest is now active.',
+        'The exact reviewed manifest and policy selection is now active.',
       );
       onOpenChange(false);
     } catch (cause) {
+      const message =
+        cause instanceof Error ? cause.message : 'Please open a new review.';
+      setError(`${message} Open a new review before trying again.`);
+      setSnapshot(null);
+      setSelection(null);
+      notify('Capabilities were not saved', message, 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const revoke = async () => {
+    if (!revokeTarget) return;
+    setBusy('revoke');
+    try {
+      await revokeGrant(revokeTarget.context, revokeTarget.scope);
+      setHasGrant(false);
+      setRevokeTarget(null);
+      notify('Grant revoked', 'The exact app grant was revoked.');
+      onOpenChange(false);
+    } catch (cause) {
       notify(
-        'Capabilities were not saved',
+        'Grant was not revoked',
         cause instanceof Error ? cause.message : 'Please try again.',
         'error',
       );
@@ -191,13 +272,13 @@ export function GeneratedAppCapabilitiesDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88vh] w-[min(700px,calc(100vw-2rem))] overflow-y-auto sm:min-w-0">
+      <DialogContent className="max-h-[90vh] w-[min(760px,calc(100vw-2rem))] overflow-y-auto sm:min-w-0">
         <DialogClose />
         <DialogHeader>
-          <DialogTitle>App capabilities</DialogTitle>
+          <DialogTitle>Review app capabilities</DialogTitle>
           <DialogDescription>
-            Generated apps are untrusted by default. Grant only the narrow
-            bridge operations this app needs.
+            Review the backend-resolved manifest, identity, and organization
+            policy. The generated app cannot create or expand this grant.
           </DialogDescription>
         </DialogHeader>
 
@@ -209,172 +290,356 @@ export function GeneratedAppCapabilitiesDialog({
           <div className="rounded-xl border border-error-solid/25 bg-error-solid/8 p-3 text-error-solid text-sm">
             {error}
           </div>
-        ) : (
+        ) : snapshot && selection ? (
           <div className="grid gap-5">
+            <section className="grid gap-3 rounded-xl border border-token-border-light bg-token-bg-secondary/25 p-4">
+              <div className="flex items-start gap-3">
+                <FingerprintIcon className="mt-0.5 size-4 shrink-0 text-clodex-green-400" />
+                <div className="min-w-0">
+                  <h3 className="font-semibold text-sm text-token-text-primary">
+                    {snapshot.manifest.name}
+                  </h3>
+                  {snapshot.manifest.description && (
+                    <p className="mt-1 text-token-text-secondary text-xs">
+                      {snapshot.manifest.description}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <dl className="grid gap-3 sm:grid-cols-2">
+                <ReviewFact label="App ID" value={snapshot.manifest.id} code />
+                <ReviewFact
+                  label="Manifest version"
+                  value={snapshot.manifest.version}
+                />
+                <ReviewFact
+                  label="Resolved app version"
+                  value={snapshot.identity.appVersion}
+                />
+                <ReviewFact
+                  label="Manifest schema version"
+                  value={String(snapshot.identity.manifestSchemaVersion)}
+                  code
+                />
+                <ReviewFact
+                  label="Context"
+                  value={formatReviewContext(snapshot)}
+                  code
+                />
+                <ReviewFact
+                  label="Provenance"
+                  value={snapshot.provenance.kind}
+                  code
+                />
+                <ReviewFact
+                  label="Grant scope"
+                  value={formatReviewScope(selection)}
+                  code
+                />
+                <div className="sm:col-span-2">
+                  <ReviewFact
+                    label="Manifest SHA-256"
+                    value={snapshot.identity.manifestHash}
+                    code
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <ReviewFact
+                    label="Executable SHA-256"
+                    value={snapshot.identity.executableHash}
+                    code
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <ReviewFact
+                    label="Asset SHA-256"
+                    value={snapshot.identity.assetHash}
+                    code
+                  />
+                </div>
+              </dl>
+            </section>
+
             <div className="flex items-center gap-2 rounded-xl border border-clodex-green-400/18 bg-clodex-green-400/7 p-3 text-token-text-secondary text-xs">
               <ShieldCheckIcon className="size-4 shrink-0 text-clodex-green-400" />
-              Requests are rate-limited to 30 per minute and results are capped
-              at 1 MB.
+              Every selector below comes from review {snapshot.reviewId}. The
+              backend will re-resolve identity, manifest, and policy when this
+              one-shot review is submitted.
             </div>
 
-            <div className="grid gap-2">
-              {CAPABILITIES.map((capability) => {
-                const enabled = capabilities.includes(capability.value);
-                const Icon = capability.icon;
-                return (
-                  <div
-                    key={capability.value}
-                    className="flex items-center gap-3 rounded-xl border border-token-border-light bg-token-bg-secondary/35 p-3"
-                  >
-                    <Icon className="size-4 text-token-text-secondary" />
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-sm text-token-text-primary">
-                        {capability.label}
-                      </p>
-                      <p className="text-token-text-tertiary text-xs">
-                        {capability.description}
-                      </p>
+            <section className="grid gap-2">
+              <div>
+                <h3 className="font-semibold text-sm text-token-text-primary">
+                  Manifest requests
+                </h3>
+                <p className="mt-1 text-token-text-tertiary text-xs">
+                  Reasons are exact manifest declarations, not an AI summary.
+                </p>
+              </div>
+              {capabilityOptions.length === 0 ? (
+                <p className="rounded-xl border border-token-border-light p-3 text-token-text-secondary text-xs">
+                  This manifest declares no capabilities.
+                </p>
+              ) : (
+                capabilityOptions.map((option) => {
+                  const presentation = CAPABILITY_PRESENTATION[option.type];
+                  const Icon = presentation.icon;
+                  return (
+                    <div
+                      key={option.type}
+                      className="flex items-start gap-3 rounded-xl border border-token-border-light bg-token-bg-secondary/35 p-3"
+                    >
+                      <Icon className="mt-0.5 size-4 shrink-0 text-token-text-secondary" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-medium text-sm text-token-text-primary">
+                            {presentation.label}
+                          </p>
+                          <code className="rounded bg-token-bg-secondary px-1.5 py-0.5 text-[10px] text-token-text-tertiary">
+                            {option.type}
+                          </code>
+                        </div>
+                        <p className="mt-1 text-token-text-secondary text-xs">
+                          {option.reason}
+                        </p>
+                        {option.restriction && (
+                          <p className="mt-1 text-[11px] text-warning-solid">
+                            {option.restriction}
+                          </p>
+                        )}
+                      </div>
+                      <Switch
+                        checked={option.selected}
+                        disabled={busy !== null || !option.editable}
+                        aria-label={`Grant ${option.type}`}
+                        onCheckedChange={(checked) =>
+                          setSelection((current) =>
+                            current
+                              ? setGeneratedAppGrantReviewCapability(
+                                  snapshot,
+                                  current,
+                                  option.type,
+                                  checked,
+                                )
+                              : current,
+                          )
+                        }
+                      />
                     </div>
+                  );
+                })
+              )}
+            </section>
+
+            {selection.capabilities.includes('mcp:call') && (
+              <section className="grid gap-2">
+                <div>
+                  <h3 className="font-semibold text-sm text-token-text-primary">
+                    Declared MCP read tools
+                  </h3>
+                  <p className="mt-1 text-token-text-tertiary text-xs">
+                    Only exact server/tool pairs declared by the manifest and
+                    allowed by the snapshot policy are selectable.
+                  </p>
+                </div>
+                {mcpToolOptions.map((tool) => (
+                  <div
+                    key={`${tool.serverId}/${tool.toolName}`}
+                    className="flex items-center gap-3 rounded-xl border border-token-border-light px-3 py-2.5"
+                  >
+                    <code className="min-w-0 flex-1 break-all text-xs">
+                      {tool.serverId}/{tool.toolName}
+                    </code>
+                    {!tool.allowedByPolicy && (
+                      <span className="text-[11px] text-warning-solid">
+                        Policy denied
+                      </span>
+                    )}
                     <Switch
-                      checked={enabled}
-                      aria-label={`Toggle ${capability.label}`}
+                      checked={tool.selected}
+                      disabled={busy !== null || !tool.allowedByPolicy}
+                      aria-label={`Grant ${tool.serverId}/${tool.toolName}`}
                       onCheckedChange={(checked) =>
-                        setCapabilities((current) =>
-                          checked
-                            ? [...current, capability.value]
-                            : current.filter(
-                                (item) => item !== capability.value,
-                              ),
+                        setSelection((current) =>
+                          current
+                            ? setGeneratedAppGrantReviewMcpTool(
+                                snapshot,
+                                current,
+                                tool,
+                                checked,
+                              )
+                            : current,
                         )
                       }
                     />
                   </div>
-                );
-              })}
-            </div>
+                ))}
+              </section>
+            )}
 
-            {capabilities.includes('mcp:call') && (
-              <div className="grid gap-3">
+            {selection.capabilities.includes('automation:run') && (
+              <section className="grid gap-2">
                 <div>
-                  <h3 className="font-medium text-sm text-token-text-primary">
-                    Allowed MCP tools
+                  <h3 className="font-semibold text-sm text-token-text-primary">
+                    Declared automations
                   </h3>
                   <p className="mt-1 text-token-text-tertiary text-xs">
-                    Unsafe, destructive, and ask-policy tools are excluded.
+                    Automation labels are not inferred; exact manifest IDs are
+                    shown.
                   </p>
                 </div>
-                {toolsByServer.length === 0 ? (
-                  <p className="rounded-xl border border-token-border-light p-3 text-token-text-secondary text-xs">
-                    No connected MCP server currently exposes eligible tools.
+                {automationOptions.map((automation) => (
+                  <div
+                    key={automation.automationId}
+                    className="flex items-center gap-3 rounded-xl border border-token-border-light px-3 py-2.5"
+                  >
+                    <code className="min-w-0 flex-1 break-all text-xs">
+                      {automation.automationId}
+                    </code>
+                    <Switch
+                      checked={automation.selected}
+                      disabled={busy !== null}
+                      aria-label={`Grant automation ${automation.automationId}`}
+                      onCheckedChange={(checked) =>
+                        setSelection((current) =>
+                          current
+                            ? setGeneratedAppGrantReviewAutomation(
+                                snapshot,
+                                current,
+                                automation.automationId,
+                                checked,
+                              )
+                            : current,
+                        )
+                      }
+                    />
+                  </div>
+                ))}
+              </section>
+            )}
+
+            {expiryState && (
+              <section className="flex items-center justify-between gap-3 rounded-xl border border-token-border-light p-3">
+                <div>
+                  <p className="font-medium text-sm text-token-text-primary">
+                    Grant expiry
                   </p>
-                ) : (
-                  toolsByServer.map((group) => (
-                    <div
-                      key={group.serverId}
-                      className="overflow-hidden rounded-xl border border-token-border-light"
-                    >
-                      <div className="bg-token-bg-secondary/60 px-3 py-2 font-medium text-xs">
-                        {group.serverName}
-                      </div>
-                      {group.tools.map((tool) => {
-                        const selected = selectedTools.some(
-                          (item) =>
-                            item.serverId === group.serverId &&
-                            item.toolName === tool.name,
-                        );
-                        return (
-                          <div
-                            key={tool.name}
-                            className="flex items-center justify-between gap-3 border-token-border-light border-t px-3 py-2.5"
-                          >
-                            <div className="min-w-0">
-                              <p className="font-mono text-token-text-primary text-xs">
-                                {tool.name}
-                              </p>
-                              <p className="truncate text-[11px] text-token-text-tertiary">
-                                {tool.description || 'Read-only MCP tool'}
-                              </p>
-                            </div>
-                            <Switch
-                              checked={selected}
-                              aria-label={`Allow ${tool.name}`}
-                              onCheckedChange={(checked) =>
-                                setSelectedTools((current) =>
-                                  checked
-                                    ? [
-                                        ...current,
-                                        {
-                                          serverId: group.serverId,
-                                          toolName: tool.name,
-                                        },
-                                      ]
-                                    : current.filter(
-                                        (item) =>
-                                          !(
-                                            item.serverId === group.serverId &&
-                                            item.toolName === tool.name
-                                          ),
-                                      ),
-                                )
-                              }
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))
-                )}
+                  <p className="text-token-text-tertiary text-xs">
+                    Choices are bounded by the snapshotted organization policy.
+                  </p>
+                </div>
+                <Select
+                  value={expiryState.value}
+                  items={expiryState.options.map((option) => ({
+                    value: option.value,
+                    label: option.label,
+                  }))}
+                  onValueChange={(value) =>
+                    setSelection((current) =>
+                      current
+                        ? setGeneratedAppGrantReviewExpiry(
+                            snapshot,
+                            current,
+                            value,
+                          )
+                        : current,
+                    )
+                  }
+                  size="sm"
+                />
+              </section>
+            )}
+
+            {unsupportedWriteSelection && (
+              <div className="flex items-start gap-2 rounded-xl border border-warning-solid/25 bg-warning-solid/8 p-3 text-warning-solid text-xs">
+                <CircleAlertIcon className="mt-0.5 size-4 shrink-0" />
+                This grant contains MCP write authority. This dialog will not
+                modify or resubmit write selections; revoke it or use the
+                separate reviewed write flow.
               </div>
             )}
 
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="font-medium text-sm text-token-text-primary">
-                  Grant expiry
-                </p>
-                <p className="text-token-text-tertiary text-xs">
-                  Expired grants fail closed.
-                </p>
+            <section className="grid gap-3 rounded-xl border border-token-border-light p-4">
+              <div className="flex items-center gap-2">
+                <ScrollTextIcon className="size-4 text-token-text-secondary" />
+                <h3 className="font-semibold text-sm text-token-text-primary">
+                  Policy and review provenance
+                </h3>
               </div>
-              <Select
-                value={expiry}
-                items={[
-                  { value: 'day', label: '1 day' },
-                  { value: 'week', label: '7 days' },
-                  { value: 'month', label: '30 days' },
-                  { value: 'never', label: 'No expiry' },
-                ]}
-                onValueChange={(value) => setExpiry(value as typeof expiry)}
-                size="sm"
-              />
-            </div>
+              <dl className="grid gap-3 sm:grid-cols-2">
+                <ReviewFact
+                  label="Policy status"
+                  value={snapshot.policy.enabled ? 'enabled' : 'disabled'}
+                  code
+                />
+                <ReviewFact
+                  label="Never-expiring grants"
+                  value={
+                    snapshot.policy.allowNeverExpiringGrants
+                      ? 'allowed'
+                      : 'denied'
+                  }
+                  code
+                />
+                <ReviewFact
+                  label="Maximum grant duration"
+                  value={`${snapshot.policy.maxGrantDurationHours} hours`}
+                />
+                <ReviewFact
+                  label="Review expires"
+                  value={snapshot.expiresAt}
+                  code
+                />
+                <div className="sm:col-span-2">
+                  <ReviewFact
+                    label="Allowed capabilities"
+                    value={
+                      snapshot.policy.allowedCapabilities.join(', ') || 'none'
+                    }
+                    code
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <ReviewFact
+                    label="Allowed MCP read patterns"
+                    value={
+                      snapshot.policy.allowedMcpReadTools.join(', ') || 'none'
+                    }
+                    code
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <ReviewFact
+                    label="Policy SHA-256"
+                    value={snapshot.policyHash}
+                    code
+                  />
+                </div>
+              </dl>
+            </section>
           </div>
-        )}
+        ) : null}
 
         <DialogFooter>
           <Button
-            disabled={busy !== null || Boolean(error)}
+            disabled={
+              busy !== null ||
+              Boolean(error) ||
+              !snapshot ||
+              !selection ||
+              unsupportedWriteSelection
+            }
             onClick={() => void save()}
           >
             {busy === 'save' && <Loader2Icon className="size-4 animate-spin" />}
-            Save grant
+            Approve exact selection
           </Button>
-          {hasGrant && (
+          {hasGrant && revokeTarget && (
             <Button
               variant="secondary"
               className="mr-auto text-error-solid"
               disabled={busy !== null}
-              onClick={() => {
-                setBusy('revoke');
-                void revokeGrant(context)
-                  .then(() => {
-                    setHasGrant(false);
-                    setCapabilities([]);
-                    setSelectedTools([]);
-                    notify('Grant revoked', 'The app bridge is disabled.');
-                  })
-                  .finally(() => setBusy(null));
-              }}
+              onClick={() => void revoke()}
             >
               {busy === 'revoke' ? (
                 <Loader2Icon className="size-4 animate-spin" />
@@ -391,4 +656,23 @@ export function GeneratedAppCapabilitiesDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function formatReviewContext(
+  snapshot: ArtifactBridgeGrantReviewSnapshot,
+): string {
+  const context = snapshot.context;
+  if (context.kind === 'package') {
+    return `package:${context.packageId} / app:${context.appId}`;
+  }
+  const plugin = context.pluginId ? ` / plugin:${context.pluginId}` : '';
+  return `agent:${context.agentId} / app:${context.appId}${plugin}`;
+}
+
+function formatReviewScope(
+  selection: ArtifactBridgeGrantReviewSelection,
+): string {
+  return selection.scope.kind === 'persistent'
+    ? 'persistent'
+    : `session:${selection.scope.sessionId}`;
 }

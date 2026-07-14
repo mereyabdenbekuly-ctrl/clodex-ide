@@ -6,6 +6,7 @@ import {
 import {
   classifyError,
   getErrorName,
+  type ErrorCategory,
 } from '@shared/chromium-errors/error-classification';
 import { useKartonProcedure } from '@pages/hooks/use-karton';
 import clodexMark from '@assets/clodex-mark.png';

@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { mcpServerIdSchema, resolvedMcpTransportSchema } from './config';
 
-export const MCP_HOST_PROTOCOL_VERSION = 5;
+export const MCP_HOST_PROTOCOL_VERSION = 6;
 export const MCP_HOST_HEARTBEAT_INTERVAL_MS = 5_000;
 
 const requestIdSchema = z.string().trim().min(1).max(120);
 const launchIdSchema = z.string().trim().min(1).max(120);
+export const mcpConnectionIdSchema = z.string().uuid();
+export type McpConnectionId = z.infer<typeof mcpConnectionIdSchema>;
 
 export const mcpToolDescriptorSchema = z
   .object({
@@ -473,6 +475,7 @@ export const mainToMcpHostMessageSchema = z.discriminatedUnion('type', [
       launchId: launchIdSchema,
       requestId: requestIdSchema,
       serverId: mcpServerIdSchema,
+      connectionId: mcpConnectionIdSchema,
       transport: resolvedMcpTransportSchema,
       secretValues: z.array(z.string().min(1).max(16_384)).max(128).default([]),
       networkProxy: mcpNetworkProxyConfigSchema.optional(),
@@ -484,6 +487,7 @@ export const mainToMcpHostMessageSchema = z.discriminatedUnion('type', [
       launchId: launchIdSchema,
       requestId: requestIdSchema,
       serverId: mcpServerIdSchema,
+      connectionId: mcpConnectionIdSchema,
     })
     .strict(),
   z
@@ -681,6 +685,7 @@ export const mcpHostToMainMessageSchema = z.discriminatedUnion('type', [
       launchId: launchIdSchema,
       requestId: requestIdSchema.optional(),
       serverId: mcpServerIdSchema,
+      connectionId: mcpConnectionIdSchema,
       state: mcpConnectionStateSchema,
       error: serializedErrorSchema.optional(),
     })
@@ -751,6 +756,7 @@ export const mcpHostToMainMessageSchema = z.discriminatedUnion('type', [
       type: z.literal('list-changed'),
       launchId: launchIdSchema,
       serverId: mcpServerIdSchema,
+      connectionId: mcpConnectionIdSchema,
       kind: z.enum(['tools', 'resources', 'prompts']),
       tools: z.array(mcpToolDescriptorSchema).max(5_000).optional(),
       resources: z.array(mcpResourceDescriptorSchema).max(5_000).optional(),

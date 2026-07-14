@@ -5,6 +5,7 @@ import {
   type MessagePortMain,
 } from '@clodex/karton/server';
 import { type KartonContract, defaultState } from '@shared/karton-contracts/ui';
+import { TRUSTED_UI_REVIEWER_CONNECTION_ID } from './trusted-ui-karton-transport';
 import type { Logger } from './logger';
 import { DisposableService } from './disposable';
 
@@ -83,7 +84,7 @@ export class KartonService extends DisposableService {
     port.on('close', closeListener);
 
     // Accept the port in the transport
-    const id = this.transport.setPort(port, 'ui-main');
+    const id = this.transport.setPort(port, TRUSTED_UI_REVIEWER_CONNECTION_ID);
     this.logger.debug(`[KartonService] Accepted port connection: ${id}`);
 
     return id;

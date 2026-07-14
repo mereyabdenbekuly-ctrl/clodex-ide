@@ -160,8 +160,6 @@ function HostedPullRequestPage() {
     setQuery({ url: normalized });
   }, []);
 
-  const pullRequest = result?.status === 'ready' ? result.pullRequest : null;
-
   if (!query) {
     return <QueryPrompt initialValue="" onSubmit={submitUrl} />;
   }
@@ -177,10 +175,10 @@ function HostedPullRequestPage() {
     );
   }
 
-  if (result.status === 'unavailable' || !pullRequest) {
+  if (result.status === 'unavailable') {
     return (
       <QueryPrompt
-        initialValue={'url' in query ? query.url : ''}
+        initialValue={query.url ?? ''}
         message={result.message}
         onSubmit={submitUrl}
       />
@@ -189,7 +187,7 @@ function HostedPullRequestPage() {
 
   return (
     <HostedPullRequestReview
-      pullRequest={pullRequest}
+      pullRequest={result.pullRequest}
       authenticated={result.authenticated}
       onRefresh={() => setRefreshKey((current) => current + 1)}
       onOpenExternal={(url) => void openExternalUrl(url)}

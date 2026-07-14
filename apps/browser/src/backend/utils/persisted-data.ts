@@ -2,6 +2,7 @@ import type { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { safeStorage } from 'electron';
 import { type JsonName, getJsonPath } from './paths';
 
@@ -167,10 +168,21 @@ async function writeFileAtomically(
     await handle.close();
     handle = undefined;
     await fs.rename(temporaryPath, filePath);
+    await syncDirectory(path.dirname(filePath));
   } catch (error) {
     await handle?.close().catch(() => undefined);
     await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
     throw error;
+  }
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  if (process.platform === 'win32') return;
+  const handle = await fs.open(directory, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
 
@@ -188,6 +200,7 @@ function writeFileAtomicallySync(
     fsSync.closeSync(fileDescriptor);
     fileDescriptor = undefined;
     fsSync.renameSync(temporaryPath, filePath);
+    syncDirectorySync(path.dirname(filePath));
   } catch (error) {
     if (fileDescriptor !== undefined) {
       try {
@@ -202,6 +215,16 @@ function writeFileAtomicallySync(
       // Preserve the original write failure.
     }
     throw error;
+  }
+}
+
+function syncDirectorySync(directory: string): void {
+  if (process.platform === 'win32') return;
+  const directoryDescriptor = fsSync.openSync(directory, 'r');
+  try {
+    fsSync.fsyncSync(directoryDescriptor);
+  } finally {
+    fsSync.closeSync(directoryDescriptor);
   }
 }
 

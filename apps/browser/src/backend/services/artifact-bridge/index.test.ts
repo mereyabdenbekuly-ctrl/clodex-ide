@@ -5,9 +5,11 @@ import type { McpRegistryService } from '../mcp';
 import {
   DEFAULT_ARTIFACT_BRIDGE_POLICY,
   type ArtifactBridgeLifecycleEvent,
+  type ArtifactBridgeWriteProposal,
 } from '@shared/artifact-bridge';
 import type { ArtifactBridgeAuditRecorder } from './audit-ledger';
 import { ArtifactBridgeService, type ArtifactBridgePersistence } from './index';
+import { TRUSTED_UI_REVIEWER_CONNECTION_ID } from '../trusted-ui-karton-transport';
 
 function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
   let store: unknown = structuredClone(initialStore);
@@ -36,10 +38,12 @@ function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
         timeoutMs?: number;
         signal?: AbortSignal;
         agentInstanceId?: string;
+        beforeDispatch?: () => void;
       },
-    ): Promise<unknown> => ({
-      content: [{ type: 'text', text: 'ok' }],
-    }),
+    ): Promise<unknown> => {
+      _options?.beforeDispatch?.();
+      return { content: [{ type: 'text', text: 'ok' }] };
+    },
   );
   const listTools = vi.fn(async () => [
     {
@@ -70,6 +74,34 @@ function createHarness(initialStore: unknown = { version: 5, grants: {} }) {
       },
     }),
     listTools,
+    getToolDispatchSnapshot: (serverId: string, toolName: string) => ({
+      server: structuredClone(
+        (mcpRegistry as unknown as { snapshot: () => any }).snapshot().servers[
+          serverId
+        ],
+      ),
+      runtime: {
+        restartCount: 0,
+        catalogRevision: 0,
+        configurationRevision: 0,
+      },
+      descriptor: structuredClone(
+        [
+          {
+            name: 'search',
+            description: 'Search',
+            inputSchema: { type: 'object' },
+            annotations: { readOnlyHint: true, destructiveHint: false },
+          },
+          {
+            name: 'update',
+            description: 'Update a record',
+            inputSchema: { type: 'object' },
+            annotations: { readOnlyHint: false, destructiveHint: true },
+          },
+        ].find((tool) => tool.name === toolName),
+      ),
+    }),
     callTool,
   } as unknown as McpRegistryService;
   const askAgent = vi.fn(async () => 'bounded answer');
@@ -141,6 +173,34 @@ const packageContext = {
 const DEFAULT_TEST_POLICY = DEFAULT_ARTIFACT_BRIDGE_POLICY;
 
 describe('ArtifactBridgeService', () => {
+  it('rejects invoke at the master gate before resolver or effect adapters', async () => {
+    const harness = createHarness();
+    const service = await ArtifactBridgeService.create({
+      logger: {} as Logger,
+      karton: harness.karton,
+      mcpRegistry: harness.mcpRegistry,
+      persistence: harness.persistence,
+      isFeatureEnabled: () => false,
+      askAgent: harness.askAgent,
+      runAutomation: harness.runAutomation,
+      resolveApp: harness.resolveApp,
+    });
+
+    await expect(
+      service.invoke(context, {
+        id: 'gate-off',
+        method: 'askAgent',
+        params: { prompt: 'This must never execute.' },
+      }),
+    ).rejects.toThrow('Generated app capability bridge is disabled');
+    expect(harness.resolveApp).not.toHaveBeenCalled();
+    expect(harness.mcpRegistry.listTools).not.toHaveBeenCalled();
+    expect(harness.callTool).not.toHaveBeenCalled();
+    expect(harness.askAgent).not.toHaveBeenCalled();
+    expect(harness.runAutomation).not.toHaveBeenCalled();
+    await service.teardown();
+  });
+
   it('emits bounded dogfood observations without request content', async () => {
     const harness = createHarness();
     const captureDogfoodTelemetry = vi.fn();
@@ -202,11 +262,11 @@ describe('ArtifactBridgeService', () => {
       resolveApp: harness.resolveApp,
     });
 
-    const result = await harness.handlers.get('artifactBridge.invoke')?.(
-      'pages',
-      context,
-      { id: '1', method: 'getCapabilities', params: {} },
-    );
+    const result = await service.invoke(context, {
+      id: '1',
+      method: 'getCapabilities',
+      params: {},
+    });
 
     expect(result).toEqual({
       version: 2,
@@ -243,7 +303,7 @@ describe('ArtifactBridgeService', () => {
       runAutomation: harness.runAutomation,
       resolveApp: harness.resolveApp,
     });
-    await harness.handlers.get('artifactBridge.setGrant')?.('ui', {
+    await service.setGrant({
       context,
       identity: harness.identity,
       capabilities: ['mcp:call'],
@@ -253,31 +313,31 @@ describe('ArtifactBridgeService', () => {
       expiresAt: null,
     });
 
-    const result = await harness.handlers.get('artifactBridge.invoke')?.(
-      'pages',
-      context,
-      {
-        id: '2',
-        method: 'callMcpTool',
-        params: {
-          serverId: 'docs',
-          toolName: 'search',
-          arguments: { query: 'Clodex' },
-        },
+    const result = await service.invoke(context, {
+      id: '2',
+      method: 'callMcpTool',
+      params: {
+        serverId: 'docs',
+        toolName: 'search',
+        arguments: { query: 'Clodex' },
       },
-    );
+    });
 
     expect(result).toEqual({ content: [{ type: 'text', text: 'ok' }] });
     expect(harness.callTool).toHaveBeenCalledWith(
       'docs',
       'search',
       { query: 'Clodex' },
-      { timeoutMs: 30_000, agentInstanceId: 'agent-1' },
+      expect.objectContaining({
+        timeoutMs: 30_000,
+        agentInstanceId: 'agent-1',
+        beforeDispatch: expect.any(Function),
+      }),
     );
     await service.teardown();
   });
 
-  it('derives the current app identity for legacy trusted grant inputs', async () => {
+  it('derives the current app identity for internal grant inputs', async () => {
     const harness = createHarness();
     const service = await ArtifactBridgeService.create({
       logger: {} as Logger,
@@ -290,17 +350,14 @@ describe('ArtifactBridgeService', () => {
       resolveApp: harness.resolveApp,
     });
 
-    const grant = await harness.handlers.get('artifactBridge.setGrant')?.(
-      'ui',
-      {
-        context,
-        capabilities: [],
-        mcpTools: [],
-        mcpWriteTools: [],
-        automationIds: [],
-        expiresAt: null,
-      },
-    );
+    const grant = await service.setGrant({
+      context,
+      capabilities: [],
+      mcpTools: [],
+      mcpWriteTools: [],
+      automationIds: [],
+      expiresAt: null,
+    });
 
     expect(grant).toMatchObject({ identity: harness.identity });
     expect(harness.resolveApp).toHaveBeenCalledWith(context);
@@ -619,7 +676,7 @@ describe('ArtifactBridgeService', () => {
       runAutomation: harness.runAutomation,
       resolveApp: harness.resolveApp,
     });
-    await harness.handlers.get('artifactBridge.setGrant')?.('ui', {
+    await service.setGrant({
       context,
       identity: harness.identity,
       capabilities: ['agent:ask', 'automation:run'],
@@ -630,14 +687,14 @@ describe('ArtifactBridgeService', () => {
     });
 
     await expect(
-      harness.handlers.get('artifactBridge.invoke')?.('pages', context, {
+      service.invoke(context, {
         id: '3',
         method: 'askAgent',
         params: { prompt: 'Summarize this dashboard.' },
       }),
     ).resolves.toEqual({ text: 'bounded answer' });
     await expect(
-      harness.handlers.get('artifactBridge.invoke')?.('pages', context, {
+      service.invoke(context, {
         id: '4',
         method: 'runAutomation',
         params: { automationId: harness.automationId },
@@ -1406,7 +1463,7 @@ describe('ArtifactBridgeService', () => {
     ).rejects.toThrow('trusted UI client');
     await expect(
       harness.handlers.get('artifactBridge.getRuntimeInspector')?.(
-        'ui',
+        TRUSTED_UI_REVIEWER_CONNECTION_ID,
         context,
       ),
     ).resolves.toMatchObject({ version: 1, context });
@@ -1507,7 +1564,7 @@ describe('ArtifactBridgeService', () => {
       runAutomation: harness.runAutomation,
       resolveApp: harness.resolveApp,
     });
-    await harness.handlers.get('artifactBridge.setGrant')?.('ui', {
+    await service.setGrant({
       context,
       identity: harness.identity,
       capabilities: ['agent:ask'],
@@ -1525,7 +1582,7 @@ describe('ArtifactBridgeService', () => {
     });
 
     await expect(
-      harness.handlers.get('artifactBridge.invoke')?.('pages', context, {
+      service.invoke(context, {
         id: 'changed',
         method: 'askAgent',
         params: { prompt: 'Use the old grant.' },
@@ -1534,7 +1591,7 @@ describe('ArtifactBridgeService', () => {
     await service.teardown();
   });
 
-  it('keeps a grant active when only non-executable assets change', async () => {
+  it('revokes a grant when non-executable assets change', async () => {
     const harness = createHarness();
     const service = await ArtifactBridgeService.create({
       logger: {} as Logger,
@@ -1546,7 +1603,7 @@ describe('ArtifactBridgeService', () => {
       runAutomation: harness.runAutomation,
       resolveApp: harness.resolveApp,
     });
-    await harness.handlers.get('artifactBridge.setGrant')?.('ui', {
+    await service.setGrant({
       context,
       identity: harness.identity,
       capabilities: ['agent:ask'],
@@ -1564,12 +1621,13 @@ describe('ArtifactBridgeService', () => {
     });
 
     await expect(
-      harness.handlers.get('artifactBridge.invoke')?.('pages', context, {
+      service.invoke(context, {
         id: 'asset-only-change',
         method: 'askAgent',
-        params: { prompt: 'Use the still-valid grant.' },
+        params: { prompt: 'Use the stale grant.' },
       }),
-    ).resolves.toEqual({ text: 'bounded answer' });
+    ).rejects.toThrow('no active capability grant');
+    expect(harness.askAgent).not.toHaveBeenCalled();
     await service.teardown();
   });
 
@@ -1618,7 +1676,10 @@ describe('ArtifactBridgeService', () => {
 
     expect(harness.savedStores).toContainEqual({ version: 5, grants: {} });
     await expect(
-      harness.handlers.get('artifactBridge.getGrant')?.('ui', context),
+      harness.handlers.get('artifactBridge.getGrant')?.(
+        TRUSTED_UI_REVIEWER_CONNECTION_ID,
+        context,
+      ),
     ).resolves.toBeNull();
     await service.teardown();
   });
@@ -1821,6 +1882,7 @@ describe('ArtifactBridgeService', () => {
         agentInstanceId: expect.stringMatching(
           /^generated-app-package:[a-f0-9]{32}$/,
         ),
+        beforeDispatch: expect.any(Function),
       },
     );
     await expect(
@@ -1949,7 +2011,7 @@ describe('ArtifactBridgeService', () => {
       runAutomation: harness.runAutomation,
       resolveApp: harness.resolveApp,
     });
-    await harness.handlers.get('artifactBridge.setGrant')?.('ui', {
+    await service.setGrant({
       context,
       identity: harness.identity,
       capabilities: ['mcp:write'],
@@ -1959,23 +2021,19 @@ describe('ArtifactBridgeService', () => {
       expiresAt: null,
     });
 
-    const proposal = await harness.handlers.get('artifactBridge.invoke')?.(
-      'pages',
-      context,
-      {
-        id: 'prepare-write',
-        method: 'prepareMcpWrite',
-        params: {
-          serverId: 'docs',
-          toolName: 'update',
-          arguments: {
-            recordId: 'record-1',
-            status: 'approved',
-            apiKey: 'must-not-appear',
-          },
+    const proposal = (await service.invoke(context, {
+      id: 'prepare-write',
+      method: 'prepareMcpWrite',
+      params: {
+        serverId: 'docs',
+        toolName: 'update',
+        arguments: {
+          recordId: 'record-1',
+          status: 'approved',
+          apiKey: 'must-not-appear',
         },
       },
-    );
+    })) as ArtifactBridgeWriteProposal;
     expect(proposal).toMatchObject({
       serverId: 'docs',
       toolName: 'update',
@@ -1985,7 +2043,7 @@ describe('ArtifactBridgeService', () => {
     expect(proposal.argumentsPreview).not.toContain('must-not-appear');
 
     await expect(
-      harness.handlers.get('artifactBridge.invoke')?.('pages', context, {
+      service.invoke(context, {
         id: 'commit-before-approval',
         method: 'commitMcpWrite',
         params: {
@@ -2003,17 +2061,12 @@ describe('ArtifactBridgeService', () => {
         proposalId: proposal.id,
         commitToken: approval.commitToken,
       },
-    };
-    const first = await harness.handlers.get('artifactBridge.invoke')?.(
-      'pages',
-      context,
-      commitRequest,
-    );
-    const repeated = await harness.handlers.get('artifactBridge.invoke')?.(
-      'pages',
-      context,
-      { ...commitRequest, id: 'commit-write-retry' },
-    );
+    } as const;
+    const first = await service.invoke(context, commitRequest);
+    const repeated = await service.invoke(context, {
+      ...commitRequest,
+      id: 'commit-write-retry',
+    });
 
     expect(first).toEqual({ content: [{ type: 'text', text: 'ok' }] });
     expect(repeated).toEqual(first);
@@ -2022,7 +2075,11 @@ describe('ArtifactBridgeService', () => {
       'docs',
       'update',
       expect.objectContaining({ recordId: 'record-1' }),
-      { timeoutMs: 30_000, agentInstanceId: 'agent-1' },
+      expect.objectContaining({
+        timeoutMs: 30_000,
+        agentInstanceId: 'agent-1',
+        beforeDispatch: expect.any(Function),
+      }),
     );
     await service.teardown();
   });
@@ -2324,7 +2381,7 @@ describe('ArtifactBridgeService', () => {
 
     expect(record.mock.calls.map(([event]) => event.action)).toEqual(
       expect.arrayContaining([
-        'grant.saved',
+        'grant.save-prepared',
         'write.prepared',
         'write.approved',
         'write.committed',
@@ -2333,7 +2390,7 @@ describe('ArtifactBridgeService', () => {
     await service.teardown();
   });
 
-  it('rejects grant mutation from an untrusted renderer client', async () => {
+  it('accepts only the internally injected ui-main reviewer identity', async () => {
     const harness = createHarness();
     const service = await ArtifactBridgeService.create({
       logger: {} as Logger,
@@ -2346,17 +2403,31 @@ describe('ArtifactBridgeService', () => {
       resolveApp: harness.resolveApp,
     });
 
-    await expect(
-      harness.handlers.get('artifactBridge.setGrant')?.('pages', {
-        context,
-        identity: harness.identity,
-        capabilities: ['agent:ask'],
-        mcpTools: [],
-        mcpWriteTools: [],
-        automationIds: [],
-        expiresAt: null,
-      }),
-    ).rejects.toThrow('trusted UI client');
+    for (const untrustedClientId of [
+      'ui',
+      'pages',
+      'pages-api',
+      'tab',
+      'reviewer',
+      'ui-main-forged',
+    ]) {
+      await expect(
+        harness.handlers.get('artifactBridge.openGrantReview')?.(
+          untrustedClientId,
+          context,
+          {
+            scope: { kind: 'persistent' },
+            capabilities: ['agent:ask'],
+            mcpTools: [],
+            mcpWriteTools: [],
+            automationIds: [],
+            expiresAt: null,
+          },
+        ),
+        untrustedClientId,
+      ).rejects.toThrow('trusted UI client');
+    }
+    expect(harness.resolveApp).not.toHaveBeenCalled();
     await service.teardown();
   });
 
@@ -2374,16 +2445,19 @@ describe('ArtifactBridgeService', () => {
       resolveApp: harness.resolveApp,
     });
     await expect(
-      harness.handlers.get('artifactBridge.setGrant')?.('ui', {
+      harness.handlers.get('artifactBridge.openGrantReview')?.(
+        TRUSTED_UI_REVIEWER_CONNECTION_ID,
         context,
-        identity: harness.identity,
-        capabilities: ['mcp:write'],
-        mcpTools: [],
-        mcpWriteTools: [{ serverId: 'docs', toolName: 'update' }],
-        automationIds: [],
-        expiresAt: null,
-      }),
-    ).rejects.toThrow('safe writes are disabled');
+        {
+          scope: { kind: 'persistent' },
+          capabilities: ['mcp:write'],
+          mcpTools: [],
+          mcpWriteTools: [{ serverId: 'docs', toolName: 'update' }],
+          automationIds: [],
+          expiresAt: null,
+        },
+      ),
+    ).rejects.toThrow('disabled by policy');
     expect(harness.callTool).not.toHaveBeenCalled();
     await service.teardown();
   });
@@ -2413,7 +2487,7 @@ describe('ArtifactBridgeService', () => {
     });
 
     await expect(
-      harness.handlers.get('artifactBridge.setGrant')?.('ui', {
+      service.setGrant({
         context,
         identity: harness.identity,
         capabilities: ['mcp:write'],
@@ -2447,7 +2521,7 @@ describe('ArtifactBridgeService', () => {
     });
 
     await expect(
-      harness.handlers.get('artifactBridge.setGrant')?.('ui', {
+      service.setGrant({
         context,
         identity: harness.identity,
         capabilities: ['agent:ask'],
@@ -2581,7 +2655,13 @@ describe('ArtifactBridgeService', () => {
         }),
       ]),
     );
-    expect(harness.savedStores).toEqual([{ version: 5, grants: {} }]);
+    expect(harness.savedStores).toHaveLength(2);
+    expect(harness.savedStores[0]).toMatchObject({
+      version: 5,
+      grants: {},
+      pendingMutations: expect.any(Object),
+    });
+    expect(harness.savedStores.at(-1)).toEqual({ version: 5, grants: {} });
     expect(JSON.stringify(harness.savedStores)).not.toContain(grantedSessionId);
 
     await service.unregisterSession(context, grantedSessionId);

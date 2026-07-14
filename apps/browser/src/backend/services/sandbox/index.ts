@@ -16,6 +16,7 @@ import type { AttachmentsService } from '@clodex/agent-core/attachments';
 import type { Attachment } from '@shared/karton-contracts/ui/agent/metadata';
 import type { ActiveAppStateController } from '../agent-core-bridge/state/toolbox-active-app';
 import type { BrowserUseCapability } from '@shared/agent-os';
+import { createSandboxAppPreviewUrl } from './app-preview-url';
 
 /**
  * Callback type for handling file diff notifications from the sandbox worker.
@@ -96,12 +97,6 @@ const SANDBOX_WORKER_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   'sandbox-worker.cjs',
 );
-
-function encodePreviewTitleParam(title: string | undefined): string | null {
-  const trimmedTitle = title?.trim();
-  if (!trimmedTitle) return null;
-  return Buffer.from(trimmedTitle, 'utf8').toString('base64url');
-}
 
 interface WorkerInfo {
   process: Electron.UtilityProcess;
@@ -585,14 +580,13 @@ export class SandboxService extends DisposableService {
             return;
           }
 
-          const params = new URLSearchParams({ t: String(timestamp) });
-          if (msg.pluginId) params.set('pluginId', msg.pluginId);
-          else params.set('agentId', msg.agentId);
-
-          const previewTitle = encodePreviewTitleParam(msg.title);
-          if (previewTitle) params.set('title', previewTitle);
-
-          const url = `clodex://internal/preview/${encodeURIComponent(msg.appId)}?${params.toString()}`;
+          const url = createSandboxAppPreviewUrl({
+            agentId: msg.agentId,
+            appId: msg.appId,
+            pluginId: msg.pluginId,
+            title: msg.title,
+            cacheBust: timestamp,
+          });
           const setActive = msg.setActive ?? true;
           const activeTabApp = this.activeTabApps.get(msg.agentId);
           const reusableTabId =

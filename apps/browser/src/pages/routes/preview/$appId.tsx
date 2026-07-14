@@ -2,8 +2,9 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { sendThemeToIframe } from '@shared/iframe-theme';
 import { useIframeAppBridge } from '@pages/lib/iframe-app-bridge';
+import { buildIsolatedAppUrl } from '@shared/isolated-app-origin';
 
-interface PreviewSearch {
+export interface PreviewSearch {
   agentId?: string;
   pluginId?: string;
   t?: string;
@@ -15,10 +16,6 @@ function readStringSearchParam(
 ): string | undefined {
   const value = search[key];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function segment(value: string): string {
-  return encodeURIComponent(value);
 }
 
 export const Route = createFileRoute('/preview/$appId')({
@@ -47,11 +44,25 @@ function PreviewPage() {
     const cacheBust = search.t ? `?_t=${encodeURIComponent(search.t)}` : '';
 
     if (search.pluginId) {
-      return `app://plugins/${segment(search.pluginId)}/${segment(appId)}/index.html${cacheBust}`;
+      return `${buildIsolatedAppUrl(
+        {
+          namespace: 'plugins',
+          entityId: search.pluginId,
+          appId,
+        },
+        ['index.html'],
+      )}${cacheBust}`;
     }
 
     if (search.agentId) {
-      return `app://agents/${segment(search.agentId)}/${segment(appId)}/index.html${cacheBust}`;
+      return `${buildIsolatedAppUrl(
+        {
+          namespace: 'agents',
+          entityId: search.agentId,
+          appId,
+        },
+        ['index.html'],
+      )}${cacheBust}`;
     }
 
     return null;

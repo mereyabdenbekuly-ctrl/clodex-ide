@@ -83,6 +83,35 @@ function enabledLocalServer(id = 'local-test') {
   };
 }
 
+function readDataTool() {
+  return {
+    name: 'read_data',
+    title: 'Read data',
+    description: 'Reads bounded test data',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {},
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('McpRegistryService', () => {
   beforeEach(() => {
     persisted.value = {
@@ -455,6 +484,336 @@ describe('McpRegistryService', () => {
     await service.teardown();
   });
 
+  it('delegates the dispatch fence to the host final-dispatch boundary', async () => {
+    const host = makeHost();
+    let releaseHostReadiness!: () => void;
+    const hostReadiness = new Promise<void>((resolve) => {
+      releaseHostReadiness = resolve;
+    });
+    const hostDispatch = vi.fn();
+    host.callTool.mockImplementation(
+      async (
+        _serverId: string,
+        _toolName: string,
+        _args: Record<string, unknown>,
+        options?: { beforeDispatch?: () => void },
+      ) => {
+        await hostReadiness;
+        options?.beforeDispatch?.();
+        hostDispatch();
+        return { content: [] };
+      },
+    );
+    const service = await McpRegistryService.create({
+      logger: makeLogger(),
+      credentialsService: makeCredentialsService(),
+      createHost: async () => host,
+    });
+    await service.upsertServer(enabledLocalServer());
+
+    let revoked = false;
+    const beforeDispatch = vi.fn(() => {
+      if (revoked) throw new Error('Host generation was revoked');
+    });
+    const result = service.callTool(
+      'local-test',
+      'read_data',
+      {},
+      { beforeDispatch },
+    );
+    const rejection = expect(result).rejects.toThrow(
+      'Host generation was revoked',
+    );
+    await vi.waitFor(() => expect(host.callTool).toHaveBeenCalledTimes(1));
+
+    expect(beforeDispatch).not.toHaveBeenCalled();
+    expect(host.callTool).toHaveBeenCalledWith(
+      'local-test',
+      'read_data',
+      {},
+      expect.objectContaining({ beforeDispatch }),
+    );
+
+    revoked = true;
+    releaseHostReadiness();
+    await rejection;
+    expect(beforeDispatch).toHaveBeenCalledTimes(1);
+    expect(hostDispatch).not.toHaveBeenCalled();
+    await service.teardown();
+  });
+
+  it('advances configurationRevision across upsert, reconnect, and policy mutations', async () => {
+    const host = makeHost();
+    host.listTools.mockResolvedValue([readDataTool()]);
+    const service = await McpRegistryService.create({
+      logger: makeLogger(),
+      credentialsService: makeCredentialsService(),
+      createHost: async () => host,
+    });
+
+    await service.upsertServer(enabledLocalServer());
+    await service.listTools('local-test');
+    const initial = service.getToolDispatchSnapshot('local-test', 'read_data');
+
+    await service.upsertServer({
+      ...enabledLocalServer(),
+      displayName: 'Reconfigured Local Test',
+    });
+    await service.listTools('local-test');
+    const afterUpsert = service.getToolDispatchSnapshot(
+      'local-test',
+      'read_data',
+    );
+
+    await service.restartServer('local-test');
+    await service.listTools('local-test');
+    const afterReconnect = service.getToolDispatchSnapshot(
+      'local-test',
+      'read_data',
+    );
+
+    await service.setPolicy('local-test', {
+      default: 'deny',
+      tools: { read_data: 'allow' },
+    });
+    const afterPolicy = service.getToolDispatchSnapshot(
+      'local-test',
+      'read_data',
+    );
+
+    expect(afterUpsert.runtime.configurationRevision).toBeGreaterThan(
+      initial.runtime.configurationRevision,
+    );
+    expect(afterReconnect.runtime.configurationRevision).toBeGreaterThan(
+      afterUpsert.runtime.configurationRevision,
+    );
+    expect(afterPolicy.runtime.configurationRevision).toBeGreaterThan(
+      afterReconnect.runtime.configurationRevision,
+    );
+    expect(afterPolicy.server.policy).toEqual({
+      default: 'deny',
+      tools: { read_data: 'allow' },
+    });
+    await service.teardown();
+  });
+
+  it('detects transient A-to-B-to-A server drift at the final dispatch fence', async () => {
+    const host = makeHost();
+    const effect = vi.fn();
+    host.listTools.mockResolvedValue([readDataTool()]);
+    host.callTool.mockImplementation(
+      async (
+        _serverId: string,
+        _toolName: string,
+        _args: Record<string, unknown>,
+        options?: { beforeDispatch?: () => void },
+      ) => {
+        options?.beforeDispatch?.();
+        effect();
+        return { content: [] };
+      },
+    );
+    const service = await McpRegistryService.create({
+      logger: makeLogger(),
+      credentialsService: makeCredentialsService(),
+      createHost: async () => host,
+    });
+    const configurationA = enabledLocalServer();
+    const configurationB = {
+      ...enabledLocalServer(),
+      transport: {
+        ...enabledLocalServer().transport,
+        command: '/usr/local/bin/reconfigured-example-mcp',
+      },
+    };
+
+    await service.upsertServer(configurationA);
+    await service.listTools('local-test');
+    const reviewed = service.getToolDispatchSnapshot('local-test', 'read_data');
+
+    await service.upsertServer(configurationB);
+    await service.upsertServer(configurationA);
+    await service.listTools('local-test');
+    const beforeDispatch = service.getToolDispatchSnapshot(
+      'local-test',
+      'read_data',
+    );
+
+    expect(beforeDispatch.server).toEqual(reviewed.server);
+    expect(beforeDispatch.descriptor).toEqual(reviewed.descriptor);
+    expect(beforeDispatch.runtime).toMatchObject({
+      restartCount: reviewed.runtime.restartCount,
+      catalogRevision: reviewed.runtime.catalogRevision,
+    });
+    expect(beforeDispatch.runtime.configurationRevision).toBeGreaterThan(
+      reviewed.runtime.configurationRevision,
+    );
+
+    const finalFence = vi.fn(() => {
+      const current = service.getToolDispatchSnapshot(
+        'local-test',
+        'read_data',
+      );
+      if (
+        current.runtime.configurationRevision !==
+        reviewed.runtime.configurationRevision
+      ) {
+        throw new Error('MCP server configuration generation changed');
+      }
+    });
+    await expect(
+      service.callTool(
+        'local-test',
+        'read_data',
+        {},
+        {
+          beforeDispatch: finalFence,
+        },
+      ),
+    ).rejects.toThrow('MCP server configuration generation changed');
+    expect(finalFence).toHaveBeenCalledTimes(1);
+    expect(effect).not.toHaveBeenCalled();
+    await service.teardown();
+  });
+
+  it('serializes parallel connects so a stale completion cannot replace the current host', async () => {
+    persisted.value = {
+      schemaVersion: 1,
+      servers: { 'local-test': enabledLocalServer() },
+    };
+    const host = makeHost();
+    const firstConnect = deferred<void>();
+    let activeConnection: 'A' | 'B' | null = null;
+    let connectAttempt = 0;
+    host.connectServer.mockImplementation(async () => {
+      connectAttempt += 1;
+      if (connectAttempt === 1) {
+        await firstConnect.promise;
+        activeConnection = 'A';
+      } else {
+        activeConnection = 'B';
+      }
+      return 'connected' as const;
+    });
+    host.disconnectServer.mockImplementation(async () => {
+      activeConnection = null;
+    });
+    host.listTools.mockImplementation(async () => [
+      {
+        ...readDataTool(),
+        title: `Descriptor from ${activeConnection ?? 'no connection'}`,
+      },
+    ]);
+    host.callTool.mockImplementation(async () => ({ activeConnection }));
+    const service = await McpRegistryService.create({
+      logger: makeLogger(),
+      credentialsService: makeCredentialsService(),
+      createHost: async () => host,
+    });
+
+    const firstList = service.listTools('local-test');
+    const firstRejection = expect(firstList).rejects.toThrow(
+      'connection was superseded',
+    );
+    await vi.waitFor(() => expect(host.connectServer).toHaveBeenCalledTimes(1));
+
+    const secondList = service.listTools('local-test');
+    await Promise.resolve();
+    expect(host.connectServer).toHaveBeenCalledTimes(1);
+
+    firstConnect.resolve();
+    await firstRejection;
+    await expect(secondList).resolves.toEqual([
+      expect.objectContaining({ title: 'Descriptor from B' }),
+    ]);
+    expect(host.connectServer).toHaveBeenCalledTimes(2);
+    expect(host.disconnectServer).toHaveBeenCalledTimes(1);
+
+    const dispatchSnapshot = service.getToolDispatchSnapshot(
+      'local-test',
+      'read_data',
+    );
+    expect(dispatchSnapshot.descriptor.title).toBe('Descriptor from B');
+    await expect(
+      service.callTool('local-test', 'read_data', {}),
+    ).resolves.toEqual({ activeConnection: 'B' });
+    await service.teardown();
+  });
+
+  it('cannot create or publish a host after teardown begins during transport resolution', async () => {
+    persisted.value = {
+      schemaVersion: 1,
+      servers: {
+        'local-test': {
+          ...enabledLocalServer(),
+          transport: {
+            ...enabledLocalServer().transport,
+            env: {
+              TEST_TOKEN: {
+                kind: 'credential' as const,
+                credentialId: 'test-token',
+                field: 'value',
+              },
+            },
+          },
+        },
+      },
+    };
+    const credential = deferred<{
+      value: string;
+      allowedOrigins: string[];
+    } | null>();
+    const credentialsService = {
+      resolveSecretField: vi.fn(async () => await credential.promise),
+    } as unknown as CredentialsService;
+    const createHost = vi.fn(async () => makeHost());
+    const service = await McpRegistryService.create({
+      logger: makeLogger(),
+      credentialsService,
+      createHost,
+    });
+
+    const list = service.listTools('local-test');
+    const listRejection = expect(list).rejects.toThrow('has been disposed');
+    await vi.waitFor(() =>
+      expect(credentialsService.resolveSecretField).toHaveBeenCalledTimes(1),
+    );
+
+    const teardown = service.teardown();
+    credential.resolve({ value: 'secret', allowedOrigins: [] });
+
+    await listRejection;
+    await teardown;
+    expect(createHost).not.toHaveBeenCalled();
+  });
+
+  it('tears down a host whose creation completes after registry teardown starts', async () => {
+    persisted.value = {
+      schemaVersion: 1,
+      servers: { 'local-test': enabledLocalServer() },
+    };
+    const host = makeHost();
+    const hostCreation = deferred<McpHostController>();
+    const createHost = vi.fn(async () => await hostCreation.promise);
+    const service = await McpRegistryService.create({
+      logger: makeLogger(),
+      credentialsService: makeCredentialsService(),
+      createHost,
+    });
+
+    const list = service.listTools('local-test');
+    const listRejection = expect(list).rejects.toThrow('has been disposed');
+    await vi.waitFor(() => expect(createHost).toHaveBeenCalledTimes(1));
+
+    const teardown = service.teardown();
+    hostCreation.resolve(host);
+
+    await listRejection;
+    await teardown;
+    expect(host.connectServer).not.toHaveBeenCalled();
+    expect(host.teardown).toHaveBeenCalledTimes(1);
+  });
+
   it('updates cached catalogs and catalogRevision after list-changed', async () => {
     const host = makeHost();
     let onListChanged: CreateHostOptions['onListChanged'];
@@ -483,6 +842,93 @@ describe('McpRegistryService', () => {
     ]);
     expect(host.listResources).toHaveBeenCalledTimes(1);
     expect(service.listRuntimeStates()[0]?.catalogRevision).toBe(1);
+    await service.teardown();
+  });
+
+  it('does not publish a catalog result captured before a reconnect revision', async () => {
+    persisted.value = {
+      schemaVersion: 1,
+      servers: { 'local-test': enabledLocalServer() },
+    };
+    const host = makeHost();
+    const staleTools =
+      deferred<Awaited<ReturnType<McpHostController['listTools']>>>();
+    host.listTools
+      .mockImplementationOnce(async () => await staleTools.promise)
+      .mockResolvedValueOnce([
+        { ...readDataTool(), title: 'Descriptor from connection B' },
+      ]);
+    const service = await McpRegistryService.create({
+      logger: makeLogger(),
+      credentialsService: makeCredentialsService(),
+      createHost: async () => host,
+    });
+
+    const staleList = service.listTools('local-test');
+    await vi.waitFor(() => expect(host.listTools).toHaveBeenCalledTimes(1));
+    await service.connectServer('local-test');
+    staleTools.resolve([
+      { ...readDataTool(), title: 'Descriptor from connection A' },
+    ]);
+
+    await expect(staleList).rejects.toThrow('connection was superseded');
+    await expect(service.listTools('local-test')).resolves.toEqual([
+      expect.objectContaining({ title: 'Descriptor from connection B' }),
+    ]);
+    expect(
+      service.getToolDispatchSnapshot('local-test', 'read_data').descriptor
+        .title,
+    ).toBe('Descriptor from connection B');
+    await service.teardown();
+  });
+
+  it('drops list-changed cache publication while a reconnect is in flight', async () => {
+    persisted.value = {
+      schemaVersion: 1,
+      servers: { 'local-test': enabledLocalServer() },
+    };
+    const host = makeHost();
+    const reconnectStarted = deferred<void>();
+    const releaseReconnect = deferred<void>();
+    let connectCount = 0;
+    host.connectServer.mockImplementation(async () => {
+      connectCount += 1;
+      if (connectCount === 2) {
+        reconnectStarted.resolve();
+        await releaseReconnect.promise;
+      }
+      return 'connected' as const;
+    });
+    host.listTools
+      .mockResolvedValueOnce([
+        { ...readDataTool(), title: 'Initial descriptor' },
+      ])
+      .mockResolvedValueOnce([
+        { ...readDataTool(), title: 'Descriptor from connection B' },
+      ]);
+    let onListChanged: CreateHostOptions['onListChanged'];
+    const service = await McpRegistryService.create({
+      logger: makeLogger(),
+      credentialsService: makeCredentialsService(),
+      createHost: async (options) => {
+        onListChanged = options.onListChanged;
+        return host;
+      },
+    });
+    await service.listTools('local-test');
+
+    const reconnect = service.connectServer('local-test');
+    await reconnectStarted.promise;
+    onListChanged?.('local-test', 'tools', [
+      { ...readDataTool(), title: 'Stale descriptor from connection A' },
+    ]);
+    releaseReconnect.resolve();
+    await reconnect;
+
+    await expect(service.listTools('local-test')).resolves.toEqual([
+      expect.objectContaining({ title: 'Descriptor from connection B' }),
+    ]);
+    expect(host.listTools).toHaveBeenCalledTimes(2);
     await service.teardown();
   });
 

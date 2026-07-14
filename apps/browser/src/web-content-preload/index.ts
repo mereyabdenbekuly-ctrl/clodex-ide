@@ -7,9 +7,11 @@ import { getHotkeyDefinitionForEvent } from '@shared/hotkeys';
 import type { MessagePortProxy } from '@clodex/karton/client';
 import type { KartonMessage } from '@clodex/karton/shared';
 import { shouldChromeConsumeEvent } from './utils';
+import { initializeArtifactBridgePreload } from './artifact-bridge';
 
 // Inject stealth overrides into the main world before any page scripts run
 injectStealthOverrides();
+initializeArtifactBridgePreload();
 
 declare global {
   interface Window {

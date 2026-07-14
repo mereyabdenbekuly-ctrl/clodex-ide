@@ -812,6 +812,17 @@ export function GeneratedAppDetail({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [regenerateOpen, setRegenerateOpen] = useState(false);
   const [capabilitiesOpen, setCapabilitiesOpen] = useState(false);
+  const capabilityContext = useMemo(
+    () =>
+      app
+        ? {
+            kind: 'agent' as const,
+            agentId: app.owner.agentId,
+            appId: app.appId,
+          }
+        : null,
+    [app?.appId, app?.owner.agentId],
+  );
   const preferences = useKartonState((state) => state.preferences);
   const releaseChannel = useKartonState(
     (state) => state.appInfo.releaseChannel,
@@ -1091,11 +1102,7 @@ export function GeneratedAppDetail({
         onConfirm={() => void confirmDelete()}
       />
       <GeneratedAppCapabilitiesDialog
-        context={{
-          kind: 'agent',
-          agentId: app.owner.agentId,
-          appId: app.appId,
-        }}
+        context={capabilityContext!}
         open={capabilitiesOpen}
         onOpenChange={setCapabilitiesOpen}
       />

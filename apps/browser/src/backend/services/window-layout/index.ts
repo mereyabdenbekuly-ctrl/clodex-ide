@@ -54,6 +54,14 @@ import type { AttachmentsService } from '@clodex/agent-core/attachments';
 import { generateAttachmentFilename } from '@shared/utils/attachment-filename';
 import sharp from 'sharp';
 import type { ControlledBrowserTabEgressOptions } from '../network-policy/controlled-browser';
+import {
+  TRUSTED_UI_REVIEWER_CONNECTION_ID,
+  TrustedUiKartonTransportAdmission,
+  closeTransferredPorts,
+  createTrustedUiLocation,
+  parseGenericKartonConnectionKind,
+} from '../trusted-ui-karton-transport';
+import { registerBeforeSendHeadersMutator } from '../web-request-before-send-headers';
 
 const windowStateSchema = z.object({
   width: z.number(),
@@ -422,8 +430,10 @@ export class WindowLayoutService extends DisposableService {
   private windowShown = false;
 
   private kartonConnectListener:
-    | ((event: Electron.IpcMainEvent, connectionId: string) => void)
+    | ((event: Electron.IpcMainEvent, connectionId: unknown) => void)
     | null = null;
+  private trustedUiKartonAdmission: TrustedUiKartonTransportAdmission | null =
+    null;
 
   private syncThemeColorsListener:
     | ((
@@ -744,6 +754,9 @@ export class WindowLayoutService extends DisposableService {
       this.kartonConnectListener = null;
     }
 
+    this.trustedUiKartonAdmission?.teardown();
+    this.trustedUiKartonAdmission = null;
+
     if (this.syncThemeColorsListener) {
       ipcMain.removeListener('sync-theme-colors', this.syncThemeColorsListener);
       this.syncThemeColorsListener = null;
@@ -1052,44 +1065,43 @@ export class WindowLayoutService extends DisposableService {
     // Intercept outgoing requests to fix client hint headers.
     // Any Sec-CH-UA-* header that Chromium sends may contain "Electron" as a
     // brand — we replace them all with Chrome-matching values.
-    browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
-      const { requestHeaders } = details;
+    registerBeforeSendHeadersMutator(
+      browserSession,
+      (_details, requestHeaders) => {
+        // Helper: set header regardless of casing Chromium used
+        const setHeader = (name: string, value: string) => {
+          const lower = name.toLowerCase();
+          for (const key of Object.keys(requestHeaders)) {
+            if (key.toLowerCase() === lower) {
+              delete requestHeaders[key];
+            }
+          }
+          requestHeaders[name] = value;
+        };
 
-      // Helper: set header regardless of casing Chromium used
-      const setHeader = (name: string, value: string) => {
-        const lower = name.toLowerCase();
+        // Replace all client-hint UA headers that could mention "Electron"
         for (const key of Object.keys(requestHeaders)) {
-          if (key.toLowerCase() === lower) {
-            delete requestHeaders[key];
+          const lower = key.toLowerCase();
+          if (lower === 'sec-ch-ua') {
+            setHeader('Sec-CH-UA', secChUa);
+          } else if (lower === 'sec-ch-ua-mobile') {
+            setHeader('Sec-CH-UA-Mobile', '?0');
+          } else if (lower === 'sec-ch-ua-platform') {
+            setHeader('Sec-CH-UA-Platform', `"${secChUaPlatform}"`);
+          } else if (lower === 'sec-ch-ua-full-version-list') {
+            setHeader('Sec-CH-UA-Full-Version-List', secChUaFullVersionList);
+          } else if (lower === 'sec-ch-ua-arch') {
+            setHeader('Sec-CH-UA-Arch', '"x86"');
+          } else if (lower === 'sec-ch-ua-bitness') {
+            setHeader('Sec-CH-UA-Bitness', '"64"');
+          } else if (lower === 'sec-ch-ua-model') {
+            setHeader('Sec-CH-UA-Model', '""');
+          } else if (lower === 'sec-ch-ua-platform-version') {
+            setHeader('Sec-CH-UA-Platform-Version', '""');
           }
         }
-        requestHeaders[name] = value;
-      };
-
-      // Replace all client-hint UA headers that could mention "Electron"
-      for (const key of Object.keys(requestHeaders)) {
-        const lower = key.toLowerCase();
-        if (lower === 'sec-ch-ua') {
-          setHeader('Sec-CH-UA', secChUa);
-        } else if (lower === 'sec-ch-ua-mobile') {
-          setHeader('Sec-CH-UA-Mobile', '?0');
-        } else if (lower === 'sec-ch-ua-platform') {
-          setHeader('Sec-CH-UA-Platform', `"${secChUaPlatform}"`);
-        } else if (lower === 'sec-ch-ua-full-version-list') {
-          setHeader('Sec-CH-UA-Full-Version-List', secChUaFullVersionList);
-        } else if (lower === 'sec-ch-ua-arch') {
-          setHeader('Sec-CH-UA-Arch', '"x86"');
-        } else if (lower === 'sec-ch-ua-bitness') {
-          setHeader('Sec-CH-UA-Bitness', '"64"');
-        } else if (lower === 'sec-ch-ua-model') {
-          setHeader('Sec-CH-UA-Model', '""');
-        } else if (lower === 'sec-ch-ua-platform-version') {
-          setHeader('Sec-CH-UA-Platform-Version', '""');
-        }
-      }
-
-      callback({ requestHeaders });
-    });
+      },
+    );
 
     this.logger.debug(
       '[WindowLayoutService] Configured browser session stealth headers',
@@ -1097,11 +1109,29 @@ export class WindowLayoutService extends DisposableService {
   }
 
   private setupKartonConnectionListener() {
+    this.trustedUiKartonAdmission = new TrustedUiKartonTransportAdmission({
+      ipc: ipcMain,
+      getCurrentUiWebContents: () => this.getUIWebContents(),
+      getAllowedUiLocation: () => {
+        const url = this.uiController?.getTrustedMainFrameUrl();
+        return url ? createTrustedUiLocation(url) : null;
+      },
+      acceptPort: (port) => this.uiKarton.setTransportPort(port),
+      logger: this.logger,
+    }).start();
+
     this.kartonConnectListener = (event, connectionId) => {
-      // 'ui-main' is the Karton client ID for the main UI renderer (different from the tab URL)
-      if (connectionId === 'ui-main') {
-        this.uiKarton.setTransportPort(event.ports[0]);
-      } else if (connectionId === 'tab') {
+      const kind = parseGenericKartonConnectionKind(connectionId);
+      const port = event.ports.length === 1 ? event.ports[0] : undefined;
+      if (!kind || !port) {
+        closeTransferredPorts(event.ports);
+        this.logger.warn(
+          '[WindowLayoutService] Rejected malformed or privileged generic Karton connection request',
+        );
+        return;
+      }
+
+      if (kind === 'tab') {
         this.logger.debug(
           `[WindowLayoutService] Received karton connection request for tab connection from webContentsId: ${event.sender.id}`,
         );
@@ -1113,8 +1143,9 @@ export class WindowLayoutService extends DisposableService {
           this.logger.debug(
             `[WindowLayoutService] Adding karton connection to tab ${tab.id}...`,
           );
-          tab.addKartonConnection(event.ports[0]);
+          tab.addKartonConnection(port);
         } else {
+          closeTransferredPorts([port]);
           const tabIds = Object.keys(this.tabs);
           const tabWebContentIds = Object.values(this.tabs).map(
             (t) => t.webContentsId,
@@ -1123,11 +1154,11 @@ export class WindowLayoutService extends DisposableService {
             `[WindowLayoutService] No tab found for webContentsId: ${event.sender.id}. Available tabs: ${tabIds.join(', ')}. Tab webContentsIds: ${tabWebContentIds.join(', ')}`,
           );
         }
-      } else if (connectionId === 'pages-api') {
+      } else {
         this.logger.debug(
           `[WindowLayoutService] Received karton connection request for pages-api...`,
         );
-        this.pagesService.acceptPort(event.ports[0]);
+        this.pagesService.acceptPort(port);
       }
     };
     ipcMain.on('karton-connect', this.kartonConnectListener);
@@ -1307,6 +1338,10 @@ export class WindowLayoutService extends DisposableService {
 
     this.uiController.on('viewRecreated', (oldView, newView) => {
       if (!this.baseWindow || this.baseWindow.isDestroyed()) return;
+
+      // The old renderer must lose reviewer transport before the replacement
+      // preload can establish a newly admitted `ui-main` connection.
+      this.uiKarton.closeConnection(TRUSTED_UI_REVIEWER_CONNECTION_ID);
 
       this.logger.info(
         '[WindowLayoutService] Swapping crashed UI view with fresh instance',

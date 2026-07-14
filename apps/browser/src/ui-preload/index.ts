@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { MessagePortProxy } from '@clodex/karton/client';
 import type { KartonMessage } from '@clodex/karton/shared';
 import { QUICK_TASK_WINDOW_CHANNELS } from '../shared/quick-task-window';
+import { TRUSTED_UI_KARTON_CONNECT_CHANNEL } from '../shared/trusted-ui-karton';
 
 /**
  * Reconnection configuration
@@ -106,7 +107,9 @@ function performReconnect() {
     const newChannel = new MessageChannel();
 
     // Send port2 to main process
-    ipcRenderer.postMessage('karton-connect', 'ui-main', [newChannel.port2]);
+    ipcRenderer.postMessage(TRUSTED_UI_KARTON_CONNECT_CHANNEL, null, [
+      newChannel.port2,
+    ]);
 
     // Update current port reference
     currentPort = newChannel.port1;
@@ -136,7 +139,9 @@ const msgChannel = new MessageChannel();
 currentPort = msgChannel.port1;
 
 // Request the port from main process
-ipcRenderer.postMessage('karton-connect', 'ui-main', [msgChannel.port2]);
+ipcRenderer.postMessage(TRUSTED_UI_KARTON_CONNECT_CHANNEL, null, [
+  msgChannel.port2,
+]);
 
 /**
  * MessagePort proxy that works with reconnection

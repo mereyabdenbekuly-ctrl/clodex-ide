@@ -22,8 +22,20 @@
     "clodex-kernel": {
       "status": "independent",
       "owner": "core",
-      "planned_paths": ["packages/clodex-kernel/**"],
+      "paths": ["packages/clodex-kernel/**"],
       "package_name": "@clodex/kernel",
+      "allowed_internal_dependencies": ["clodex-contracts"],
+      "allowed_external_dependencies": [],
+      "allowed_builtins": [],
+      "allowed_typescript_libs": ["es2022"],
+      "allowed_typescript_types": [],
+      "enforce_dependency_allowlist": true
+    },
+    "clodex-approval": {
+      "status": "independent",
+      "owner": "security",
+      "paths": ["packages/clodex-approval/**"],
+      "package_name": "@clodex/approval",
       "allowed_internal_dependencies": ["clodex-contracts"],
       "allowed_external_dependencies": [],
       "allowed_builtins": [],
@@ -34,7 +46,7 @@
     "clodex-guardian": {
       "status": "independent",
       "owner": "security",
-      "planned_paths": ["packages/clodex-guardian/**"],
+      "paths": ["packages/clodex-guardian/**"],
       "package_name": "@clodex/guardian",
       "allowed_internal_dependencies": ["clodex-contracts"],
       "allowed_external_dependencies": [],
@@ -46,7 +58,7 @@
     "clodex-ledger": {
       "status": "independent",
       "owner": "core",
-      "planned_paths": ["packages/clodex-ledger/**"],
+      "paths": ["packages/clodex-ledger/**"],
       "package_name": "@clodex/ledger",
       "allowed_internal_dependencies": ["clodex-contracts"],
       "allowed_external_dependencies": [],
@@ -55,10 +67,25 @@
       "allowed_typescript_types": [],
       "enforce_dependency_allowlist": true
     },
+    "clodex-ledger-node": {
+      "status": "independent",
+      "owner": "core",
+      "paths": ["packages/clodex-ledger-node/**"],
+      "package_name": "@clodex/ledger-node",
+      "allowed_internal_dependencies": [
+        "clodex-contracts",
+        "clodex-ledger"
+      ],
+      "allowed_external_dependencies": [],
+      "allowed_builtins": ["fs", "path", "timers"],
+      "allowed_typescript_libs": ["es2022"],
+      "allowed_typescript_types": ["node"],
+      "enforce_dependency_allowlist": true
+    },
     "clodex-evidence": {
       "status": "independent",
       "owner": "security",
-      "planned_paths": ["packages/clodex-evidence/**"],
+      "paths": ["packages/clodex-evidence/**"],
       "package_name": "@clodex/evidence",
       "allowed_internal_dependencies": ["clodex-contracts"],
       "allowed_external_dependencies": [],
@@ -70,7 +97,7 @@
     "clodex-runtime": {
       "status": "independent",
       "owner": "runtime",
-      "planned_paths": ["packages/clodex-runtime/**"],
+      "paths": ["packages/clodex-runtime/**"],
       "package_name": "@clodex/runtime",
       "allowed_internal_dependencies": [
         "clodex-contracts",
@@ -79,6 +106,34 @@
         "clodex-kernel",
         "clodex-ledger"
       ],
+      "allowed_external_dependencies": [],
+      "allowed_builtins": [],
+      "allowed_typescript_libs": ["es2022"],
+      "allowed_typescript_types": [],
+      "enforce_dependency_allowlist": true
+    },
+    "clodex-adapters": {
+      "status": "independent",
+      "owner": "runtime",
+      "paths": ["packages/clodex-adapters/**"],
+      "package_name": "@clodex/adapters",
+      "allowed_internal_dependencies": [
+        "clodex-contracts",
+        "clodex-guardian",
+        "clodex-runtime"
+      ],
+      "allowed_external_dependencies": [],
+      "allowed_builtins": [],
+      "allowed_typescript_libs": ["es2022"],
+      "allowed_typescript_types": [],
+      "enforce_dependency_allowlist": true
+    },
+    "clodex-promotion": {
+      "status": "independent",
+      "owner": "security",
+      "paths": ["packages/clodex-promotion/**"],
+      "package_name": "@clodex/promotion",
+      "allowed_internal_dependencies": ["clodex-contracts"],
       "allowed_external_dependencies": [],
       "allowed_builtins": [],
       "allowed_typescript_libs": ["es2022"],

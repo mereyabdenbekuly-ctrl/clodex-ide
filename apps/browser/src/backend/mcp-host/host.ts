@@ -47,6 +47,12 @@ import {
   startRuntimeMemoryMonitor,
   type RuntimeMemoryMonitor,
 } from './runtime-sandbox';
+import {
+  deleteExactMcpConnection,
+  isExactMcpConnection,
+  requireExactMcpConnection,
+  StaleMcpConnectionError,
+} from './connection-identity';
 
 interface ParentPort {
   postMessage(message: McpHostToMainMessage): void;
@@ -57,6 +63,7 @@ interface ParentPort {
 }
 
 interface Connection {
+  connectionId: string;
   client: Client;
   transport: Transport;
   secretValues: string[];
@@ -210,7 +217,11 @@ function handleMessage(message: MainToMcpHostMessage): void {
       break;
     case 'disconnect-server':
       startRequest(message.requestId, () =>
-        disconnectServer(message.serverId, message.requestId),
+        disconnectServer(
+          message.serverId,
+          message.connectionId,
+          message.requestId,
+        ),
       );
       break;
     case 'list-tools':
@@ -306,6 +317,7 @@ async function connectServer(
     launchId,
     requestId: message.requestId,
     serverId: message.serverId,
+    connectionId: message.connectionId,
     state: 'connecting',
   });
 
@@ -351,6 +363,7 @@ async function connectServer(
           onChanged: (error) => {
             void refreshListChangedCatalog(
               message.serverId,
+              message.connectionId,
               'tools',
               client,
               message.secretValues,
@@ -363,6 +376,7 @@ async function connectServer(
           onChanged: (error) => {
             void refreshListChangedCatalog(
               message.serverId,
+              message.connectionId,
               'resources',
               client,
               message.secretValues,
@@ -375,6 +389,7 @@ async function connectServer(
           onChanged: (error) => {
             void refreshListChangedCatalog(
               message.serverId,
+              message.connectionId,
               'prompts',
               client,
               message.secretValues,
@@ -386,6 +401,16 @@ async function connectServer(
     },
   );
   client.setRequestHandler(ElicitRequestSchema, async (request, extra) => {
+    if (
+      !isExactMcpConnection(
+        connections,
+        message.serverId,
+        client,
+        message.connectionId,
+      )
+    ) {
+      return { action: 'cancel' as const };
+    }
     const params = request.params;
     if (params.mode === 'url') {
       return { action: 'cancel' as const };
@@ -400,28 +425,56 @@ async function connectServer(
       );
       return { action: 'cancel' as const };
     }
-    return await requestMainElicitation(
+    const result = await requestMainElicitation(
       message.serverId,
       elicitationContext.agentInstanceId,
       elicitationContext.toolRequestIds,
       normalizeElicitationRequest(params),
       extra.signal,
     );
+    if (
+      !isExactMcpConnection(
+        connections,
+        message.serverId,
+        client,
+        message.connectionId,
+      )
+    ) {
+      return { action: 'cancel' as const };
+    }
+    return result;
   });
   client.onclose = () => {
     resourceMonitor?.stop();
     resourceMonitor = null;
     if (!launchId || shuttingDown) return;
-    connections.delete(message.serverId);
+    const closed = deleteExactMcpConnection(
+      connections,
+      message.serverId,
+      client,
+      message.connectionId,
+    );
+    if (!closed) return;
     send({
       type: 'connection-state',
       launchId,
       serverId: message.serverId,
+      connectionId: message.connectionId,
       state: 'disconnected',
     });
   };
   client.onerror = (error) => {
     if (!launchId || shuttingDown) return;
+    if (
+      !isExactMcpConnection(
+        connections,
+        message.serverId,
+        client,
+        message.connectionId,
+      )
+    ) {
+      return;
+    }
     send({
       type: 'server-log',
       launchId,
@@ -453,6 +506,7 @@ async function connectServer(
         launchId,
         requestId: message.requestId,
         serverId: message.serverId,
+        connectionId: message.connectionId,
         state: 'authorization-required',
       });
       return;
@@ -485,6 +539,7 @@ async function connectServer(
       });
     }
     connections.set(message.serverId, {
+      connectionId: message.connectionId,
       client,
       transport,
       secretValues: [...message.secretValues],
@@ -496,6 +551,7 @@ async function connectServer(
       launchId,
       requestId: message.requestId,
       serverId: message.serverId,
+      connectionId: message.connectionId,
       state: 'connected',
     });
   } catch (error) {
@@ -517,6 +573,7 @@ async function connectServer(
         launchId,
         requestId: message.requestId,
         serverId: message.serverId,
+        connectionId: message.connectionId,
         state: 'authorization-required',
       });
       return;
@@ -527,6 +584,7 @@ async function connectServer(
       launchId,
       requestId: message.requestId,
       serverId: message.serverId,
+      connectionId: message.connectionId,
       state: 'failed',
       error: serializeError(
         error,
@@ -628,21 +686,32 @@ function createTransport(
 
 async function disconnectServer(
   serverId: string,
+  connectionId: string,
   requestId: string,
 ): Promise<void> {
   if (!launchId) return;
-  await closeConnection(serverId);
+  await closeConnection(serverId, connectionId);
   send({
     type: 'connection-state',
     launchId,
     requestId,
     serverId,
+    connectionId,
     state: 'disconnected',
   });
 }
 
-async function closeConnection(serverId: string): Promise<void> {
+async function closeConnection(
+  serverId: string,
+  expectedConnectionId?: string,
+): Promise<void> {
   const connection = connections.get(serverId);
+  if (
+    expectedConnectionId !== undefined &&
+    connection?.connectionId !== expectedConnectionId
+  ) {
+    return;
+  }
   connections.delete(serverId);
   pendingOAuthConnections.delete(serverId);
   oauthSecretValues.delete(serverId);
@@ -899,6 +968,7 @@ function emitServerLog(
 
 function emitListChanged(
   serverId: string,
+  connectionId: string,
   kind: 'tools' | 'resources' | 'prompts',
   payload: {
     tools?: McpToolDescriptor[];
@@ -911,6 +981,7 @@ function emitListChanged(
     type: 'list-changed',
     launchId,
     serverId,
+    connectionId,
     kind,
     ...payload,
   });
@@ -918,11 +989,14 @@ function emitListChanged(
 
 async function refreshListChangedCatalog(
   serverId: string,
+  connectionId: string,
   kind: 'tools' | 'resources' | 'prompts',
   client: Client,
   baseSecretValues: string[],
   notificationError: Error | null,
 ): Promise<void> {
+  if (!isExactMcpConnection(connections, serverId, client, connectionId))
+    return;
   const secretValues = collectServerSecretValues(serverId, baseSecretValues);
   if (notificationError) {
     emitServerLog(
@@ -937,44 +1011,54 @@ async function refreshListChangedCatalog(
     const signal = AbortSignal.timeout(LIST_CONTEXT_TIMEOUT_MS);
     if (kind === 'tools') {
       const tools = await collectMcpCatalogPages(async (cursor) => {
+        requireExactMcpConnection(connections, serverId, client, connectionId);
         const response = await client.listTools(
           cursor ? { cursor } : undefined,
           { signal, timeout: LIST_TOOLS_TIMEOUT_MS },
         );
+        requireExactMcpConnection(connections, serverId, client, connectionId);
         return {
           items: response.tools.map(normalizeToolDescriptor),
           nextCursor: response.nextCursor,
         };
       });
-      emitListChanged(serverId, kind, { tools });
+      requireExactMcpConnection(connections, serverId, client, connectionId);
+      emitListChanged(serverId, connectionId, kind, { tools });
       return;
     }
     if (kind === 'resources') {
       const resources = await collectMcpCatalogPages(async (cursor) => {
+        requireExactMcpConnection(connections, serverId, client, connectionId);
         const response = await client.listResources(
           cursor ? { cursor } : undefined,
           { signal, timeout: LIST_CONTEXT_TIMEOUT_MS },
         );
+        requireExactMcpConnection(connections, serverId, client, connectionId);
         return {
           items: response.resources.map(normalizeResourceDescriptor),
           nextCursor: response.nextCursor,
         };
       });
-      emitListChanged(serverId, kind, { resources });
+      requireExactMcpConnection(connections, serverId, client, connectionId);
+      emitListChanged(serverId, connectionId, kind, { resources });
       return;
     }
     const prompts = await collectMcpCatalogPages(async (cursor) => {
+      requireExactMcpConnection(connections, serverId, client, connectionId);
       const response = await client.listPrompts(
         cursor ? { cursor } : undefined,
         { signal, timeout: LIST_CONTEXT_TIMEOUT_MS },
       );
+      requireExactMcpConnection(connections, serverId, client, connectionId);
       return {
         items: response.prompts.map(normalizePromptDescriptor),
         nextCursor: response.nextCursor,
       };
     });
-    emitListChanged(serverId, kind, { prompts });
+    requireExactMcpConnection(connections, serverId, client, connectionId);
+    emitListChanged(serverId, connectionId, kind, { prompts });
   } catch (error) {
+    if (error instanceof StaleMcpConnectionError) return;
     emitServerLog(
       serverId,
       'warn',

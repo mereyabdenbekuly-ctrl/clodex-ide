@@ -532,6 +532,7 @@ export class AgentManager extends DisposableService {
         workspacePaths?: string[],
         preserveWorkspacePaths?: boolean,
         agentType: AgentTypes = AgentTypes.CHAT,
+        beforeDispatch?: () => void,
       ) => {
         const initialState: Partial<AgentState> = {};
         if (modelId) initialState.activeModelId = modelId;
@@ -547,6 +548,7 @@ export class AgentManager extends DisposableService {
           Object.keys(initialState).length > 0 ? initialState : undefined,
           undefined,
           initialInputState,
+          beforeDispatch,
         );
         if (workspacePaths) {
           for (const wp of workspacePaths) {
@@ -1313,6 +1315,7 @@ export class AgentManager extends DisposableService {
     initialState?: Partial<AgentState>,
     instanceId?: string,
     initialInputState?: string,
+    beforeDispatch?: () => void,
   ): Promise<BaseAgent<any, any>> {
     const agentInstanceId = instanceId ?? randomUUID();
 
@@ -1340,6 +1343,7 @@ export class AgentManager extends DisposableService {
     // Seed the new envelope on the canonical AgentStore. The bridge
     // forward-mirror projects the result back to Karton for existing
     // readers.
+    beforeDispatch?.();
     upsertAgentInstance(this.agentStore, agentInstanceId, {
       type: type,
       canSelectModel: (this.agentsMap as any)[type].config.allowModelSelection,

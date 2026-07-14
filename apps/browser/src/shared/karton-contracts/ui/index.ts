@@ -170,15 +170,18 @@ import type {
 import type {
   ArtifactBridgeContext,
   ArtifactBridgeGrant,
-  ArtifactBridgeGrantInput,
   ArtifactBridgeGrantRevokeScope,
   ArtifactBridgePolicy,
-  ArtifactBridgeRequest,
   ArtifactBridgeRuntimeInspectorSnapshot,
   ArtifactBridgeSensitiveMcpApproval,
   ArtifactBridgeSessionSnapshot,
   ArtifactBridgeWriteApproval,
 } from '../../artifact-bridge';
+import type {
+  ArtifactBridgeGrantReviewSelection,
+  ArtifactBridgeGrantReviewSnapshot,
+  ArtifactBridgeGrantReviewSubmission,
+} from '../../artifact-bridge-grant-review';
 import type {
   CreateSpaceInput,
   SpaceDefinition,
@@ -2384,11 +2387,6 @@ export type KartonContract = {
       ) => Promise<AutomationOperationResult>;
     };
     artifactBridge: {
-      invoke: (
-        context: ArtifactBridgeContext,
-        request: ArtifactBridgeRequest,
-        sessionId?: string,
-      ) => Promise<unknown>;
       getGrant: (
         context: ArtifactBridgeContext,
         sessionId?: string,
@@ -2399,8 +2397,12 @@ export type KartonContract = {
       getRuntimeInspector: (
         context: ArtifactBridgeContext,
       ) => Promise<ArtifactBridgeRuntimeInspectorSnapshot>;
-      setGrant: (
-        input: ArtifactBridgeGrantInput,
+      openGrantReview: (
+        context: ArtifactBridgeContext,
+        selection: ArtifactBridgeGrantReviewSelection,
+      ) => Promise<ArtifactBridgeGrantReviewSnapshot>;
+      submitGrantReview: (
+        submission: ArtifactBridgeGrantReviewSubmission,
       ) => Promise<ArtifactBridgeGrant>;
       revokeGrant: (
         context: ArtifactBridgeContext,
