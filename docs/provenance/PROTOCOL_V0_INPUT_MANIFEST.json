@@ -1,0 +1,131 @@
+{
+  "manifestVersion": "0.1.0-draft",
+  "status": "UNAPPROVED_INPUT_INVENTORY",
+  "auditBaseCommit": "f331fa976f043f5e909ea0e60aeafbdd4fd1446a",
+  "auditBaseDate": "2026-07-14",
+  "protocolPath": "docs/protocol/agent-gateway-v0",
+  "cleanRoomClaim": false,
+  "publicationAuthorized": false,
+  "privateImplementationAuthorized": false,
+  "requirementsCatalogue": {
+    "path": "docs/protocol/agent-gateway-v0/REQUIREMENTS.md",
+    "status": "RECONSTRUCTED_UNAPPROVED",
+    "warning": "The catalogue was recorded in the same change as the schemas and does not prove that approved requirements preceded authoring."
+  },
+  "aiAssistance": {
+    "toolClass": "OpenAI Codex language-model agents",
+    "work": [
+      "repository provenance inventory",
+      "boundary and release documentation",
+      "Protocol v0 requirements reconstruction",
+      "schema and OpenAPI drafting",
+      "independent manual consistency reviews"
+    ],
+    "contextClasses": [
+      "maintainer task direction",
+      "public standards listed in the protocol README",
+      "the public repository at the audit base commit",
+      "repository governance and provenance documentation",
+      "review findings produced during the same task"
+    ],
+    "disclosure": "Repository exposure means this draft is not accepted as clean-room evidence. No permissive relicensing or private implementation use is authorized."
+  },
+  "candidateInputs": [
+    {
+      "id": "PV0-IN-001",
+      "type": "maintainer_direction",
+      "locator": "CLODEx task direction dated 2026-07-14",
+      "immutableRevision": null,
+      "status": "YELLOW",
+      "permittedUse": "High-level public/private product boundary and instruction to draft provenance controls and schema-only Protocol v0.",
+      "blocker": "Archive and approve an immutable decision record before PV0-G01 can close."
+    },
+    {
+      "id": "PV0-IN-002",
+      "type": "public_standard",
+      "title": "OpenAPI Specification 3.2.0",
+      "locator": "https://spec.openapis.org/oas/v3.2.0.html",
+      "version": "3.2.0",
+      "status": "CANDIDATE_GREEN_REVIEW_REQUIRED",
+      "permittedUse": "OpenAPI document structure and dialect declaration.",
+      "blocker": "Record terms/notice review and reviewer approval."
+    },
+    {
+      "id": "PV0-IN-003",
+      "type": "public_standard",
+      "title": "JSON Schema Draft 2020-12",
+      "locator": "https://json-schema.org/draft/2020-12",
+      "version": "2020-12",
+      "status": "CANDIDATE_GREEN_REVIEW_REQUIRED",
+      "permittedUse": "Schema vocabulary and validation semantics.",
+      "blocker": "Record terms/notice review and reviewer approval."
+    },
+    {
+      "id": "PV0-IN-004",
+      "type": "public_standard",
+      "title": "RFC 8785 JSON Canonicalization Scheme",
+      "locator": "https://www.rfc-editor.org/rfc/rfc8785",
+      "version": "RFC 8785",
+      "status": "CANDIDATE_GREEN_REVIEW_REQUIRED",
+      "permittedUse": "Canonical JSON byte construction.",
+      "blocker": "Record terms/notice review and reviewer approval."
+    },
+    {
+      "id": "PV0-IN-005",
+      "type": "public_standard",
+      "title": "RFC 4648 Base-N Encodings",
+      "locator": "https://www.rfc-editor.org/rfc/rfc4648",
+      "version": "RFC 4648",
+      "status": "CANDIDATE_GREEN_REVIEW_REQUIRED",
+      "permittedUse": "Unpadded canonical base64url encoding rules.",
+      "blocker": "Record terms/notice review and reviewer approval."
+    },
+    {
+      "id": "PV0-IN-006",
+      "type": "public_standard",
+      "title": "RFC 8032 Edwards-Curve Digital Signature Algorithm",
+      "locator": "https://www.rfc-editor.org/rfc/rfc8032",
+      "version": "RFC 8032",
+      "status": "CANDIDATE_GREEN_REVIEW_REQUIRED",
+      "permittedUse": "Ed25519 signature algorithm requirements.",
+      "blocker": "Record terms/notice review and reviewer approval."
+    },
+    {
+      "id": "PV0-IN-007",
+      "type": "repository_governance",
+      "locator": "docs/governance/PROVENANCE_POLICY.md",
+      "immutableRevision": "f331fa976f043f5e909ea0e60aeafbdd4fd1446a",
+      "status": "YELLOW",
+      "permittedUse": "Engineering provenance process only; not protocol wire semantics.",
+      "blocker": "Approve exact paragraphs and authorship/context record."
+    },
+    {
+      "id": "PV0-IN-008",
+      "type": "repository_context_exposure",
+      "locator": "clodex-ide repository",
+      "immutableRevision": "f331fa976f043f5e909ea0e60aeafbdd4fd1446a",
+      "status": "RED_FOR_STRUCTURAL_USE",
+      "permittedUse": "Component/provenance inventory and negative dependency constraints only.",
+      "prohibitedUse": "Copying, translating, structurally following, or generating schemas/tests/types from implementation source.",
+      "blocker": "Independent review must determine whether re-derivation or clean-room reauthoring is required before PV0-G04 can close."
+    }
+  ],
+  "excludedInputClasses": [
+    "customer or production data",
+    "private threat intelligence",
+    "current implementation types, validators, tests, fixtures, constants, or module structure as a blueprint",
+    "other AI answers as legal authority or normative protocol authority"
+  ],
+  "openGates": [
+    "PV0-G01",
+    "PV0-G02",
+    "PV0-G03",
+    "PV0-G04",
+    "PV0-G05",
+    "PV0-G06",
+    "PV0-G07",
+    "PV0-G08",
+    "PV0-G09",
+    "PV0-G10"
+  ]
+}

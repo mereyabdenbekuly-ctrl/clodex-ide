@@ -71,7 +71,11 @@ Provider-specific logic must remain outside Agent Core behavior.
 
 ## 5. Custom runners
 
-Use `packages/runner-sdk`.
+Do not start new external, protocol, or private-Gateway integrations on
+`packages/runner-sdk`; its current `agent-shell` dependency makes it an
+audit-blocked legacy surface. Existing in-monorepo callers may be maintained
+without expanding the boundary. New ecosystem runners must wait for and consume
+only a future GREEN Protocol v0 SDK.
 
 A runner declares:
 

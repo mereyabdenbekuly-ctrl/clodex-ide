@@ -1,0 +1,552 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.clodex.dev/agent-gateway/v0/common.schema.json",
+  "title": "CLODEx Agent Gateway Protocol v0 Common Types",
+  "description": "Shared, transport-neutral types for the schema-only Agent Gateway Protocol v0 draft.",
+  "$defs": {
+    "OpaqueIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._~:-]{0,255}$"
+    },
+    "ProtocolVersion": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^0\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$",
+      "examples": ["0.1.0-draft"]
+    },
+    "DraftProtocolVersion": {
+      "const": "0.1.0-draft"
+    },
+    "ShortToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._~:@/+-]{0,127}$"
+    },
+    "Nonce": {
+      "type": "string",
+      "minLength": 22,
+      "maxLength": 128,
+      "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$"
+    },
+    "Digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "encoding", "canonicalization", "value"],
+      "properties": {
+        "algorithm": {
+          "const": "sha-256"
+        },
+        "encoding": {
+          "const": "base64url"
+        },
+        "canonicalization": {
+          "type": "string",
+          "enum": ["jcs-rfc8785", "raw-bytes"]
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+        }
+      }
+    },
+    "EnvelopeDigest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "encoding", "profile", "value"],
+      "properties": {
+        "algorithm": {
+          "const": "sha-256"
+        },
+        "encoding": {
+          "const": "base64url"
+        },
+        "profile": {
+          "const": "clodex-agent-gateway-v0.jcs"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+        }
+      }
+    },
+    "NegotiationBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "negotiationId",
+        "selectionEnvelopeDigest",
+        "selectedVersion"
+      ],
+      "properties": {
+        "negotiationId": {
+          "$ref": "#/$defs/OpaqueIdentifier"
+        },
+        "selectionEnvelopeDigest": {
+          "$ref": "#/$defs/EnvelopeDigest"
+        },
+        "selectedVersion": {
+          "$ref": "#/$defs/DraftProtocolVersion"
+        }
+      }
+    },
+    "Signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "algorithm", "keyId", "createdAt", "value"],
+      "properties": {
+        "profile": {
+          "const": "clodex-agent-gateway-v0.jcs"
+        },
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "keyId": {
+          "$ref": "#/$defs/OpaqueIdentifier"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+        }
+      }
+    },
+    "TenantIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenantId"],
+      "properties": {
+        "tenantId": {
+          "$ref": "#/$defs/OpaqueIdentifier"
+        }
+      }
+    },
+    "ActorIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actorId", "actorType", "authenticationContextDigest"],
+      "properties": {
+        "actorId": {
+          "$ref": "#/$defs/OpaqueIdentifier"
+        },
+        "actorType": {
+          "type": "string",
+          "enum": ["HUMAN", "SERVICE", "WORKLOAD"]
+        },
+        "authenticationContextDigest": {
+          "$ref": "#/$defs/Digest"
+        }
+      }
+    },
+    "DeviceIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deviceId", "trustState"],
+      "properties": {
+        "deviceId": {
+          "$ref": "#/$defs/OpaqueIdentifier"
+        },
+        "trustState": {
+          "type": "string",
+          "enum": ["UNKNOWN", "REGISTERED", "ATTESTED"]
+        },
+        "attestationDigest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "trustState": {
+                "const": "ATTESTED"
+              }
+            },
+            "required": ["trustState"]
+          },
+          "then": {
+            "required": ["attestationDigest"]
+          },
+          "else": {
+            "not": {
+              "required": ["attestationDigest"]
+            }
+          }
+        }
+      ]
+    },
+    "AgentIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agentId", "agentInstanceId", "agentBuild"],
+      "properties": {
+        "agentId": {
+          "$ref": "#/$defs/OpaqueIdentifier"
+        },
+        "agentInstanceId": {
+          "$ref": "#/$defs/OpaqueIdentifier"
+        },
+        "agentBuild": {
+          "$ref": "#/$defs/ShortToken"
+        }
+      }
+    },
+    "TaskIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taskId"],
+      "properties": {
+        "taskId": {
+          "$ref": "#/$defs/OpaqueIdentifier"
+        }
+      }
+    },
+    "StepIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stepId", "attempt"],
+      "properties": {
+        "stepId": {
+          "$ref": "#/$defs/OpaqueIdentifier"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      }
+    },
+    "ToolIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["toolId", "namespace", "name", "serverId", "version"],
+      "properties": {
+        "toolId": {
+          "$ref": "#/$defs/OpaqueIdentifier"
+        },
+        "namespace": {
+          "$ref": "#/$defs/ShortToken"
+        },
+        "name": {
+          "$ref": "#/$defs/ShortToken"
+        },
+        "serverId": {
+          "$ref": "#/$defs/OpaqueIdentifier"
+        },
+        "version": {
+          "$ref": "#/$defs/ShortToken"
+        }
+      }
+    },
+    "PolicyBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policyId", "policyVersion", "policyDigest"],
+      "properties": {
+        "policyId": {
+          "$ref": "#/$defs/OpaqueIdentifier"
+        },
+        "policyVersion": {
+          "$ref": "#/$defs/ShortToken"
+        },
+        "policyDigest": {
+          "$ref": "#/$defs/Digest"
+        }
+      }
+    },
+    "EffectBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant",
+        "actor",
+        "device",
+        "agent",
+        "task",
+        "step",
+        "tool",
+        "intentDigest",
+        "descriptorDigest",
+        "contextDigest",
+        "effectDigest",
+        "policy"
+      ],
+      "properties": {
+        "tenant": {
+          "$ref": "#/$defs/TenantIdentity"
+        },
+        "actor": {
+          "$ref": "#/$defs/ActorIdentity"
+        },
+        "device": {
+          "$ref": "#/$defs/DeviceIdentity"
+        },
+        "agent": {
+          "$ref": "#/$defs/AgentIdentity"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskIdentity"
+        },
+        "step": {
+          "$ref": "#/$defs/StepIdentity"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolIdentity"
+        },
+        "intentDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "descriptorDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "contextDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "effectDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "policy": {
+          "$ref": "#/$defs/PolicyBinding"
+        }
+      }
+    },
+    "Artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "mediaType", "delivery"],
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "delivery": {
+          "type": "string",
+          "enum": ["INLINE", "REFERENCE", "OUT_OF_BAND"]
+        },
+        "contentEncoding": {
+          "type": "string",
+          "enum": ["json", "base64url"]
+        },
+        "content": true,
+        "locator": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2048
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "delivery": {
+                "const": "INLINE"
+              }
+            }
+          },
+          "then": {
+            "required": ["content", "contentEncoding"],
+            "not": {
+              "required": ["locator"]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "delivery": {
+                "const": "REFERENCE"
+              }
+            }
+          },
+          "then": {
+            "required": ["locator"],
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["content"]
+                },
+                {
+                  "required": ["contentEncoding"]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "delivery": {
+                "const": "OUT_OF_BAND"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["content"]
+                },
+                {
+                  "required": ["locator"]
+                },
+                {
+                  "required": ["contentEncoding"]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "delivery": {
+                "const": "INLINE"
+              },
+              "digest": {
+                "properties": {
+                  "canonicalization": {
+                    "const": "jcs-rfc8785"
+                  }
+                },
+                "required": ["canonicalization"]
+              }
+            },
+            "required": ["delivery", "digest"]
+          },
+          "then": {
+            "properties": {
+              "contentEncoding": {
+                "const": "json"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "delivery": {
+                "const": "INLINE"
+              },
+              "digest": {
+                "properties": {
+                  "canonicalization": {
+                    "const": "raw-bytes"
+                  }
+                },
+                "required": ["canonicalization"]
+              }
+            },
+            "required": ["delivery", "digest"]
+          },
+          "then": {
+            "properties": {
+              "contentEncoding": {
+                "const": "base64url"
+              },
+              "content": {
+                "type": "string",
+                "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ReplayProtection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["idempotencyKey", "replayNonce", "issuedAt", "expiresAt"],
+      "properties": {
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._~:-]{15,255}$"
+        },
+        "replayNonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "issuedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "TerminalOutcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "effectState", "resultDigest"],
+          "properties": {
+            "status": {
+              "const": "SUCCEEDED"
+            },
+            "effectState": {
+              "const": "APPLIED"
+            },
+            "resultDigest": {
+              "$ref": "#/$defs/Digest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "effectState", "reasonCode"],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "DENIED",
+                "CANCELLED",
+                "EXPIRED",
+                "SUPERSEDED",
+                "INVALIDATED"
+              ]
+            },
+            "effectState": {
+              "const": "NOT_APPLIED"
+            },
+            "reasonCode": {
+              "$ref": "#/$defs/ShortToken"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "effectState", "errorCode"],
+          "properties": {
+            "status": {
+              "const": "FAILED"
+            },
+            "effectState": {
+              "type": "string",
+              "enum": ["APPLIED", "NOT_APPLIED", "UNKNOWN"]
+            },
+            "errorCode": {
+              "$ref": "#/$defs/ShortToken"
+            },
+            "errorDigest": {
+              "$ref": "#/$defs/Digest"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

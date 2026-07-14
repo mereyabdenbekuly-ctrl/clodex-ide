@@ -51,19 +51,30 @@ still requires:
 Until the corresponding evidence passes, advanced release allocation remains
 zero.
 
+The gate-based product calendar, including the next `1.16.0` preview/stable
+targets and the later Protocol/Gateway milestones, is maintained in
+[`docs/roadmap/PRODUCT_RELEASE_PLAN.md`](../roadmap/PRODUCT_RELEASE_PLAN.md).
+
 ## 4. Next development sequence
 
-Recommended order:
+Two paths proceed in parallel:
 
-1. finalize task-goal time and token budget support;
-2. usage and budget dashboard;
-3. permission profiles;
-4. fork into a new worktree;
-5. task-level background process manager;
-6. live steering for running work;
-7. session import/export;
-8. team distribution for plugins and policies;
-9. enterprise audit and external signing adapters.
+1. **Local `1.16`:** integrate and independently verify the durable P0
+   approval/MCP lifecycle, clear batched audit/test debt, close desktop
+   attribution `OCB-006`, then promote preview/canary/stable.
+2. **Protocol/service:** close provenance and Protocol v0 input/requirements
+   evidence, independently review/re-derive the schema draft, implement boundary
+   CI, and only after `B0`–`B5` plus `PV0-G01`–`PV0-G10` start a synthetic
+   Gateway slice in a separate private repository.
+
+Protocol/Gateway work does not delay the local `1.16` release; only its own P0,
+verification, attribution, signing, and operational gates do.
+
+Budgets/dashboard, worktree UX, background processes, steering, session
+transfer, and team distribution remain post-`1.16` backlog unless explicitly
+re-prioritized. Public reference audit/signing contracts may be designed here;
+enterprise managed audit/signing implementation belongs only in the private
+product track.
 
 ## 5. Definition of done
 

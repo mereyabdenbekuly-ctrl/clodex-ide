@@ -1,0 +1,301 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.clodex.dev/agent-gateway/v0/signed-effect-receipt.schema.json",
+  "title": "CLODEx Signed Effect Receipt v0",
+  "description": "A gateway-signed terminal receipt cryptographically bound to the request, authorization disposition, and effect outcome.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "protocolVersion",
+    "receiptId",
+    "receiptIssuerId",
+    "requestId",
+    "requestEnvelopeDigest",
+    "negotiation",
+    "binding",
+    "requestReplayProtection",
+    "authorization",
+    "outcome",
+    "completedAt",
+    "issuedAt",
+    "signature"
+  ],
+  "properties": {
+    "kind": {
+      "const": "clodex.agent-gateway.signed-effect-receipt"
+    },
+    "protocolVersion": {
+      "$ref": "common.schema.json#/$defs/DraftProtocolVersion"
+    },
+    "receiptId": {
+      "$ref": "common.schema.json#/$defs/OpaqueIdentifier"
+    },
+    "receiptIssuerId": {
+      "$ref": "common.schema.json#/$defs/OpaqueIdentifier"
+    },
+    "requestId": {
+      "$ref": "common.schema.json#/$defs/OpaqueIdentifier"
+    },
+    "requestEnvelopeDigest": {
+      "$ref": "common.schema.json#/$defs/EnvelopeDigest"
+    },
+    "negotiation": {
+      "$ref": "common.schema.json#/$defs/NegotiationBinding"
+    },
+    "binding": {
+      "$ref": "common.schema.json#/$defs/EffectBinding"
+    },
+    "requestReplayProtection": {
+      "$ref": "common.schema.json#/$defs/ReplayProtection"
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decisionId",
+        "decision",
+        "decisionSource",
+        "policy",
+        "decidedAt"
+      ],
+      "properties": {
+        "decisionId": {
+          "$ref": "common.schema.json#/$defs/OpaqueIdentifier"
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["AUTHORIZED", "DENIED", "NOT_EVALUATED"]
+        },
+        "decisionSource": {
+          "type": "string",
+          "enum": ["POLICY", "APPROVAL_EVIDENCE", "GUARDIAN", "LIFECYCLE"]
+        },
+        "policy": {
+          "$ref": "common.schema.json#/$defs/PolicyBinding"
+        },
+        "approvalEvidenceId": {
+          "$ref": "common.schema.json#/$defs/OpaqueIdentifier"
+        },
+        "approvalEvidenceDigest": {
+          "description": "Digest of the complete signed ApprovalEvidenceReference under the v0 envelope-digest profile, not the referenced evidence payload digest.",
+          "$ref": "common.schema.json#/$defs/EnvelopeDigest"
+        },
+        "decidedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "dependentRequired": {
+        "approvalEvidenceId": ["approvalEvidenceDigest"],
+        "approvalEvidenceDigest": ["approvalEvidenceId"]
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decisionSource": {
+                "const": "APPROVAL_EVIDENCE"
+              }
+            },
+            "required": ["decisionSource"]
+          },
+          "then": {
+            "required": ["approvalEvidenceId", "approvalEvidenceDigest"]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["approvalEvidenceId"]
+                },
+                {
+                  "required": ["approvalEvidenceDigest"]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "NOT_EVALUATED"
+              }
+            },
+            "required": ["decision"]
+          },
+          "then": {
+            "properties": {
+              "decisionSource": {
+                "const": "LIFECYCLE"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "decisionSource": {
+                "not": {
+                  "const": "LIFECYCLE"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "outcome": {
+      "$ref": "common.schema.json#/$defs/TerminalOutcome"
+    },
+    "claimedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "issuedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "signature": {
+      "$ref": "common.schema.json#/$defs/Signature"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "authorization": {
+            "properties": {
+              "decision": {
+                "const": "DENIED"
+              }
+            },
+            "required": ["decision"]
+          }
+        },
+        "required": ["authorization"]
+      },
+      "then": {
+        "properties": {
+          "outcome": {
+            "properties": {
+              "status": {
+                "const": "DENIED"
+              },
+              "effectState": {
+                "const": "NOT_APPLIED"
+              }
+            },
+            "required": ["status", "effectState"]
+          }
+        },
+        "not": {
+          "required": ["claimedAt"]
+        }
+      },
+      "else": {
+        "properties": {
+          "outcome": {
+            "not": {
+              "properties": {
+                "status": {
+                  "const": "DENIED"
+                }
+              },
+              "required": ["status"]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "authorization": {
+            "properties": {
+              "decision": {
+                "const": "NOT_EVALUATED"
+              }
+            },
+            "required": ["decision"]
+          }
+        },
+        "required": ["authorization"]
+      },
+      "then": {
+        "properties": {
+          "outcome": {
+            "properties": {
+              "status": {
+                "const": "EXPIRED"
+              },
+              "effectState": {
+                "const": "NOT_APPLIED"
+              }
+            },
+            "required": ["status", "effectState"]
+          }
+        },
+        "not": {
+          "required": ["claimedAt"]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "anyOf": [
+              {
+                "properties": {
+                  "status": {
+                    "const": "SUCCEEDED"
+                  }
+                },
+                "required": ["status"]
+              },
+              {
+                "properties": {
+                  "status": {
+                    "const": "FAILED"
+                  },
+                  "effectState": {
+                    "enum": ["APPLIED", "UNKNOWN"]
+                  }
+                },
+                "required": ["status", "effectState"]
+              }
+            ]
+          }
+        },
+        "required": ["outcome"]
+      },
+      "then": {
+        "required": ["claimedAt"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "properties": {
+              "status": {
+                "const": "EXPIRED"
+              }
+            },
+            "required": ["status"]
+          }
+        },
+        "required": ["outcome"]
+      },
+      "then": {
+        "not": {
+          "required": ["claimedAt"]
+        }
+      }
+    }
+  ]
+}

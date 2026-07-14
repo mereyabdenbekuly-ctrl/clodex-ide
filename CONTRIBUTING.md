@@ -77,11 +77,17 @@ A pull request must:
 
 - link the issue or explain why no issue is needed;
 - describe the problem, chosen solution, and explicit scope boundaries;
+- classify every new artifact as `PUBLIC CORE`, `PUBLIC SPEC/REFERENCE`,
+  `PRIVATE PRODUCT`, or `RESTRICTED DATA`, and confirm no private/restricted
+  artifact is present in the public change;
 - identify security, privacy, migration, network, and compatibility impact;
 - add or update tests for changed behavior;
 - include screenshots or a short recording for visible UI changes;
 - document new environment variables and external network dependencies;
 - preserve upstream and third-party attribution;
+- for protocol changes, identify the approved input-manifest entries,
+  requirement IDs, AI/source context, and provenance reviewer; YELLOW incubator
+  drafts must say explicitly that publication/extraction remains blocked;
 - contain no unrelated formatting or refactoring; and
 - resolve all review conversations before merge.
 
@@ -123,9 +129,12 @@ matrix](docs/migration/parity-matrix.md), [provenance
 ledger](docs/migration/provenance-ledger.md), and
 [ADR-0005](docs/adr/0005-hybrid-strangler-migration.md). Normative rules live
 in the [architecture boundaries](docs/architecture/BOUNDARIES.md),
-[provenance policy](docs/governance/PROVENANCE_POLICY.md), [security
+[provenance policy](docs/governance/PROVENANCE_POLICY.md), [open/closed product
+boundary](docs/governance/OPEN_CLOSED_BOUNDARY.md), [security
 invariants](docs/security/INVARIANTS.md), and [component
-registry](docs/provenance/components.yml).
+registry](docs/provenance/components.yml). Contributors must not add managed
+Gateway, enterprise/cloud implementation, restricted customer/production data,
+or pitch/commercial material to this public repository.
 
 ## AI-assisted contributions
 
