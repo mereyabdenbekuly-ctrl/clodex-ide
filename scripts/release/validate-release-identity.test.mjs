@@ -264,12 +264,41 @@ test('Karton and release preparation preserve exact-source and credential bounda
   );
   const prepare = YAML.parse(prepareSource);
   assert.equal(prepare.jobs.prepare.if, "github.ref == 'refs/heads/main'");
-  assert.equal(prepare.jobs.prepare.environment, 'Release');
+  assert.equal(prepare.jobs.prepare.environment, undefined);
+  assert.equal(prepare.jobs.publish.environment, 'Release');
+  assert.equal(prepare.jobs.publish.needs, 'prepare');
+  assert.equal(prepare.jobs.publish.permissions.actions, 'read');
+  assert.equal(prepare.jobs.publish.permissions.contents, 'read');
   assert.equal(prepare.permissions.contents, 'read');
   assert.doesNotMatch(prepareSource, /refs\/heads\/release-tests/);
   assert.doesNotMatch(prepareSource, /token: \$\{\{ secrets\.RELEASE_PAT \}\}/);
   assert.match(prepareSource, /persist-credentials: false/);
-  assert.match(prepareSource, /git commit -s /);
-  assert.doesNotMatch(prepareSource, /git push --force/);
+  assert.match(prepareSource, /Upload exact release-preparation payload/);
+  assert.match(prepareSource, /artifact-ids:/);
+  assert.match(prepareSource, /EXPECTED_PATCH_SHA256/);
+  assert.match(
+    prepareSource,
+    /release patch changed package metadata beyond version/,
+  );
+  assert.match(prepareSource, /git status --short --untracked-files=all/);
+  assert.match(prepareSource, /git add -- "\$\{changed_files\[@\]\}"/);
+  assert.doesNotMatch(prepareSource, /git add \./);
+  assert.match(prepareSource, /commit --no-verify -s/);
+  assert.match(prepareSource, /core\.hooksPath/);
+  assert.match(
+    prepareSource,
+    /--force-with-lease="refs\/heads\/\$\{RELEASE_BRANCH\}:"/,
+  );
+  assert.doesNotMatch(prepareSource, /--force(?:\s|$)/);
   assert.match(prepareSource, /refusing to overwrite reviewed work/);
+  const unprivilegedJob = prepareSource
+    .split('\n  prepare:')[1]
+    .split('\n  publish:')[0];
+  const protectedJob = prepareSource.split('\n  publish:')[1];
+  assert.doesNotMatch(unprivilegedJob, /environment:\s*Release|RELEASE_PAT/);
+  assert.doesNotMatch(protectedJob, /pnpm install|pnpm tsx scripts\/release/);
+  assert.ok(
+    protectedJob.indexOf('git status --short --untracked-files=all') <
+      protectedJob.indexOf('git add --'),
+  );
 });

@@ -62,12 +62,12 @@ rollback target or an allowed public download.
 | P0 zero-trust foundation | Implemented on `main` | Integrate and verify the final durable approval/MCP lifecycle increment |
 | Durable lifecycle increment | PR #16 merged with required checks green | Preserve the merged behavior through the batched release audit/test gate |
 | `v1.16.0-preview.2` plan | Committed protected-draft rollback-baseline target; `preview.1` is historical and untrusted | Build signed/notarized artifacts, create the attested live publication report, and collect split-job protected schema-v3 rollback-baseline acceptance |
-| Provenance/license boundary | OCB-006 source gate reports `834 dependencies; 0 blockers; Nucleo=NOT_REQUIRED` | Require final packaged attribution inspection and retained CycloneDX SBOM/manifest in the release run; obtain specialist review for custom/LGPL obligations |
+| Provenance/license boundary | OCB-006 automated source gate reports `834 dependencies; 0 blockers; Nucleo=NOT_REQUIRED`, but the ground-truth audit reopened bundled `vscode-eslint` and VC++ runtime evidence gaps | Add immutable source/digest/license inventory for both bundled components, rerun final packaged attribution inspection, retain the attested CycloneDX SBOM/publication receipt, and obtain specialist review for custom/LGPL obligations |
 | Public Protocol v0 | YELLOW schema-only incubator draft; not publishable/extractable | Approve immutable inputs and requirements, independently review/re-derive schemas, then author synthetic conformance vectors |
 | Boundary CI | Not complete | Deny forbidden private dependencies, copied source, secrets, and unreviewed generated inputs |
 | Managed Gateway | Not started; intentionally blocked | Begin only after boundary gates B0–B5 and Protocol gates PV0-G01–PV0-G10 |
 | Trusted canary observation | **NOT_READY**; manual/workflow-dispatch JSON is explicitly rejected | Implement an independently attested manifest/tag/source-bound distribution and telemetry receipt before starting the preview.2 → preview.3 release clock |
-| Production dependency audit | npm bulk-advisory gate GREEN on the current macOS graph: 894 package names / 1008 exact versions, zero unapproved findings; one documented moderate `esbuild@0.18.20` residual | Run the same gate on Linux/macOS/Windows CI and remove or re-review the deprecated Drizzle Kit path before 2026-08-15; any new advisory or expired exception fails closed |
+| Production dependency audit | npm bulk-advisory gate GREEN on the frozen cross-platform graph: 894 package names / 985 exact versions, zero findings and no exceptions | Keep the canonical Linux CI and protected release-gate runs green; any advisory or empty/invalid inventory fails closed |
 | Enterprise/cloud operations | Planned | Begin after the synthetic Gateway slice is accepted |
 
 ## 3. Milestones and target release windows

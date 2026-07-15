@@ -35,7 +35,7 @@
     "release:attribution:check": "pnpm --dir apps/browser release:attribution:check",
     "release:attribution:test": "pnpm --dir apps/browser release:attribution:test",
     "release:signing:readiness": "node scripts/release/signing-readiness.mjs",
-    "release:signing:readiness:test": "node --test scripts/release/signing-readiness.test.mjs scripts/release/release-plumbing.test.mjs scripts/release/release-trust.test.mjs scripts/release/validate-release-identity.test.mjs scripts/release/legacy-download-surface.test.mjs",
+    "release:signing:readiness:test": "node --test scripts/release/signing-readiness.test.mjs scripts/release/release-plumbing.test.mjs scripts/release/release-trust.test.mjs scripts/release/validate-release-identity.test.mjs scripts/release/prepare-release-workflow.test.mjs scripts/release/legacy-download-surface.test.mjs",
     "release:preview:validate": "node scripts/release/validate-technical-preview-plan.mjs --manifest=.release-notes/clodex-technical-preview.json",
     "release:stable:validate": "node scripts/release/validate-stable-release-plan.mjs --manifest=.release-notes/clodex-stable.json --expected-version=1.16.0 --expected-tag=clodex@1.16.0",
     "version:karton": "tsx scripts/release/index.ts --package karton",
