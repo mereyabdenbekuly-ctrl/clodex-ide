@@ -1,14 +1,24 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 
 export const NPM_BULK_ADVISORY_ENDPOINT =
   'https://registry.npmjs.org/-/npm/v1/security/advisories/bulk';
 
 export const DOCUMENTED_RESIDUALS = [];
+export const AUDITED_DEPENDENCY_FIELDS = Object.freeze([
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+]);
+
+const EXACT_NPM_VERSION_PATTERN =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 
 function fail(message) {
   throw new Error(message);
@@ -42,17 +52,44 @@ function addVersion(inventory, name, version) {
   inventory.get(name).add(version);
 }
 
+function sha256Json(value) {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+export function dependencyInventoryDigest(inventory) {
+  return sha256Json(
+    Object.fromEntries(
+      [...inventory]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([name, versions]) => [name, [...versions].sort()]),
+    ),
+  );
+}
+
 export function collectDependencyInventory(pnpmList) {
-  if (!Array.isArray(pnpmList)) fail('pnpm production list must be an array');
+  if (!Array.isArray(pnpmList)) fail('pnpm release list must be an array');
   const inventory = new Map();
   const visit = (dependencies) => {
     if (!dependencies || typeof dependencies !== 'object') return;
     for (const [declaredName, dependency] of Object.entries(dependencies)) {
-      if (!dependency || typeof dependency !== 'object') continue;
-      const linkedWorkspace =
-        typeof dependency.version === 'string' &&
-        /^(?:file|link|workspace):/u.test(dependency.version);
-      let name = declaredName;
+      if (!declaredName || !dependency || typeof dependency !== 'object') {
+        fail(
+          `pnpm dependency record is invalid: ${declaredName || '<missing>'}`,
+        );
+      }
+      if (typeof dependency.version !== 'string' || !dependency.version) {
+        fail(`pnpm dependency version is missing: ${declaredName}`);
+      }
+      if (dependency.version.startsWith('file:')) {
+        fail(
+          `local file dependency is outside the npm advisory model: ${declaredName}`,
+        );
+      }
+      const linkedWorkspace = /^(?:link|workspace):/u.test(dependency.version);
+      let name =
+        typeof dependency.name === 'string' && dependency.name
+          ? dependency.name
+          : declaredName;
       let version = dependency.version;
       if (typeof dependency.path === 'string') {
         const packageJsonPath = path.join(dependency.path, 'package.json');
@@ -68,23 +105,137 @@ export function collectDependencyInventory(pnpmList) {
           }
         }
       }
-      if (!linkedWorkspace) addVersion(inventory, name, version);
-      visit(dependency.dependencies);
-      visit(dependency.optionalDependencies);
+      if (!linkedWorkspace) {
+        if (
+          typeof name !== 'string' ||
+          !name ||
+          typeof version !== 'string' ||
+          !EXACT_NPM_VERSION_PATTERN.test(version)
+        ) {
+          fail(
+            `dependency version is not an exact npm version: ${name}@${version}`,
+          );
+        }
+        addVersion(inventory, name, version);
+      }
+      for (const field of AUDITED_DEPENDENCY_FIELDS) visit(dependency[field]);
     }
   };
   for (const workspace of pnpmList) {
-    visit(workspace?.dependencies);
-    visit(workspace?.optionalDependencies);
+    for (const field of AUDITED_DEPENDENCY_FIELDS) visit(workspace?.[field]);
   }
   const versionCount = [...inventory.values()].reduce(
     (count, versions) => count + versions.size,
     0,
   );
   if (inventory.size === 0 || versionCount === 0) {
-    fail('pnpm production inventory is empty');
+    fail('pnpm release dependency inventory is empty');
   }
   return inventory;
+}
+
+function normalizeImporterPath(repositoryDirectory, workspacePath) {
+  if (typeof workspacePath !== 'string' || !path.isAbsolute(workspacePath)) {
+    fail('pnpm workspace path must be absolute');
+  }
+  const relativePath = path
+    .relative(path.resolve(repositoryDirectory), path.resolve(workspacePath))
+    .split(path.sep)
+    .join('/');
+  if (
+    relativePath === '..' ||
+    relativePath.startsWith('../') ||
+    relativePath.includes('/../')
+  ) {
+    fail(`pnpm workspace escapes the repository: ${workspacePath}`);
+  }
+  return relativePath || '.';
+}
+
+function dependencyNames(record, field) {
+  const dependencies = record?.[field] ?? {};
+  if (
+    !dependencies ||
+    typeof dependencies !== 'object' ||
+    Array.isArray(dependencies)
+  ) {
+    fail(`dependency category ${field} must be an object`);
+  }
+  return Object.keys(dependencies).sort();
+}
+
+export function validateDependencyListCoverage({
+  lockfileText,
+  pnpmList,
+  repositoryDirectory,
+}) {
+  if (typeof lockfileText !== 'string' || !lockfileText.trim()) {
+    fail('pnpm lockfile text is empty');
+  }
+  const lockfile = parseYaml(lockfileText);
+  if (
+    !lockfile ||
+    typeof lockfile !== 'object' ||
+    !lockfile.importers ||
+    typeof lockfile.importers !== 'object' ||
+    Array.isArray(lockfile.importers)
+  ) {
+    fail('pnpm lockfile importers are missing or invalid');
+  }
+  if (!Array.isArray(pnpmList) || pnpmList.length === 0) {
+    fail('pnpm release list is empty');
+  }
+  const observedImporters = new Map();
+  for (const workspace of pnpmList) {
+    const importerPath = normalizeImporterPath(
+      repositoryDirectory,
+      workspace?.path,
+    );
+    if (observedImporters.has(importerPath)) {
+      fail(`pnpm release list duplicates importer ${importerPath}`);
+    }
+    observedImporters.set(importerPath, workspace);
+  }
+  const expectedImporterPaths = Object.keys(lockfile.importers).sort();
+  const observedImporterPaths = [...observedImporters.keys()].sort();
+  if (
+    JSON.stringify(observedImporterPaths) !==
+    JSON.stringify(expectedImporterPaths)
+  ) {
+    fail(
+      `pnpm release list importer drift: expected ${expectedImporterPaths.join(', ')}; got ${observedImporterPaths.join(', ')}`,
+    );
+  }
+  let directDependencyCount = 0;
+  const directDependencyRecords = [];
+  for (const importerPath of expectedImporterPaths) {
+    const expected = lockfile.importers[importerPath];
+    const observed = observedImporters.get(importerPath);
+    for (const field of AUDITED_DEPENDENCY_FIELDS) {
+      const expectedNames = dependencyNames(expected, field);
+      const observedNames = dependencyNames(observed, field);
+      directDependencyCount += expectedNames.length;
+      directDependencyRecords.push({
+        dependencies: expectedNames,
+        field,
+        importer: importerPath,
+      });
+      if (JSON.stringify(observedNames) !== JSON.stringify(expectedNames)) {
+        fail(
+          `pnpm release list direct dependency drift for ${importerPath} ${field}: expected ${expectedNames.join(', ')}; got ${observedNames.join(', ')}`,
+        );
+      }
+    }
+  }
+  if (directDependencyCount === 0) {
+    fail('pnpm lockfile direct dependency inventory is empty');
+  }
+  return {
+    dependencyFields: [...AUDITED_DEPENDENCY_FIELDS],
+    directDependencyCount,
+    directDependencySha256: sha256Json(directDependencyRecords),
+    importerCount: expectedImporterPaths.length,
+  };
 }
 
 function advisoryIdentity(advisory) {
@@ -197,7 +348,6 @@ export function buildPnpmListInvocation({
       ...(npmExecPath ? [npmExecPath] : []),
       'list',
       '-r',
-      '--prod',
       '--json',
       '--depth',
       'Infinity',
@@ -206,7 +356,7 @@ export function buildPnpmListInvocation({
   };
 }
 
-export function loadProductionDependencyList({
+export function loadReleaseDependencyList({
   execFileSyncImpl = execFileSync,
   nodeExecutable,
   npmExecPath,
@@ -223,27 +373,41 @@ export function loadProductionDependencyList({
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   const parsed = JSON.parse(rawList);
-  if (!Array.isArray(parsed)) fail('pnpm production list must be an array');
+  if (!Array.isArray(parsed)) fail('pnpm release list must be an array');
   return parsed;
 }
 
 async function main() {
   const options = parseArguments(process.argv.slice(2));
-  const inventory = collectDependencyInventory(loadProductionDependencyList());
+  const repositoryDirectory = process.cwd();
+  const pnpmList = loadReleaseDependencyList();
+  const lockfileText = readFileSync(
+    path.join(repositoryDirectory, 'pnpm-lock.yaml'),
+    'utf8',
+  );
+  const coverage = validateDependencyListCoverage({
+    lockfileText,
+    pnpmList,
+    repositoryDirectory,
+  });
+  const inventory = collectDependencyInventory(pnpmList);
   const findings = await queryAdvisories(inventory);
   const evaluated = evaluateFindings(findings);
   const report = {
-    schemaVersion: 1,
-    reportKind: 'production-dependency-audit',
+    schemaVersion: 2,
+    reportKind: 'release-dependency-audit',
     status: evaluated.blockers.length === 0 ? 'passed' : 'blocked',
     generatedAt: new Date().toISOString(),
     endpoint: NPM_BULK_ADVISORY_ENDPOINT,
+    lockfileSha256: createHash('sha256').update(lockfileText).digest('hex'),
     inventory: {
+      ...coverage,
       packageNames: inventory.size,
       packageVersions: [...inventory.values()].reduce(
         (total, versions) => total + versions.size,
         0,
       ),
+      sha256: dependencyInventoryDigest(inventory),
     },
     findings,
     ...evaluated,
@@ -255,9 +419,7 @@ async function main() {
   }
   console.log(JSON.stringify(report, null, 2));
   if (report.status !== 'passed') {
-    fail(
-      `production dependency audit has ${report.blockers.length} blocker(s)`,
-    );
+    fail(`release dependency audit has ${report.blockers.length} blocker(s)`);
   }
 }
 

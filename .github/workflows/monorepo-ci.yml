@@ -96,20 +96,20 @@ jobs:
       - name: Validate release acceptance contracts
         run: pnpm release:acceptance:test
 
-      - name: Test production dependency audit policy
+      - name: Test release dependency audit policy
         run: pnpm security:dependencies:test
 
-      - name: Audit production dependencies through the npm bulk endpoint
+      - name: Audit the complete release and workspace dependency graph
         run: >-
           pnpm security:dependencies --
-          --report=security-reports/production-dependency-audit.json
+          --report=security-reports/release-dependency-audit.json
 
-      - name: Upload production dependency audit report
+      - name: Upload release dependency audit report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: production-dependency-audit-${{ github.sha }}
-          path: security-reports/production-dependency-audit.json
+          name: release-dependency-audit-${{ github.sha }}
+          path: security-reports/release-dependency-audit.json
           retention-days: 30
           if-no-files-found: ignore
 

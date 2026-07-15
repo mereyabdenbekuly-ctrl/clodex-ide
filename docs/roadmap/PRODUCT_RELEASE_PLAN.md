@@ -67,7 +67,7 @@ rollback target or an allowed public download.
 | Boundary CI | Not complete | Deny forbidden private dependencies, copied source, secrets, and unreviewed generated inputs |
 | Managed Gateway | Not started; intentionally blocked | Begin only after boundary gates B0–B5 and Protocol gates PV0-G01–PV0-G10 |
 | Trusted canary observation | **NOT_READY**; manual/workflow-dispatch JSON is explicitly rejected | Implement an independently attested manifest/tag/source-bound distribution and telemetry receipt before starting the preview.2 → preview.3 release clock |
-| Production dependency audit | npm bulk-advisory gate GREEN on the frozen cross-platform graph: 894 package names / 985 exact versions, zero findings and no exceptions | Keep the canonical Linux CI and protected release-gate runs green; any advisory or empty/invalid inventory fails closed |
+| Release dependency audit | npm bulk-advisory gate GREEN on the complete frozen workspace/release graph: 33 lockfile importers, 1,866 package names / 2,183 exact versions, zero findings and no exceptions; retained reports hash-bind `pnpm-lock.yaml`, direct dependency categories, and the canonical exact-version inventory | Keep the canonical Linux CI and protected release-gate runs green; any importer/direct-dependency drift, unsupported version, advisory, or empty/invalid inventory fails closed |
 | Enterprise/cloud operations | Planned | Begin after the synthetic Gateway slice is accepted |
 
 ## 3. Milestones and target release windows

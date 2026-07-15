@@ -318,7 +318,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Audit the exact production lockfile before release effects
+      - name: Audit the exact release dependency graph before release effects
         run: pnpm security:dependencies
 
       - name: Validate desktop attribution and redistribution rights

@@ -1303,7 +1303,7 @@ test('browser release builds and publishes only the immutable input SHA', () => 
   assert.doesNotMatch(sourceGate, /contents: write|id-token: write|secrets\./);
   assert.match(
     promotionGate,
-    /Audit the exact production lockfile before release effects/,
+    /Audit the exact release dependency graph before release effects/,
   );
   assert.match(
     promotionGate,
