@@ -11,20 +11,24 @@ import {
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type {
+  LoadedTechnicalPreviewReleasePlan,
+  TechnicalPreviewReleasePlan,
+} from './release-plan.mjs';
 
-export const PREVIEW_ACCEPTANCE_SCHEMA_VERSION = 1;
-export const PREVIEW_VERSION = '1.16.0-preview.2';
-export const ROLLBACK_TARGET_TAG = 'v1.16.0-preview.1';
+export const PREVIEW_ACCEPTANCE_SCHEMA_VERSION = 2;
 export const PINNED_NODE_VERSION = '22.23.1';
 export const PINNED_PNPM_VERSION = '10.30.3';
+const CANONICAL_RELEASE_REPOSITORY = 'mereyabdenbekuly-ctrl/clodex-ide';
 
 export type AcceptanceCheckKind = 'automated' | 'manual';
 export type AcceptanceCheckStatus = 'blocked' | 'fail' | 'not-run' | 'pass';
 export type PreviewAcceptanceStatus =
   | 'canary-running'
   | 'hold'
+  | 'ready-as-rollback-baseline'
   | 'ready-for-canary'
-  | 'ready-for-expansion'
+  | 'ready-for-stable'
   | 'rollback-required';
 
 export interface AcceptanceCheckDefinition {
@@ -45,6 +49,7 @@ export interface AcceptanceCheckDefinition {
 export const AUTOMATED_CHECK_IDS = [
   'source.commit-bound',
   'source.clean-tree',
+  'publication.github-release',
   'toolchain.node',
   'toolchain.pnpm',
   'artifact.validation-manifest',
@@ -90,6 +95,14 @@ export const PREVIEW_ACCEPTANCE_MATRIX: readonly AcceptanceCheckDefinition[] = [
     required: true,
   },
   {
+    category: 'artifact',
+    description:
+      'GitHub identifies the exact tag as a real protected draft pre-release.',
+    id: 'publication.github-release',
+    kind: 'automated',
+    required: true,
+  },
+  {
     category: 'toolchain',
     description: `Node.js is pinned to ${PINNED_NODE_VERSION}.`,
     id: 'toolchain.node',
@@ -106,7 +119,7 @@ export const PREVIEW_ACCEPTANCE_MATRIX: readonly AcceptanceCheckDefinition[] = [
   {
     category: 'artifact',
     description:
-      'The macOS release validator emitted a schema-v1 passed manifest.',
+      'The macOS release validator emitted a schema-v2 passed manifest.',
     id: 'artifact.validation-manifest',
     kind: 'automated',
     required: true,
@@ -261,6 +274,7 @@ export interface CanaryMetrics {
   crashLoops: number;
   crashes: number;
   dataLossIncidents: number;
+  distributionClosedAt: string | null;
   egressMissingPrompts: number;
   egressPromptAttempts: number;
   egressUnexpectedAllows: number;
@@ -277,39 +291,64 @@ export interface CanaryMetrics {
 
 export interface PreviewAcceptanceInput {
   canary: CanaryMetrics | null;
-  manualChecks: Record<ManualCheckId, ManualCheckInput>;
-  release: {
-    channel: 'prerelease';
+  manifest: {
+    path: string;
+    sha256: string;
     sourceCommit: string;
-    version: string;
+  };
+  manualChecks: Record<ManualCheckId, ManualCheckInput>;
+  publication: {
+    githubReleaseId: number | null;
+    githubReleaseState: 'draft' | 'not-recorded';
+    tag: string;
+    targetCommit: string;
   };
   rollback: {
     operatorReviewed: boolean;
     readOnlyVerificationPassed: boolean;
-    targetTag: string;
   };
-  schemaVersion: 1;
+  schemaVersion: 2;
 }
 
 export interface PreviewAcceptanceReport {
   blockers: string[];
   canary: {
+    distributionClosedAt: string | null;
+    endedAt: string | null;
     exitCriteria: string[];
     observedHours: number | null;
+    observedInstallations: number | null;
+    startedAt: string | null;
     stopReasons: string[];
-    targetInstallations: 5;
+    targetInstallations: 0 | 5;
     targetObservationHours: 24;
   };
   checks: AcceptanceCheckReceipt[];
+  evidenceKind: 'release-acceptance';
   generatedAt: string;
-  release: PreviewAcceptanceInput['release'];
+  manifest: PreviewAcceptanceInput['manifest'];
+  publication: PreviewAcceptanceInput['publication'];
+  release: {
+    channel: 'preview';
+    promotionRole: TechnicalPreviewReleasePlan['promotionRole'];
+    tag: string;
+    version: string;
+  };
   rollback: {
     commands: string[];
     note: string;
-    targetTag: string;
+    mode: 'distribution-stop-only';
+    targetTag?: string;
   };
-  schemaVersion: 1;
+  schemaVersion: 2;
   status: PreviewAcceptanceStatus;
+}
+
+export type PreviewAcceptanceContext = LoadedTechnicalPreviewReleasePlan;
+
+interface AcceptanceReleaseIdentity {
+  sourceCommit: string;
+  version: string;
 }
 
 interface MacosValidationManifest {
@@ -355,8 +394,10 @@ interface MacosValidationManifest {
 
 export interface AutomatedCollectionOptions {
   artifactValidationPath?: string;
+  context: PreviewAcceptanceContext;
+  githubRepository?: string;
   packagedAppPath?: string;
-  release: PreviewAcceptanceInput['release'];
+  publication: PreviewAcceptanceInput['publication'];
   repositoryDirectory: string;
   runSourceChecks: boolean;
 }
@@ -382,14 +423,6 @@ export const CANARY_EXIT_CRITERIA = [
   'at least five restart/recovery attempts with zero recovery failures',
   'zero data-loss, Guardian-bypass, or signature/trust incidents',
   'minimum observation duration of 24 hours',
-] as const;
-
-export const ROLLBACK_COMMANDS = [
-  'gh release view v1.16.0-preview.1 --json tagName,isPrerelease,assets',
-  'gh release view v1.16.0-preview.2 --json tagName,isPrerelease,assets',
-  'gh release download v1.16.0-preview.1 --pattern "*.dmg" --pattern "*.sha256" --dir "$ROLLBACK_DIR"',
-  'shasum -a 256 -c "$ROLLBACK_DIR"/*.sha256',
-  'gh release edit v1.16.0-preview.2 --draft',
 ] as const;
 
 function receipt(
@@ -634,7 +667,7 @@ export function collectDirectPackagedAppChecks(
 
 export function collectMacosArtifactChecks(
   manifestPath: string | undefined,
-  release: PreviewAcceptanceInput['release'],
+  release: AcceptanceReleaseIdentity,
 ): AcceptanceCheckReceipt[] {
   if (!manifestPath) {
     return [
@@ -683,7 +716,7 @@ export function collectMacosArtifactChecks(
   }
 
   const manifestValid =
-    manifest.schemaVersion === 1 &&
+    manifest.schemaVersion === 2 &&
     manifest.status === 'passed' &&
     manifest.build?.nodeVersion === PINNED_NODE_VERSION &&
     manifest.build?.pnpmVersion === PINNED_PNPM_VERSION &&
@@ -830,6 +863,102 @@ function collectSourceContractChecks(
   return receipts;
 }
 
+export function collectGitHubPublicationCheck(
+  options: Pick<
+    AutomatedCollectionOptions,
+    'context' | 'githubRepository' | 'publication' | 'repositoryDirectory'
+  >,
+  runGh: typeof spawnSync = spawnSync,
+  runGitCommand: typeof runGit = runGit,
+): AcceptanceCheckReceipt {
+  if (options.githubRepository !== CANONICAL_RELEASE_REPOSITORY) {
+    return receipt(
+      'publication.github-release',
+      'blocked',
+      'github-repository-not-provided',
+    );
+  }
+  if (
+    options.publication.githubReleaseId === null ||
+    options.publication.githubReleaseState !== 'draft'
+  ) {
+    return receipt(
+      'publication.github-release',
+      'blocked',
+      'github-release-not-recorded',
+    );
+  }
+
+  let tagCommit: string;
+  try {
+    tagCommit = runGitCommand(options.repositoryDirectory, [
+      'rev-parse',
+      '--verify',
+      `refs/tags/${options.context.plan.tag}^{commit}`,
+    ]);
+  } catch {
+    return receipt(
+      'publication.github-release',
+      'blocked',
+      'release-tag-unavailable',
+    );
+  }
+  if (tagCommit !== options.context.releaseRef) {
+    return receipt(
+      'publication.github-release',
+      'fail',
+      'release-tag-source-mismatch',
+    );
+  }
+
+  const result = runGh(
+    'gh',
+    [
+      'api',
+      '--method',
+      'GET',
+      `repos/${options.githubRepository}/releases/${options.publication.githubReleaseId}`,
+    ],
+    {
+      encoding: 'utf8',
+      env: sanitizeChildEnvironment(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  if (result.error || result.status !== 0) {
+    return receipt(
+      'publication.github-release',
+      'blocked',
+      'github-release-query-failed',
+    );
+  }
+
+  let release: unknown;
+  try {
+    release = JSON.parse(String(result.stdout));
+  } catch {
+    return receipt(
+      'publication.github-release',
+      'fail',
+      'github-release-response-invalid',
+    );
+  }
+  const valid =
+    isObject(release) &&
+    release.id === options.publication.githubReleaseId &&
+    release.tag_name === options.context.plan.tag &&
+    release.draft === true &&
+    release.prerelease === true &&
+    release.published_at === null;
+  return receipt(
+    'publication.github-release',
+    valid ? 'pass' : 'fail',
+    valid
+      ? 'github-draft-release-verified'
+      : 'github-release-contract-mismatch',
+  );
+}
+
 export function collectAutomatedAcceptance(
   options: AutomatedCollectionOptions,
 ): AcceptanceCheckReceipt[] {
@@ -847,8 +976,8 @@ export function collectAutomatedAcceptance(
     receipts.push(
       receipt(
         'source.commit-bound',
-        actualCommit === options.release.sourceCommit ? 'pass' : 'fail',
-        actualCommit === options.release.sourceCommit
+        actualCommit === options.context.releaseRef ? 'pass' : 'fail',
+        actualCommit === options.context.releaseRef
           ? 'source-commit-matched'
           : 'source-commit-mismatch',
       ),
@@ -861,6 +990,8 @@ export function collectAutomatedAcceptance(
       ),
     );
   }
+
+  receipts.push(collectGitHubPublicationCheck(options));
 
   const nodeVersion = process.version.replace(/^v/u, '');
   receipts.push(
@@ -891,10 +1022,10 @@ export function collectAutomatedAcceptance(
   );
 
   receipts.push(
-    ...collectMacosArtifactChecks(
-      options.artifactValidationPath,
-      options.release,
-    ),
+    ...collectMacosArtifactChecks(options.artifactValidationPath, {
+      sourceCommit: options.context.releaseRef,
+      version: options.context.plan.version,
+    }),
   );
   receipts.push(...collectDirectPackagedAppChecks(options.packagedAppPath));
   if (options.runSourceChecks) {
@@ -930,8 +1061,21 @@ function resolveCanaryObservationEnd(
   const startedAtMs = new Date(metrics.startedAt).getTime();
   const endedAt = metrics.endedAt ?? now.toISOString();
   const endedAtMs = new Date(endedAt).getTime();
+  const distributionClosedAtMs =
+    metrics.distributionClosedAt === null
+      ? null
+      : new Date(metrics.distributionClosedAt).getTime();
 
-  if (Number.isNaN(nowMs) || startedAtMs > endedAtMs || endedAtMs > nowMs) {
+  if (
+    Number.isNaN(nowMs) ||
+    startedAtMs > endedAtMs ||
+    endedAtMs > nowMs ||
+    (metrics.endedAt === null && metrics.distributionClosedAt !== null) ||
+    (distributionClosedAtMs !== null &&
+      (Number.isNaN(distributionClosedAtMs) ||
+        distributionClosedAtMs < endedAtMs ||
+        distributionClosedAtMs > nowMs))
+  ) {
     throw new Error('acceptance-canary-window-invalid');
   }
 
@@ -954,12 +1098,7 @@ export function getCanaryStopReasons(metrics: CanaryMetrics): string[] {
   if (metrics.crashes > 0) reasons.push('crash');
   if (metrics.launchFailures > 0) reasons.push('launch-failure');
   if (metrics.recoveryFailures > 0) reasons.push('recovery-failure');
-  if (
-    metrics.authAttempts >= CANARY_5_POLICY.minimum.authAttempts &&
-    metrics.authFailures / metrics.authAttempts > 0.2
-  ) {
-    reasons.push('auth-failure-rate');
-  }
+  if (metrics.authFailures > 0) reasons.push('auth-failure');
   return reasons;
 }
 
@@ -969,6 +1108,8 @@ function canaryMeetsExitCriteria(
 ): boolean {
   return (
     observedHours >= CANARY_5_POLICY.targetObservationHours &&
+    metrics.endedAt !== null &&
+    metrics.distributionClosedAt !== null &&
     metrics.uniqueInstallations === CANARY_5_POLICY.targetInstallations &&
     metrics.launchAttempts >= CANARY_5_POLICY.minimum.launchAttempts &&
     metrics.launchFailures === 0 &&
@@ -988,12 +1129,42 @@ function canaryMeetsExitCriteria(
   );
 }
 
+function validateAcceptanceContext(context: PreviewAcceptanceContext): void {
+  if (
+    context.plan.schemaVersion !== 2 ||
+    context.plan.releaseKind !== 'technical-preview' ||
+    !['canary', 'rollback-baseline'].includes(context.plan.promotionRole) ||
+    !/^[a-f0-9]{40}$/u.test(context.releaseRef) ||
+    !/^[a-f0-9]{64}$/u.test(context.manifestSha256) ||
+    !context.manifestPath.startsWith('.release-notes/')
+  ) {
+    throw new Error('acceptance-manifest-context-invalid');
+  }
+}
+
+function rollbackCommands(plan: TechnicalPreviewReleasePlan): string[] {
+  const commands = [
+    `gh release view ${plan.tag} --json databaseId,tagName,isDraft,isPrerelease,assets`,
+  ];
+  if (plan.rollback.targetTag) {
+    commands.push(
+      `gh release view ${plan.rollback.targetTag} --json databaseId,tagName,isDraft,isPrerelease,assets`,
+      `gh release download ${plan.rollback.targetTag} --pattern "*.dmg" --pattern "*.sha256" --dir "$ROLLBACK_DIR"`,
+      'shasum -a 256 -c "$ROLLBACK_DIR"/*.sha256',
+    );
+  }
+  commands.push(`gh release edit ${plan.tag} --draft`);
+  return commands;
+}
+
 export function evaluatePreviewAcceptance(
+  context: PreviewAcceptanceContext,
   input: PreviewAcceptanceInput,
   automatedChecks: readonly AcceptanceCheckReceipt[],
   now = new Date(),
 ): PreviewAcceptanceReport {
-  validatePreviewAcceptanceInput(input);
+  validateAcceptanceContext(context);
+  validatePreviewAcceptanceInput(input, context);
   const byId = new Map<AcceptanceCheckId, AcceptanceCheckReceipt>();
   for (const check of automatedChecks) byId.set(check.id, check);
   for (const id of MANUAL_CHECK_IDS) {
@@ -1024,8 +1195,18 @@ export function evaluatePreviewAcceptance(
   if (!input.rollback.readOnlyVerificationPassed) {
     blockers.push('rollback:read-only-verification-required');
   }
+  if (
+    input.publication.githubReleaseId === null ||
+    input.publication.githubReleaseState !== 'draft'
+  ) {
+    blockers.push('publication:verified-draft-release-required');
+  }
 
   const canary = input.canary;
+  const isCanaryPlan = context.plan.promotionRole === 'canary';
+  if (!isCanaryPlan && canary !== null) {
+    throw new Error('acceptance-baseline-canary-forbidden');
+  }
   const endedAt = canary
     ? resolveCanaryObservationEnd(canary, now)
     : now.toISOString();
@@ -1039,13 +1220,15 @@ export function evaluatePreviewAcceptance(
     status = 'rollback-required';
   } else if (blockers.length > 0) {
     status = 'hold';
+  } else if (!isCanaryPlan) {
+    status = 'ready-as-rollback-baseline';
   } else if (!canary) {
     status = 'ready-for-canary';
   } else if (
     observedHours !== null &&
     canaryMeetsExitCriteria(canary, observedHours)
   ) {
-    status = 'ready-for-expansion';
+    status = 'ready-for-stable';
   } else {
     status = 'canary-running';
   }
@@ -1053,20 +1236,49 @@ export function evaluatePreviewAcceptance(
   return {
     blockers,
     canary: {
-      exitCriteria: [...CANARY_EXIT_CRITERIA],
+      distributionClosedAt: canary?.distributionClosedAt ?? null,
+      endedAt: canary?.endedAt ?? null,
+      exitCriteria: isCanaryPlan ? [...CANARY_EXIT_CRITERIA] : [],
       observedHours:
         observedHours === null ? null : Math.round(observedHours * 100) / 100,
+      observedInstallations: canary?.uniqueInstallations ?? null,
+      startedAt: canary?.startedAt ?? null,
       stopReasons,
-      targetInstallations: CANARY_5_POLICY.targetInstallations,
+      targetInstallations: isCanaryPlan
+        ? CANARY_5_POLICY.targetInstallations
+        : 0,
       targetObservationHours: CANARY_5_POLICY.targetObservationHours,
     },
     checks,
+    evidenceKind: 'release-acceptance',
     generatedAt: now.toISOString(),
-    release: input.release,
+    manifest: {
+      path: input.manifest.path,
+      sha256: input.manifest.sha256,
+      sourceCommit: input.manifest.sourceCommit,
+    },
+    publication: {
+      githubReleaseId: input.publication.githubReleaseId,
+      githubReleaseState: input.publication.githubReleaseState,
+      tag: input.publication.tag,
+      targetCommit: input.publication.targetCommit,
+    },
+    release: {
+      channel: 'preview',
+      promotionRole: context.plan.promotionRole,
+      tag: context.plan.tag,
+      version: context.plan.version,
+    },
     rollback: {
-      commands: [...ROLLBACK_COMMANDS],
-      note: 'Preview rollback stops new distribution. Electron updates are forward-only; already-updated clients require manual reinstall or a forward-fix build.',
-      targetTag: ROLLBACK_TARGET_TAG,
+      commands: rollbackCommands(context.plan),
+      mode: 'distribution-stop-only',
+      note:
+        context.plan.promotionRole === 'rollback-baseline'
+          ? 'This build is the rollback baseline. Keep its GitHub Release draft and stop any out-of-band distribution; there is no earlier trusted target tag.'
+          : 'Stop preview.3 distribution and use only the manifest-bound preview.2 baseline. Electron updates remain forward-only for already-updated clients.',
+      ...(context.plan.rollback.targetTag
+        ? { targetTag: context.plan.rollback.targetTag }
+        : {}),
     },
     schemaVersion: PREVIEW_ACCEPTANCE_SCHEMA_VERSION,
     status,
@@ -1075,18 +1287,34 @@ export function evaluatePreviewAcceptance(
 
 export function validatePreviewAcceptanceInput(
   value: unknown,
+  context: PreviewAcceptanceContext,
 ): asserts value is PreviewAcceptanceInput {
-  if (!isObject(value) || value.schemaVersion !== 1) {
+  validateAcceptanceContext(context);
+  if (!isObject(value) || value.schemaVersion !== 2) {
     throw new Error('acceptance-schema-version-invalid');
   }
-  if (!isObject(value.release)) throw new Error('acceptance-release-missing');
   if (
-    value.release.channel !== 'prerelease' ||
-    typeof value.release.version !== 'string' ||
-    typeof value.release.sourceCommit !== 'string' ||
-    !/^[a-f0-9]{40}$/u.test(value.release.sourceCommit)
+    !isObject(value.manifest) ||
+    value.manifest.path !== context.manifestPath ||
+    value.manifest.sha256 !== context.manifestSha256 ||
+    value.manifest.sourceCommit !== context.releaseRef
   ) {
-    throw new Error('acceptance-release-invalid');
+    throw new Error('acceptance-manifest-binding-invalid');
+  }
+  if (!isObject(value.publication)) {
+    throw new Error('acceptance-publication-missing');
+  }
+  if (
+    (value.publication.githubReleaseId !== null &&
+      (!Number.isInteger(value.publication.githubReleaseId) ||
+        Number(value.publication.githubReleaseId) <= 0)) ||
+    !['draft', 'not-recorded'].includes(
+      String(value.publication.githubReleaseState),
+    ) ||
+    value.publication.tag !== context.plan.tag ||
+    value.publication.targetCommit !== context.releaseRef
+  ) {
+    throw new Error('acceptance-publication-invalid');
   }
   if (!isObject(value.manualChecks)) {
     throw new Error('acceptance-manual-checks-missing');
@@ -1095,15 +1323,15 @@ export function validatePreviewAcceptanceInput(
     const check = value.manualChecks[id];
     if (
       !isObject(check) ||
-      !['blocked', 'fail', 'not-run', 'pass'].includes(String(check.status))
+      !['blocked', 'fail', 'not-run', 'pass'].includes(String(check.status)) ||
+      (check.reasonCode !== undefined &&
+        (typeof check.reasonCode !== 'string' ||
+          !/^[a-z0-9][a-z0-9.-]{0,63}$/u.test(check.reasonCode)))
     ) {
       throw new Error(`acceptance-manual-check-invalid:${id}`);
     }
   }
   if (!isObject(value.rollback)) throw new Error('acceptance-rollback-missing');
-  if (value.rollback.targetTag !== ROLLBACK_TARGET_TAG) {
-    throw new Error('acceptance-rollback-target-invalid');
-  }
   if (
     typeof value.rollback.operatorReviewed !== 'boolean' ||
     typeof value.rollback.readOnlyVerificationPassed !== 'boolean'
@@ -1148,15 +1376,25 @@ function validateCanaryMetrics(value: unknown): asserts value is CanaryMetrics {
       (typeof value.endedAt !== 'string' ||
         Number.isNaN(new Date(value.endedAt).getTime()))) ||
     (typeof value.endedAt === 'string' &&
-      new Date(value.endedAt).getTime() < new Date(value.startedAt).getTime())
+      new Date(value.endedAt).getTime() <
+        new Date(value.startedAt).getTime()) ||
+    (value.distributionClosedAt !== null &&
+      (typeof value.distributionClosedAt !== 'string' ||
+        Number.isNaN(new Date(value.distributionClosedAt).getTime()))) ||
+    (value.endedAt === null && value.distributionClosedAt !== null) ||
+    (typeof value.endedAt === 'string' &&
+      typeof value.distributionClosedAt === 'string' &&
+      new Date(value.distributionClosedAt).getTime() <
+        new Date(value.endedAt).getTime())
   ) {
     throw new Error('acceptance-canary-window-invalid');
   }
 }
 
 export function createPreviewAcceptanceTemplate(
-  sourceCommit: string,
+  context: PreviewAcceptanceContext,
 ): PreviewAcceptanceInput {
+  validateAcceptanceContext(context);
   const manualChecks = Object.fromEntries(
     MANUAL_CHECK_IDS.map((id) => [
       id,
@@ -1165,16 +1403,21 @@ export function createPreviewAcceptanceTemplate(
   ) as Record<ManualCheckId, ManualCheckInput>;
   return {
     canary: null,
+    manifest: {
+      path: context.manifestPath,
+      sha256: context.manifestSha256,
+      sourceCommit: context.releaseRef,
+    },
     manualChecks,
-    release: {
-      channel: 'prerelease',
-      sourceCommit,
-      version: PREVIEW_VERSION,
+    publication: {
+      githubReleaseId: null,
+      githubReleaseState: 'not-recorded',
+      tag: context.plan.tag,
+      targetCommit: context.releaseRef,
     },
     rollback: {
       operatorReviewed: false,
       readOnlyVerificationPassed: false,
-      targetTag: ROLLBACK_TARGET_TAG,
     },
     schemaVersion: PREVIEW_ACCEPTANCE_SCHEMA_VERSION,
   };

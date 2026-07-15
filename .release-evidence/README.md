@@ -101,3 +101,31 @@ SSH/Docker samples across two command classes must succeed. Controlled fault
 samples remain diagnostic only. `.github/workflows/runner-docker-promotion.yml`
 runs the production Docker transport against a digest-resolved disposable
 image and signs the resulting bundle with the protected collector identity.
+
+### Desktop release acceptance
+
+Desktop preview promotion uses content-free schema-v3 evidence produced only by
+the protected `Trusted Release Acceptance Evidence` workflow. The workflow
+revalidates the canonical live draft release, exact remote tag, complete asset
+inventory and SHA-256 digests, then verifies the publication report attestation
+before it runs real source checks and attests the final evidence bytes.
+
+A desktop release report may be committed only when:
+
+- `gh attestation verify` succeeds for the exact evidence file against
+  `.github/workflows/release-acceptance-evidence.yml`, canonical `main`, and the
+  source/signer digests recorded inside the evidence;
+- its manifest SHA-256 and source commit identify the exact released plan;
+- every required automated and manual check is `pass`;
+- it identifies the unchanged real draft GitHub Release and every live asset by
+  database ID, name, positive byte size, API digest, and downloaded SHA-256;
+- preview.2 status is `ready-as-rollback-baseline`; or
+- preview.3 remains `NOT_READY` until a separately attested, manifest-bound
+  distribution/telemetry observation source exists. Operator-authored JSON is
+  not canary evidence and cannot open the stable gate.
+
+Never hand-author a passing report or add templates, placeholder hashes,
+synthetic release IDs, raw logs, or per-installation data. The release-plan
+validator rejects uncommitted or unattested evidence, recomputes the historical
+manifest binding from Git, and retains complete preview.3 to preview.2 live
+revalidation behind the explicit `NOT_READY` canary-observation blocker.

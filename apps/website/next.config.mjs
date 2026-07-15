@@ -40,6 +40,11 @@ const config = {
   async redirects() {
     return [
       {
+        source: '/downloads/clodex-1.16.0-arm64.dmg',
+        destination: '/download',
+        permanent: false,
+      },
+      {
         source: '/docs/:path*',
         destination: 'https://docs.clodex.io/:path*',
         permanent: true,

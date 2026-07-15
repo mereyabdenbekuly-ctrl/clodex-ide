@@ -6,51 +6,14 @@ import { Github, HeartHandshake, MenuIcon, XIcon } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useSession } from '@/lib/auth-client';
-import { IconDownload4FillDuo18 } from '@clodex/icons';
+import { DownloadUnavailableButton } from '@/components/download-unavailable-button';
 
 type Locale = 'ru' | 'en';
 
 function NavDownloadButton({ locale }: { locale: Locale }) {
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    const platform =
-      (
-        navigator as Navigator & {
-          userAgentData?: { platform?: string };
-        }
-      ).userAgentData?.platform?.toLowerCase() ?? '';
-    const ua = navigator.userAgent.toLowerCase();
-    if (
-      /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(ua)
-    ) {
-      return;
-    }
-    if (platform.includes('mac') || ua.includes('mac')) {
-      setDownloadUrl(
-        'https://ide.clodex.xyz/downloads/clodex-1.16.0-arm64.dmg',
-      );
-    } else if (platform.includes('win') || ua.includes('win')) {
-      setDownloadUrl('https://dl.clodex.io/download/clodex/release/win/x64');
-    } else if (platform.includes('linux') || ua.includes('linux')) {
-      setDownloadUrl(
-        'https://dl.clodex.io/download/clodex/release/linux/deb/x86_64',
-      );
-    }
-  }, []);
-
-  if (!downloadUrl) return null;
-  return (
-    <a
-      href={downloadUrl}
-      className={cn(buttonVariants({ size: 'sm', variant: 'primary' }))}
-    >
-      {locale === 'ru' ? 'Скачать' : 'Download'}
-      <IconDownload4FillDuo18 className="size-4" />
-    </a>
-  );
+  return <DownloadUnavailableButton locale={locale} size="sm" />;
 }
 
 function NavbarAuthLink({ locale }: { locale: Locale }) {

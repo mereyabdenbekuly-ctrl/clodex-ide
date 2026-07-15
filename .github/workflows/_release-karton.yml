@@ -11,55 +11,121 @@ on:
         required: true
         type: string
         description: "Git tag to create (e.g., @clodex/karton@1.2.3)"
+      ref:
+        required: true
+        type: string
+        description: "Immutable 40-character canonical-main commit SHA"
     secrets:
       NPM_TOKEN:
         required: false
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
+  source-gate:
+    name: Validate immutable Karton release identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require canonical main source
+        shell: bash
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          if [[ ! "$RELEASE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Karton release ref must be an immutable lowercase commit SHA"
+            exit 1
+          fi
+          test "$GITHUB_SHA" = "$RELEASE_REF"
+          test "$GITHUB_WORKFLOW_SHA" = "$RELEASE_REF"
+
+      - name: Checkout exact release source without credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate Karton version and tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          node scripts/release/validate-release-identity.mjs \
+            --product=karton \
+            --channel=release \
+            --tag="$RELEASE_TAG" \
+            --version="$RELEASE_VERSION"
+          package_version=$(node -p 'require("./packages/karton/package.json").version')
+          test "$package_version" = "$RELEASE_VERSION"
+
+      - name: Require exact current canonical main HEAD
+        shell: bash
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
+
   # Create the git tag from the current commit
   tag:
+    needs: source-gate
     runs-on: ubuntu-latest
+    environment: Release
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ inputs.ref }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
 
-      - name: Create and push tag (idempotent)
+      - name: Create exact lightweight tag through GitHub API (idempotent)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          if git rev-parse "refs/tags/${{ inputs.tag }}" >/dev/null 2>&1; then
-            EXISTING=$(git rev-list -n 1 "refs/tags/${{ inputs.tag }}")
-            CURRENT=$(git rev-parse HEAD)
-            if [ "$EXISTING" = "$CURRENT" ]; then
-              echo "Tag ${{ inputs.tag }} already exists on current commit — skipping"
-              exit 0
-            else
-              echo "::error::Tag ${{ inputs.tag }} exists but points to a different commit ($EXISTING vs $CURRENT)"
-              exit 1
-            fi
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
+          remote_tag=$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk 'NR == 1 {print $1}')
+          if [ -n "$remote_tag" ]; then
+            git fetch --force --no-tags origin \
+              "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+            existing_commit=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+            test "$existing_commit" = "$RELEASE_REF"
+            echo "Tag $RELEASE_TAG already targets the exact release commit"
+            exit 0
           fi
-
-          git tag "${{ inputs.tag }}"
-          git push origin "${{ inputs.tag }}"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f "ref=refs/tags/${RELEASE_TAG}" \
+            -f "sha=${RELEASE_REF}"
 
   publish:
-    needs: tag
+    needs: [source-gate, tag]
     runs-on: ubuntu-latest
+    environment: Release
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
@@ -75,6 +141,23 @@ jobs:
 
       - run: pnpm --filter @clodex/karton build
 
+      - name: Reassert exact main and tag immediately before npm publication
+        shell: bash
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          test "$(node -p 'require("./packages/karton/package.json").version')" = "$RELEASE_VERSION"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          tag_commit=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+          test "$tag_commit" = "$RELEASE_REF"
+
       - name: Publish to npm
         working-directory: packages/karton
         run: npm publish --tag latest --access public
@@ -82,12 +165,35 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   release:
-    needs: [tag, publish]
+    needs: [source-gate, tag, publish]
     runs-on: ubuntu-latest
+    environment: Release
     permissions:
       contents: write
 
     steps:
+      - name: Checkout exact release source without credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reassert exact main and tag immediately before GitHub Release
+        shell: bash
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          tag_commit=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+          test "$tag_commit" = "$RELEASE_REF"
+
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ inputs.tag }}

@@ -19,6 +19,16 @@ on:
         required: true
         type: string
         description: "Immutable 40-character commit SHA to tag, build, and release"
+      manifest:
+        required: false
+        type: string
+        default: ""
+        description: "Committed schema-v2 release plan; mandatory for preview and stable promotion"
+      draft:
+        required: false
+        type: boolean
+        default: false
+        description: "Stage the GitHub Release as a non-public draft"
     secrets:
       POSTHOG_API_KEY:
         required: false
@@ -61,17 +71,28 @@ on:
       CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY:
         required: false
 
+permissions:
+  contents: read
+
 jobs:
-  promotion-gate:
-    name: Validate release safety gates
+  source-gate:
+    name: Verify canonical main release source
     runs-on: ubuntu-latest
-    environment: Release
+    permissions:
+      attestations: read
+      contents: read
+    outputs:
+      release_plan_sha256: ${{ steps.binding.outputs.release_plan_sha256 }}
+      trusted_promotion: ${{ steps.binding.outputs.trusted_promotion }}
     steps:
-      - name: Validate release channel input
+      - name: Validate immutable canonical-main inputs
         shell: bash
         env:
           RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_REF: ${{ inputs.ref }}
         run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
           case "$RELEASE_CHANNEL_INPUT" in
             preview|alpha|beta|nightly|release) ;;
             *)
@@ -79,23 +100,114 @@ jobs:
               exit 1
               ;;
           esac
-
-      - name: Validate immutable release ref input
-        shell: bash
-        env:
-          RELEASE_REF: ${{ inputs.ref }}
-        run: |
           if [[ ! "$RELEASE_REF" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Release ref must be an immutable 40-character lowercase commit SHA"
             exit 1
           fi
+          test "$GITHUB_SHA" = "$RELEASE_REF"
+          test "$GITHUB_WORKFLOW_SHA" = "$RELEASE_REF"
 
-      - name: Checkout release candidate
+      - name: Checkout exact release source without credentials
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Validate canonical channel, version, and tag identity
+        shell: bash
+        env:
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          node scripts/release/validate-release-identity.mjs \
+            --channel="$RELEASE_CHANNEL_INPUT" \
+            --tag="$RELEASE_TAG" \
+            --version="$RELEASE_VERSION"
+
+      - name: Require exact current canonical main HEAD
+        shell: bash
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
+
+      - name: Verify manifest, trusted evidence, and live prerequisite chain
+        id: binding
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_DRAFT: ${{ inputs.draft }}
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$RELEASE_CHANNEL_INPUT" != "preview" ] && [ "$RELEASE_CHANNEL_INPUT" != "release" ]; then
+            if [ -n "$RELEASE_MANIFEST" ]; then
+              echo "::error::Only preview/stable releases may supply a promotion manifest"
+              exit 1
+            fi
+            echo "release_plan_sha256=" >> "$GITHUB_OUTPUT"
+            echo "trusted_promotion=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$RELEASE_MANIFEST" ]; then
+            echo "::error::A committed schema-v2 release manifest is mandatory"
+            exit 1
+          fi
+          expected_kind=stable
+          if [ "$RELEASE_CHANNEL_INPUT" = "preview" ]; then
+            expected_kind=technical-preview
+          fi
+          node scripts/release/verify-release-promotion.mjs \
+            --manifest="$RELEASE_MANIFEST" \
+            --repository="$GITHUB_REPOSITORY" \
+            --expected-kind="$expected_kind" \
+            --expected-version="$RELEASE_VERSION" \
+            --expected-tag="$RELEASE_TAG"
+          expected_draft=$(node -p '
+            const plan = JSON.parse(require("node:fs").readFileSync(process.env.RELEASE_MANIFEST, "utf8"));
+            String(plan.distribution.githubReleaseState === "draft");
+          ')
+          if [ "$expected_draft" != "$RELEASE_DRAFT" ]; then
+            echo "::error::Release draft input differs from the committed manifest"
+            exit 1
+          fi
+          release_plan_sha256=$(shasum -a 256 "$RELEASE_MANIFEST" | awk '{print $1}')
+          echo "release_plan_sha256=$release_plan_sha256" >> "$GITHUB_OUTPUT"
+          echo "trusted_promotion=true" >> "$GITHUB_OUTPUT"
+
+  promotion-gate:
+    name: Validate release safety gates
+    needs: source-gate
+    runs-on: ubuntu-latest
+    environment: Release
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout verified release candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reassert exact current main after protected approval
+        shell: bash
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+        run: |
+          test "$GITHUB_SHA" = "$RELEASE_REF"
+          test "$GITHUB_WORKFLOW_SHA" = "$RELEASE_REF"
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
 
       - name: Validate signing and update-server contract
         id: signing-readiness
@@ -113,19 +225,25 @@ jobs:
           AZURE_ACCOUNT_ENDPOINT_URI: ${{ secrets.AZURE_ACCOUNT_ENDPOINT_URI }}
           AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          SIGNING_REPORT: ${{ runner.temp }}/release-signing-readiness.json
+          SIGNING_SUMMARY: ${{ runner.temp }}/release-signing-readiness.md
           UPDATE_SERVER_ORIGIN: ${{ vars.UPDATE_SERVER_ORIGIN }}
-        run: >-
-          node scripts/release/signing-readiness.mjs
-          --artifacts=all
-          --channel=${{ inputs.channel }}
-          --github-annotations
-          --report=${{ runner.temp }}/release-signing-readiness.json
-          --summary=${{ runner.temp }}/release-signing-readiness.md
+        shell: bash
+        run: |
+          node scripts/release/signing-readiness.mjs \
+            --artifacts=all \
+            --channel="$RELEASE_CHANNEL_INPUT" \
+            --github-annotations \
+            --report="$SIGNING_REPORT" \
+            --summary="$SIGNING_SUMMARY"
 
       - name: Publish signing readiness summary
         if: always() && steps.signing-readiness.outcome != 'skipped'
         shell: bash
-        run: cat "${{ runner.temp }}/release-signing-readiness.md" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          SIGNING_SUMMARY: ${{ runner.temp }}/release-signing-readiness.md
+        run: cat "$SIGNING_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload signing readiness report
         if: always()
@@ -154,10 +272,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Audit the exact production lockfile before release effects
+        run: pnpm security:dependencies
+
       - name: Validate desktop attribution and redistribution rights
-        run: >-
-          pnpm --dir apps/browser release:attribution:check --
-          --channel=${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
+        shell: bash
+        env:
+          VALIDATION_CHANNEL: ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
+        run: |
+          pnpm --dir apps/browser release:attribution:check -- \
+            --channel="$VALIDATION_CHANNEL"
 
       - name: Validate isolated agent runtime promotion evidence
         if: inputs.channel == 'release'
@@ -181,13 +305,15 @@ jobs:
 
       - name: Validate main plan closure gate
         if: inputs.channel != 'nightly'
-        run: >-
-          pnpm --dir apps/browser check:main-plan-readiness --
-          --channel ${{ inputs.channel == 'release' && 'release' || 'prerelease' }}
-          --require-clean
-          --out test-results/main-plan-readiness.json
+        shell: bash
+        run: |
+          pnpm --dir apps/browser check:main-plan-readiness -- \
+            --channel "$MAIN_PLAN_CHANNEL" \
+            --require-clean \
+            --out test-results/main-plan-readiness.json
         env:
           CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY: ${{ secrets.CLODEX_EVIDENCE_MEMORY_PROMOTION_PUBLIC_KEY }}
+          MAIN_PLAN_CHANNEL: ${{ inputs.channel == 'release' && 'release' || 'prerelease' }}
 
       - name: Upload main plan readiness report
         if: always() && inputs.channel != 'nightly'
@@ -222,6 +348,7 @@ jobs:
   tag:
     needs: promotion-gate
     runs-on: ubuntu-latest
+    environment: Release
     permissions:
       contents: write
     steps:
@@ -230,33 +357,39 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
 
-      - name: Create and push tag (idempotent)
+      - name: Create exact lightweight tag through GitHub API (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          if git rev-parse "refs/tags/${{ inputs.tag }}" >/dev/null 2>&1; then
-            EXISTING=$(git rev-list -n 1 "refs/tags/${{ inputs.tag }}")
-            CURRENT=$(git rev-parse HEAD)
-            if [ "$EXISTING" = "$CURRENT" ]; then
-              echo "Tag ${{ inputs.tag }} already exists on current commit — skipping"
-              exit 0
-            else
-              echo "::error::Tag ${{ inputs.tag }} exists but points to a different commit ($EXISTING vs $CURRENT)"
-              exit 1
-            fi
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
+          remote_tag=$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk 'NR == 1 {print $1}')
+          if [ -n "$remote_tag" ]; then
+            git fetch --force --no-tags origin \
+              "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+            existing_commit=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+            test "$existing_commit" = "$RELEASE_REF"
+            echo "Tag $RELEASE_TAG already targets the exact release commit"
+            exit 0
           fi
-
-          git tag "${{ inputs.tag }}"
-          git push origin "${{ inputs.tag }}"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f "ref=refs/tags/${RELEASE_TAG}" \
+            -f "sha=${RELEASE_REF}"
 
       - name: Read release notes
         id: notes
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           PACKAGE_DIR="apps/browser"
-          VERSION="${{ inputs.version }}"
+          VERSION="$RELEASE_VERSION"
 
           NOTES=""
           if [ -f "$PACKAGE_DIR/CHANGELOG.md" ]; then
@@ -267,15 +400,15 @@ jobs:
             NOTES="Release ${VERSION}"
           fi
 
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          echo "$NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
 
     outputs:
       notes: ${{ steps.notes.outputs.notes }}
 
   build:
-    needs: tag
+    needs: [source-gate, tag]
     environment: Release
     strategy:
       fail-fast: false
@@ -333,6 +466,13 @@ jobs:
             echo "::error::Release checkout mismatch: expected $RELEASE_REF, got $actual_ref"
             exit 1
           fi
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          if [ -z "$remote_main" ] || [ "$remote_main" != "$RELEASE_REF" ]; then
+            echo "::error::Canonical main moved before protected build: expected $RELEASE_REF, got ${remote_main:-missing}"
+            exit 1
+          fi
+          test "$GITHUB_SHA" = "$RELEASE_REF"
+          test "$GITHUB_WORKFLOW_SHA" = "$RELEASE_REF"
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
@@ -367,9 +507,13 @@ jobs:
       - name: Setup Windows code signing (Azure Trusted Signing)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          AZURE_ACCOUNT_ENDPOINT_URI_INPUT: ${{ secrets.AZURE_ACCOUNT_ENDPOINT_URI }}
+          AZURE_ACCOUNT_NAME_INPUT: ${{ secrets.AZURE_ACCOUNT_NAME }}
+          AZURE_CERTIFICATE_PROFILE_NAME_INPUT: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
         run: |
           # Install Azure.CodeSigning.Dlib via NuGet
-          $nugetDir = "${{ runner.temp }}\nuget"
+          $nugetDir = Join-Path $env:RUNNER_TEMP 'nuget'
           New-Item -ItemType Directory -Force -Path $nugetDir | Out-Null
           nuget install Microsoft.Trusted.Signing.Client -Version 1.0.95 -OutputDirectory $nugetDir -Source https://api.nuget.org/v3/index.json
 
@@ -396,15 +540,13 @@ jobs:
           }
 
           # Create metadata.json for Azure Trusted Signing
-          $metadataPath = "${{ runner.temp }}\metadata.json"
-          $metadataContent = @"
-          {
-            "Endpoint": "${{ secrets.AZURE_ACCOUNT_ENDPOINT_URI }}",
-            "CodeSigningAccountName": "${{ secrets.AZURE_ACCOUNT_NAME }}",
-            "CertificateProfileName": "${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}"
-          }
-          "@
-          [System.IO.File]::WriteAllText($metadataPath, $metadataContent.Trim(), [System.Text.UTF8Encoding]::new($false))
+          $metadataPath = Join-Path $env:RUNNER_TEMP 'metadata.json'
+          $metadataContent = [ordered]@{
+            Endpoint = $env:AZURE_ACCOUNT_ENDPOINT_URI_INPUT
+            CodeSigningAccountName = $env:AZURE_ACCOUNT_NAME_INPUT
+            CertificateProfileName = $env:AZURE_CERTIFICATE_PROFILE_NAME_INPUT
+          } | ConvertTo-Json -Compress
+          [System.IO.File]::WriteAllText($metadataPath, $metadataContent, [System.Text.UTF8Encoding]::new($false))
 
           # Export environment variables for subsequent steps
           echo "SIGNTOOL_PATH=$signtoolPath" >> $env:GITHUB_ENV
@@ -423,7 +565,8 @@ jobs:
 
       - name: Build Electron App
         working-directory: apps/browser
-        run: pnpm make --arch=${{ matrix.arch }}
+        shell: bash
+        run: pnpm make "--arch=$RELEASE_ARCH"
         env:
           BUILD_MODE: production
           # macOS signing
@@ -436,6 +579,7 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           # Release channel
+          RELEASE_ARCH: ${{ matrix.arch }}
           RELEASE_CHANNEL: ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
           APP_VERSION_OVERRIDE: ${{ inputs.version }}
 
@@ -443,72 +587,147 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: apps/browser
         timeout-minutes: 30
-        run: >-
-          pnpm release:notarize:dmg --
-          --arch=${{ matrix.arch }}
-          --channel=${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
-          --version=${{ inputs.version }}
+        shell: bash
+        run: |
+          pnpm release:notarize:dmg -- \
+            --arch="$RELEASE_ARCH" \
+            --channel="$VALIDATION_CHANNEL" \
+            --version="$RELEASE_VERSION"
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          RELEASE_ARCH: ${{ matrix.arch }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          VALIDATION_CHANNEL: ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
 
       - name: Validate macOS release artifacts
         if: runner.os == 'macOS'
         working-directory: apps/browser
         timeout-minutes: 5
-        run: >-
-          pnpm release:validate:macos --
-          --skip-make
-          --ui-launch
-          --arch=${{ matrix.arch }}
-          --channel=${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
-          --version=${{ inputs.version }}
+        shell: bash
         env:
+          RELEASE_ARCH: ${{ matrix.arch }}
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
           UPDATE_SERVER_ORIGIN: ${{ vars.UPDATE_SERVER_ORIGIN }}
+          VALIDATION_CHANNEL: ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
+        run: |
+          args=(
+            --skip-make
+            --ui-launch
+            "--arch=$RELEASE_ARCH"
+            "--channel=$VALIDATION_CHANNEL"
+            "--version=$RELEASE_VERSION"
+          )
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            args+=(
+              --require-trusted-binding
+              --source-commit="$RELEASE_REF"
+              --tag="$RELEASE_TAG"
+              --release-plan="$RELEASE_MANIFEST"
+              --release-plan-sha256="$RELEASE_PLAN_SHA256"
+            )
+          fi
+          pnpm release:validate:macos -- "${args[@]}"
 
       - name: Validate Windows release artifacts
         if: runner.os == 'Windows'
         working-directory: apps/browser
         timeout-minutes: 5
-        run: >-
-          pnpm release:validate:artifacts --
-          --platform=windows
-          --arch=${{ matrix.arch }}
-          --channel=${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
-          --version=${{ inputs.version }}
+        shell: bash
+        env:
+          RELEASE_ARCH: ${{ matrix.arch }}
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
+          VALIDATION_CHANNEL: ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
+        run: |
+          args=(
+            --platform=windows
+            "--arch=$RELEASE_ARCH"
+            "--channel=$VALIDATION_CHANNEL"
+            "--version=$RELEASE_VERSION"
+          )
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            args+=(
+              --require-trusted-binding
+              --source-commit="$RELEASE_REF"
+              --tag="$RELEASE_TAG"
+              --release-plan="$RELEASE_MANIFEST"
+              --release-plan-sha256="$RELEASE_PLAN_SHA256"
+            )
+          fi
+          pnpm release:validate:artifacts -- "${args[@]}"
 
       - name: Smoke test Windows installer and uninstall
         if: runner.os == 'Windows'
         working-directory: apps/browser
         shell: pwsh
         timeout-minutes: 10
-        run: >-
-          ./scripts/smoke-windows-installer.ps1
-          -Channel ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
-          -Arch ${{ matrix.arch }}
-          -Version ${{ inputs.version }}
+        env:
+          RELEASE_ARCH: ${{ matrix.arch }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          VALIDATION_CHANNEL: ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
+        run: |
+          & ./scripts/smoke-windows-installer.ps1 `
+            -Channel $env:VALIDATION_CHANNEL `
+            -Arch $env:RELEASE_ARCH `
+            -Version $env:RELEASE_VERSION
 
       - name: Validate Linux release artifacts
         if: runner.os == 'Linux'
         working-directory: apps/browser
         timeout-minutes: 5
-        run: >-
-          pnpm release:validate:artifacts --
-          --platform=linux
-          --arch=${{ matrix.arch }}
-          --channel=${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
-          --version=${{ inputs.version }}
+        shell: bash
+        env:
+          RELEASE_ARCH: ${{ matrix.arch }}
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
+          VALIDATION_CHANNEL: ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
+        run: |
+          args=(
+            --platform=linux
+            "--arch=$RELEASE_ARCH"
+            "--channel=$VALIDATION_CHANNEL"
+            "--version=$RELEASE_VERSION"
+          )
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            args+=(
+              --require-trusted-binding
+              --source-commit="$RELEASE_REF"
+              --tag="$RELEASE_TAG"
+              --release-plan="$RELEASE_MANIFEST"
+              --release-plan-sha256="$RELEASE_PLAN_SHA256"
+            )
+          fi
+          pnpm release:validate:artifacts -- "${args[@]}"
 
       - name: Smoke test Debian installer and uninstall
         if: runner.os == 'Linux'
         working-directory: apps/browser
         timeout-minutes: 10
-        run: >-
-          pnpm release:smoke:linux-installer --
-          ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
-          ${{ matrix.arch }}
-          ${{ inputs.version }}
+        shell: bash
+        env:
+          RELEASE_ARCH: ${{ matrix.arch }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          VALIDATION_CHANNEL: ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
+        run: |
+          pnpm release:smoke:linux-installer -- \
+            "$VALIDATION_CHANNEL" \
+            "$RELEASE_ARCH" \
+            "$RELEASE_VERSION"
 
       - name: List build output
         working-directory: apps/browser
@@ -521,11 +740,18 @@ jobs:
           RELEASE_ARCH: ${{ matrix.arch }}
           RELEASE_PLATFORM: ${{ runner.os == 'macOS' && 'macos' || runner.os == 'Windows' && 'windows' || 'linux' }}
           RELEASE_VERSION: ${{ inputs.version }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
           VALIDATION_CHANNEL: ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
-        run: >-
-          node apps/browser/scripts/release-publication.mjs stage
-          --manifest="apps/browser/out/${VALIDATION_CHANNEL}/validation/${RELEASE_PLATFORM}-${RELEASE_ARCH}-${RELEASE_VERSION}.json"
-          --output="${RUNNER_TEMP}/clodex-release-bundle"
+        run: |
+          args=(
+            stage
+            --manifest="apps/browser/out/${VALIDATION_CHANNEL}/validation/${RELEASE_PLATFORM}-${RELEASE_ARCH}-${RELEASE_VERSION}.json"
+            --output="${RUNNER_TEMP}/clodex-release-bundle"
+          )
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            args+=(--trusted-promotion=true)
+          fi
+          node apps/browser/scripts/release-publication.mjs "${args[@]}"
 
       - name: Upload manifest-bound release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -535,10 +761,14 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [tag, build]
+    needs: [source-gate, tag, build]
     runs-on: ubuntu-latest
+    environment: Release
     permissions:
       contents: write
+    outputs:
+      release_id: ${{ steps.release-state.outputs.release_id }}
+      report_name: ${{ steps.release-state.outputs.report_name }}
 
     steps:
       - name: Checkout immutable release candidate
@@ -558,20 +788,50 @@ jobs:
           path: artifacts
 
       - name: Verify downloaded manifests and collect release assets
+        shell: bash
         env:
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_VERSION: ${{ inputs.version }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
           VALIDATION_CHANNEL: ${{ inputs.channel == 'release' && 'release' || inputs.channel == 'nightly' && 'nightly' || 'prerelease' }}
-        run: >-
-          node apps/browser/scripts/release-publication.mjs collect
-          --input=artifacts
-          --output=release
-          --report=${{ runner.temp }}/release-publication-report.json
-          --version="${RELEASE_VERSION}"
-          --channel="${VALIDATION_CHANNEL}"
-          --expected=macos:arm64,macos:x64,linux:x64,windows:x64
+        run: |
+          args=(
+            collect
+            --input=artifacts
+            --output=release
+            --report="${RUNNER_TEMP}/release-publication-report.json"
+            --version="${RELEASE_VERSION}"
+            --channel="${VALIDATION_CHANNEL}"
+            --expected=macos:arm64,macos:x64,linux:x64,windows:x64
+          )
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            args+=(
+              --trusted-promotion=true
+              --repository="$GITHUB_REPOSITORY"
+              --source-commit="$RELEASE_REF"
+              --tag="$RELEASE_TAG"
+              --release-plan="$RELEASE_MANIFEST"
+              --release-plan-sha256="$RELEASE_PLAN_SHA256"
+              --workflow-run-id="$GITHUB_RUN_ID"
+              --workflow-commit="$GITHUB_WORKFLOW_SHA"
+              --workflow-source-ref="$GITHUB_REF"
+              --run-attempt="$GITHUB_RUN_ATTEMPT"
+            )
+          fi
+          node apps/browser/scripts/release-publication.mjs "${args[@]}"
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            cp "${RUNNER_TEMP}/release-publication-report.json" \
+              "release/clodex-release-publication.json"
+          fi
 
       - name: Publish verified asset summary
-        run: cat "${{ runner.temp }}/release-publication-report.json" >> "$GITHUB_STEP_SUMMARY"
+        shell: bash
+        env:
+          PUBLICATION_REPORT: ${{ runner.temp }}/release-publication-report.json
+        run: cat "$PUBLICATION_REPORT" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Re-assert immutable tag target before publication
         shell: bash
@@ -579,6 +839,11 @@ jobs:
           RELEASE_REF: ${{ inputs.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          if [ -z "$remote_main" ] || [ "$remote_main" != "$RELEASE_REF" ]; then
+            echo "::error::Canonical main moved before publication: expected $RELEASE_REF, got ${remote_main:-missing}"
+            exit 1
+          fi
           git fetch --force --no-tags origin \
             "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
           actual_ref=$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")
@@ -587,20 +852,208 @@ jobs:
             exit 1
           fi
 
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+      - name: Create or update the exact GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ inputs.tag }}
           name: "Clodex Agentic IDE ${{ inputs.version }}"
           body: ${{ needs.tag.outputs.notes }}
           prerelease: ${{ inputs.channel != 'release' }}
+          # Stable promotion is staged as a protected draft first. The exact
+          # live bytes are attested before a separate job may publish them.
+          draft: ${{ needs.source-gate.outputs.trusted_promotion == 'true' && inputs.channel == 'release' || inputs.draft }}
           files: release/*
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Query and assert exact live release state
+        id: release-state
+        shell: bash
+        env:
+          EXPECTED_DRAFT: ${{ needs.source-gate.outputs.trusted_promotion == 'true' && inputs.channel == 'release' || inputs.draft }}
+          EXPECTED_PRERELEASE: ${{ inputs.channel != 'release' }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
+        run: |
+          gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+            > "${RUNNER_TEMP}/created-release.json"
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const release = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/created-release.json`, 'utf8'));
+          const expectedDraft = process.env.EXPECTED_DRAFT === 'true';
+          const expectedPrerelease = process.env.EXPECTED_PRERELEASE === 'true';
+          if (
+            !Number.isSafeInteger(release.id) ||
+            release.id <= 0 ||
+            release.tag_name !== process.env.RELEASE_TAG ||
+            release.draft !== expectedDraft ||
+            release.prerelease !== expectedPrerelease ||
+            (expectedDraft ? release.published_at !== null : typeof release.published_at !== 'string')
+          ) {
+            throw new Error('created GitHub Release does not match the manifest-derived state');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `release_id=${release.id}\n`);
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `report_name=${process.env.TRUSTED_PROMOTION === 'true' ? 'clodex-release-publication.json' : ''}\n`,
+          );
+          NODE
+
+  attest-publication:
+    name: Attest verified live release publication
+    needs: [source-gate, release]
+    if: needs.source-gate.outputs.trusted_promotion == 'true'
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    uses: mereyabdenbekuly-ctrl/clodex-ide/.github/workflows/release-publication-attestation.yml@main
+    with:
+      release_id: ${{ fromJSON(needs.release.outputs.release_id) }}
+      report_name: ${{ needs.release.outputs.report_name }}
+      source_commit: ${{ inputs.ref }}
+      tag: ${{ inputs.tag }}
+
+  publish-stable:
+    name: Publish only the pre-attested stable draft
+    needs: [source-gate, release, attest-publication]
+    if: inputs.channel == 'release' && needs.source-gate.outputs.trusted_promotion == 'true'
+    runs-on: ubuntu-latest
+    environment: Release
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    steps:
+      - name: Checkout exact canonical release source without credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require exact current canonical main before publication
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$RELEASE_REF"
+          test "$GITHUB_WORKFLOW_SHA" = "$RELEASE_REF"
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
+
+      - name: Download the exact attested publication snapshot artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.attest-publication.outputs.snapshot_artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/attested-publication
+
+      - name: Verify exact attested publication snapshot handoff
+        env:
+          EXPECTED_SHA256: ${{ needs.attest-publication.outputs.snapshot_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ inputs.ref }}
+        run: |
+          snapshot_dir="${RUNNER_TEMP}/attested-publication"
+          entry_count=$(find "$snapshot_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+          test "$entry_count" = "1"
+          snapshot="${snapshot_dir}/publication-snapshot.json"
+          test -f "$snapshot"
+          test ! -L "$snapshot"
+          test -s "$snapshot"
+          actual_sha256=$(sha256sum "$snapshot" | awk '{print $1}')
+          test "$actual_sha256" = "$EXPECTED_SHA256"
+          gh attestation verify "$snapshot" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release-publication-attestation.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "$RELEASE_REF" \
+            --signer-digest "$RELEASE_REF" \
+            --deny-self-hosted-runners
+
+      - name: Download and verify the exact attested stable draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.release.outputs.release_id }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          REPORT_NAME: ${{ needs.release.outputs.report_name }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/release-assets"
+          gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            > "${RUNNER_TEMP}/release-draft.json"
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir "${RUNNER_TEMP}/release-assets" \
+            --clobber
+          report="${RUNNER_TEMP}/release-assets/${REPORT_NAME}"
+          report_source=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).sourceCommit' "$report")
+          report_workflow=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).workflow.commit' "$report")
+          test "$report_source" = "$RELEASE_REF"
+          gh attestation verify "$report" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release-publication-attestation.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "$report_source" \
+            --signer-digest "$report_workflow" \
+            --deny-self-hosted-runners
+          node scripts/release/verify-release-publication.mjs \
+            --assets="${RUNNER_TEMP}/release-assets" \
+            --expected-release-state=draft \
+            --expected-source-commit="$RELEASE_REF" \
+            --expected-tag="$RELEASE_TAG" \
+            --release-id="$RELEASE_ID" \
+            --release-json="${RUNNER_TEMP}/release-draft.json" \
+            --report="$report" \
+            --report-name="$REPORT_NAME" \
+            --repository="$GITHUB_REPOSITORY" \
+            --snapshot="${RUNNER_TEMP}/current-publication-snapshot.json"
+          cmp \
+            "${RUNNER_TEMP}/attested-publication/publication-snapshot.json" \
+            "${RUNNER_TEMP}/current-publication-snapshot.json"
+
+      - name: Publish the unchanged attested stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.release.outputs.release_id }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          REPORT_NAME: ${{ needs.release.outputs.report_name }}
+        run: |
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F draft=false \
+            -F prerelease=false \
+            > "${RUNNER_TEMP}/published-release.json"
+          node scripts/release/verify-release-publication.mjs \
+            --assets="${RUNNER_TEMP}/release-assets" \
+            --expected-release-state=published \
+            --expected-source-commit="$RELEASE_REF" \
+            --expected-tag="$RELEASE_TAG" \
+            --release-id="$RELEASE_ID" \
+            --release-json="${RUNNER_TEMP}/published-release.json" \
+            --report="${RUNNER_TEMP}/release-assets/${REPORT_NAME}" \
+            --report-name="$REPORT_NAME" \
+            --repository="$GITHUB_REPOSITORY" \
+            --snapshot="${RUNNER_TEMP}/published-publication-snapshot.json"
+          cmp \
+            "${RUNNER_TEMP}/attested-publication/publication-snapshot.json" \
+            "${RUNNER_TEMP}/published-publication-snapshot.json"
+
   trigger-nightly-after-stable:
     name: Trigger nightly after stable
-    needs: release
+    needs: publish-stable
     if: inputs.channel == 'release' && github.ref_name == 'main'
     runs-on: ubuntu-latest
     permissions:

@@ -253,7 +253,15 @@ test('release workflows bind the fail-fast contract to the Release environment',
   );
   assert.match(readinessStep, /signing-readiness\.mjs/);
   assert.match(readinessStep, /--artifacts=all/);
-  assert.match(readinessStep, /--channel=\$\{\{ inputs\.channel \}\}/);
+  assert.match(
+    readinessStep,
+    /RELEASE_CHANNEL_INPUT: \$\{\{ inputs\.channel \}\}/,
+  );
+  assert.match(readinessStep, /--channel="\$RELEASE_CHANNEL_INPUT"/);
+  assert.doesNotMatch(
+    readinessStep.match(/run: \|[\s\S]*/u)?.[0] ?? '',
+    /\$\{\{/,
+  );
   for (const name of REQUIRED_RELEASE_SECRETS) {
     assert.ok(readinessStep.includes(`${name}: \${{ secrets.${name} }}`));
   }
@@ -273,12 +281,22 @@ test('release workflows bind the fail-fast contract to the Release environment',
   assert.match(readinessWorkflowSource, /permissions:\n\s+contents: read\n/);
   assert.match(
     readinessWorkflowSource,
-    /\n {2}contract:\n[\s\S]*?\n {4}environment: Release\n/,
+    /source-gate:\n[\s\S]*?permissions:\n\s+contents: read/,
+  );
+  assert.match(
+    readinessWorkflowSource,
+    /\n {2}contract:\n[\s\S]*?\n {4}needs: source-gate\n[\s\S]*?\n {4}environment: Release\n/,
   );
   assert.match(
     readinessWorkflowSource,
     /artifact_set:\n[\s\S]*?default: macos\n/,
   );
+  assert.ok(
+    (readinessWorkflowSource.match(/Reassert exact current main/g) ?? [])
+      .length >= 2,
+  );
+  assert.match(readinessWorkflowSource, /GITHUB_WORKFLOW_SHA.*RELEASE_REF/s);
+  assert.match(readinessWorkflowSource, /remote_main=.*refs\/heads\/main/s);
   assert.doesNotMatch(
     readinessWorkflowSource,
     /softprops\/action-gh-release|gh\s+release|electron-forge\s+make/,

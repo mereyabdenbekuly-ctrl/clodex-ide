@@ -26,25 +26,37 @@ on:
 
 run-name: "Prepare Release: ${{ inputs.package }} (${{ inputs.channel }}${{ inputs.new-cycle && ', new cycle' || '' }})"
 
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
-    # Only run on main or release-tests branch
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release-tests'
+    environment: Release
+    if: github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout
+      - name: Checkout canonical main without credentials
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: main
           fetch-depth: 0
-          # Use a PAT so that the push + PR creation triggers downstream
-          # workflows (GITHUB_TOKEN events are deliberately ignored by GitHub
-          # to prevent infinite loops).
-          token: ${{ secrets.RELEASE_PAT }}
+          persist-credentials: false
+
+      - name: Require exact current canonical main source
+        shell: bash
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$(git rev-parse HEAD)" = "$remote_main"
+          test "$GITHUB_SHA" = "$remote_main"
+          test "$GITHUB_WORKFLOW_SHA" = "$remote_main"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -89,66 +101,134 @@ jobs:
 
       - name: Bump Version
         id: bump
+        shell: bash
+        env:
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_NEW_CYCLE: ${{ inputs.new-cycle }}
+          RELEASE_PRODUCT: ${{ inputs.package }}
         run: |
-          ARGS="--package ${{ inputs.package }} --channel ${{ inputs.channel }}"
-          [ "${{ inputs.new-cycle }}" == "true" ] && ARGS="$ARGS --new-cycle"
-          pnpm tsx scripts/release/index.ts $ARGS
-          echo "version=$(cat .release-version)" >> $GITHUB_OUTPUT
-          echo "tag=$(cat .release-tag)" >> $GITHUB_OUTPUT
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          cat .release-notes.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          case "$RELEASE_PRODUCT" in
+            clodex|karton) ;;
+            *) echo "::error::Unsupported release product"; exit 1 ;;
+          esac
+          case "$RELEASE_CHANNEL_INPUT" in
+            alpha|beta|release) ;;
+            *) echo "::error::Unsupported release channel"; exit 1 ;;
+          esac
+          args=(--package "$RELEASE_PRODUCT" --channel "$RELEASE_CHANNEL_INPUT")
+          if [ "$RELEASE_NEW_CYCLE" = "true" ]; then
+            args+=(--new-cycle)
+          fi
+          pnpm tsx scripts/release/index.ts "${args[@]}"
+          version=$(cat .release-version)
+          tag=$(cat .release-tag)
+          node scripts/release/validate-release-identity.mjs \
+            --product="$RELEASE_PRODUCT" \
+            --channel="$RELEASE_CHANNEL_INPUT" \
+            --version="$version" \
+            --tag="$tag"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Determine branch name
         id: branch
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.bump.outputs.tag }}
         run: |
-          TAG="${{ steps.bump.outputs.tag }}"
           # Sanitize tag for branch name: replace @ and / with -
-          SAFE_TAG=$(echo "$TAG" | sed 's/@/-/g; s/\//-/g; s/^-//; s/--*/-/g')
+          SAFE_TAG=$(printf '%s\n' "$RELEASE_TAG" | sed 's/@/-/g; s/\//-/g; s/^-//; s/--*/-/g')
           BRANCH="release/${SAFE_TAG}"
-          echo "name=${BRANCH}" >> $GITHUB_OUTPUT
+          git check-ref-format --branch "$BRANCH" >/dev/null
+          echo "name=${BRANCH}" >> "$GITHUB_OUTPUT"
 
-      - name: Create release branch and push
+      - name: Create signed-off release commit
+        shell: bash
+        env:
+          RELEASE_BRANCH: ${{ steps.branch.outputs.name }}
+          RELEASE_PRODUCT: ${{ inputs.package }}
+          RELEASE_VERSION: ${{ steps.bump.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "${{ steps.branch.outputs.name }}"
+          git checkout -b "$RELEASE_BRANCH"
           git add .
-          git commit -m "chore(${{ inputs.package }}): release ${{ steps.bump.outputs.version }}"
-          git push --force origin "${{ steps.branch.outputs.name }}"
+          git status --short
+          git commit -s -m "chore(${RELEASE_PRODUCT}): release ${RELEASE_VERSION}"
+
+      - name: Push a new release branch without overwriting existing review
+        shell: bash
+        env:
+          RELEASE_BRANCH: ${{ steps.branch.outputs.name }}
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
+        run: |
+          test -n "$RELEASE_PAT"
+          existing=$(git ls-remote origin "refs/heads/${RELEASE_BRANCH}" | awk 'NR == 1 {print $1}')
+          if [ -n "$existing" ]; then
+            echo "::error::Release branch already exists at $existing; refusing to overwrite reviewed work"
+            exit 1
+          fi
+          auth_header=$(printf 'x-access-token:%s' "$RELEASE_PAT" | base64 | tr -d '\n')
+          echo "::add-mask::$auth_header"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth_header" \
+            push origin "HEAD:refs/heads/${RELEASE_BRANCH}"
 
       - name: Create Pull Request
         env:
+          BASE_REF: ${{ github.ref_name }}
           GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+          RELEASE_BRANCH: ${{ steps.branch.outputs.name }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_PRODUCT: ${{ inputs.package }}
+          RELEASE_TAG: ${{ steps.bump.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.bump.outputs.version }}
         run: |
-          BODY="## Release: ${{ inputs.package }} ${{ steps.bump.outputs.version }}
-
-          **Channel:** ${{ inputs.channel }}
-          **Tag:** \`${{ steps.bump.outputs.tag }}\`
-
-          ### Release Notes
-
-          ${{ steps.bump.outputs.notes }}
-
-          ---
-
-          > Merge this PR, then explicitly dispatch the \`Auto Release\` workflow on \`${{ github.ref_name }}\`."
-
+          body_file="${RUNNER_TEMP}/release-pr-body.md"
+          export body_file
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const releaseNotes = fs.readFileSync('.release-notes.md', 'utf8').trimEnd();
+          const body = [
+            `## Release: ${process.env.RELEASE_PRODUCT} ${process.env.RELEASE_VERSION}`,
+            '',
+            `**Channel:** ${process.env.RELEASE_CHANNEL_INPUT}`,
+            `**Tag:** \`${process.env.RELEASE_TAG}\``,
+            '',
+            '### Release Notes',
+            '',
+            releaseNotes,
+            '',
+            '---',
+            '',
+            `> Merge this PR, then explicitly dispatch the \`Auto Release\` workflow on \`${process.env.BASE_REF}\`.`,
+            '',
+          ].join('\n');
+          fs.writeFileSync(process.env.body_file, body);
+          NODE
           gh pr create \
-            --base "${{ github.ref_name }}" \
-            --head "${{ steps.branch.outputs.name }}" \
-            --title "release(${{ inputs.package }}): ${{ steps.bump.outputs.version }}" \
-            --body "$BODY" \
+            --base "$BASE_REF" \
+            --head "$RELEASE_BRANCH" \
+            --title "release(${RELEASE_PRODUCT}): ${RELEASE_VERSION}" \
+            --body-file "$body_file" \
             --label "release"
 
       - name: Summary
+        shell: bash
+        env:
+          RELEASE_BRANCH: ${{ steps.branch.outputs.name }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_PRODUCT: ${{ inputs.package }}
+          RELEASE_TAG: ${{ steps.bump.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.bump.outputs.version }}
         run: |
-          echo "## Release PR Created" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Package:** ${{ inputs.package }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** ${{ steps.bump.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Channel:** ${{ inputs.channel }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tag:** \`${{ steps.bump.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch:** \`${{ steps.branch.outputs.name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Merge the PR, then explicitly dispatch the Auto Release workflow." >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Release PR Created"
+            echo ""
+            echo "- **Package:** $RELEASE_PRODUCT"
+            echo "- **Version:** $RELEASE_VERSION"
+            echo "- **Channel:** $RELEASE_CHANNEL_INPUT"
+            echo "- **Tag:** \`$RELEASE_TAG\`"
+            echo "- **Branch:** \`$RELEASE_BRANCH\`"
+            echo ""
+            echo "Merge the PR, then explicitly dispatch the Auto Release workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

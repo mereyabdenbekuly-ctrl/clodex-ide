@@ -1,0 +1,422 @@
+name: Trusted Release Acceptance Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: "Draft GitHub Release database ID"
+        required: true
+        type: string
+      manifest:
+        description: "Committed schema-v2 preview release plan"
+        required: true
+        default: ".release-notes/clodex-technical-preview.json"
+        type: string
+      manual_checks_json:
+        description: "Content-free JSON object with every manual check set to true"
+        required: true
+        type: string
+      # Canary metrics are intentionally not accepted here. Stable promotion
+      # remains NOT_READY until a separately attested observation source exists.
+      confirm:
+        description: "Type ATTEST_ACCEPTANCE"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trusted-release-acceptance
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: Collect unprivileged acceptance candidate
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: read
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.candidate-upload.outputs.artifact-id }}
+      evidence_sha256: ${{ steps.subject.outputs.evidence_sha256 }}
+      release_id: ${{ steps.publication.outputs.release_id }}
+      release_source_commit: ${{ steps.publication.outputs.source_commit }}
+    steps:
+      - name: Require main dispatch and explicit confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirm }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$CONFIRMATION" = "ATTEST_ACCEPTANCE"
+
+      - name: Checkout trusted main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require exact current main workflow source
+        run: |
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$GITHUB_SHA"
+          test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
+
+      - name: Fail closed while trusted canary observation is NOT_READY
+        env:
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const manifest = process.env.RELEASE_MANIFEST;
+          if (
+            typeof manifest !== 'string' ||
+            manifest.includes('\\') ||
+            path.posix.normalize(manifest) !== manifest ||
+            !manifest.startsWith('.release-notes/') ||
+            !manifest.endsWith('.json')
+          ) {
+            throw new Error('release manifest path is invalid');
+          }
+          const plan = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+          if (plan.promotionRole !== 'rollback-baseline') {
+            throw new Error(
+              'stable promotion is NOT_READY: no trusted, manifest-bound canary observation attestation source is configured',
+            );
+          }
+          NODE
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Materialize bounded operator input
+        env:
+          MANUAL_JSON: ${{ inputs.manual_checks_json }}
+        run: >-
+          node -e
+          'JSON.parse(process.env.MANUAL_JSON);
+          require("node:fs").writeFileSync(process.argv[1], `${process.env.MANUAL_JSON}\n`)'
+          "${RUNNER_TEMP}/manual-checks.json"
+
+      - name: Download live release and verify publication attestation
+        id: publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/release-assets"
+          gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            > "${RUNNER_TEMP}/release.json"
+          live_release_id=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).id' "${RUNNER_TEMP}/release.json")
+          test "$live_release_id" = "$RELEASE_ID"
+          release_tag=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).tag_name' "${RUNNER_TEMP}/release.json")
+          gh release download "$release_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir "${RUNNER_TEMP}/release-assets" \
+            --clobber
+          report="${RUNNER_TEMP}/release-assets/clodex-release-publication.json"
+          source_commit=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).sourceCommit' "$report")
+          workflow_commit=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).workflow.commit' "$report")
+          gh attestation verify "$report" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release-publication-attestation.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "$source_commit" \
+            --signer-digest "$workflow_commit" \
+            --deny-self-hosted-runners
+          node scripts/release/verify-release-publication.mjs \
+            --assets="${RUNNER_TEMP}/release-assets" \
+            --expected-release-state=draft \
+            --release-id="$RELEASE_ID" \
+            --release-json="${RUNNER_TEMP}/release.json" \
+            --report="$report" \
+            --report-name=clodex-release-publication.json \
+            --repository="$GITHUB_REPOSITORY" \
+            --snapshot="${RUNNER_TEMP}/publication-snapshot.json"
+          snapshot_source=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).sourceCommit' "${RUNNER_TEMP}/publication-snapshot.json")
+          test "$snapshot_source" = "$source_commit"
+          echo "release_id=$live_release_id" >> "$GITHUB_OUTPUT"
+          echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact released source for automated checks
+        env:
+          RELEASE_SOURCE_COMMIT: ${{ steps.publication.outputs.source_commit }}
+        run: git checkout --detach "$RELEASE_SOURCE_COMMIT"
+
+      - name: Install exact released workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build source-check prerequisites
+        run: pnpm build:packages
+
+      - name: Install Playwright Chromium for the real Quick Task check
+        run: pnpm --dir apps/browser exec playwright install --with-deps chromium
+
+      - name: Run real source and product acceptance checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.publication.outputs.release_id }}
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_SOURCE_COMMIT: ${{ steps.publication.outputs.source_commit }}
+        run: >-
+          node --import tsx scripts/release/collect-trusted-source-checks.ts
+          --manifest="${RELEASE_MANIFEST}"
+          --output="${RUNNER_TEMP}/automated-checks.json"
+          --release-id="${RELEASE_ID}"
+          --repository="${GITHUB_REPOSITORY}"
+          --source-commit="${RELEASE_SOURCE_COMMIT}"
+
+      - name: Generate canonical rollback-baseline evidence candidate
+        env:
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+        run: >-
+          node scripts/release/collect-trusted-release-evidence.mjs
+          --automated-checks="${RUNNER_TEMP}/automated-checks.json"
+          --manual-checks="${RUNNER_TEMP}/manual-checks.json"
+          --output="${RUNNER_TEMP}/release-acceptance-evidence.json"
+          --plan="${RELEASE_MANIFEST}"
+          --publication-report="${RUNNER_TEMP}/release-assets/clodex-release-publication.json"
+          --publication-snapshot="${RUNNER_TEMP}/publication-snapshot.json"
+
+      - name: Bind exact candidate bytes for the privileged handoff
+        id: subject
+        run: |
+          subject="${RUNNER_TEMP}/release-acceptance-evidence.json"
+          test -f "$subject"
+          test ! -L "$subject"
+          test -s "$subject"
+          evidence_sha256=$(sha256sum "$subject" | awk '{print $1}')
+          test -n "$evidence_sha256"
+          echo "evidence_sha256=$evidence_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable unprivileged candidate
+        id: candidate-upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clodex-release-acceptance-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-acceptance-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
+  attest:
+    name: Verify handoff and attest exact evidence bytes
+    needs: collect
+    runs-on: ubuntu-latest
+    environment: Release
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Require exact canonical main signer source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
+          remote_main=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')
+          test -n "$remote_main"
+          test "$remote_main" = "$GITHUB_SHA"
+
+      - name: Download exact unprivileged candidate artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.collect.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/acceptance-candidate
+
+      - name: Verify exact candidate digest and terminal schema
+        env:
+          EXPECTED_RELEASE_ID: ${{ needs.collect.outputs.release_id }}
+          EXPECTED_RELEASE_SOURCE_COMMIT: ${{ needs.collect.outputs.release_source_commit }}
+          EXPECTED_SHA256: ${{ needs.collect.outputs.evidence_sha256 }}
+        run: |
+          candidate_dir="${RUNNER_TEMP}/acceptance-candidate"
+          entry_count=$(find "$candidate_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+          test "$entry_count" = "1"
+          subject="${candidate_dir}/release-acceptance-evidence.json"
+          test -f "$subject"
+          test ! -L "$subject"
+          test -s "$subject"
+          subject_bytes=$(wc -c < "$subject" | tr -d ' ')
+          test "$subject_bytes" -le 1048576
+          actual_sha256=$(sha256sum "$subject" | awk '{print $1}')
+          test "$actual_sha256" = "$EXPECTED_SHA256"
+          node - "$subject" <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const evidence = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const requiredCheckIds = [
+            'source.commit-bound',
+            'source.clean-tree',
+            'publication.github-release',
+            'toolchain.node',
+            'toolchain.pnpm',
+            'artifact.validation-manifest',
+            'artifact.packaged-smoke',
+            'artifact.clean-profile-launch',
+            'artifact.app-icon',
+            'security.distribution-trust',
+            'product.quick-task-green',
+            'product.task-creation-contract',
+            'product.browser-contract',
+            'product.mcp-contract',
+            'product.guardian-egress-contract',
+            'product.session-recovery-contract',
+            'manual.dock-or-tray-icon',
+            'manual.task-creation',
+            'manual.terminal',
+            'manual.browser',
+            'manual.mcp',
+            'manual.guardian-egress-prompt',
+            'manual.restart-session-recovery',
+          ].sort();
+          const isObject = (value) =>
+            typeof value === 'object' && value !== null && !Array.isArray(value);
+          const isCommit = (value) => /^[a-f0-9]{40}$/.test(String(value ?? ''));
+          const isSha256 = (value) => /^[a-f0-9]{64}$/.test(String(value ?? ''));
+          const generatedAt = new Date(evidence.generatedAt).getTime();
+          const publicationCreatedAt = new Date(evidence.publication?.createdAt).getTime();
+          const now = Date.now();
+          const checks = Array.isArray(evidence.checks) ? evidence.checks : [];
+          const checkIds = checks.map((check) => check?.id).sort();
+          const publicationAssets = Array.isArray(evidence.publication?.assets)
+            ? evidence.publication.assets
+            : [];
+          const assetNames = new Set();
+          const assetIds = new Set();
+          const assetsValid = publicationAssets.length > 1 && publicationAssets.every((asset) => {
+            const valid =
+              isObject(asset) &&
+              typeof asset.fileName === 'string' &&
+              asset.fileName === path.basename(asset.fileName) &&
+              asset.fileName.length > 0 &&
+              Number.isSafeInteger(asset.bytes) &&
+              asset.bytes > 0 &&
+              Number.isSafeInteger(asset.releaseAssetId) &&
+              asset.releaseAssetId > 0 &&
+              isSha256(asset.sha256) &&
+              !assetNames.has(asset.fileName) &&
+              !assetIds.has(asset.releaseAssetId);
+            assetNames.add(asset.fileName);
+            assetIds.add(asset.releaseAssetId);
+            return valid;
+          });
+          const reportAsset = publicationAssets.find(
+            (asset) => asset?.fileName === 'clodex-release-publication.json',
+          );
+          const release = evidence.release;
+          const canary = evidence.canary;
+          const rollback = evidence.rollback;
+          const automatedInput = evidence.inputs?.automatedChecks;
+          const manualInput = evidence.inputs?.manualChecks;
+          if (
+            evidence.schemaVersion !== 3 ||
+            evidence.evidenceKind !== 'release-acceptance' ||
+            evidence.status !== 'ready-as-rollback-baseline' ||
+            !Number.isFinite(generatedAt) ||
+            generatedAt > now + 5 * 60 * 1000 ||
+            now - generatedAt > 72 * 60 * 60 * 1000 ||
+            !Number.isFinite(publicationCreatedAt) ||
+            publicationCreatedAt > generatedAt ||
+            evidence.collector?.repository !== process.env.GITHUB_REPOSITORY ||
+            evidence.collector?.runId !== Number(process.env.GITHUB_RUN_ID) ||
+            evidence.collector?.runAttempt !== Number(process.env.GITHUB_RUN_ATTEMPT) ||
+            evidence.collector?.sourceCommit !== process.env.GITHUB_SHA ||
+            evidence.collector?.workflowCommit !== process.env.GITHUB_WORKFLOW_SHA ||
+            !isCommit(evidence.collector?.sourceCommit) ||
+            evidence.collector?.sourceRef !== 'refs/heads/main' ||
+            evidence.collector?.workflow !==
+              `${process.env.GITHUB_REPOSITORY}/.github/workflows/release-acceptance-evidence.yml` ||
+            !isObject(evidence.manifest) ||
+            typeof evidence.manifest.path !== 'string' ||
+            evidence.manifest.path.includes('\\') ||
+            path.posix.normalize(evidence.manifest.path) !== evidence.manifest.path ||
+            !evidence.manifest.path.startsWith('.release-notes/') ||
+            !evidence.manifest.path.endsWith('.json') ||
+            !isSha256(evidence.manifest.sha256) ||
+            evidence.manifest?.sourceCommit !== process.env.EXPECTED_RELEASE_SOURCE_COMMIT ||
+            !isCommit(evidence.manifest?.sourceCommit) ||
+            evidence.publication?.repository !== process.env.GITHUB_REPOSITORY ||
+            evidence.publication?.releaseId !== Number(process.env.EXPECTED_RELEASE_ID) ||
+            evidence.publication?.sourceCommit !== process.env.EXPECTED_RELEASE_SOURCE_COMMIT ||
+            evidence.publication?.tag !== release?.tag ||
+            evidence.publication?.reportFileName !== 'clodex-release-publication.json' ||
+            !isSha256(evidence.publication?.reportSha256) ||
+            !Number.isSafeInteger(evidence.publication?.reportAssetId) ||
+            evidence.publication.reportAssetId <= 0 ||
+            !assetsValid ||
+            reportAsset?.releaseAssetId !== evidence.publication.reportAssetId ||
+            reportAsset?.sha256 !== evidence.publication.reportSha256 ||
+            !isObject(release) ||
+            release.channel !== 'preview' ||
+            release.promotionRole !== 'rollback-baseline' ||
+            !/^\d+\.\d+\.\d+-preview\.2$/.test(String(release.version ?? '')) ||
+            release.tag !== `v${release.version}` ||
+            !isObject(rollback) ||
+            rollback.mode !== 'distribution-stop-only' ||
+            Object.hasOwn(rollback, 'targetTag') ||
+            !isObject(canary) ||
+            canary.startedAt !== null ||
+            canary.endedAt !== null ||
+            canary.distributionClosedAt !== null ||
+            canary.observedHours !== null ||
+            canary.observedInstallations !== null ||
+            canary.targetInstallations !== 0 ||
+            canary.targetObservationHours !== 24 ||
+            canary.authFailures !== 0 ||
+            !Array.isArray(canary.stopReasons) ||
+            canary.stopReasons.length !== 0 ||
+            !isObject(automatedInput) ||
+            typeof automatedInput.path !== 'string' ||
+            automatedInput.path !== path.basename(automatedInput.path) ||
+            !isSha256(automatedInput.sha256) ||
+            automatedInput.sourceCommit !== process.env.EXPECTED_RELEASE_SOURCE_COMMIT ||
+            !isObject(manualInput) ||
+            typeof manualInput.path !== 'string' ||
+            manualInput.path !== path.basename(manualInput.path) ||
+            !isSha256(manualInput.sha256) ||
+            manualInput.sourceCommit !== process.env.GITHUB_SHA ||
+            !Array.isArray(evidence.blockers) ||
+            evidence.blockers.length !== 0 ||
+            JSON.stringify(checkIds) !== JSON.stringify(requiredCheckIds) ||
+            checks.some(
+              (check) =>
+                !isObject(check) ||
+                check.status !== 'pass' ||
+                typeof check.reasonCode !== 'string' ||
+                check.reasonCode.length === 0,
+            )
+          ) {
+            throw new Error('unprivileged acceptance handoff is not an exact terminal rollback-baseline receipt');
+          }
+          NODE
+
+      - name: Attest exact acceptance evidence bytes
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ runner.temp }}/acceptance-candidate/release-acceptance-evidence.json
+
+      - name: Upload attested acceptance evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clodex-release-acceptance-evidence-${{ needs.collect.outputs.release_id }}
+          path: ${{ runner.temp }}/acceptance-candidate/release-acceptance-evidence.json
+          if-no-files-found: error
+          retention-days: 90

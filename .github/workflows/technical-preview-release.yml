@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Candidate source branch (must match the committed manifest)"
+        description: "Release source (must be exactly main)"
         required: true
         type: string
         default: "main"
@@ -14,7 +14,7 @@ on:
         type: string
         default: ".release-notes/clodex-technical-preview.json"
       confirm:
-        description: "Type RELEASE to create the tag and GitHub pre-release"
+        description: "Type RELEASE to create the tag and protected draft release"
         required: true
         type: string
 
@@ -25,56 +25,85 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  actions: write
-  contents: write
-  id-token: write
-  pull-requests: read
+  attestations: read
+  contents: read
 
 jobs:
   preflight:
     name: Validate immutable preview plan
     runs-on: ubuntu-latest
+    permissions:
+      attestations: read
+      contents: read
     outputs:
       release_ref: ${{ steps.plan.outputs.release_ref }}
       rollback_tag: ${{ steps.plan.outputs.rollback_tag }}
+      manifest_path: ${{ steps.plan.outputs.manifest_path }}
+      manifest_sha256: ${{ steps.plan.outputs.manifest_sha256 }}
+      promotion_role: ${{ steps.plan.outputs.promotion_role }}
+      release_draft: ${{ steps.plan.outputs.release_draft }}
       tag: ${{ steps.plan.outputs.tag }}
       version: ${{ steps.plan.outputs.version }}
 
     steps:
-      - name: Require explicit confirmation
+      - name: Require main dispatch and explicit confirmation
         env:
           RELEASE_CONFIRMATION: ${{ inputs.confirm }}
+          RELEASE_REF_INPUT: ${{ inputs.ref }}
         run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$RELEASE_REF_INPUT" = "main"
           if [ "$RELEASE_CONFIRMATION" != "RELEASE" ]; then
             echo "::error::Confirmation must be exactly RELEASE"
             exit 1
           fi
 
-      - name: Checkout candidate
+      - name: Checkout canonical main without credentials
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: main
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Fetch release and rollback tags
-        run: git fetch --force --tags origin
+      - name: Require exact current main HEAD
+        run: |
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$(git rev-parse HEAD)" = "$remote_main"
+          test "$GITHUB_SHA" = "$remote_main"
+          test "$GITHUB_WORKFLOW_SHA" = "$remote_main"
+
+      - name: Fetch only an existing exact target tag
+        env:
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+        run: |
+          release_tag=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.env.RELEASE_MANIFEST, "utf8")).tag')
+          if [ -n "$(git ls-remote origin "refs/tags/${release_tag}")" ]; then
+            git fetch --force --no-tags origin \
+              "refs/tags/${release_tag}:refs/tags/${release_tag}"
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: ".node-version"
 
-      - name: Validate committed preview plan
+      - name: Verify committed preview plan and live prerequisite chain
         id: plan
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_MANIFEST: ${{ inputs.manifest }}
-          RELEASE_SOURCE_REF: ${{ inputs.ref }}
         run: |
-          node scripts/release/validate-technical-preview-plan.mjs \
+          version=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.env.RELEASE_MANIFEST, "utf8")).version')
+          tag=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.env.RELEASE_MANIFEST, "utf8")).tag')
+          node scripts/release/verify-release-promotion.mjs \
             --manifest="$RELEASE_MANIFEST" \
-            --source-ref="$RELEASE_SOURCE_REF" \
-            --require-new-tag \
-            --require-rollback-tag \
+            --repository="$GITHUB_REPOSITORY" \
+            --expected-kind=technical-preview \
+            --expected-version="$version" \
+            --expected-tag="$tag" \
+            --require-new-tag=true \
             --github-output="$GITHUB_OUTPUT"
 
       - name: Summarize immutable release plan
@@ -88,8 +117,12 @@ jobs:
           console.log('');
           console.log(`- **Version:** ${plan.version}`);
           console.log(`- **Tag:** ${plan.tag}`);
+          console.log(`- **Promotion role:** ${plan.promotionRole}`);
           console.log(`- **Build channel:** ${plan.buildChannel}`);
-          console.log(`- **Rollback target:** ${plan.rollbackTag}`);
+          console.log(`- **GitHub Release state:** ${plan.distribution.githubReleaseState}`);
+          console.log(`- **Canary installations:** ${plan.distribution.canaryInstallations}`);
+          console.log(`- **Rollback mode:** ${plan.rollback.mode}`);
+          console.log(`- **Rollback target:** ${plan.rollback.targetTag ?? 'none'}`);
           console.log(`- **OAuth/WebAuth ready:** ${plan.authentication.oauthWebAuthReady}`);
           console.log('');
           console.log('The reusable release workflow will pin the resolved candidate SHA.');
@@ -119,12 +152,19 @@ jobs:
           esac
 
   release:
-    name: Build and publish technical preview
+    name: Build and stage technical preview
     needs: preflight
+    permissions:
+      actions: write
+      attestations: write
+      contents: write
+      id-token: write
     uses: ./.github/workflows/_release-browser.yml
     with:
       version: ${{ needs.preflight.outputs.version }}
       tag: ${{ needs.preflight.outputs.tag }}
       channel: preview
       ref: ${{ needs.preflight.outputs.release_ref }}
+      manifest: ${{ needs.preflight.outputs.manifest_path }}
+      draft: ${{ needs.preflight.outputs.release_draft == 'true' }}
     secrets: inherit

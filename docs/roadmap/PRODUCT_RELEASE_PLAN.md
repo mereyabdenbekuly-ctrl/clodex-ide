@@ -44,17 +44,30 @@ Repository version metadata, source completion, and product promotion are
 different states. The presence of `1.16.0` metadata does not mean the stable
 release gates have passed.
 
+The fixed `1.16.0` promotion chain is:
+
+1. `v1.16.0-preview.2` — signed/notarized protected-draft rollback baseline;
+2. `v1.16.0-preview.3` — exactly-five controlled canary after accepted
+   preview.2 evidence;
+3. `clodex@1.16.0` — newly built stable artifacts after accepted preview.3
+   evidence.
+
+`v1.16.0-preview.1` is historical, untrusted release state. It is never a
+rollback target or an allowed public download.
+
 ## 2. Status at the planning baseline
 
-| Workstream | Status on 2026-07-14 | Remaining release work |
+| Workstream | Status on 2026-07-15 | Remaining release work |
 | --- | --- | --- |
 | P0 zero-trust foundation | Implemented on `main` | Integrate and verify the final durable approval/MCP lifecycle increment |
-| Durable lifecycle increment | Candidate in PR #16; `IMPLEMENTED_UNVERIFIED` until required checks and review pass | Resolve CI/review findings, merge, run the batched independent audit/test gate |
-| `v1.16.0-preview.2` plan | Committed release target; `preview.1` is the published rollback baseline | Revalidate the manifest against the exact final source; use a different `preview.N` only if the release owner explicitly re-plans; never reuse a published tag |
-| Provenance/license boundary | Started as a decision record | Complete component, author, dependency, asset, and notice evidence |
+| Durable lifecycle increment | PR #16 merged with required checks green | Preserve the merged behavior through the batched release audit/test gate |
+| `v1.16.0-preview.2` plan | Committed protected-draft rollback-baseline target; `preview.1` is historical and untrusted | Build signed/notarized artifacts, create the attested live publication report, and collect split-job protected schema-v3 rollback-baseline acceptance |
+| Provenance/license boundary | OCB-006 source gate reports `834 dependencies; 0 blockers; Nucleo=NOT_REQUIRED` | Require final packaged attribution inspection and retained CycloneDX SBOM/manifest in the release run; obtain specialist review for custom/LGPL obligations |
 | Public Protocol v0 | YELLOW schema-only incubator draft; not publishable/extractable | Approve immutable inputs and requirements, independently review/re-derive schemas, then author synthetic conformance vectors |
 | Boundary CI | Not complete | Deny forbidden private dependencies, copied source, secrets, and unreviewed generated inputs |
 | Managed Gateway | Not started; intentionally blocked | Begin only after boundary gates B0–B5 and Protocol gates PV0-G01–PV0-G10 |
+| Trusted canary observation | **NOT_READY**; manual/workflow-dispatch JSON is explicitly rejected | Implement an independently attested manifest/tag/source-bound distribution and telemetry receipt before starting the preview.2 → preview.3 release clock |
+| Production dependency audit | npm bulk-advisory gate GREEN on the current macOS graph: 894 package names / 1008 exact versions, zero unapproved findings; one documented moderate `esbuild@0.18.20` residual | Run the same gate on Linux/macOS/Windows CI and remove or re-review the deprecated Drizzle Kit path before 2026-08-15; any new advisory or expired exception fails closed |
 | Enterprise/cloud operations | Planned | Begin after the synthetic Gateway slice is accepted |
 
 ## 3. Milestones and target release windows
@@ -80,12 +93,13 @@ Exit criteria:
 - no private or restricted material is staged in the public repository;
 - deferred verification is explicitly recorded, not treated as completion.
 
-### M1 — Next `1.16.0` security preview
+### M1 — `1.16.0` rollback baseline and controlled canary
 
 **Target window:** 2026-07-27 through 2026-07-31
-**Version:** `v1.16.0-preview.2`. Use another `v1.16.0-preview.N` only if the
-release owner explicitly re-plans before promotion; never move or reuse a
-published tag.
+**Versions:** `v1.16.0-preview.2` is the rollback baseline;
+`v1.16.0-preview.3` is the only canary candidate after accepted preview.2
+evidence. Use another `v1.16.0-preview.N` only if the release owner explicitly
+re-plans before promotion; never move or reuse an existing tag.
 
 Scope:
 
@@ -101,9 +115,17 @@ Required gates:
 - required CI, typecheck, lint, unit/integration, and platform checks green;
 - independent security-focused source review complete;
 - desktop attribution gate `OCB-006` green from the final packaged artifacts;
-- signed/notarized artifacts and validation manifests for supported platforms;
-- manual acceptance and rollback target confirmed;
-- five-installation canary with at least a 24-hour clean observation window.
+- preview.2 signed/notarized artifacts and validation manifests for supported
+  platforms, followed by protected, attested `ready-as-rollback-baseline`
+  acceptance;
+- no preview.2 rollback target and no public preview/preview.1 download links;
+- preview.3 created only after real committed preview.2 evidence, with preview.2
+  as its exact rollback target;
+- independently attested, manifest-bound distribution/telemetry observation
+  source implemented and reviewed; until then preview.3/stable are `NOT_READY`;
+- preview.3 exactly-five canary with a trusted closed distribution, at least a
+  24-hour clean observation window, and protected attested `ready-for-stable`
+  evidence.
 
 If implementation work intentionally defers local tests, the preview remains
 blocked until GitHub CI or the designated verification model produces the
@@ -124,7 +146,7 @@ Release promise:
 
 Required gates:
 
-- M1 canary remains clean and all stop conditions are closed;
+- the preview.3 canary remains clean and all stop conditions are closed;
 - no open P0/P1 security defect in the release scope;
 - clean install, upgrade, restart/recovery, approval, MCP, and rollback
   acceptance;
@@ -276,8 +298,9 @@ local `1.16` release.
 2. clear accumulated `IMPLEMENTED_UNVERIFIED` debt through the designated
    verification model and CI;
 3. close desktop attribution gate `OCB-006` on final artifacts;
-4. promote preview, acceptance, canary, signing/notarization, then stable
-   `clodex@1.16.0`.
+4. sign/notarize and accept preview.2 as the rollback baseline, then
+   sign/notarize preview.3, complete its exactly-five canary, and only then
+   build stable `clodex@1.16.0` from accepted evidence.
 
 **Track B — public Protocol/private managed service:**
 
