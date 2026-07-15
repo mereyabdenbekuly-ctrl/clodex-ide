@@ -120,6 +120,14 @@ test('collects exact production dependency versions from recursive pnpm JSON', (
   assert.deepEqual([...inventory.get('nested')], ['2.0.0']);
 });
 
+test('fails closed on an empty production dependency inventory', () => {
+  assert.throws(() => collectDependencyInventory([]), /inventory is empty/);
+  assert.throws(
+    () => collectDependencyInventory([{ dependencies: {} }]),
+    /inventory is empty/,
+  );
+});
+
 test('resolves advisories to exact locked versions', async () => {
   const inventory = new Map([['esbuild', new Set(['0.18.20', '0.25.9'])]]);
   const advisoryUrl = 'https://github.com/advisories/GHSA-67mh-4wv8-2f99';

@@ -77,6 +77,13 @@ export function collectDependencyInventory(pnpmList) {
     visit(workspace?.dependencies);
     visit(workspace?.optionalDependencies);
   }
+  const versionCount = [...inventory.values()].reduce(
+    (count, versions) => count + versions.size,
+    0,
+  );
+  if (inventory.size === 0 || versionCount === 0) {
+    fail('pnpm production inventory is empty');
+  }
   return inventory;
 }
 
