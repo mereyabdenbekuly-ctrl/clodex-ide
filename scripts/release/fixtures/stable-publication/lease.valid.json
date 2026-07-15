@@ -1,0 +1,51 @@
+{
+  "constraints": {
+    "maximumPatchAttempts": 1,
+    "requireConditionalRequest": true,
+    "requireTerminalImmutable": true
+  },
+  "holder": {
+    "id": "github-actions:stable-publisher-7001-1",
+    "repository": "mereyabdenbekuly-ctrl/clodex-ide",
+    "runAttempt": 1,
+    "runId": 7001,
+    "workflow": "mereyabdenbekuly-ctrl/clodex-ide/.github/workflows/_release-browser.yml"
+  },
+  "lease": {
+    "epoch": 42,
+    "expiresAt": "2026-07-16T00:12:00.000Z",
+    "issuedAt": "2026-07-16T00:02:00.000Z",
+    "nonce": "M3NlyQCLOBk1jMaD3Mii6DPlppmnoN3fJ8yEof_OcaI"
+  },
+  "manifest": {
+    "path": ".release-notes/clodex-stable.json",
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "producer": {
+    "repository": "example-org/release-lease-producer",
+    "runAttempt": 2,
+    "runId": 9001,
+    "sourceCommit": "cccccccccccccccccccccccccccccccccccccccc",
+    "sourceRef": "refs/heads/main",
+    "workflow": "example-org/release-lease-producer/.github/workflows/issue-stable-lease.yml",
+    "workflowCommit": "cccccccccccccccccccccccccccccccccccccccc"
+  },
+  "publication": {
+    "assetsSnapshotSha256": "8c22714ef2102bc37148fbedf60d0a60c9412aad1d0c96e69efa8a002f2c683b",
+    "draftSnapshotSha256": "7fb59540e0698e96f2b68080db3583c90263f499d40142e946592afa40ded75d",
+    "releaseBodySha256": "6a823349306b6f7598f653f7822c0cfdff75d868881575b628cd708ebb33fcc8",
+    "releaseNameSha256": "1574eeb63911fa778dc3266899b4005527c97cf5fd7d5a7b09020f6e6a9661da"
+  },
+  "receiptKind": "stable-github-release-publication-lease",
+  "resource": {
+    "kind": "github-release",
+    "releaseId": 4242,
+    "repository": "mereyabdenbekuly-ctrl/clodex-ide",
+    "tag": "clodex@1.16.0"
+  },
+  "schemaVersion": 1,
+  "source": {
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "ref": "refs/heads/main"
+  }
+}

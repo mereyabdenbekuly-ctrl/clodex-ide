@@ -1,0 +1,28 @@
+{
+  "assets": [
+    {
+      "bytes": 12,
+      "fileName": "clodex-linux-x64.AppImage",
+      "releaseAssetId": 201,
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "bytes": 13,
+      "fileName": "clodex-release-publication.json",
+      "releaseAssetId": 202,
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ],
+  "createdAt": "2026-07-16T00:00:00.000Z",
+  "releaseId": 4242,
+  "reportAsset": {
+    "bytes": 13,
+    "fileName": "clodex-release-publication.json",
+    "releaseAssetId": 202,
+    "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "reportSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "repository": "mereyabdenbekuly-ctrl/clodex-ide",
+  "sourceCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "tag": "clodex@1.16.0"
+}

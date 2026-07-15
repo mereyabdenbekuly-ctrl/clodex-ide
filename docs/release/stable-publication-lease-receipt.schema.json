@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clodex.xyz/schemas/release/stable-publication-lease-receipt-v1.json",
+  "title": "CLODEx stable GitHub Release publication lease receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "constraints",
+    "holder",
+    "lease",
+    "manifest",
+    "producer",
+    "publication",
+    "receiptKind",
+    "resource",
+    "schemaVersion",
+    "source"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "receiptKind": {
+      "const": "stable-github-release-publication-lease"
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "releaseId", "repository", "tag"],
+      "properties": {
+        "kind": {
+          "const": "github-release"
+        },
+        "repository": {
+          "const": "mereyabdenbekuly-ctrl/clodex-ide"
+        },
+        "releaseId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^clodex@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "ref"],
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "ref": {
+          "const": "refs/heads/main"
+        }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 160,
+          "pattern": "^\\.release-notes/[A-Za-z0-9._-]+\\.json$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assetsSnapshotSha256",
+        "draftSnapshotSha256",
+        "releaseBodySha256",
+        "releaseNameSha256"
+      ],
+      "properties": {
+        "assetsSnapshotSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "draftSnapshotSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseBodySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "releaseNameSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "holder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "repository", "runAttempt", "runId", "workflow"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/#-]*$"
+        },
+        "repository": {
+          "const": "mereyabdenbekuly-ctrl/clodex-ide"
+        },
+        "workflow": {
+          "type": "string",
+          "pattern": "^mereyabdenbekuly-ctrl/clodex-ide/\\.github/workflows/[A-Za-z0-9_.-]+\\.ya?ml$"
+        },
+        "runId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "runAttempt": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["epoch", "expiresAt", "issuedAt", "nonce"],
+      "properties": {
+        "epoch": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "issuedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      }
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "runAttempt",
+        "runId",
+        "sourceCommit",
+        "sourceRef",
+        "workflow",
+        "workflowCommit"
+      ],
+      "properties": {
+        "repository": {
+          "$ref": "#/$defs/repository"
+        },
+        "workflow": {
+          "type": "string",
+          "maxLength": 240,
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\\.github/workflows/[A-Za-z0-9_.-]+\\.ya?ml$"
+        },
+        "sourceCommit": {
+          "$ref": "#/$defs/commit"
+        },
+        "workflowCommit": {
+          "$ref": "#/$defs/commit"
+        },
+        "sourceRef": {
+          "type": "string",
+          "pattern": "^refs/heads/[A-Za-z0-9._/-]+$"
+        },
+        "runId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "runAttempt": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximumPatchAttempts",
+        "requireConditionalRequest",
+        "requireTerminalImmutable"
+      ],
+      "properties": {
+        "maximumPatchAttempts": {
+          "const": 1
+        },
+        "requireConditionalRequest": {
+          "const": true
+        },
+        "requireTerminalImmutable": {
+          "const": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    }
+  }
+}
