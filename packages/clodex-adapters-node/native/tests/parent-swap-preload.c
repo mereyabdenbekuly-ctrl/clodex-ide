@@ -19,6 +19,7 @@ typedef long (*syscall_function)(long number, ...);
 
 static syscall_function next_syscall = NULL;
 static bool exchanged = false;
+static unsigned int trigger_matches = 0U;
 
 __attribute__((constructor)) static void resolve_next_syscall(void) {
   void *symbol = dlsym(RTLD_NEXT, "syscall");
@@ -83,6 +84,22 @@ static const char *leaf_name(const char *path) {
   return separator == NULL ? path : separator + 1;
 }
 
+static unsigned int parse_match_count(const char *value) {
+  if (value == NULL || *value == '\0') {
+    _exit(126);
+  }
+  errno = 0;
+  char *end = NULL;
+  const unsigned long parsed = strtoul(value, &end, 10);
+  if (
+    errno != 0 || end == NULL || *end != '\0' ||
+    parsed == 0UL || parsed > (unsigned long)UINT_MAX
+  ) {
+    _exit(126);
+  }
+  return (unsigned int)parsed;
+}
+
 static void mutate_test_namespace(const char *openat2_path) {
   const char *left = getenv("CLODEX_TEST_SWAP_LEFT");
   const char *right = getenv("CLODEX_TEST_SWAP_RIGHT");
@@ -106,6 +123,23 @@ static void mutate_test_namespace(const char *openat2_path) {
       return;
     }
     exchange_test_directories(left, right);
+    return;
+  }
+
+  if (strcmp(action, "exchange-on-match") == 0) {
+    const char *trigger = getenv("CLODEX_TEST_SWAP_TRIGGER");
+    const unsigned int wanted = parse_match_count(
+      getenv("CLODEX_TEST_SWAP_MATCH")
+    );
+    if (
+      trigger == NULL || *trigger == '\0' ||
+      strcmp(openat2_path, trigger) != 0
+    ) {
+      return;
+    }
+    if (++trigger_matches == wanted) {
+      exchange_test_directories(left, right);
+    }
     return;
   }
 

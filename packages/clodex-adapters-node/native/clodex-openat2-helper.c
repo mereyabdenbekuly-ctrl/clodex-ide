@@ -201,6 +201,16 @@ static bool same_identity_type_and_link_count(
     captured->st_nlink == observed->st_nlink;
 }
 
+static bool stable_directory_descriptor(
+  int descriptor,
+  const struct stat *expected_metadata
+) {
+  struct stat observed_metadata;
+  return fstat(descriptor, &observed_metadata) == 0 &&
+    S_ISDIR(observed_metadata.st_mode) &&
+    stable_metadata(expected_metadata, &observed_metadata);
+}
+
 static int confined_openat2(
   int directory_fd,
   const char *path,
@@ -380,6 +390,7 @@ static void open_parent_reference(
 static int reopen_verified_parent(
   int root_fd,
   const struct parent_reference *authorized_parent,
+  const struct stat *post_effect_metadata,
   const char *failure_detail
 ) {
   const int visible_parent = confined_openat2(
@@ -395,13 +406,27 @@ static int reopen_verified_parent(
   if (
     fstat(visible_parent, &visible_metadata) < 0 ||
     !S_ISDIR(visible_metadata.st_mode) ||
-    visible_metadata.st_dev != authorized_parent->metadata.st_dev ||
-    visible_metadata.st_ino != authorized_parent->metadata.st_ino
+    !stable_metadata(post_effect_metadata, &visible_metadata)
   ) {
     close_quietly(visible_parent);
     fail_with("UNCERTAIN", failure_detail);
   }
   return visible_parent;
+}
+
+static void capture_post_effect_parent_metadata(
+  const struct parent_reference *parent,
+  struct stat *output,
+  const char *failure_detail
+) {
+  if (
+    fstat(parent->fd, output) < 0 ||
+    !S_ISDIR(output->st_mode) ||
+    output->st_dev != parent->metadata.st_dev ||
+    output->st_ino != parent->metadata.st_ino
+  ) {
+    fail_with("UNCERTAIN", failure_detail);
+  }
 }
 
 static void capture_absent_state(
@@ -653,9 +678,17 @@ static void execute_create(
   }
   sync_parent(&parent);
 
+  struct stat parent_post_effect_metadata;
+  capture_post_effect_parent_metadata(
+    &parent,
+    &parent_post_effect_metadata,
+    "create-parent-post-state"
+  );
+
   const int visible_parent = reopen_verified_parent(
     root_fd,
     &parent,
+    &parent_post_effect_metadata,
     "create-final-parent-drift"
   );
   struct file_snapshot post = { .fd = -1 };
@@ -690,6 +723,75 @@ static void execute_create(
     close_quietly(parent.fd);
     fail_with("UNCERTAIN", "create-final-child-drift");
   }
+
+  if (
+    !stable_directory_descriptor(
+      parent.fd,
+      &parent_post_effect_metadata
+    ) ||
+    !stable_directory_descriptor(
+      visible_parent,
+      &parent_post_effect_metadata
+    )
+  ) {
+    close_quietly(post.fd);
+    close_quietly(visible_parent);
+    close_quietly(destination);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "create-final-parent-drift");
+  }
+
+  const int final_visible_parent = reopen_verified_parent(
+    root_fd,
+    &parent,
+    &parent_post_effect_metadata,
+    "create-final-parent-drift"
+  );
+  const int final_child = confined_openat2(
+    final_visible_parent,
+    parent.basename,
+    (uint64_t)(O_RDONLY | O_CLOEXEC | O_NOFOLLOW),
+    0U
+  );
+  if (final_child < 0) {
+    close_quietly(final_visible_parent);
+    close_quietly(post.fd);
+    close_quietly(visible_parent);
+    close_quietly(destination);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "create-final-child-resolution");
+  }
+  struct stat final_child_metadata;
+  if (
+    fstat(final_child, &final_child_metadata) < 0 ||
+    !same_identity_type_and_link_count(
+      &created_metadata,
+      &final_child_metadata
+    ) ||
+    !stable_metadata(&post.metadata, &final_child_metadata) ||
+    !stable_directory_descriptor(
+      parent.fd,
+      &parent_post_effect_metadata
+    ) ||
+    !stable_directory_descriptor(
+      visible_parent,
+      &parent_post_effect_metadata
+    ) ||
+    !stable_directory_descriptor(
+      final_visible_parent,
+      &parent_post_effect_metadata
+    )
+  ) {
+    close_quietly(final_child);
+    close_quietly(final_visible_parent);
+    close_quietly(post.fd);
+    close_quietly(visible_parent);
+    close_quietly(destination);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "create-final-binding-drift");
+  }
+  close_quietly(final_child);
+  close_quietly(final_visible_parent);
   close_quietly(post.fd);
   close_quietly(visible_parent);
   close_quietly(destination);
@@ -740,9 +842,17 @@ static void execute_mkdir(
   }
   sync_parent(&parent);
 
+  struct stat parent_post_effect_metadata;
+  capture_post_effect_parent_metadata(
+    &parent,
+    &parent_post_effect_metadata,
+    "mkdir-parent-post-state"
+  );
+
   const int visible_parent = reopen_verified_parent(
     root_fd,
     &parent,
+    &parent_post_effect_metadata,
     "mkdir-final-parent-drift"
   );
   const int visible_directory = confined_openat2(
@@ -777,12 +887,81 @@ static void execute_mkdir(
     close_quietly(parent.fd);
     fail_with("UNCERTAIN", "mkdir-final-child-drift");
   }
+
+  if (
+    !stable_directory_descriptor(
+      parent.fd,
+      &parent_post_effect_metadata
+    ) ||
+    !stable_directory_descriptor(
+      visible_parent,
+      &parent_post_effect_metadata
+    )
+  ) {
+    close_quietly(visible_directory);
+    close_quietly(visible_parent);
+    close_quietly(created_directory);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "mkdir-final-parent-drift");
+  }
+
+  const int final_visible_parent = reopen_verified_parent(
+    root_fd,
+    &parent,
+    &parent_post_effect_metadata,
+    "mkdir-final-parent-drift"
+  );
+  const int final_directory = confined_openat2(
+    final_visible_parent,
+    parent.basename,
+    (uint64_t)(O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW),
+    0U
+  );
+  if (final_directory < 0) {
+    close_quietly(final_visible_parent);
+    close_quietly(visible_directory);
+    close_quietly(visible_parent);
+    close_quietly(created_directory);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "mkdir-final-child-resolution");
+  }
+  struct stat final_directory_metadata;
+  if (
+    fstat(final_directory, &final_directory_metadata) < 0 ||
+    !same_identity_type_and_link_count(
+      &created_metadata,
+      &final_directory_metadata
+    ) ||
+    !stable_metadata(&post_metadata, &final_directory_metadata) ||
+    !stable_directory_descriptor(
+      parent.fd,
+      &parent_post_effect_metadata
+    ) ||
+    !stable_directory_descriptor(
+      visible_parent,
+      &parent_post_effect_metadata
+    ) ||
+    !stable_directory_descriptor(
+      final_visible_parent,
+      &parent_post_effect_metadata
+    )
+  ) {
+    close_quietly(final_directory);
+    close_quietly(final_visible_parent);
+    close_quietly(visible_directory);
+    close_quietly(visible_parent);
+    close_quietly(created_directory);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "mkdir-final-binding-drift");
+  }
   build_directory_commitment(
     root_metadata,
     path,
     &post_metadata,
     post_commitment
   );
+  close_quietly(final_directory);
+  close_quietly(final_visible_parent);
   close_quietly(visible_directory);
   close_quietly(visible_parent);
   close_quietly(created_directory);

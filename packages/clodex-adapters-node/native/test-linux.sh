@@ -213,6 +213,44 @@ cmp -s "$create_input" "$move_create_left/created.txt" || \
 [[ ! -e "$move_create_right/created.txt" ]] || \
   fail 'move-then-exchange create left the inode in the captured parent'
 
+final_create_left="$root/final-create-left"
+final_create_right="$root/final-create-right"
+mkdir -m 700 "$final_create_left" "$final_create_right"
+final_create_left_inode="$(stat -c '%i' "$final_create_left")"
+final_create_right_inode="$(stat -c '%i' "$final_create_right")"
+final_create_pre="$(
+  parse_one_digest "$(invoke inspect-create final-create-left/created - - - 0)"
+)"
+set +e
+CLODEX_TEST_SWAP_LEFT="$final_create_left" \
+  CLODEX_TEST_SWAP_RIGHT="$final_create_right" \
+  CLODEX_TEST_SWAP_ACTION='exchange-on-match' \
+  CLODEX_TEST_SWAP_TRIGGER='created' \
+  CLODEX_TEST_SWAP_MATCH='2' \
+  LD_PRELOAD="$swap_preload" \
+  "$helper" --protocol-v1 execute-create "$device" "$inode" \
+    final-create-left/created "$final_create_pre" - \
+    "$create_digest" "$create_bytes" \
+    <"$create_input" >"$failure_stdout" 2>"$failure_stderr"
+exit_code=$?
+set -e
+[[ "$exit_code" -eq 20 ]] || \
+  fail 'final-child create parent exchange did not fail uncertain'
+grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
+  fail 'final-child create exchange returned an invalid uncertainty record'
+[[ ! -s "$failure_stdout" ]] || \
+  fail 'final-child create exchange returned false success'
+[[ "$(stat -c '%i' "$final_create_left")" == \
+  "$final_create_right_inode" ]] || \
+  fail 'final-child create exchange did not replace the visible parent'
+[[ "$(stat -c '%i' "$final_create_right")" == \
+  "$final_create_left_inode" ]] || \
+  fail 'final-child create exchange lost the authorized parent'
+[[ ! -e "$final_create_left/created" ]] || \
+  fail 'final-child create unexpectedly remained at the visible path'
+cmp -s "$create_input" "$final_create_right/created" || \
+  fail 'final-child create was not retained by the authorized parent'
+
 mkdir_pre="$(parse_one_digest "$(invoke inspect-mkdir build - - - 0)")"
 mkdir_output="$(invoke execute-mkdir build "$mkdir_pre" - - 0)"
 IFS=$'\t' read -r mkdir_status returned_mkdir_pre mkdir_post mkdir_extra \
@@ -279,6 +317,43 @@ grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
   fail 'move-then-exchange mkdir did not expose the moved inode'
 [[ ! -e "$move_mkdir_right/created" ]] || \
   fail 'move-then-exchange mkdir left the inode in the captured parent'
+
+final_mkdir_left="$root/final-mkdir-left"
+final_mkdir_right="$root/final-mkdir-right"
+mkdir -m 700 "$final_mkdir_left" "$final_mkdir_right"
+final_mkdir_left_inode="$(stat -c '%i' "$final_mkdir_left")"
+final_mkdir_right_inode="$(stat -c '%i' "$final_mkdir_right")"
+final_mkdir_pre="$(
+  parse_one_digest "$(invoke inspect-mkdir final-mkdir-left/created - - - 0)"
+)"
+set +e
+CLODEX_TEST_SWAP_LEFT="$final_mkdir_left" \
+  CLODEX_TEST_SWAP_RIGHT="$final_mkdir_right" \
+  CLODEX_TEST_SWAP_ACTION='exchange-on-match' \
+  CLODEX_TEST_SWAP_TRIGGER='created' \
+  CLODEX_TEST_SWAP_MATCH='1' \
+  LD_PRELOAD="$swap_preload" \
+  "$helper" --protocol-v1 execute-mkdir "$device" "$inode" \
+    final-mkdir-left/created "$final_mkdir_pre" - - 0 \
+    >"$failure_stdout" 2>"$failure_stderr"
+exit_code=$?
+set -e
+[[ "$exit_code" -eq 20 ]] || \
+  fail 'final-child mkdir parent exchange did not fail uncertain'
+grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
+  fail 'final-child mkdir exchange returned an invalid uncertainty record'
+[[ ! -s "$failure_stdout" ]] || \
+  fail 'final-child mkdir exchange returned false success'
+[[ "$(stat -c '%i' "$final_mkdir_left")" == \
+  "$final_mkdir_right_inode" ]] || \
+  fail 'final-child mkdir exchange did not replace the visible parent'
+[[ "$(stat -c '%i' "$final_mkdir_right")" == \
+  "$final_mkdir_left_inode" ]] || \
+  fail 'final-child mkdir exchange lost the authorized parent'
+[[ ! -e "$final_mkdir_left/created" ]] || \
+  fail 'final-child mkdir unexpectedly remained at the visible path'
+[[ -d "$final_mkdir_right/created" ]] || \
+  fail 'final-child mkdir was not retained by the authorized parent'
 
 replace_inspect="$(invoke inspect-replace created.txt - "$create_digest" - 0)"
 IFS=$'\t' read -r replace_status replace_pre returned_before replace_extra \
