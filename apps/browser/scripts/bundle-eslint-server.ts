@@ -17,6 +17,7 @@ import {
   verifyBundledComponentSourceBytes,
   verifyBundledEmbeddedDependencySourceBytes,
 } from './release-attribution.mjs';
+import { buildNpmCliInvocation } from './npm-cli-invocation.mjs';
 import { extractVerifiedZipArchive } from './safe-zip-extractor.mjs';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -67,7 +68,7 @@ const bundleDirectory = path.join(browserDirectory, 'bundled', 'eslint-server');
 const bundleParentDirectory = path.dirname(bundleDirectory);
 const bundleWorkDirectory = path.join(browserDirectory, '.eslint-server-work');
 const buildLockPath = path.join(bundleWorkDirectory, 'build.lock');
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const npmInvocation = buildNpmCliInvocation();
 const maximumSourceArchiveBytes = 64 * 1024 * 1024;
 const maximumDependencyArchiveBytes = 25 * 1024 * 1024;
 
@@ -476,13 +477,25 @@ async function main() {
 
     log('Installing exact upstream npm lockfiles...', colors.blue);
     execFileSync(
-      npmCommand,
-      ['ci', '--ignore-scripts', '--no-audit', '--no-fund'],
+      npmInvocation.command,
+      [
+        ...npmInvocation.arguments,
+        'ci',
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+      ],
       { cwd: extractedDirectory, stdio: 'inherit' },
     );
     execFileSync(
-      npmCommand,
-      ['ci', '--ignore-scripts', '--no-audit', '--no-fund'],
+      npmInvocation.command,
+      [
+        ...npmInvocation.arguments,
+        'ci',
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+      ],
       { cwd: serverDirectory, stdio: 'inherit' },
     );
     const embeddedDependencies =

@@ -123,7 +123,9 @@ runtime material that package-manifest traversal cannot discover:
   Same-filesystem staging, lock, and rollback state lives outside the packaged
   `bundled/` tree; stale work fails closed, and the bundled-assets validator
   independently rejects reserved work-state siblings before packaging. The
-  exact archived server lock and
+  archived npm locks are installed by invoking the official `npm-cli.js`
+  through the pinned Node executable, avoiding platform-specific shell wrappers.
+  The exact archived server lock and
   nine production packages are integrity/license bound. Source-map inspection
   currently proves seven are emitted by webpack; only those seven become child
   CycloneDX components, while `lru-cache` and `yallist` remain explicitly

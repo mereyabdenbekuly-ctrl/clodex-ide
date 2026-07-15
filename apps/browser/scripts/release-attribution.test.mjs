@@ -1845,6 +1845,8 @@ test('vscode-eslint bundling rebuilds from verified bytes instead of trusting lo
   );
   assert.match(bundleSource, /fs\.mkdtemp/u);
   assert.match(bundleSource, /extractVerifiedZipArchive\(\{/u);
+  assert.match(bundleSource, /buildNpmCliInvocation/u);
+  assert.doesNotMatch(bundleSource, /npm\.cmd/u);
   assert.match(bundleSource, /verifyBundledModuleCoverage/u);
   assert.doesNotMatch(
     bundleSource,
