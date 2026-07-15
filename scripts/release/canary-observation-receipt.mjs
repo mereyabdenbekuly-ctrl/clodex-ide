@@ -3,7 +3,7 @@ import {
   CANONICAL_REPOSITORY,
   PUBLICATION_REPORT_FILE_NAME,
   TRUSTED_SOURCE_REF,
-} from './release-trust.mjs';
+} from './release-trust-constants.mjs';
 import {
   CANARY_OBSERVATION_POLICY_ID,
   CANARY_OBSERVATION_POLICY_SHA256,
@@ -42,7 +42,7 @@ function isObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function assertExactKeys(value, expected, label) {
+export function assertCanaryExactKeys(value, expected, label) {
   assert(isObject(value), `${label} must be an object`);
   assert(
     JSON.stringify(Object.keys(value).sort()) ===
@@ -51,7 +51,7 @@ function assertExactKeys(value, expected, label) {
   );
 }
 
-function parseCanonicalInstant(value, label) {
+export function parseCanonicalCanaryInstant(value, label) {
   assert(typeof value === 'string', `${label} is invalid`);
   const instant = new Date(value);
   assert(
@@ -61,8 +61,12 @@ function parseCanonicalInstant(value, label) {
   return instant.getTime();
 }
 
-function validateSource(value) {
-  assertExactKeys(value, ['commit', 'ref', 'repository'], 'source binding');
+export function validateCanarySourceBinding(value) {
+  assertCanaryExactKeys(
+    value,
+    ['commit', 'ref', 'repository'],
+    'source binding',
+  );
   assert(
     value.repository === CANONICAL_REPOSITORY &&
       value.ref === TRUSTED_SOURCE_REF &&
@@ -71,8 +75,8 @@ function validateSource(value) {
   );
 }
 
-function validateManifest(value) {
-  assertExactKeys(
+export function validateCanaryManifestBinding(value) {
+  assertCanaryExactKeys(
     value,
     ['path', 'sha256', 'sourceCommit'],
     'manifest binding',
@@ -92,8 +96,8 @@ function validateManifest(value) {
   );
 }
 
-function validateRelease(value) {
-  assertExactKeys(
+export function validateCanaryReleaseBinding(value) {
+  assertCanaryExactKeys(
     value,
     ['channel', 'promotionRole', 'sourceCommit', 'tag', 'version'],
     'release binding',
@@ -109,8 +113,8 @@ function validateRelease(value) {
   );
 }
 
-function validatePublication(value) {
-  assertExactKeys(
+export function validateCanaryPublicationBinding(value) {
+  assertCanaryExactKeys(
     value,
     [
       'createdAt',
@@ -125,7 +129,7 @@ function validatePublication(value) {
     ],
     'publication binding',
   );
-  parseCanonicalInstant(value.createdAt, 'publication createdAt');
+  parseCanonicalCanaryInstant(value.createdAt, 'publication createdAt');
   assert(
     value.repository === CANONICAL_REPOSITORY &&
       Number.isSafeInteger(value.releaseId) &&
@@ -143,7 +147,7 @@ function validatePublication(value) {
 }
 
 function validateEvidenceSummary(value, kind, label) {
-  assertExactKeys(value, ['artifactKind', 'sha256'], label);
+  assertCanaryExactKeys(value, ['artifactKind', 'sha256'], label);
   assert(
     value.artifactKind === kind && SHA256.test(String(value.sha256 ?? '')),
     `${label} is invalid`,
@@ -151,7 +155,11 @@ function validateEvidenceSummary(value, kind, label) {
 }
 
 function validateEvidence(value) {
-  assertExactKeys(value, ['distribution', 'telemetry'], 'evidence bindings');
+  assertCanaryExactKeys(
+    value,
+    ['distribution', 'telemetry'],
+    'evidence bindings',
+  );
   validateEvidenceSummary(
     value.distribution,
     CANARY_DISTRIBUTION_SUMMARY_KIND,
@@ -164,8 +172,8 @@ function validateEvidence(value) {
   );
 }
 
-function validateProducer(value) {
-  assertExactKeys(
+export function validateCanaryReceiptProducer(value) {
+  assertCanaryExactKeys(
     value,
     [
       'repository',
@@ -195,7 +203,7 @@ function validateProducer(value) {
 }
 
 function validatePolicy(value) {
-  assertExactKeys(value, ['id', 'sha256'], 'policy binding');
+  assertCanaryExactKeys(value, ['id', 'sha256'], 'policy binding');
   assert(
     value.id === CANARY_OBSERVATION_POLICY_ID &&
       value.sha256 === CANARY_OBSERVATION_POLICY_SHA256,
@@ -204,7 +212,7 @@ function validatePolicy(value) {
 }
 
 function validateObservation(value) {
-  assertExactKeys(
+  assertCanaryExactKeys(
     value,
     [
       'counters',
@@ -217,9 +225,9 @@ function validateObservation(value) {
     'observation',
   );
   assertCanaryObservationCounters(value.counters);
-  parseCanonicalInstant(value.startedAt, 'observation startedAt');
-  parseCanonicalInstant(value.endedAt, 'observation endedAt');
-  parseCanonicalInstant(
+  parseCanonicalCanaryInstant(value.startedAt, 'observation startedAt');
+  parseCanonicalCanaryInstant(value.endedAt, 'observation endedAt');
+  parseCanonicalCanaryInstant(
     value.distributionClosedAt,
     'observation distributionClosedAt',
   );
@@ -242,7 +250,7 @@ function validateObservation(value) {
 }
 
 function validateInput(value) {
-  assertExactKeys(
+  assertCanaryExactKeys(
     value,
     [
       'evidence',
@@ -256,22 +264,25 @@ function validateInput(value) {
     ],
     'canary observation input',
   );
-  parseCanonicalInstant(value.generatedAt, 'receipt generatedAt');
-  validateSource(value.source);
-  validateManifest(value.manifest);
-  validateRelease(value.release);
-  validatePublication(value.publication);
+  parseCanonicalCanaryInstant(value.generatedAt, 'receipt generatedAt');
+  validateCanarySourceBinding(value.source);
+  validateCanaryManifestBinding(value.manifest);
+  validateCanaryReleaseBinding(value.release);
+  validateCanaryPublicationBinding(value.publication);
   validateEvidence(value.evidence);
-  validateProducer(value.producer);
-  assertExactKeys(
+  validateCanaryReceiptProducer(value.producer);
+  assertCanaryExactKeys(
     value.observation,
     ['counters', 'distributionClosedAt', 'endedAt', 'startedAt'],
     'observation input',
   );
   assertCanaryObservationCounters(value.observation.counters);
-  parseCanonicalInstant(value.observation.startedAt, 'observation startedAt');
-  parseCanonicalInstant(value.observation.endedAt, 'observation endedAt');
-  parseCanonicalInstant(
+  parseCanonicalCanaryInstant(
+    value.observation.startedAt,
+    'observation startedAt',
+  );
+  parseCanonicalCanaryInstant(value.observation.endedAt, 'observation endedAt');
+  parseCanonicalCanaryInstant(
     value.observation.distributionClosedAt,
     'observation distributionClosedAt',
   );
@@ -293,17 +304,17 @@ function validateBindingIdentity(bindings) {
 }
 
 export function validateCanaryObservationBindings(value) {
-  assertExactKeys(
+  assertCanaryExactKeys(
     value,
     ['evidence', 'manifest', 'producer', 'publication', 'release', 'source'],
     'canary observation bindings',
   );
-  validateSource(value.source);
-  validateManifest(value.manifest);
-  validateRelease(value.release);
-  validatePublication(value.publication);
+  validateCanarySourceBinding(value.source);
+  validateCanaryManifestBinding(value.manifest);
+  validateCanaryReleaseBinding(value.release);
+  validateCanaryPublicationBinding(value.publication);
   validateEvidence(value.evidence);
-  validateProducer(value.producer);
+  validateCanaryReceiptProducer(value.producer);
   validateBindingIdentity(value);
   return value;
 }
@@ -313,23 +324,23 @@ function validateCrossBindings(receipt, now) {
 
   const nowMs = now.getTime();
   assert(!Number.isNaN(nowMs), 'verification clock is invalid');
-  const publicationCreatedAt = parseCanonicalInstant(
+  const publicationCreatedAt = parseCanonicalCanaryInstant(
     receipt.publication.createdAt,
     'publication createdAt',
   );
-  const startedAt = parseCanonicalInstant(
+  const startedAt = parseCanonicalCanaryInstant(
     receipt.observation.startedAt,
     'observation startedAt',
   );
-  const endedAt = parseCanonicalInstant(
+  const endedAt = parseCanonicalCanaryInstant(
     receipt.observation.endedAt,
     'observation endedAt',
   );
-  const distributionClosedAt = parseCanonicalInstant(
+  const distributionClosedAt = parseCanonicalCanaryInstant(
     receipt.observation.distributionClosedAt,
     'observation distributionClosedAt',
   );
-  const generatedAt = parseCanonicalInstant(
+  const generatedAt = parseCanonicalCanaryInstant(
     receipt.generatedAt,
     'receipt generatedAt',
   );
@@ -382,7 +393,7 @@ export function validateCanaryObservationReceipt(
   value,
   { now = new Date() } = {},
 ) {
-  assertExactKeys(
+  assertCanaryExactKeys(
     value,
     [
       'evidence',
@@ -404,12 +415,12 @@ export function validateCanaryObservationReceipt(
       value.receiptKind === CANARY_OBSERVATION_RECEIPT_KIND,
     'canary observation receipt schema is invalid',
   );
-  validateSource(value.source);
-  validateManifest(value.manifest);
-  validateRelease(value.release);
-  validatePublication(value.publication);
+  validateCanarySourceBinding(value.source);
+  validateCanaryManifestBinding(value.manifest);
+  validateCanaryReleaseBinding(value.release);
+  validateCanaryPublicationBinding(value.publication);
   validateEvidence(value.evidence);
-  validateProducer(value.producer);
+  validateCanaryReceiptProducer(value.producer);
   validatePolicy(value.policy);
   validateObservation(value.observation);
   validateCrossBindings(value, now);

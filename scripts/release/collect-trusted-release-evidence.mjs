@@ -150,6 +150,7 @@ async function main() {
       authFailures: 0,
       distributionClosedAt: null,
       endedAt: null,
+      observationEvidence: null,
       observedHours: null,
       observedInstallations: null,
       startedAt: null,
@@ -182,7 +183,7 @@ async function main() {
   }
 
   const evidence = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     evidenceKind: 'release-acceptance',
     status,
     generatedAt,

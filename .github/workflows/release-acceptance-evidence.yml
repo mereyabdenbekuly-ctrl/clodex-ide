@@ -292,6 +292,9 @@ jobs:
           ].sort();
           const isObject = (value) =>
             typeof value === 'object' && value !== null && !Array.isArray(value);
+          const hasExactKeys = (value, keys) =>
+            isObject(value) &&
+            JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
           const isCommit = (value) => /^[a-f0-9]{40}$/.test(String(value ?? ''));
           const isSha256 = (value) => /^[a-f0-9]{64}$/.test(String(value ?? ''));
           const generatedAt = new Date(evidence.generatedAt).getTime();
@@ -306,7 +309,7 @@ jobs:
           const assetIds = new Set();
           const assetsValid = publicationAssets.length > 1 && publicationAssets.every((asset) => {
             const valid =
-              isObject(asset) &&
+              hasExactKeys(asset, ['bytes', 'fileName', 'releaseAssetId', 'sha256']) &&
               typeof asset.fileName === 'string' &&
               asset.fileName === path.basename(asset.fileName) &&
               asset.fileName.length > 0 &&
@@ -326,11 +329,41 @@ jobs:
           );
           const release = evidence.release;
           const canary = evidence.canary;
+          const canaryKeys = [
+            'authFailures',
+            'distributionClosedAt',
+            'endedAt',
+            'observationEvidence',
+            'observedHours',
+            'observedInstallations',
+            'startedAt',
+            'stopReasons',
+            'targetInstallations',
+            'targetObservationHours',
+          ].sort();
+          const canaryKeysValid =
+            isObject(canary) &&
+            JSON.stringify(Object.keys(canary).sort()) === JSON.stringify(canaryKeys);
           const rollback = evidence.rollback;
           const automatedInput = evidence.inputs?.automatedChecks;
           const manualInput = evidence.inputs?.manualChecks;
           if (
-            evidence.schemaVersion !== 3 ||
+            !hasExactKeys(evidence, [
+              'blockers',
+              'canary',
+              'checks',
+              'collector',
+              'evidenceKind',
+              'generatedAt',
+              'inputs',
+              'manifest',
+              'publication',
+              'release',
+              'rollback',
+              'schemaVersion',
+              'status',
+            ]) ||
+            evidence.schemaVersion !== 4 ||
             evidence.evidenceKind !== 'release-acceptance' ||
             evidence.status !== 'ready-as-rollback-baseline' ||
             !Number.isFinite(generatedAt) ||
@@ -338,7 +371,16 @@ jobs:
             now - generatedAt > 72 * 60 * 60 * 1000 ||
             !Number.isFinite(publicationCreatedAt) ||
             publicationCreatedAt > generatedAt ||
-            evidence.collector?.repository !== process.env.GITHUB_REPOSITORY ||
+            !hasExactKeys(evidence.collector, [
+              'repository',
+              'runAttempt',
+              'runId',
+              'sourceCommit',
+              'sourceRef',
+              'workflow',
+              'workflowCommit',
+            ]) ||
+            evidence.collector.repository !== process.env.GITHUB_REPOSITORY ||
             evidence.collector?.runId !== Number(process.env.GITHUB_RUN_ID) ||
             evidence.collector?.runAttempt !== Number(process.env.GITHUB_RUN_ATTEMPT) ||
             evidence.collector?.sourceCommit !== process.env.GITHUB_SHA ||
@@ -347,7 +389,7 @@ jobs:
             evidence.collector?.sourceRef !== 'refs/heads/main' ||
             evidence.collector?.workflow !==
               `${process.env.GITHUB_REPOSITORY}/.github/workflows/release-acceptance-evidence.yml` ||
-            !isObject(evidence.manifest) ||
+            !hasExactKeys(evidence.manifest, ['path', 'sha256', 'sourceCommit']) ||
             typeof evidence.manifest.path !== 'string' ||
             evidence.manifest.path.includes('\\') ||
             path.posix.normalize(evidence.manifest.path) !== evidence.manifest.path ||
@@ -356,7 +398,18 @@ jobs:
             !isSha256(evidence.manifest.sha256) ||
             evidence.manifest?.sourceCommit !== process.env.EXPECTED_RELEASE_SOURCE_COMMIT ||
             !isCommit(evidence.manifest?.sourceCommit) ||
-            evidence.publication?.repository !== process.env.GITHUB_REPOSITORY ||
+            !hasExactKeys(evidence.publication, [
+              'assets',
+              'createdAt',
+              'releaseId',
+              'reportAssetId',
+              'reportFileName',
+              'reportSha256',
+              'repository',
+              'sourceCommit',
+              'tag',
+            ]) ||
+            evidence.publication.repository !== process.env.GITHUB_REPOSITORY ||
             evidence.publication?.releaseId !== Number(process.env.EXPECTED_RELEASE_ID) ||
             evidence.publication?.sourceCommit !== process.env.EXPECTED_RELEASE_SOURCE_COMMIT ||
             evidence.publication?.tag !== release?.tag ||
@@ -367,31 +420,33 @@ jobs:
             !assetsValid ||
             reportAsset?.releaseAssetId !== evidence.publication.reportAssetId ||
             reportAsset?.sha256 !== evidence.publication.reportSha256 ||
-            !isObject(release) ||
+            !hasExactKeys(release, ['channel', 'promotionRole', 'tag', 'version']) ||
             release.channel !== 'preview' ||
             release.promotionRole !== 'rollback-baseline' ||
             !/^\d+\.\d+\.\d+-preview\.2$/.test(String(release.version ?? '')) ||
             release.tag !== `v${release.version}` ||
-            !isObject(rollback) ||
+            !hasExactKeys(rollback, ['mode']) ||
             rollback.mode !== 'distribution-stop-only' ||
             Object.hasOwn(rollback, 'targetTag') ||
-            !isObject(canary) ||
+            !canaryKeysValid ||
             canary.startedAt !== null ||
             canary.endedAt !== null ||
             canary.distributionClosedAt !== null ||
             canary.observedHours !== null ||
             canary.observedInstallations !== null ||
+            canary.observationEvidence !== null ||
             canary.targetInstallations !== 0 ||
             canary.targetObservationHours !== 24 ||
             canary.authFailures !== 0 ||
             !Array.isArray(canary.stopReasons) ||
             canary.stopReasons.length !== 0 ||
-            !isObject(automatedInput) ||
+            !hasExactKeys(evidence.inputs, ['automatedChecks', 'manualChecks']) ||
+            !hasExactKeys(automatedInput, ['path', 'sha256', 'sourceCommit']) ||
             typeof automatedInput.path !== 'string' ||
             automatedInput.path !== path.basename(automatedInput.path) ||
             !isSha256(automatedInput.sha256) ||
             automatedInput.sourceCommit !== process.env.EXPECTED_RELEASE_SOURCE_COMMIT ||
-            !isObject(manualInput) ||
+            !hasExactKeys(manualInput, ['path', 'sha256', 'sourceCommit']) ||
             typeof manualInput.path !== 'string' ||
             manualInput.path !== path.basename(manualInput.path) ||
             !isSha256(manualInput.sha256) ||
@@ -401,7 +456,7 @@ jobs:
             JSON.stringify(checkIds) !== JSON.stringify(requiredCheckIds) ||
             checks.some(
               (check) =>
-                !isObject(check) ||
+                !hasExactKeys(check, ['id', 'reasonCode', 'status']) ||
                 check.status !== 'pass' ||
                 typeof check.reasonCode !== 'string' ||
                 check.reasonCode.length === 0,

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clodex.xyz/schemas/release/content-free-canary-distribution-summary-v1.schema.json",
+  "$comment": "Cross-field equality, canonical byte encoding, freshness, and closure grace are enforced by canary-observation-summaries.mjs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifactKind",
+    "generatedAt",
+    "manifest",
+    "observation",
+    "producer",
+    "publication",
+    "release",
+    "schemaVersion",
+    "source"
+  ],
+  "properties": {
+    "artifactKind": {
+      "const": "content-free-canary-distribution-summary-v1"
+    },
+    "generatedAt": {
+      "$ref": "canary-observation-summary-bindings-v1.schema.json#/$defs/instant"
+    },
+    "manifest": {
+      "$ref": "canary-observation-summary-bindings-v1.schema.json#/$defs/manifest"
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["counters", "distributionClosedAt", "endedAt", "startedAt"],
+      "properties": {
+        "counters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["signatureTrustFailures", "uniqueInstallations"],
+          "properties": {
+            "signatureTrustFailures": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "uniqueInstallations": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "distributionClosedAt": {
+          "$ref": "canary-observation-summary-bindings-v1.schema.json#/$defs/instant"
+        },
+        "endedAt": {
+          "$ref": "canary-observation-summary-bindings-v1.schema.json#/$defs/instant"
+        },
+        "startedAt": {
+          "$ref": "canary-observation-summary-bindings-v1.schema.json#/$defs/instant"
+        }
+      }
+    },
+    "producer": {
+      "$ref": "canary-observation-summary-bindings-v1.schema.json#/$defs/producer"
+    },
+    "publication": {
+      "$ref": "canary-observation-summary-bindings-v1.schema.json#/$defs/publication"
+    },
+    "release": {
+      "$ref": "canary-observation-summary-bindings-v1.schema.json#/$defs/release"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "source": {
+      "$ref": "canary-observation-summary-bindings-v1.schema.json#/$defs/source"
+    }
+  }
+}

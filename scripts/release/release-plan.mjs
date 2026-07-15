@@ -8,7 +8,7 @@ import {
 } from './release-trust.mjs';
 
 export const RELEASE_PLAN_SCHEMA_VERSION = 2;
-export const RELEASE_ACCEPTANCE_SCHEMA_VERSION = 3;
+export const RELEASE_ACCEPTANCE_SCHEMA_VERSION = 4;
 
 const TECHNICAL_PREVIEW_VERSION = /^(\d+\.\d+\.\d+)-preview\.([1-9]\d*)$/u;
 const STABLE_VERSION = /^\d+\.\d+\.\d+$/u;
@@ -369,6 +369,7 @@ function validatePromotionEvidence(evidence, expected, context, evidenceTrust) {
       evidence.canary?.observedHours === null &&
         evidence.canary?.observedInstallations === null &&
         evidence.canary?.targetInstallations === 0 &&
+        evidence.canary?.observationEvidence === null &&
         !Object.hasOwn(evidence.rollback, 'targetTag'),
       'rollback-baseline evidence must not claim a canary',
     );
@@ -377,6 +378,8 @@ function validatePromotionEvidence(evidence, expected, context, evidenceTrust) {
       evidence.canary?.targetInstallations === 5 &&
         evidence.canary?.observedInstallations === 5 &&
         evidence.canary?.observedHours >= 24 &&
+        typeof evidence.canary?.observationEvidence === 'object' &&
+        evidence.canary.observationEvidence !== null &&
         Array.isArray(evidence.canary?.stopReasons) &&
         evidence.canary.stopReasons.length === 0 &&
         evidence.rollback?.targetTag ===

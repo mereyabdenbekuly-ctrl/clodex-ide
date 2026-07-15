@@ -6,6 +6,7 @@
       "**",
       "!**/pnpm-lock.yaml",
       "!docs/provenance/bundled-component-evidence/vscode-eslint-3.0.10-server-package-lock.json",
+      "!scripts/release/fixtures/canary-observation-v1/*.json",
       "!**/lib/db/migrations",
       "!**/lib/editor/react-renderer.tsx",
       "!**/node_modules",

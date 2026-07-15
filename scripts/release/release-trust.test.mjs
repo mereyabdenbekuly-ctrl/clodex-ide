@@ -19,6 +19,11 @@ import {
   validatePublicationReport,
   validateTrustedAcceptanceEvidence,
 } from './release-trust.mjs';
+import {
+  CANARY_FIXTURE_MANIFEST_SHA256,
+  CANARY_FIXTURE_PUBLICATION_SHA256,
+  canaryObservationEvidenceBundle,
+} from './canary-observation-test-fixtures.mjs';
 
 const SOURCE_COMMIT = '1'.repeat(40);
 const WORKFLOW_COMMIT = SOURCE_COMMIT;
@@ -285,9 +290,11 @@ test('stable publication is verified as an attested draft before it becomes publ
 });
 
 function trustedEvidence() {
-  const reportSha256 = '8'.repeat(64);
+  const reportSha256 = CANARY_FIXTURE_PUBLICATION_SHA256;
+  const observationEvidence = canaryObservationEvidenceBundle();
+  const observation = observationEvidence.receipt.value.observation;
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     evidenceKind: 'release-acceptance',
     status: 'ready-for-stable',
     generatedAt: '2026-07-15T00:00:00.000Z',
@@ -308,8 +315,20 @@ function trustedEvidence() {
     },
     manifest: {
       path: '.release-notes/clodex-technical-preview.json',
-      sha256: '2'.repeat(64),
+      sha256: CANARY_FIXTURE_MANIFEST_SHA256,
       sourceCommit: SOURCE_COMMIT,
+    },
+    inputs: {
+      automatedChecks: {
+        path: 'automated-checks.json',
+        sha256: 'a'.repeat(64),
+        sourceCommit: SOURCE_COMMIT,
+      },
+      manualChecks: {
+        path: 'manual-checks.json',
+        sha256: 'b'.repeat(64),
+        sourceCommit: '3'.repeat(40),
+      },
     },
     publication: {
       assets: [
@@ -347,11 +366,12 @@ function trustedEvidence() {
     },
     canary: {
       authFailures: 0,
-      distributionClosedAt: '2026-07-14T00:00:00.000Z',
-      endedAt: '2026-07-14T00:00:00.000Z',
-      observedHours: 24,
+      distributionClosedAt: observation.distributionClosedAt,
+      endedAt: observation.endedAt,
+      observationEvidence,
+      observedHours: observation.observedHours,
       observedInstallations: 5,
-      startedAt: '2026-07-13T00:00:00.000Z',
+      startedAt: observation.startedAt,
       stopReasons: [],
       targetInstallations: 5,
       targetObservationHours: 24,
@@ -402,6 +422,34 @@ test('trusted acceptance rejects stale/open/pre-release/auth-failure canaries', 
     () => validateTrustedAcceptanceEvidence(authFailure, { now }),
     /zero-failure policy/,
   );
+
+  const substitutedSubject = trustedEvidence();
+  substitutedSubject.canary.observationEvidence.health.sha256 = 'f'.repeat(64);
+  assert.throws(
+    () => validateTrustedAcceptanceEvidence(substitutedSubject, { now }),
+    /artifact subject digest is invalid/,
+  );
+
+  const contentBearing = trustedEvidence();
+  contentBearing.canary.observationEvidence.distribution.value.observation.machineId =
+    'not-allowed';
+  assert.throws(
+    () => validateTrustedAcceptanceEvidence(contentBearing, { now }),
+    /missing or unsupported fields/,
+  );
+
+  for (const mutate of [
+    (value) => (value.privateData = { opaque: true }),
+    (value) => (value.inputs.automatedChecks.rawTelemetry = []),
+    (value) => (value.checks[0].metadata = { note: 'not-allowed' }),
+  ]) {
+    const extraField = trustedEvidence();
+    mutate(extraField);
+    assert.throws(
+      () => validateTrustedAcceptanceEvidence(extraField, { now }),
+      /missing or unsupported fields/,
+    );
+  }
 });
 
 test('stable promotion stays fail-closed without a trusted canary observation verifier', () => {

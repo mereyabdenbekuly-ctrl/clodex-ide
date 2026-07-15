@@ -109,6 +109,37 @@ export interface ValidatedCanaryObservationReceipt {
   stopReasons: CanaryObservationStopReason[];
 }
 
+export function assertCanaryExactKeys(
+  value: unknown,
+  expected: readonly string[],
+  label: string,
+): asserts value is Record<string, unknown>;
+
+export function parseCanonicalCanaryInstant(
+  value: unknown,
+  label: string,
+): number;
+
+export function validateCanarySourceBinding(
+  value: unknown,
+): asserts value is CanaryObservationSourceBinding;
+
+export function validateCanaryManifestBinding(
+  value: unknown,
+): asserts value is CanaryObservationManifestBinding;
+
+export function validateCanaryReleaseBinding(
+  value: unknown,
+): asserts value is CanaryObservationReleaseBinding;
+
+export function validateCanaryPublicationBinding(
+  value: unknown,
+): asserts value is CanaryObservationPublicationBinding;
+
+export function validateCanaryReceiptProducer(
+  value: unknown,
+): asserts value is CanaryObservationProducerBinding;
+
 export function validateCanaryObservationReceipt(
   value: unknown,
   options?: { now?: Date },

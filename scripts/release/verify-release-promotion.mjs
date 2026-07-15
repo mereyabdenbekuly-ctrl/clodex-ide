@@ -28,6 +28,15 @@ import {
   validatePublicationReport,
   validateTrustedAcceptanceEvidence,
 } from './release-trust.mjs';
+import {
+  canaryObservationBindings,
+  validateCanaryReceiptProducer,
+} from './canary-observation-receipt.mjs';
+import {
+  canonicalCanaryArtifactBytes,
+  validateCanarySummaryProducer,
+} from './canary-observation-summaries.mjs';
+import { verifyCanaryObservationEvidenceBundle } from './verify-canary-observation.mjs';
 
 const repositoryDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -83,7 +92,10 @@ function run(command, args, options = {}) {
   return result.stdout ?? '';
 }
 
-function verifyAttestation(filePath, { signerDigest, sourceDigest, workflow }) {
+function verifyAttestation(
+  filePath,
+  { repository = CANONICAL_REPOSITORY, signerDigest, sourceDigest, workflow },
+) {
   if (
     !/^[a-f0-9]{40}$/u.test(String(sourceDigest ?? '')) ||
     !/^[a-f0-9]{40}$/u.test(String(signerDigest ?? ''))
@@ -95,7 +107,7 @@ function verifyAttestation(filePath, { signerDigest, sourceDigest, workflow }) {
     'verify',
     filePath,
     '--repo',
-    CANONICAL_REPOSITORY,
+    repository,
     '--signer-workflow',
     workflow,
     '--source-ref',
@@ -149,10 +161,92 @@ function normalizeEvidencePath(value) {
 }
 
 export function requireTrustedCanaryObservation(evidence) {
-  if (evidence?.status === 'ready-for-stable') {
+  if (
+    evidence?.status === 'ready-for-stable' &&
+    TRUSTED_CANARY_OBSERVATION_STATUS !== 'READY'
+  ) {
     fail(
       'stable promotion is NOT_READY: no trusted, manifest-bound canary observation attestation verifier is configured',
     );
+  }
+}
+
+function verifiedAttestationClaim(subject, producer) {
+  return {
+    repository: producer.repository,
+    signerDigest: producer.workflowCommit,
+    signerWorkflow: producer.workflow,
+    sourceDigest: producer.sourceCommit,
+    sourceRef: producer.sourceRef,
+    subjectSha256: subject.sha256,
+  };
+}
+
+/**
+ * Reconstructs the exact canonical nested subjects, verifies each external
+ * attestation against an independently supplied producer policy, and then
+ * binds the verified claims to the acceptance receipt.
+ * The production call remains unreachable while the explicit NOT_READY guard
+ * is active; tests may inject a verifier to exercise the completed plumbing.
+ */
+export async function verifyTrustedCanaryObservationSubjects(
+  evidence,
+  {
+    expectedProducers,
+    now = new Date(),
+    verifyAttestationImpl = verifyAttestation,
+  } = {},
+) {
+  if (evidence?.status !== 'ready-for-stable') return null;
+  if (
+    !expectedProducers ||
+    typeof expectedProducers !== 'object' ||
+    Array.isArray(expectedProducers) ||
+    JSON.stringify(Object.keys(expectedProducers).sort()) !==
+      JSON.stringify(['distribution', 'health', 'receipt'])
+  ) {
+    fail('expected canary producer policy is not configured');
+  }
+  validateCanarySummaryProducer(expectedProducers.distribution);
+  validateCanarySummaryProducer(expectedProducers.health);
+  validateCanaryReceiptProducer(expectedProducers.receipt);
+  const bundle = evidence.canary?.observationEvidence;
+  const subjects = {
+    distribution: bundle?.distribution,
+    health: bundle?.health,
+    receipt: bundle?.receipt,
+  };
+  const temporaryDirectory = mkdtempSync(
+    path.join(os.tmpdir(), 'clodex-canary-observation.'),
+  );
+  try {
+    const fileNames = {
+      distribution: 'canary-distribution-summary.json',
+      health: 'canary-health-summary.json',
+      receipt: 'canary-observation-receipt.json',
+    };
+    const verifiedAttestations = {};
+    for (const label of ['distribution', 'health', 'receipt']) {
+      const subject = subjects[label];
+      const producer = expectedProducers[label];
+      const filePath = path.join(temporaryDirectory, fileNames[label]);
+      writeFileSync(filePath, canonicalCanaryArtifactBytes(subject.value));
+      await verifyAttestationImpl(filePath, {
+        repository: producer.repository,
+        signerDigest: producer.workflowCommit,
+        sourceDigest: producer.sourceCommit,
+        workflow: producer.workflow,
+      });
+      verifiedAttestations[label] = verifiedAttestationClaim(subject, producer);
+    }
+    return verifyCanaryObservationEvidenceBundle(bundle, {
+      expected: canaryObservationBindings(subjects.receipt.value, { now }),
+      expectedProducers,
+      now,
+      verifiedAttestations,
+    });
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
   }
 }
 
@@ -176,6 +270,9 @@ async function verifyAcceptedRelease({
     sourceDigest: evidence.collector.sourceCommit,
     workflow: ACCEPTANCE_ATTESTATION_WORKFLOW,
   });
+  if (evidence.status === 'ready-for-stable') {
+    await verifyTrustedCanaryObservationSubjects(evidence, { now });
+  }
 
   const temporaryDirectory = mkdtempSync(
     path.join(os.tmpdir(), 'clodex-accepted-release.'),

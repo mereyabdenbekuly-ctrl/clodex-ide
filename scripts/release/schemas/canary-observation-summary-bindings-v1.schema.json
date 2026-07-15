@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clodex.xyz/schemas/release/canary-observation-summary-bindings-v1.schema.json",
+  "$defs": {
+    "commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "instant": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "sourceCommit"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^\\.release-notes/[A-Za-z0-9._-]+\\.json$",
+          "maxLength": 160
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "sourceCommit": {
+          "$ref": "#/$defs/commit"
+        }
+      }
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "runAttempt",
+        "runId",
+        "sourceCommit",
+        "sourceRef",
+        "workflow",
+        "workflowCommit"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "maxLength": 160
+        },
+        "runAttempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "runId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sourceCommit": {
+          "$ref": "#/$defs/commit"
+        },
+        "sourceRef": {
+          "const": "refs/heads/main"
+        },
+        "workflow": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "workflowCommit": {
+          "$ref": "#/$defs/commit"
+        }
+      }
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "createdAt",
+        "releaseId",
+        "reportAssetId",
+        "reportFileName",
+        "reportSha256",
+        "repository",
+        "sourceCommit",
+        "state",
+        "tag"
+      ],
+      "properties": {
+        "createdAt": {
+          "$ref": "#/$defs/instant"
+        },
+        "releaseId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reportAssetId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reportFileName": {
+          "const": "clodex-release-publication.json"
+        },
+        "reportSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "repository": {
+          "const": "mereyabdenbekuly-ctrl/clodex-ide"
+        },
+        "sourceCommit": {
+          "$ref": "#/$defs/commit"
+        },
+        "state": {
+          "const": "draft"
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+-preview\\.[1-9][0-9]*$"
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "channel",
+        "promotionRole",
+        "sourceCommit",
+        "tag",
+        "version"
+      ],
+      "properties": {
+        "channel": {
+          "const": "preview"
+        },
+        "promotionRole": {
+          "const": "canary"
+        },
+        "sourceCommit": {
+          "$ref": "#/$defs/commit"
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+-preview\\.[1-9][0-9]*$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-preview\\.[1-9][0-9]*$",
+          "maxLength": 64
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "ref", "repository"],
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "ref": {
+          "const": "refs/heads/main"
+        },
+        "repository": {
+          "const": "mereyabdenbekuly-ctrl/clodex-ide"
+        }
+      }
+    }
+  }
+}
