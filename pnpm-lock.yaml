@@ -12,6 +12,7 @@ overrides:
   '@types/minimatch': 5.1.2
   '@babel/core@>=7.0.0 <7.29.6': 7.29.6
   '@better-auth/electron@1.6.13>@better-auth/core': 1.6.13
+  '@electron/rebuild@3.7.2>@electron/node-gyp': 10.2.0-electron.2
   '@conventional-changelog/git-client@1.0.1': 2.0.0
   '@esbuild-kit/core-utils@3.3.2>esbuild': 0.25.9
   '@opentelemetry/core@2.2.0': 2.8.0
@@ -2489,9 +2490,8 @@ packages:
     resolution: {integrity: sha512-pjoBpru1KdEtcExBnuHAP1cAc/5faoedw0hzJkL3o4/IJp7HNF1+fbrdxT3gMYRX2oJfvnA/WXeCTVQpYYxyJA==}
     engines: {node: '>=22.12.0'}
 
-  '@electron/node-gyp@https://codeload.github.com/electron/node-gyp/tar.gz/06b29aafb7708acef8b3669835c8a7857ebc92d2':
-    resolution: {tarball: https://codeload.github.com/electron/node-gyp/tar.gz/06b29aafb7708acef8b3669835c8a7857ebc92d2}
-    version: 10.2.0-electron.1
+  '@electron/node-gyp@10.2.0-electron.2':
+    resolution: {integrity: sha512-OhO6fwqpetMO1vWI3+J8mb3a4s4A405tgKoUCJsgd4nyQDdFh0VvZm+gj/Cc70iRLQoIYUfSaAgYSVwmLsQHig==}
     engines: {node: '>=12.13.0'}
     hasBin: true
 
@@ -12773,7 +12773,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@electron/node-gyp@https://codeload.github.com/electron/node-gyp/tar.gz/06b29aafb7708acef8b3669835c8a7857ebc92d2':
+  '@electron/node-gyp@10.2.0-electron.2':
     dependencies:
       env-paths: 2.2.1
       exponential-backoff: 3.1.3
@@ -12836,7 +12836,7 @@ snapshots:
 
   '@electron/rebuild@3.7.2':
     dependencies:
-      '@electron/node-gyp': https://codeload.github.com/electron/node-gyp/tar.gz/06b29aafb7708acef8b3669835c8a7857ebc92d2
+      '@electron/node-gyp': 10.2.0-electron.2
       '@malept/cross-spawn-promise': 2.0.0
       chalk: 4.1.2
       debug: 4.4.3(supports-color@5.5.0)

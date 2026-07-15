@@ -105,6 +105,7 @@
       "@types/minimatch": "5.1.2",
       "@babel/core@>=7.0.0 <7.29.6": "7.29.6",
       "@better-auth/electron@1.6.13>@better-auth/core": "1.6.13",
+      "@electron/rebuild@3.7.2>@electron/node-gyp": "10.2.0-electron.2",
       "@conventional-changelog/git-client@1.0.1": "2.0.0",
       "@esbuild-kit/core-utils@3.3.2>esbuild": "0.25.9",
       "@opentelemetry/core@2.2.0": "2.8.0",
