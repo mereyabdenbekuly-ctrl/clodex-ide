@@ -157,6 +157,12 @@ cc -std=c17 -O2 -fPIC -shared -Wall -Wextra -Wconversion -Werror \
   -Wformat=2 -Wshadow -Wstrict-prototypes \
   "$script_directory/tests/parent-swap-preload.c" -ldl -o "$swap_preload"
 
+metadata_preload="$temporary_directory/child-metadata-drift-preload.so"
+cc -std=c17 -O2 -fPIC -shared -Wall -Wextra -Wconversion -Werror \
+  -Wformat=2 -Wshadow -Wstrict-prototypes \
+  "$script_directory/tests/child-metadata-drift-preload.c" -ldl \
+  -o "$metadata_preload"
+
 swap_left="$root/swap-left"
 swap_right="$root/swap-right"
 mkdir -m 700 "$swap_left" "$swap_right"
@@ -251,6 +257,33 @@ grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
 cmp -s "$create_input" "$final_create_right/created" || \
   fail 'final-child create was not retained by the authorized parent'
 
+metadata_create_parent="$root/metadata-create-parent"
+mkdir -m 700 "$metadata_create_parent"
+metadata_create_pre="$(
+  parse_one_digest "$(
+    invoke inspect-create metadata-create-parent/created - - - 0
+  )"
+)"
+set +e
+CLODEX_TEST_METADATA_TARGET="$metadata_create_parent/created" \
+  CLODEX_TEST_METADATA_TRIGGER='created' \
+  CLODEX_TEST_METADATA_MATCH='2' \
+  LD_PRELOAD="$metadata_preload" \
+  "$helper" --protocol-v1 execute-create "$device" "$inode" \
+    metadata-create-parent/created "$metadata_create_pre" - \
+    "$create_digest" "$create_bytes" \
+    <"$create_input" >"$failure_stdout" 2>"$failure_stderr"
+exit_code=$?
+set -e
+[[ "$exit_code" -eq 20 ]] || \
+  fail 'create child metadata drift did not fail uncertain'
+grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
+  fail 'create child metadata drift returned an invalid uncertainty record'
+[[ ! -s "$failure_stdout" ]] || \
+  fail 'create child metadata drift returned false success'
+[[ "$(stat -c '%a' "$metadata_create_parent/created")" == "777" ]] || \
+  fail 'create child metadata drift hook did not mutate the created file'
+
 mkdir_pre="$(parse_one_digest "$(invoke inspect-mkdir build - - - 0)")"
 mkdir_output="$(invoke execute-mkdir build "$mkdir_pre" - - 0)"
 IFS=$'\t' read -r mkdir_status returned_mkdir_pre mkdir_post mkdir_extra \
@@ -260,6 +293,26 @@ IFS=$'\t' read -r mkdir_status returned_mkdir_pre mkdir_post mkdir_extra \
 require_digest "$mkdir_post"
 [[ -d "$root/build" && "$(stat -c '%a' "$root/build")" == "700" ]] || \
   fail 'mkdir did not install a mode 0700 directory'
+
+umask_mkdir_pre="$(
+  parse_one_digest "$(invoke inspect-mkdir umask-build - - - 0)"
+)"
+umask_mkdir_output="$(
+  (
+    umask 0200
+    invoke execute-mkdir umask-build "$umask_mkdir_pre" - - 0
+  )
+)"
+IFS=$'\t' read -r umask_mkdir_status returned_umask_mkdir_pre \
+  umask_mkdir_post umask_mkdir_extra <<<"$umask_mkdir_output"
+[[ "$umask_mkdir_status" == "OK" && \
+  "$returned_umask_mkdir_pre" == "$umask_mkdir_pre" && \
+  -z "${umask_mkdir_extra:-}" ]] || \
+  fail 'umask mkdir returned an invalid protocol record'
+require_digest "$umask_mkdir_post"
+[[ -d "$root/umask-build" && \
+  "$(stat -c '%a' "$root/umask-build")" == "700" ]] || \
+  fail 'mkdir did not correct inherited umask to mode 0700'
 
 mkdir_swap_left="$root/mkdir-swap-left"
 mkdir_swap_right="$root/mkdir-swap-right"
@@ -354,6 +407,32 @@ grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
   fail 'final-child mkdir unexpectedly remained at the visible path'
 [[ -d "$final_mkdir_right/created" ]] || \
   fail 'final-child mkdir was not retained by the authorized parent'
+
+metadata_mkdir_parent="$root/metadata-mkdir-parent"
+mkdir -m 700 "$metadata_mkdir_parent"
+metadata_mkdir_pre="$(
+  parse_one_digest "$(
+    invoke inspect-mkdir metadata-mkdir-parent/created - - - 0
+  )"
+)"
+set +e
+CLODEX_TEST_METADATA_TARGET="$metadata_mkdir_parent/created" \
+  CLODEX_TEST_METADATA_TRIGGER='created' \
+  CLODEX_TEST_METADATA_MATCH='1' \
+  LD_PRELOAD="$metadata_preload" \
+  "$helper" --protocol-v1 execute-mkdir "$device" "$inode" \
+    metadata-mkdir-parent/created "$metadata_mkdir_pre" - - 0 \
+    >"$failure_stdout" 2>"$failure_stderr"
+exit_code=$?
+set -e
+[[ "$exit_code" -eq 20 ]] || \
+  fail 'mkdir child metadata drift did not fail uncertain'
+grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
+  fail 'mkdir child metadata drift returned an invalid uncertainty record'
+[[ ! -s "$failure_stdout" ]] || \
+  fail 'mkdir child metadata drift returned false success'
+[[ "$(stat -c '%a' "$metadata_mkdir_parent/created")" == "777" ]] || \
+  fail 'mkdir child metadata drift hook did not mutate the created directory'
 
 replace_inspect="$(invoke inspect-replace created.txt - "$create_digest" - 0)"
 IFS=$'\t' read -r replace_status replace_pre returned_before replace_extra \

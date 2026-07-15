@@ -34,6 +34,9 @@
 #define MAX_TREE_ENTRIES 100000ULL
 #define MAX_TREE_DEPTH 128U
 #define MAX_SELECTOR_BYTES (16U * 1024U)
+#define CREATE_PERMISSIONS ((mode_t)0600U)
+#define MKDIR_PERMISSIONS ((mode_t)0700U)
+#define PERMISSION_BITS ((mode_t)07777U)
 
 static bool effect_started = false;
 
@@ -168,6 +171,13 @@ static bool stable_metadata(const struct stat *left, const struct stat *right) {
     left->st_ctim.tv_nsec == right->st_ctim.tv_nsec;
 }
 
+static bool has_exact_permissions(
+  const struct stat *metadata,
+  mode_t expected_permissions
+) {
+  return (metadata->st_mode & PERMISSION_BITS) == expected_permissions;
+}
+
 /*
  * renameat2(RENAME_EXCHANGE) may legitimately advance inode ctime even when
  * the exchanged file is still the exact captured inode with unchanged bytes
@@ -189,16 +199,6 @@ static bool stable_exchange_file_semantics(
     left->st_size == right->st_size &&
     left->st_mtim.tv_sec == right->st_mtim.tv_sec &&
     left->st_mtim.tv_nsec == right->st_mtim.tv_nsec;
-}
-
-static bool same_identity_type_and_link_count(
-  const struct stat *captured,
-  const struct stat *observed
-) {
-  return captured->st_dev == observed->st_dev &&
-    captured->st_ino == observed->st_ino &&
-    (captured->st_mode & S_IFMT) == (observed->st_mode & S_IFMT) &&
-    captured->st_nlink == observed->st_nlink;
 }
 
 static bool stable_directory_descriptor(
@@ -644,14 +644,14 @@ static void execute_create(
     parent.fd,
     parent.basename,
     (uint64_t)(O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW),
-    0600U
+    CREATE_PERMISSIONS
   );
   if (destination < 0) {
     close_quietly(parent.fd);
     fail_errno(errno == ENOSYS ? "UNSUPPORTED" : "IO");
   }
   write_exact_stdin(destination, content_bytes, content_sha256);
-  if (fchmod(destination, 0600U) < 0 || fsync(destination) < 0) {
+  if (fchmod(destination, CREATE_PERMISSIONS) < 0 || fsync(destination) < 0) {
     close_quietly(destination);
     close_quietly(parent.fd);
     fail_errno("IO");
@@ -661,16 +661,17 @@ static void execute_create(
   if (
     fstat(destination, &created_metadata) < 0 ||
     !S_ISREG(created_metadata.st_mode) || created_metadata.st_nlink != 1U ||
+    !has_exact_permissions(&created_metadata, CREATE_PERMISSIONS) ||
     fstatat(
       parent.fd,
       parent.basename,
       &committed_parent_entry,
       AT_SYMLINK_NOFOLLOW
     ) < 0 ||
-    committed_parent_entry.st_dev != created_metadata.st_dev ||
-    committed_parent_entry.st_ino != created_metadata.st_ino ||
     !S_ISREG(committed_parent_entry.st_mode) ||
-    committed_parent_entry.st_nlink != 1U
+    committed_parent_entry.st_nlink != 1U ||
+    !has_exact_permissions(&committed_parent_entry, CREATE_PERMISSIONS) ||
+    !stable_metadata(&created_metadata, &committed_parent_entry)
   ) {
     close_quietly(destination);
     close_quietly(parent.fd);
@@ -710,11 +711,10 @@ static void execute_create(
     fstat(destination, &held_created_metadata) < 0 ||
     !S_ISREG(held_created_metadata.st_mode) ||
     held_created_metadata.st_nlink != 1U ||
-    !same_identity_type_and_link_count(
-      &created_metadata,
-      &held_created_metadata
-    ) ||
-    !same_identity_type_and_link_count(&created_metadata, &post.metadata) ||
+    !has_exact_permissions(&held_created_metadata, CREATE_PERMISSIONS) ||
+    !has_exact_permissions(&post.metadata, CREATE_PERMISSIONS) ||
+    !stable_metadata(&created_metadata, &held_created_metadata) ||
+    !stable_metadata(&created_metadata, &post.metadata) ||
     strcmp(post.content_sha256, content_sha256) != 0
   ) {
     close_quietly(post.fd);
@@ -764,10 +764,10 @@ static void execute_create(
   struct stat final_child_metadata;
   if (
     fstat(final_child, &final_child_metadata) < 0 ||
-    !same_identity_type_and_link_count(
-      &created_metadata,
-      &final_child_metadata
-    ) ||
+    !S_ISREG(final_child_metadata.st_mode) ||
+    final_child_metadata.st_nlink != 1U ||
+    !has_exact_permissions(&final_child_metadata, CREATE_PERMISSIONS) ||
+    !stable_metadata(&created_metadata, &final_child_metadata) ||
     !stable_metadata(&post.metadata, &final_child_metadata) ||
     !stable_directory_descriptor(
       parent.fd,
@@ -820,7 +820,7 @@ static void execute_mkdir(
   }
 
   effect_started = true;
-  if (mkdirat(parent.fd, parent.basename, 0700U) < 0) {
+  if (mkdirat(parent.fd, parent.basename, MKDIR_PERMISSIONS) < 0) {
     close_quietly(parent.fd);
     fail_errno("IO");
   }
@@ -832,9 +832,11 @@ static void execute_mkdir(
   struct stat created_metadata;
   if (
     created_directory < 0 ||
+    fchmod(created_directory, MKDIR_PERMISSIONS) < 0 ||
+    fsync(created_directory) < 0 ||
     fstat(created_directory, &created_metadata) < 0 ||
     !S_ISDIR(created_metadata.st_mode) ||
-    fsync(created_directory) < 0
+    !has_exact_permissions(&created_metadata, MKDIR_PERMISSIONS)
   ) {
     close_quietly(created_directory);
     close_quietly(parent.fd);
@@ -875,11 +877,10 @@ static void execute_mkdir(
     fstat(visible_directory, &post_metadata) < 0 ||
     !S_ISDIR(held_created_metadata.st_mode) ||
     !S_ISDIR(post_metadata.st_mode) ||
-    !same_identity_type_and_link_count(
-      &created_metadata,
-      &held_created_metadata
-    ) ||
-    !same_identity_type_and_link_count(&created_metadata, &post_metadata)
+    !has_exact_permissions(&held_created_metadata, MKDIR_PERMISSIONS) ||
+    !has_exact_permissions(&post_metadata, MKDIR_PERMISSIONS) ||
+    !stable_metadata(&created_metadata, &held_created_metadata) ||
+    !stable_metadata(&created_metadata, &post_metadata)
   ) {
     close_quietly(visible_directory);
     close_quietly(visible_parent);
@@ -928,10 +929,9 @@ static void execute_mkdir(
   struct stat final_directory_metadata;
   if (
     fstat(final_directory, &final_directory_metadata) < 0 ||
-    !same_identity_type_and_link_count(
-      &created_metadata,
-      &final_directory_metadata
-    ) ||
+    !S_ISDIR(final_directory_metadata.st_mode) ||
+    !has_exact_permissions(&final_directory_metadata, MKDIR_PERMISSIONS) ||
+    !stable_metadata(&created_metadata, &final_directory_metadata) ||
     !stable_metadata(&post_metadata, &final_directory_metadata) ||
     !stable_directory_descriptor(
       parent.fd,
