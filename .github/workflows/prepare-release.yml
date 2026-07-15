@@ -26,25 +26,48 @@ on:
 
 run-name: "Prepare Release: ${{ inputs.package }} (${{ inputs.channel }}${{ inputs.new-cycle && ', new cycle' || '' }})"
 
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   prepare:
+    name: Generate an unprivileged release patch
     runs-on: ubuntu-latest
-    # Only run on main or release-tests branch
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release-tests'
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      base_sha: ${{ steps.source.outputs.base_sha }}
+      branch: ${{ steps.payload.outputs.branch }}
+      notes_sha256: ${{ steps.payload.outputs.notes_sha256 }}
+      patch_sha256: ${{ steps.payload.outputs.patch_sha256 }}
+      tag: ${{ steps.payload.outputs.tag }}
+      version: ${{ steps.payload.outputs.version }}
 
     steps:
-      - name: Checkout
+      - name: Checkout canonical main without credentials
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: main
           fetch-depth: 0
-          # Use a PAT so that the push + PR creation triggers downstream
-          # workflows (GITHUB_TOKEN events are deliberately ignored by GitHub
-          # to prevent infinite loops).
-          token: ${{ secrets.RELEASE_PAT }}
+          persist-credentials: false
+
+      - name: Require exact current canonical main source
+        id: source
+        shell: bash
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$(git rev-parse HEAD)" = "$remote_main"
+          test "$GITHUB_SHA" = "$remote_main"
+          test "$GITHUB_WORKFLOW_SHA" = "$remote_main"
+          echo "base_sha=$remote_main" >> "$GITHUB_OUTPUT"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -89,66 +112,685 @@ jobs:
 
       - name: Bump Version
         id: bump
+        shell: bash
+        env:
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_NEW_CYCLE: ${{ inputs.new-cycle }}
+          RELEASE_PRODUCT: ${{ inputs.package }}
         run: |
-          ARGS="--package ${{ inputs.package }} --channel ${{ inputs.channel }}"
-          [ "${{ inputs.new-cycle }}" == "true" ] && ARGS="$ARGS --new-cycle"
-          pnpm tsx scripts/release/index.ts $ARGS
-          echo "version=$(cat .release-version)" >> $GITHUB_OUTPUT
-          echo "tag=$(cat .release-tag)" >> $GITHUB_OUTPUT
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          cat .release-notes.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          case "$RELEASE_PRODUCT" in
+            clodex|karton) ;;
+            *) echo "::error::Unsupported release product"; exit 1 ;;
+          esac
+          case "$RELEASE_CHANNEL_INPUT" in
+            alpha|beta|release) ;;
+            *) echo "::error::Unsupported release channel"; exit 1 ;;
+          esac
+          args=(--package "$RELEASE_PRODUCT" --channel "$RELEASE_CHANNEL_INPUT")
+          if [ "$RELEASE_NEW_CYCLE" = "true" ]; then
+            args+=(--new-cycle)
+          fi
+          pnpm tsx scripts/release/index.ts "${args[@]}"
+          version=$(cat .release-version)
+          tag=$(cat .release-tag)
+          node scripts/release/validate-release-identity.mjs \
+            --product="$RELEASE_PRODUCT" \
+            --channel="$RELEASE_CHANNEL_INPUT" \
+            --version="$version" \
+            --tag="$tag"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Determine branch name
         id: branch
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.bump.outputs.tag }}
         run: |
-          TAG="${{ steps.bump.outputs.tag }}"
           # Sanitize tag for branch name: replace @ and / with -
-          SAFE_TAG=$(echo "$TAG" | sed 's/@/-/g; s/\//-/g; s/^-//; s/--*/-/g')
+          SAFE_TAG=$(printf '%s\n' "$RELEASE_TAG" | sed 's/@/-/g; s/\//-/g; s/^-//; s/--*/-/g')
           BRANCH="release/${SAFE_TAG}"
-          echo "name=${BRANCH}" >> $GITHUB_OUTPUT
+          git check-ref-format --branch "$BRANCH" >/dev/null
+          echo "name=${BRANCH}" >> "$GITHUB_OUTPUT"
 
-      - name: Create release branch and push
+      - name: Inspect release mutation before handoff
         run: |
+          git status --short --untracked-files=all
+          git diff --check
+          git diff --cached --quiet
+
+      - name: Build exact allowlisted release payload
+        id: payload
+        env:
+          BASE_SHA: ${{ steps.source.outputs.base_sha }}
+          RELEASE_BRANCH: ${{ steps.branch.outputs.name }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_PRODUCT: ${{ inputs.package }}
+          RELEASE_TAG: ${{ steps.bump.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          payload_dir="${RUNNER_TEMP}/release-preparation"
+          export payload_dir
+          rm -rf "$payload_dir"
+          mkdir -p "$payload_dir"
+          node - <<'NODE'
+          const { execFileSync, spawnSync } = require('node:child_process');
+          const { createHash } = require('node:crypto');
+          const {
+            copyFileSync,
+            lstatSync,
+            mkdirSync,
+            readFileSync,
+            readdirSync,
+            writeFileSync,
+          } = require('node:fs');
+          const path = require('node:path');
+
+          const fail = (message) => {
+            throw new Error(message);
+          };
+          const git = (args, encoding = 'utf8') =>
+            execFileSync('/usr/bin/git', args, {
+              encoding,
+              maxBuffer: 64 * 1024 * 1024,
+              stdio: ['ignore', 'pipe', 'pipe'],
+            });
+          const sha256 = (bytes) =>
+            createHash('sha256').update(bytes).digest('hex');
+          const productFiles = {
+            clodex: {
+              changelog: 'apps/browser/CHANGELOG.md',
+              notes: '.release-notes/clodex.md',
+              packageJson: 'apps/browser/package.json',
+              releaseNotes: '.release-notes.md',
+              releaseTag: '.release-tag',
+              releaseVersion: '.release-version',
+            },
+            karton: {
+              changelog: 'packages/karton/CHANGELOG.md',
+              notes: '.release-notes/karton.md',
+              packageJson: 'packages/karton/package.json',
+              releaseNotes: '.release-notes.md',
+              releaseTag: '.release-tag',
+              releaseVersion: '.release-version',
+            },
+          };
+          const product = process.env.RELEASE_PRODUCT;
+          const files = productFiles[product];
+          if (!files) fail('unsupported release product');
+          const requiredModified = [
+            files.packageJson,
+            files.changelog,
+            files.releaseNotes,
+            files.releaseTag,
+            files.releaseVersion,
+          ];
+          const allowed = [...requiredModified, files.notes];
+          const statusLines = git(['diff', '--name-status'])
+            .trim()
+            .split('\n')
+            .filter(Boolean);
+          const statusByPath = new Map(
+            statusLines.map((line) => {
+              const [status, filePath, extra] = line.split('\t');
+              if (!status || !filePath || extra || !/^[A-Z]$/u.test(status)) {
+                fail(`invalid release diff status: ${line}`);
+              }
+              return [filePath, status];
+            }),
+          );
+          if (
+            requiredModified.some((filePath) => statusByPath.get(filePath) !== 'M')
+          ) {
+            fail('release payload is missing a required tracked release mutation');
+          }
+          const notesExisted =
+            spawnSync('/usr/bin/git', ['cat-file', '-e', `HEAD:${files.notes}`])
+              .status === 0;
+          if (
+            (notesExisted && statusByPath.get(files.notes) !== 'D') ||
+            (!notesExisted && statusByPath.has(files.notes))
+          ) {
+            fail('custom release-note deletion does not match the base tree');
+          }
+          const expectedChanged = new Set([
+            ...requiredModified,
+            ...(notesExisted ? [files.notes] : []),
+          ]);
+          if (
+            statusByPath.size !== expectedChanged.size ||
+            [...statusByPath.keys()].some((filePath) => !expectedChanged.has(filePath))
+          ) {
+            fail('release tooling modified a file outside the strict allowlist');
+          }
+          const untracked = git(
+            ['ls-files', '--others', '--exclude-standard', '-z'],
+            null,
+          )
+            .toString('utf8')
+            .split('\0')
+            .filter(Boolean)
+            .sort();
+          if (untracked.length !== 0) {
+            fail(`unexpected untracked release files: ${untracked.join(', ')}`);
+          }
+          if (
+            spawnSync('/usr/bin/git', ['diff', '--cached', '--quiet']).status !== 0
+          ) {
+            fail('release preparation must not stage files');
+          }
+          for (const filePath of requiredModified) {
+            if (!lstatSync(filePath).isFile()) fail(`${filePath} is not a regular file`);
+          }
+          const version = readFileSync(files.releaseVersion, 'utf8').trim();
+          const tag = readFileSync(files.releaseTag, 'utf8').trim();
+          if (
+            version !== process.env.RELEASE_VERSION ||
+            tag !== process.env.RELEASE_TAG
+          ) {
+            fail('release artifact identity differs from validated outputs');
+          }
+          const payloadDirectory = process.env.payload_dir;
+          mkdirSync(payloadDirectory, { recursive: true });
+          const patch = git(
+            [
+              'diff',
+              '--binary',
+              '--full-index',
+              '--no-ext-diff',
+              '--',
+              ...allowed,
+            ],
+            'buffer',
+          );
+          if (patch.length === 0) fail('release patch is empty');
+          const patchPath = path.join(payloadDirectory, 'release.patch');
+          writeFileSync(patchPath, patch);
+          const notesPath = path.join(payloadDirectory, 'release-notes.md');
+          copyFileSync(files.releaseNotes, notesPath);
+          if (!lstatSync(notesPath).isFile() || lstatSync(notesPath).size === 0) {
+            fail('release notes payload is empty');
+          }
+          const patchSha256 = sha256(patch);
+          const notesSha256 = sha256(readFileSync(notesPath));
+          const changedFiles = [...statusByPath]
+            .map(([filePath, status]) => ({ path: filePath, status }))
+            .sort((left, right) => left.path.localeCompare(right.path));
+          const manifest = {
+            schemaVersion: 1,
+            payloadKind: 'release-preparation',
+            baseCommit: process.env.BASE_SHA,
+            repository: process.env.GITHUB_REPOSITORY,
+            product,
+            channel: process.env.RELEASE_CHANNEL_INPUT,
+            version,
+            tag,
+            branch: process.env.RELEASE_BRANCH,
+            changedFiles,
+            patchSha256,
+            notesSha256,
+          };
+          writeFileSync(
+            path.join(payloadDirectory, 'release-preparation.json'),
+            `${JSON.stringify(manifest, null, 2)}\n`,
+          );
+          const entries = readdirSync(payloadDirectory).sort();
+          if (
+            JSON.stringify(entries) !==
+            JSON.stringify([
+              'release-notes.md',
+              'release-preparation.json',
+              'release.patch',
+            ])
+          ) {
+            fail('release payload contains unexpected files');
+          }
+          const output = process.env.GITHUB_OUTPUT;
+          writeFileSync(
+            output,
+            [
+              `branch=${manifest.branch}`,
+              `notes_sha256=${notesSha256}`,
+              `patch_sha256=${patchSha256}`,
+              `tag=${tag}`,
+              `version=${version}`,
+              '',
+            ].join('\n'),
+            { flag: 'a' },
+          );
+          NODE
+
+      - name: Upload exact release-preparation payload
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-preparation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-preparation/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    name: Commit and publish on a fresh protected runner
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: Release
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout the exact prepared main commit without credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reassert exact current main after protected approval
+        env:
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$BASE_SHA"
+          test "$GITHUB_WORKFLOW_SHA" = "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$BASE_SHA"
+
+      - name: Download the exact unprivileged payload by artifact ID
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/release-preparation
+
+      - name: Verify exact payload identity, digests, and allowlist
+        env:
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          EXPECTED_BRANCH: ${{ needs.prepare.outputs.branch }}
+          EXPECTED_NOTES_SHA256: ${{ needs.prepare.outputs.notes_sha256 }}
+          EXPECTED_PATCH_SHA256: ${{ needs.prepare.outputs.patch_sha256 }}
+          EXPECTED_TAG: ${{ needs.prepare.outputs.tag }}
+          EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_PRODUCT: ${{ inputs.package }}
+        run: |
+          payload_dir="${RUNNER_TEMP}/release-preparation"
+          export payload_dir
+          node - <<'NODE'
+          const { createHash } = require('node:crypto');
+          const {
+            lstatSync,
+            readFileSync,
+            readdirSync,
+          } = require('node:fs');
+          const path = require('node:path');
+          const fail = (message) => {
+            throw new Error(message);
+          };
+          const sha256 = (filePath) =>
+            createHash('sha256').update(readFileSync(filePath)).digest('hex');
+          const directory = process.env.payload_dir;
+          const entries = readdirSync(directory).sort();
+          const expectedEntries = [
+            'release-notes.md',
+            'release-preparation.json',
+            'release.patch',
+          ];
+          if (JSON.stringify(entries) !== JSON.stringify(expectedEntries)) {
+            fail('downloaded release payload contains unexpected files');
+          }
+          for (const entry of entries) {
+            if (!lstatSync(path.join(directory, entry)).isFile()) {
+              fail(`release payload entry is not a regular file: ${entry}`);
+            }
+          }
+          const manifest = JSON.parse(
+            readFileSync(path.join(directory, 'release-preparation.json'), 'utf8'),
+          );
+          if (
+            manifest.schemaVersion !== 1 ||
+            manifest.payloadKind !== 'release-preparation' ||
+            manifest.repository !== process.env.GITHUB_REPOSITORY ||
+            manifest.baseCommit !== process.env.BASE_SHA ||
+            manifest.product !== process.env.RELEASE_PRODUCT ||
+            manifest.channel !== process.env.RELEASE_CHANNEL_INPUT ||
+            manifest.version !== process.env.EXPECTED_VERSION ||
+            manifest.tag !== process.env.EXPECTED_TAG ||
+            manifest.branch !== process.env.EXPECTED_BRANCH ||
+            manifest.patchSha256 !== process.env.EXPECTED_PATCH_SHA256 ||
+            manifest.notesSha256 !== process.env.EXPECTED_NOTES_SHA256
+          ) {
+            fail('release payload manifest identity is invalid');
+          }
+          const sanitizedTag = manifest.tag
+            .replaceAll('@', '-')
+            .replaceAll('/', '-')
+            .replace(/^-+/u, '')
+            .replace(/-+/gu, '-');
+          if (manifest.branch !== `release/${sanitizedTag}`) {
+            fail('release branch is not the canonical sanitized tag branch');
+          }
+          const productFiles = {
+            clodex: {
+              changelog: 'apps/browser/CHANGELOG.md',
+              notes: '.release-notes/clodex.md',
+              packageJson: 'apps/browser/package.json',
+              releaseNotes: '.release-notes.md',
+              releaseTag: '.release-tag',
+              releaseVersion: '.release-version',
+            },
+            karton: {
+              changelog: 'packages/karton/CHANGELOG.md',
+              notes: '.release-notes/karton.md',
+              packageJson: 'packages/karton/package.json',
+              releaseNotes: '.release-notes.md',
+              releaseTag: '.release-tag',
+              releaseVersion: '.release-version',
+            },
+          };
+          const files = productFiles[manifest.product];
+          const requiredModified = files
+            ? [
+                files.packageJson,
+                files.changelog,
+                files.releaseNotes,
+                files.releaseTag,
+                files.releaseVersion,
+              ]
+            : [];
+          const changed = new Map(
+            Array.isArray(manifest.changedFiles)
+              ? manifest.changedFiles.map((entry) => [entry.path, entry.status])
+              : [],
+          );
+          if (
+            !files ||
+            changed.size !== manifest.changedFiles.length ||
+            requiredModified.some((filePath) => changed.get(filePath) !== 'M') ||
+            [...changed].some(
+              ([filePath, status]) =>
+                ![...requiredModified, files.notes].includes(filePath) ||
+                !['M', 'D'].includes(status) ||
+                (requiredModified.includes(filePath) && status !== 'M') ||
+                (filePath === files.notes && status !== 'D'),
+            )
+          ) {
+            fail('release payload changed-file allowlist is invalid');
+          }
+          if (
+            sha256(path.join(directory, 'release.patch')) !==
+              manifest.patchSha256 ||
+            sha256(path.join(directory, 'release-notes.md')) !==
+              manifest.notesSha256
+          ) {
+            fail('release payload digest mismatch');
+          }
+          NODE
+
+      - name: Apply and semantically verify the allowlisted patch
+        env:
+          EXPECTED_TAG: ${{ needs.prepare.outputs.tag }}
+          EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_PRODUCT: ${{ inputs.package }}
+        run: |
+          payload_dir="${RUNNER_TEMP}/release-preparation"
+          git apply --check "$payload_dir/release.patch"
+          git apply "$payload_dir/release.patch"
+          git diff --check
+          git status --short --untracked-files=all
+          export payload_dir
+          node - <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const { existsSync, lstatSync, readFileSync } = require('node:fs');
+          const path = require('node:path');
+          const fail = (message) => {
+            throw new Error(message);
+          };
+          const git = (args) =>
+            execFileSync('/usr/bin/git', args, {
+              encoding: 'utf8',
+              stdio: ['ignore', 'pipe', 'pipe'],
+            });
+          const manifest = JSON.parse(
+            readFileSync(
+              path.join(process.env.payload_dir, 'release-preparation.json'),
+              'utf8',
+            ),
+          );
+          const actual = git(['diff', '--name-status'])
+            .trim()
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => {
+              const [status, filePath, extra] = line.split('\t');
+              if (!status || !filePath || extra) fail('invalid applied diff status');
+              return { path: filePath, status };
+            })
+            .sort((left, right) => left.path.localeCompare(right.path));
+          if (JSON.stringify(actual) !== JSON.stringify(manifest.changedFiles)) {
+            fail('applied release patch differs from the signed allowlist');
+          }
+          const untracked = git([
+            'ls-files',
+            '--others',
+            '--exclude-standard',
+          ]).trim();
+          if (untracked) fail(`protected checkout contains untracked files: ${untracked}`);
+          const productFiles = {
+            clodex: {
+              changelog: 'apps/browser/CHANGELOG.md',
+              notes: '.release-notes/clodex.md',
+              packageJson: 'apps/browser/package.json',
+              releaseNotes: '.release-notes.md',
+              releaseTag: '.release-tag',
+              releaseVersion: '.release-version',
+            },
+            karton: {
+              changelog: 'packages/karton/CHANGELOG.md',
+              notes: '.release-notes/karton.md',
+              packageJson: 'packages/karton/package.json',
+              releaseNotes: '.release-notes.md',
+              releaseTag: '.release-tag',
+              releaseVersion: '.release-version',
+            },
+          };
+          const files = productFiles[manifest.product];
+          const requiredModified = [
+            files.packageJson,
+            files.changelog,
+            files.releaseNotes,
+            files.releaseTag,
+            files.releaseVersion,
+          ];
+          for (const filePath of requiredModified) {
+            if (!lstatSync(filePath).isFile()) fail(`${filePath} is not regular`);
+          }
+          const before = JSON.parse(git(['show', `HEAD:${files.packageJson}`]));
+          const after = JSON.parse(readFileSync(files.packageJson, 'utf8'));
+          if (after.version !== manifest.version) fail('package version mismatch');
+          delete before.version;
+          delete after.version;
+          if (JSON.stringify(before) !== JSON.stringify(after)) {
+            fail('release patch changed package metadata beyond version');
+          }
+          if (
+            readFileSync(files.releaseVersion, 'utf8').trim() !== manifest.version ||
+            readFileSync(files.releaseTag, 'utf8').trim() !== manifest.tag
+          ) {
+            fail('tracked release identity files differ from the payload');
+          }
+          const payloadNotes = readFileSync(
+            path.join(process.env.payload_dir, 'release-notes.md'),
+          );
+          const trackedNotes = readFileSync(files.releaseNotes);
+          if (!payloadNotes.equals(trackedNotes)) {
+            fail('tracked release notes differ from the downloaded payload');
+          }
+          const customNotesChanged = manifest.changedFiles.some(
+            (entry) => entry.path === files.notes,
+          );
+          let baseNotesExisted = true;
+          try {
+            git(['cat-file', '-e', `HEAD:${files.notes}`]);
+          } catch {
+            baseNotesExisted = false;
+          }
+          if (
+            customNotesChanged !== baseNotesExisted ||
+            (customNotesChanged && existsSync(files.notes))
+          ) {
+            fail('custom release-note deletion was not applied exactly');
+          }
+          const summary = git(['diff', '--summary'])
+            .trim()
+            .split('\n')
+            .filter(Boolean);
+          if (
+            summary.some(
+              (line) =>
+                !customNotesChanged ||
+                !line.trim().endsWith(`delete mode 100644 ${files.notes}`),
+            )
+          ) {
+            fail('release patch contains a mode or type change');
+          }
+          NODE
+          node scripts/release/validate-release-identity.mjs \
+            --product="$RELEASE_PRODUCT" \
+            --channel="$RELEASE_CHANNEL_INPUT" \
+            --version="$EXPECTED_VERSION" \
+            --tag="$EXPECTED_TAG"
+
+      - name: Create exact signed-off release commit after status review
+        env:
+          RELEASE_BRANCH: ${{ needs.prepare.outputs.branch }}
+          RELEASE_PRODUCT: ${{ inputs.package }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          payload_dir="${RUNNER_TEMP}/release-preparation"
+          git check-ref-format --branch "$RELEASE_BRANCH" >/dev/null
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "${{ steps.branch.outputs.name }}"
-          git add .
-          git commit -m "chore(${{ inputs.package }}): release ${{ steps.bump.outputs.version }}"
-          git push --force origin "${{ steps.branch.outputs.name }}"
+          git checkout -b "$RELEASE_BRANCH"
+          changed_files=()
+          while IFS= read -r file_path; do
+            changed_files+=("$file_path")
+          done < <(
+            node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).changedFiles.map((entry) => entry.path).join("\n")' \
+              "$payload_dir/release-preparation.json"
+          )
+          test "${#changed_files[@]}" -ge 2
+          git add -- "${changed_files[@]}"
+          test -z "$(git diff --name-only)"
+          expected=$(printf '%s\n' "${changed_files[@]}" | LC_ALL=C sort)
+          actual=$(git diff --cached --name-only | LC_ALL=C sort)
+          test "$actual" = "$expected"
+          mkdir -p "${RUNNER_TEMP}/disabled-git-hooks"
+          git -c core.hooksPath="${RUNNER_TEMP}/disabled-git-hooks" \
+            commit --no-verify -s \
+            -m "chore(${RELEASE_PRODUCT}): release ${RELEASE_VERSION}"
 
-      - name: Create Pull Request
+      - name: Atomically push the exact release branch with an empty-ref lease
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          RELEASE_BRANCH: ${{ needs.prepare.outputs.branch }}
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
         run: |
-          BODY="## Release: ${{ inputs.package }} ${{ steps.bump.outputs.version }}
+          test -n "$RELEASE_PAT"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(git rev-list --count "${BASE_SHA}..HEAD")" = "1"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$BASE_SHA"
+          commit_sha=$(git rev-parse HEAD)
+          auth_header=$(printf 'x-access-token:%s' "$RELEASE_PAT" | base64 | tr -d '\n')
+          echo "::add-mask::$auth_header"
+          mkdir -p "${RUNNER_TEMP}/disabled-git-hooks"
+          if ! git \
+            -c core.hooksPath="${RUNNER_TEMP}/disabled-git-hooks" \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth_header" \
+            push \
+            --force-with-lease="refs/heads/${RELEASE_BRANCH}:" \
+            origin \
+            "HEAD:refs/heads/${RELEASE_BRANCH}"; then
+            echo "::error::Release branch already exists or could not be created; refusing to overwrite reviewed work"
+            exit 1
+          fi
+          remote_branch=$(git \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth_header" \
+            ls-remote origin "refs/heads/${RELEASE_BRANCH}" | awk 'NR == 1 {print $1}')
+          test "$remote_branch" = "$commit_sha"
 
-          **Channel:** ${{ inputs.channel }}
-          **Tag:** \`${{ steps.bump.outputs.tag }}\`
-
-          ### Release Notes
-
-          ${{ steps.bump.outputs.notes }}
-
-          ---
-
-          > Merge this PR, then explicitly dispatch the \`Auto Release\` workflow on \`${{ github.ref_name }}\`."
-
+      - name: Create Pull Request with the step-scoped PAT
+        env:
+          BASE_REF: main
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+          RELEASE_BRANCH: ${{ needs.prepare.outputs.branch }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_PRODUCT: ${{ inputs.package }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          test -n "$GH_TOKEN"
+          body_file="${RUNNER_TEMP}/release-pr-body.md"
+          export body_file
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const releaseNotes = fs
+            .readFileSync(
+              path.join(process.env.RUNNER_TEMP, 'release-preparation/release-notes.md'),
+              'utf8',
+            )
+            .trimEnd();
+          const body = [
+            `## Release: ${process.env.RELEASE_PRODUCT} ${process.env.RELEASE_VERSION}`,
+            '',
+            `**Channel:** ${process.env.RELEASE_CHANNEL_INPUT}`,
+            `**Tag:** \`${process.env.RELEASE_TAG}\``,
+            '',
+            '### Release Notes',
+            '',
+            releaseNotes,
+            '',
+            '---',
+            '',
+            `> Merge this PR, then explicitly dispatch the \`Auto Release\` workflow on \`${process.env.BASE_REF}\`.`,
+            '',
+          ].join('\n');
+          fs.writeFileSync(process.env.body_file, body);
+          NODE
           gh pr create \
-            --base "${{ github.ref_name }}" \
-            --head "${{ steps.branch.outputs.name }}" \
-            --title "release(${{ inputs.package }}): ${{ steps.bump.outputs.version }}" \
-            --body "$BODY" \
+            --base "$BASE_REF" \
+            --head "$RELEASE_BRANCH" \
+            --title "release(${RELEASE_PRODUCT}): ${RELEASE_VERSION}" \
+            --body-file "$body_file" \
             --label "release"
 
       - name: Summary
+        env:
+          ARTIFACT_DIGEST: ${{ needs.prepare.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.prepare.outputs.artifact_id }}
+          RELEASE_BRANCH: ${{ needs.prepare.outputs.branch }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_PRODUCT: ${{ inputs.package }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          echo "## Release PR Created" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Package:** ${{ inputs.package }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** ${{ steps.bump.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Channel:** ${{ inputs.channel }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tag:** \`${{ steps.bump.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch:** \`${{ steps.branch.outputs.name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Merge the PR, then explicitly dispatch the Auto Release workflow." >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Release PR Created"
+            echo ""
+            echo "- **Package:** $RELEASE_PRODUCT"
+            echo "- **Version:** $RELEASE_VERSION"
+            echo "- **Channel:** $RELEASE_CHANNEL_INPUT"
+            echo "- **Tag:** \`$RELEASE_TAG\`"
+            echo "- **Branch:** \`$RELEASE_BRANCH\`"
+            echo "- **Payload artifact ID:** \`$ARTIFACT_ID\`"
+            echo "- **Payload artifact digest:** \`$ARTIFACT_DIGEST\`"
+            echo ""
+            echo "Merge the PR, then explicitly dispatch the Auto Release workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

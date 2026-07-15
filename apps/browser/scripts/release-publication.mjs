@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -16,6 +17,29 @@ import { pathToFileURL } from 'node:url';
 const VALIDATION_MANIFEST_NAME = 'validation-manifest.json';
 const ASSET_DIRECTORY_NAME = 'assets';
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+export const PUBLICATION_REPORT_FILE_NAME = 'clodex-release-publication.json';
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalize(value[key])]),
+    );
+  }
+  return value;
+}
+
+function sha256Json(value) {
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalize(value)))
+    .digest('hex');
+}
+
+function sha256FileSync(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
 
 function readJson(filePath, label) {
   try {
@@ -74,7 +98,20 @@ function portableBaseName(value) {
   );
 }
 
-export function inspectPublicationManifest(manifestPath) {
+function isNormalizedReleasePlanPath(value) {
+  return (
+    typeof value === 'string' &&
+    !value.includes('\\') &&
+    path.posix.normalize(value) === value &&
+    value.startsWith('.release-notes/') &&
+    value.endsWith('.json')
+  );
+}
+
+export function inspectPublicationManifest(
+  manifestPath,
+  { requireTrustedBinding = false } = {},
+) {
   assertRegularFile(manifestPath, 'Release validation manifest');
   const manifest = readJson(manifestPath, 'Release validation manifest');
   if (manifest.schemaVersion !== 2 || manifest.status !== 'passed') {
@@ -94,6 +131,31 @@ export function inspectPublicationManifest(manifestPath) {
   ) {
     throw new Error(
       `Release validation build identity is incomplete: ${manifestPath}`,
+    );
+  }
+  if (
+    requireTrustedBinding &&
+    (!/^[a-f0-9]{40}$/.test(String(build.sourceCommit ?? '')) ||
+      typeof build.tag !== 'string' ||
+      !build.tag ||
+      !isNormalizedReleasePlanPath(build.releasePlanPath) ||
+      !SHA256_PATTERN.test(String(build.releasePlanSha256 ?? '')))
+  ) {
+    throw new Error(
+      `Release validation build is not source/plan/tag bound: ${manifestPath}`,
+    );
+  }
+  const canonicalManifestFileName = safeFileName(
+    `${build.platform}-${build.arch}-${build.version}.json`,
+  );
+  const observedManifestFileName = path.basename(manifestPath);
+  if (
+    requireTrustedBinding &&
+    observedManifestFileName !== VALIDATION_MANIFEST_NAME &&
+    observedManifestFileName !== canonicalManifestFileName
+  ) {
+    throw new Error(
+      `Release validation manifest filename is not canonical: ${manifestPath}`,
     );
   }
   if (
@@ -167,7 +229,22 @@ export function inspectPublicationManifest(manifestPath) {
       `Validator artifact evidence contains non-publication files: ${manifestPath}`,
     );
   }
-  return { assets, build, manifest, manifestPath };
+  return {
+    assets,
+    build,
+    manifest,
+    manifestPath,
+    validationReceipt: {
+      checksSha256: sha256Json(manifest.checks ?? null),
+      manifestFileName: canonicalManifestFileName,
+      manifestSha256: sha256FileSync(manifestPath),
+      signatureSha256: manifest.signature
+        ? sha256Json(manifest.signature)
+        : null,
+      status: manifest.status,
+      trustSha256: manifest.trust ? sha256Json(manifest.trust) : null,
+    },
+  };
 }
 
 async function verifyAsset(filePath, expected, label) {
@@ -188,28 +265,33 @@ async function verifyAsset(filePath, expected, label) {
 export async function stageValidatedReleaseAssets({
   manifestPath,
   outputDirectory,
+  requireTrustedBinding = false,
 }) {
-  const inspected = inspectPublicationManifest(manifestPath);
+  const inspected = inspectPublicationManifest(manifestPath, {
+    requireTrustedBinding,
+  });
   rmSync(outputDirectory, { force: true, recursive: true });
   const assetsDirectory = path.join(outputDirectory, ASSET_DIRECTORY_NAME);
   mkdirSync(assetsDirectory, { recursive: true });
   const validatedOutputRoot = path.resolve(path.dirname(manifestPath), '..');
+  const realValidatedOutputRoot = realpathSync(validatedOutputRoot);
 
   for (const asset of inspected.assets) {
     const sourcePath = path.isAbsolute(asset.sourcePath)
       ? asset.sourcePath
       : path.resolve(path.dirname(manifestPath), asset.sourcePath);
+    const realSourcePath = realpathSync(sourcePath);
     if (
-      !sourcePath.startsWith(`${validatedOutputRoot}${path.sep}`) ||
-      sourcePath === validatedOutputRoot
+      !realSourcePath.startsWith(`${realValidatedOutputRoot}${path.sep}`) ||
+      realSourcePath === realValidatedOutputRoot
     ) {
       throw new Error(
         `Validated source asset escapes the release output root: ${sourcePath}`,
       );
     }
-    await verifyAsset(sourcePath, asset, 'Validated source asset');
+    await verifyAsset(realSourcePath, asset, 'Validated source asset');
     const destinationPath = path.join(assetsDirectory, asset.fileName);
-    copyFileSync(sourcePath, destinationPath, 0);
+    copyFileSync(realSourcePath, destinationPath, 0);
     await verifyAsset(destinationPath, asset, 'Staged release asset');
   }
   copyFileSync(
@@ -274,14 +356,127 @@ function parseExpectedBuilds(value) {
   return expected;
 }
 
+function deriveAcceptanceChecks(inspectedManifests) {
+  const macos = inspectedManifests.filter(
+    (inspected) => inspected.build.platform === 'macos',
+  );
+  const windows = inspectedManifests.find(
+    (inspected) => inspected.build.platform === 'windows',
+  );
+  if (macos.length !== 2 || !windows) {
+    throw new Error(
+      'Acceptance requires both macOS and the Windows validation manifests',
+    );
+  }
+  const allManifestPassed = inspectedManifests.every(
+    (inspected) => inspected.manifest.status === 'passed',
+  );
+  const smokePassed = macos.every(
+    ({ manifest }) =>
+      manifest.checks?.smoke?.exitCode === 0 &&
+      manifest.checks.smoke.successMarker === true &&
+      Array.isArray(manifest.checks.smoke.fatalLines) &&
+      manifest.checks.smoke.fatalLines.length === 0,
+  );
+  const launchPassed = macos.every(
+    ({ manifest }) =>
+      manifest.checks?.cleanProfileUiLaunch?.startupComplete === true &&
+      manifest.checks.cleanProfileUiLaunch.windowShown === true &&
+      Array.isArray(manifest.checks.cleanProfileUiLaunch.fatalLines) &&
+      manifest.checks.cleanProfileUiLaunch.fatalLines.length === 0,
+  );
+  const iconPassed = macos.every(
+    ({ manifest }) =>
+      Number.isSafeInteger(manifest.metadata?.icon?.bytes) &&
+      manifest.metadata.icon.bytes > 0,
+  );
+  const macosDistributionTrustPassed = macos.every(({ manifest }) => {
+    const signature = manifest.signature;
+    const trust = manifest.trust;
+    return (
+      signature?.requiredMode === 'developer-id' &&
+      signature.packaged?.isAdhoc === false &&
+      signature.mounted?.isAdhoc === false &&
+      signature.copied?.isAdhoc === false &&
+      signature.zip?.isAdhoc === false &&
+      trust?.applicationGatekeeper?.passed === true &&
+      trust.applicationStapler?.passed === true &&
+      trust.copiedApplicationGatekeeper?.passed === true &&
+      trust.copiedApplicationStapler?.passed === true &&
+      trust.dmgGatekeeper?.passed === true &&
+      trust.dmgStapler?.passed === true
+    );
+  });
+  const windowsDistributionTrustPassed = [
+    windows.manifest.checks?.packagedExecutableAuthenticode,
+    windows.manifest.checks?.setupAuthenticode,
+  ].every(
+    (signature) =>
+      signature?.checked === true &&
+      signature.passed === true &&
+      signature.status === 'Valid',
+  );
+  const checks = [
+    ['artifact.validation-manifest', allManifestPassed],
+    ['artifact.packaged-smoke', smokePassed],
+    ['artifact.clean-profile-launch', launchPassed],
+    ['artifact.app-icon', iconPassed],
+    [
+      'security.distribution-trust',
+      macosDistributionTrustPassed && windowsDistributionTrustPassed,
+    ],
+  ].map(([id, passed]) => ({
+    id,
+    reasonCode: passed
+      ? 'attested-publication-validation'
+      : 'publication-validation-failed',
+    status: passed ? 'pass' : 'fail',
+  }));
+  const failed = checks.filter((check) => check.status !== 'pass');
+  if (failed.length > 0) {
+    throw new Error(
+      `Release publication acceptance receipts failed: ${failed.map((check) => check.id).join(', ')}`,
+    );
+  }
+  return checks;
+}
+
 export async function collectValidatedReleaseAssets({
   channel,
   expectedBuilds,
   inputDirectory,
   outputDirectory,
+  releasePlanPath,
+  releasePlanSha256,
+  repository,
   reportPath,
+  requireTrustedBinding = false,
+  runAttempt,
+  sourceCommit,
+  tag,
   version,
+  workflowRunId,
+  workflowCommit,
+  workflowSourceRef,
 }) {
+  if (
+    requireTrustedBinding &&
+    (repository !== 'mereyabdenbekuly-ctrl/clodex-ide' ||
+      !/^[a-f0-9]{40}$/.test(String(sourceCommit ?? '')) ||
+      typeof tag !== 'string' ||
+      !tag ||
+      !isNormalizedReleasePlanPath(releasePlanPath) ||
+      !SHA256_PATTERN.test(String(releasePlanSha256 ?? '')) ||
+      !Number.isSafeInteger(workflowRunId) ||
+      workflowRunId <= 0 ||
+      !Number.isSafeInteger(runAttempt) ||
+      runAttempt <= 0 ||
+      !/^[a-f0-9]{40}$/.test(String(workflowCommit ?? '')) ||
+      workflowCommit !== sourceCommit ||
+      workflowSourceRef !== 'refs/heads/main')
+  ) {
+    throw new Error('Release publication binding is incomplete or invalid');
+  }
   const expected =
     expectedBuilds instanceof Set
       ? expectedBuilds
@@ -293,7 +488,9 @@ export async function collectValidatedReleaseAssets({
     );
   }
 
-  const inspectedManifests = manifestPaths.map(inspectPublicationManifest);
+  const inspectedManifests = manifestPaths.map((manifestPath) =>
+    inspectPublicationManifest(manifestPath, { requireTrustedBinding }),
+  );
   const observed = new Set();
   const releaseAssets = [];
   for (const inspected of inspectedManifests) {
@@ -304,10 +501,15 @@ export async function collectValidatedReleaseAssets({
     observed.add(identity);
     if (
       inspected.build.version !== version ||
-      inspected.build.channel !== channel
+      inspected.build.channel !== channel ||
+      (requireTrustedBinding &&
+        (inspected.build.sourceCommit !== sourceCommit ||
+          inspected.build.tag !== tag ||
+          inspected.build.releasePlanPath !== releasePlanPath ||
+          inspected.build.releasePlanSha256 !== releasePlanSha256))
     ) {
       throw new Error(
-        `Validated build ${identity} targets ${inspected.build.version}/${inspected.build.channel}, expected ${version}/${channel}`,
+        `Validated build ${identity} does not match the aggregate release binding`,
       );
     }
 
@@ -363,16 +565,53 @@ export async function collectValidatedReleaseAssets({
     await verifyAsset(destinationPath, asset, 'Collected release asset');
   }
 
-  const report = {
-    schemaVersion: 1,
-    status: 'validated',
-    version,
-    channel,
-    builds: [...observed].sort(),
-    assets: releaseAssets
-      .map(({ sourcePath: _sourcePath, ...asset }) => asset)
-      .sort((left, right) => left.fileName.localeCompare(right.fileName)),
-  };
+  const assets = releaseAssets
+    .map(({ sourcePath: _sourcePath, ...asset }) => asset)
+    .sort((left, right) => left.fileName.localeCompare(right.fileName));
+  const report = requireTrustedBinding
+    ? {
+        schemaVersion: 2,
+        reportKind: 'release-publication',
+        status: 'validated',
+        generatedAt: new Date().toISOString(),
+        repository,
+        sourceCommit,
+        tag,
+        version,
+        channel,
+        releasePlan: {
+          path: releasePlanPath,
+          sha256: releasePlanSha256,
+        },
+        workflow: {
+          commit: workflowCommit,
+          runAttempt,
+          runId: workflowRunId,
+          sourceRef: workflowSourceRef,
+        },
+        builds: [...observed].sort(),
+        validations: inspectedManifests
+          .map((inspected) => ({
+            arch: inspected.build.arch,
+            platform: inspected.build.platform,
+            ...inspected.validationReceipt,
+          }))
+          .sort((left, right) =>
+            `${left.platform}:${left.arch}`.localeCompare(
+              `${right.platform}:${right.arch}`,
+            ),
+          ),
+        acceptanceChecks: deriveAcceptanceChecks(inspectedManifests),
+        assets,
+      }
+    : {
+        schemaVersion: 1,
+        status: 'validated',
+        version,
+        channel,
+        builds: [...observed].sort(),
+        assets,
+      };
   if (reportPath) {
     mkdirSync(path.dirname(reportPath), { recursive: true });
     writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
@@ -402,6 +641,7 @@ async function main() {
     const result = await stageValidatedReleaseAssets({
       manifestPath: path.resolve(options.manifest),
       outputDirectory: path.resolve(options.output),
+      requireTrustedBinding: options['trusted-promotion'] === 'true',
     });
     console.log(
       `[release-publication] staged ${result.assetCount} validated assets for ${result.build.platform}:${result.build.arch}`,
@@ -409,13 +649,28 @@ async function main() {
     return;
   }
   if (options.action === 'collect') {
-    for (const required of [
+    const trustedPromotion = options['trusted-promotion'] === 'true';
+    const requiredOptions = [
       'input',
       'output',
       'version',
       'channel',
       'expected',
-    ]) {
+    ];
+    if (trustedPromotion) {
+      requiredOptions.push(
+        'repository',
+        'source-commit',
+        'tag',
+        'release-plan',
+        'release-plan-sha256',
+        'workflow-run-id',
+        'workflow-commit',
+        'workflow-source-ref',
+        'run-attempt',
+      );
+    }
+    for (const required of requiredOptions) {
       if (!options[required]) {
         throw new Error(`collect requires --${required}`);
       }
@@ -425,8 +680,18 @@ async function main() {
       expectedBuilds: options.expected,
       inputDirectory: path.resolve(options.input),
       outputDirectory: path.resolve(options.output),
+      releasePlanPath: options['release-plan'],
+      releasePlanSha256: options['release-plan-sha256'],
+      repository: options.repository,
       reportPath: options.report ? path.resolve(options.report) : undefined,
+      requireTrustedBinding: trustedPromotion,
+      runAttempt: Number.parseInt(options['run-attempt'], 10),
+      sourceCommit: options['source-commit'],
+      tag: options.tag,
       version: options.version,
+      workflowRunId: Number.parseInt(options['workflow-run-id'], 10),
+      workflowCommit: options['workflow-commit'],
+      workflowSourceRef: options['workflow-source-ref'],
     });
     console.log(
       `[release-publication] collected ${report.assets.length} manifest-bound release assets`,

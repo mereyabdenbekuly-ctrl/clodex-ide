@@ -96,6 +96,11 @@ Options:
   --channel=<dev|nightly|prerelease|release>  Build channel (default: release)
   --arch=<arm64|x64>                          Target architecture
   --version=<semver>                          Package version override
+  --source-commit=<sha>                       Exact release source commit
+  --tag=<tag>                                 Exact release tag
+  --release-plan=<path>                       Committed release-plan path
+  --release-plan-sha256=<sha256>              Exact release-plan digest
+  --require-trusted-binding                   Require source/tag/plan binding
   --skip-make                                 Validate existing artifacts
   --allow-adhoc                               Accept an ad-hoc local signature
   --ui-launch                                 Launch the full copied application
@@ -109,7 +114,12 @@ function parseArguments(values) {
     arch: process.arch,
     channel: process.env.RELEASE_CHANNEL ?? 'release',
     output: undefined,
+    releasePlanPath: undefined,
+    releasePlanSha256: undefined,
+    requireTrustedBinding: false,
     skipMake: false,
+    sourceCommit: undefined,
+    tag: undefined,
     uiLaunch: false,
     version: process.env.APP_VERSION_OVERRIDE,
   };
@@ -132,6 +142,16 @@ function parseArguments(values) {
       options.channel = value.slice('--channel='.length);
     } else if (value.startsWith('--output=')) {
       options.output = value.slice('--output='.length);
+    } else if (value.startsWith('--release-plan=')) {
+      options.releasePlanPath = value.slice('--release-plan='.length);
+    } else if (value.startsWith('--release-plan-sha256=')) {
+      options.releasePlanSha256 = value.slice('--release-plan-sha256='.length);
+    } else if (value === '--require-trusted-binding') {
+      options.requireTrustedBinding = true;
+    } else if (value.startsWith('--source-commit=')) {
+      options.sourceCommit = value.slice('--source-commit='.length);
+    } else if (value.startsWith('--tag=')) {
+      options.tag = value.slice('--tag='.length);
     } else if (value.startsWith('--version=')) {
       options.version = value.slice('--version='.length);
     } else {
@@ -144,6 +164,19 @@ function parseArguments(values) {
   }
   if (!['arm64', 'x64'].includes(options.arch)) {
     throw new Error(`Unsupported macOS architecture: ${options.arch}`);
+  }
+  if (
+    options.requireTrustedBinding &&
+    (!/^[a-f0-9]{40}$/.test(String(options.sourceCommit ?? '')) ||
+      typeof options.tag !== 'string' ||
+      !options.tag ||
+      typeof options.releasePlanPath !== 'string' ||
+      !options.releasePlanPath ||
+      !/^[a-f0-9]{64}$/.test(String(options.releasePlanSha256 ?? '')))
+  ) {
+    throw new Error(
+      'Release validation requires exact source/tag/plan binding',
+    );
   }
 
   return options;
@@ -821,6 +854,21 @@ async function main() {
       displayName: readPlistValue(infoPlistPath, 'CFBundleDisplayName'),
       version: readPlistValue(infoPlistPath, 'CFBundleShortVersionString'),
     };
+    const iconName = readPlistValue(infoPlistPath, 'CFBundleIconFile');
+    const iconPath = iconName
+      ? [iconName, iconName.endsWith('.icns') ? iconName : `${iconName}.icns`]
+          .map((candidate) =>
+            path.join(appPath, 'Contents', 'Resources', candidate),
+          )
+          .find((candidate) => existsSync(candidate))
+      : null;
+    if (!iconPath || statSync(iconPath).size <= 0) {
+      throw new Error('Packaged application icon is missing or empty');
+    }
+    metadata.icon = {
+      bytes: statSync(iconPath).size,
+      fileName: path.basename(iconPath),
+    };
     if (metadata.displayName !== config.displayName) {
       throw new Error(
         `Unexpected display name: ${metadata.displayName} (expected ${config.displayName})`,
@@ -1135,6 +1183,10 @@ async function main() {
         nodeVersion: actualNodeVersion,
         platform: 'macos',
         pnpmVersion: actualPnpmVersion,
+        releasePlanPath: options.releasePlanPath,
+        releasePlanSha256: options.releasePlanSha256,
+        sourceCommit: options.sourceCommit,
+        tag: options.tag,
         updateServerConfigured,
         version,
       },

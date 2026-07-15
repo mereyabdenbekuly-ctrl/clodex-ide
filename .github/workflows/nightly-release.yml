@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git ref to build"
+        description: "Release source (must be exactly main)"
         required: false
         type: string
         default: main
@@ -36,17 +36,35 @@ jobs:
       should_release: ${{ steps.check.outputs.should_release }}
 
     steps:
+      - name: Require canonical main source
+        env:
+          RELEASE_REF_INPUT: ${{ inputs.ref || 'main' }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$RELEASE_REF_INPUT" = "main"
+
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ inputs.ref || 'main' }}
+          ref: main
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Require exact current main HEAD
+        run: |
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$(git rev-parse HEAD)" = "$remote_main"
+          test "$GITHUB_SHA" = "$remote_main"
+          test "$GITHUB_WORKFLOW_SHA" = "$remote_main"
+
       - name: Check latest nightly tag
         id: check
+        env:
+          RELEASE_EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ "${{ github.event_name }}" != "schedule" ]; then
+          if [ "$RELEASE_EVENT_NAME" != "schedule" ]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -87,7 +105,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: ${{ inputs.ref || 'main' }}
+          ref: main
           fetch-depth: 0
           persist-credentials: false
 
@@ -127,6 +145,8 @@ jobs:
     permissions:
       contents: write
       actions: write
+      attestations: write
+      id-token: write
     uses: ./.github/workflows/_release-browser.yml
     with:
       version: ${{ needs.version.outputs.version }}

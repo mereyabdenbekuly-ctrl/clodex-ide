@@ -1,17 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import Link from 'next/link';
-import { Button, buttonVariants } from '@clodex/stage-ui/components/button';
-import { cn } from '@clodex/stage-ui/lib/utils';
-import { IconDownload4FillDuo18 } from '@clodex/icons';
+import { Button } from '@clodex/stage-ui/components/button';
 import { ScrollReveal } from '@/components/landing/scroll-reveal';
 import { Logo } from '@/components/landing/logo';
 import { AnimatedGradientBackground } from '@/components/landing/animated-gradient-background';
+import { DownloadUnavailableButton } from '@/components/download-unavailable-button';
 
 export default function Welcome() {
-  const [userOS, setUserOS] = useState<string>('your OS');
-  const [downloadUrl, setDownloadUrl] = useState<string>('#');
   const [isMobile, setIsMobile] = useState(false);
   const [isOsSupported, setIsOsSupported] = useState(true);
 
@@ -24,20 +20,11 @@ export default function Welcome() {
       );
     setIsMobile(mobileCheck);
 
-    if (userAgent.includes('mac')) {
-      setUserOS('macOS');
-      setDownloadUrl(
-        'https://ide.clodex.xyz/downloads/clodex-1.16.0-arm64.dmg',
-      );
-    } else if (userAgent.includes('win')) {
-      setUserOS('Windows');
-      setDownloadUrl('https://dl.clodex.io/download/clodex/release/win/x64');
-    } else if (userAgent.includes('linux')) {
-      setUserOS('Linux');
-      setDownloadUrl(
-        'https://dl.clodex.io/download/clodex/release/linux/deb/x86_64',
-      );
-    } else {
+    const isSupportedDesktop =
+      userAgent.includes('mac') ||
+      userAgent.includes('win') ||
+      userAgent.includes('linux');
+    if (!isSupportedDesktop) {
       setIsOsSupported(false);
     }
   }, []);
@@ -64,9 +51,9 @@ export default function Welcome() {
                 <span className="text-foreground">Meet the clodex browser</span>
               </h1>
               <p className="mx-auto mb-10 max-w-md text-muted-foreground">
-                We&apos;ve rebuilt clodex as a standalone desktop browser - no
-                extension required. Download it and get a more powerful
-                experience right out of the box.
+                The standalone desktop browser is being prepared for its next
+                verified release. Downloads remain temporarily unavailable while
+                signing and acceptance complete.
               </p>
 
               <div className="flex flex-col items-center gap-3">
@@ -79,17 +66,7 @@ export default function Welcome() {
                     Download on Desktop
                   </Button>
                 ) : (
-                  <Link
-                    href={downloadUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={cn(
-                      buttonVariants({ variant: 'primary', size: 'lg' }),
-                    )}
-                  >
-                    Download for {userOS}
-                    <IconDownload4FillDuo18 className="size-4" />
-                  </Link>
+                  <DownloadUnavailableButton size="lg" />
                 )}
                 <p className="text-sm text-subtle-foreground">
                   Free to start · macOS, Windows & Linux

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git ref containing the readiness contract"
+        description: "Readiness contract source (must be exactly main)"
         required: false
         type: string
         default: main
@@ -40,16 +40,76 @@ permissions:
   contents: read
 
 jobs:
+  source-gate:
+    name: Verify trusted readiness source
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      release_ref: ${{ steps.source.outputs.release_ref }}
+    steps:
+      - name: Require canonical main inputs
+        shell: bash
+        env:
+          ARTIFACT_SET: ${{ inputs.artifact_set }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.release_channel }}
+          RELEASE_REF_INPUT: ${{ inputs.ref }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$RELEASE_REF_INPUT" = "main"
+          case "$ARTIFACT_SET" in
+            macos|windows|all) ;;
+            *) echo "::error::Unsupported signing artifact set"; exit 1 ;;
+          esac
+          case "$RELEASE_CHANNEL_INPUT" in
+            preview|alpha|beta|nightly|release) ;;
+            *) echo "::error::Unsupported release channel"; exit 1 ;;
+          esac
+
+      - name: Checkout canonical main without credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require exact current canonical main HEAD
+        id: source
+        shell: bash
+        run: |
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$(git rev-parse HEAD)" = "$remote_main"
+          test "$GITHUB_SHA" = "$remote_main"
+          test "$GITHUB_WORKFLOW_SHA" = "$remote_main"
+          echo "release_ref=$remote_main" >> "$GITHUB_OUTPUT"
+
   contract:
     name: Validate Release environment contract
+    needs: source-gate
     runs-on: ubuntu-latest
     environment: Release
     steps:
       - name: Checkout contract
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.source-gate.outputs.release_ref }}
           persist-credentials: false
+
+      - name: Reassert exact current main after protected approval
+        shell: bash
+        env:
+          RELEASE_REF: ${{ needs.source-gate.outputs.release_ref }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$RELEASE_REF"
+          test "$GITHUB_WORKFLOW_SHA" = "$RELEASE_REF"
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
 
       - name: Validate signing and update-server contract
         id: signing-readiness
@@ -67,18 +127,26 @@ jobs:
           AZURE_ACCOUNT_ENDPOINT_URI: ${{ secrets.AZURE_ACCOUNT_ENDPOINT_URI }}
           AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          READINESS_ARTIFACT_SET: ${{ inputs.artifact_set }}
+          READINESS_CHANNEL: ${{ inputs.release_channel }}
+          READINESS_REPORT: ${{ runner.temp }}/release-signing-readiness.json
+          READINESS_SUMMARY: ${{ runner.temp }}/release-signing-readiness.md
           UPDATE_SERVER_ORIGIN: ${{ vars.UPDATE_SERVER_ORIGIN }}
-        run: >-
-          node scripts/release/signing-readiness.mjs
-          --artifacts=${{ inputs.artifact_set }}
-          --channel=${{ inputs.release_channel }}
-          --github-annotations
-          --report=${{ runner.temp }}/release-signing-readiness.json
-          --summary=${{ runner.temp }}/release-signing-readiness.md
+        shell: bash
+        run: |
+          node scripts/release/signing-readiness.mjs \
+            --artifacts="$READINESS_ARTIFACT_SET" \
+            --channel="$READINESS_CHANNEL" \
+            --github-annotations \
+            --report="$READINESS_REPORT" \
+            --summary="$READINESS_SUMMARY"
 
       - name: Publish readiness summary
         if: always() && steps.signing-readiness.outcome != 'skipped'
-        run: cat "${{ runner.temp }}/release-signing-readiness.md" >> "$GITHUB_STEP_SUMMARY"
+        shell: bash
+        env:
+          READINESS_SUMMARY: ${{ runner.temp }}/release-signing-readiness.md
+        run: cat "$READINESS_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload content-free readiness report
         if: always()
@@ -91,7 +159,7 @@ jobs:
 
   macos-keychain:
     name: Verify Developer ID keychain identity
-    needs: contract
+    needs: [source-gate, contract]
     if: inputs.check_macos_keychain && inputs.artifact_set != 'windows'
     runs-on: macos-26
     environment: Release
@@ -99,8 +167,22 @@ jobs:
       - name: Checkout contract
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.source-gate.outputs.release_ref }}
           persist-credentials: false
+
+      - name: Reassert exact current main before certificate import
+        shell: bash
+        env:
+          RELEASE_REF: ${{ needs.source-gate.outputs.release_ref }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$RELEASE_REF"
+          test "$GITHUB_WORKFLOW_SHA" = "$RELEASE_REF"
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
 
       - name: Import macOS signing certificate
         uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d # v3
@@ -124,19 +206,27 @@ jobs:
           AZURE_ACCOUNT_ENDPOINT_URI: ${{ secrets.AZURE_ACCOUNT_ENDPOINT_URI }}
           AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          READINESS_ARTIFACT_SET: ${{ inputs.artifact_set }}
+          READINESS_CHANNEL: ${{ inputs.release_channel }}
+          READINESS_REPORT: ${{ runner.temp }}/macos-developer-id-readiness.json
+          READINESS_SUMMARY: ${{ runner.temp }}/macos-developer-id-readiness.md
           UPDATE_SERVER_ORIGIN: ${{ vars.UPDATE_SERVER_ORIGIN }}
-        run: >-
-          node scripts/release/signing-readiness.mjs
-          --artifacts=${{ inputs.artifact_set }}
-          --channel=${{ inputs.release_channel }}
-          --check-keychain
-          --github-annotations
-          --report=${{ runner.temp }}/macos-developer-id-readiness.json
-          --summary=${{ runner.temp }}/macos-developer-id-readiness.md
+        shell: bash
+        run: |
+          node scripts/release/signing-readiness.mjs \
+            --artifacts="$READINESS_ARTIFACT_SET" \
+            --channel="$READINESS_CHANNEL" \
+            --check-keychain \
+            --github-annotations \
+            --report="$READINESS_REPORT" \
+            --summary="$READINESS_SUMMARY"
 
       - name: Publish Developer ID summary
         if: always() && steps.developer-id-readiness.outcome != 'skipped'
-        run: cat "${{ runner.temp }}/macos-developer-id-readiness.md" >> "$GITHUB_STEP_SUMMARY"
+        shell: bash
+        env:
+          READINESS_SUMMARY: ${{ runner.temp }}/macos-developer-id-readiness.md
+        run: cat "$READINESS_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload content-free Developer ID report
         if: always()

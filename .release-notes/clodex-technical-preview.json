@@ -1,12 +1,26 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "releaseKind": "technical-preview",
   "version": "1.16.0-preview.2",
   "tag": "v1.16.0-preview.2",
   "sourceRef": "main",
   "channel": "preview",
   "buildChannel": "prerelease",
-  "rollbackTag": "v1.16.0-preview.1",
+  "promotionRole": "rollback-baseline",
+  "distribution": {
+    "githubReleaseState": "draft",
+    "protectedEnvironment": "Release",
+    "access": "release-operators-only",
+    "canaryInstallations": 0,
+    "publicDownloadLinks": false
+  },
+  "rollback": {
+    "mode": "distribution-stop-only"
+  },
+  "acceptance": {
+    "binding": "manifest-sha256+source-commit",
+    "requiredStatus": "ready-as-rollback-baseline"
+  },
   "authentication": {
     "oauthWebAuthReady": false,
     "releaseClaim": "OAuth/WebAuth is not included in this technical preview; existing provider credential configuration remains the supported path."

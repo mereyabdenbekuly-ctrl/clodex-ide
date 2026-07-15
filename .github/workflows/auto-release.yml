@@ -6,6 +6,11 @@ name: "Auto Release"
 
 on:
   workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type RELEASE_STABLE to authorize protected release evaluation"
+        required: true
+        type: string
 
 # Only one release at a time per branch
 concurrency:
@@ -13,10 +18,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  pull-requests: read
-  id-token: write
-  actions: write
+  contents: read
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -25,7 +27,10 @@ jobs:
   detect:
     name: Detect Unreleased Packages
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
+      release-ref: ${{ steps.source.outputs.release_ref }}
       clodex-needs-release: ${{ steps.check.outputs.clodex_needs_release }}
       clodex-version: ${{ steps.check.outputs.clodex_version }}
       clodex-tag: ${{ steps.check.outputs.clodex_tag }}
@@ -35,14 +40,35 @@ jobs:
       karton-tag: ${{ steps.check.outputs.karton_tag }}
 
     steps:
+      - name: Require exact main dispatch and stable confirmation
+        env:
+          RELEASE_CONFIRMATION: ${{ inputs.confirm }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$RELEASE_CONFIRMATION" = "RELEASE_STABLE"
+
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: main
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require exact current canonical main HEAD
+        id: source
+        run: |
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$(git rev-parse HEAD)" = "$remote_main"
+          test "$GITHUB_SHA" = "$remote_main"
+          test "$GITHUB_WORKFLOW_SHA" = "$remote_main"
+          echo "release_ref=$remote_main" >> "$GITHUB_OUTPUT"
 
       - name: Check package versions against tags
         id: check
         env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
           GH_TOKEN: ${{ github.token }}
         run: |
           check_package() {
@@ -54,9 +80,23 @@ jobs:
             version=$(node -p "require('./${pkg_json}').version")
             local tag="${tag_prefix}${version}"
             local previous_version=""
+            local channel="release"
 
-            if git cat-file -e "${{ github.event.before }}:${pkg_json}" 2>/dev/null; then
-              previous_version=$(git show "${{ github.event.before }}:${pkg_json}" | node -e '
+            if [[ "$version" =~ -alpha[0-9]{3}$ ]]; then
+              channel="alpha"
+            elif [[ "$version" =~ -beta[0-9]{3}$ ]]; then
+              channel="beta"
+            fi
+
+            node scripts/release/validate-release-identity.mjs \
+              --product="$name" \
+              --channel="$channel" \
+              --version="$version" \
+              --tag="$tag"
+
+            if [[ "$GITHUB_EVENT_BEFORE" =~ ^[0-9a-f]{40}$ ]] && \
+              git cat-file -e "${GITHUB_EVENT_BEFORE}:${pkg_json}" 2>/dev/null; then
+              previous_version=$(git show "${GITHUB_EVENT_BEFORE}:${pkg_json}" | node -e '
                 let input = "";
                 process.stdin.on("data", (chunk) => input += chunk);
                 process.stdin.on("end", () => {
@@ -76,11 +116,11 @@ jobs:
               case "$release_state" in
                 exists)
                   echo "  ✅ Tag and GitHub Release exist — already released"
-                  echo "${name}_needs_release=false" >> $GITHUB_OUTPUT
+                  echo "${name}_needs_release=false" >> "$GITHUB_OUTPUT"
                   ;;
                 absent)
                   echo "  🚀 Tag exists without a GitHub Release — retrying immutable release"
-                  echo "${name}_needs_release=true" >> $GITHUB_OUTPUT
+                  echo "${name}_needs_release=true" >> "$GITHUB_OUTPUT"
                   ;;
                 *)
                   echo "::error::Unexpected GitHub Release state for ${tag}: ${release_state}"
@@ -89,26 +129,15 @@ jobs:
               esac
             elif [ -n "$previous_version" ] && [ "$previous_version" = "$version" ]; then
               echo "  ✅ Version unchanged and no poisoned tag exists — no release requested"
-              echo "${name}_needs_release=false" >> $GITHUB_OUTPUT
+              echo "${name}_needs_release=false" >> "$GITHUB_OUTPUT"
             else
               echo "  🚀 Tag missing — needs release"
-              echo "${name}_needs_release=true" >> $GITHUB_OUTPUT
+              echo "${name}_needs_release=true" >> "$GITHUB_OUTPUT"
             fi
 
-            echo "${name}_version=${version}" >> $GITHUB_OUTPUT
-            echo "${name}_tag=${tag}" >> $GITHUB_OUTPUT
-
-            # Determine channel from version.
-            # Accepts both the new format (`1.0.0-alpha063`) and the legacy
-            # format (`1.0.0-alpha.63`) so re-runs of historical release PRs
-            # continue to classify correctly.
-            if [[ "$version" =~ -alpha(\.[0-9]+|[0-9]+)$ ]]; then
-              echo "${name}_channel=alpha" >> $GITHUB_OUTPUT
-            elif [[ "$version" =~ -beta(\.[0-9]+|[0-9]+)$ ]]; then
-              echo "${name}_channel=beta" >> $GITHUB_OUTPUT
-            else
-              echo "${name}_channel=release" >> $GITHUB_OUTPUT
-            fi
+            echo "${name}_version=${version}" >> "$GITHUB_OUTPUT"
+            echo "${name}_tag=${tag}" >> "$GITHUB_OUTPUT"
+            echo "${name}_channel=${channel}" >> "$GITHUB_OUTPUT"
           }
 
           # --- Releasable packages (add new packages here) ---
@@ -122,12 +151,19 @@ jobs:
     name: Release clodex
     needs: detect
     if: needs.detect.outputs.clodex-needs-release == 'true'
+    permissions:
+      actions: write
+      attestations: write
+      contents: write
+      id-token: write
     uses: ./.github/workflows/_release-browser.yml
     with:
       version: ${{ needs.detect.outputs.clodex-version }}
       tag: ${{ needs.detect.outputs.clodex-tag }}
       channel: ${{ needs.detect.outputs.clodex-channel }}
-      ref: ${{ github.sha }}
+      ref: ${{ needs.detect.outputs.release-ref }}
+      manifest: ${{ needs.detect.outputs.clodex-channel == 'release' && '.release-notes/clodex-stable.json' || '' }}
+      draft: false
     secrets: inherit
 
   # ---------------------------------------------------------------------------
@@ -137,8 +173,11 @@ jobs:
     name: Release karton
     needs: detect
     if: needs.detect.outputs.karton-needs-release == 'true'
+    permissions:
+      contents: write
     uses: ./.github/workflows/_release-karton.yml
     with:
       version: ${{ needs.detect.outputs.karton-version }}
       tag: ${{ needs.detect.outputs.karton-tag }}
+      ref: ${{ needs.detect.outputs.release-ref }}
     secrets: inherit

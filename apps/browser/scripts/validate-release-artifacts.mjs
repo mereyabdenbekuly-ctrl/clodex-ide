@@ -49,6 +49,7 @@ Options:
   --version=<semver>                         Package version
   --allow-unsigned                           Accept unsigned Windows binaries
   --output=<path>                            JSON manifest output path
+  --require-trusted-binding                  Require source/tag/plan binding
   --help                                     Show this message
 `;
 
@@ -59,6 +60,11 @@ function parseArguments(values) {
     channel: process.env.RELEASE_CHANNEL ?? 'release',
     output: undefined,
     platform: process.platform === 'win32' ? 'windows' : 'linux',
+    releasePlanPath: undefined,
+    releasePlanSha256: undefined,
+    requireTrustedBinding: false,
+    sourceCommit: undefined,
+    tag: undefined,
     version: process.env.APP_VERSION_OVERRIDE,
   };
 
@@ -77,6 +83,16 @@ function parseArguments(values) {
       options.output = value.slice('--output='.length);
     } else if (value.startsWith('--platform=')) {
       options.platform = value.slice('--platform='.length);
+    } else if (value.startsWith('--release-plan=')) {
+      options.releasePlanPath = value.slice('--release-plan='.length);
+    } else if (value.startsWith('--release-plan-sha256=')) {
+      options.releasePlanSha256 = value.slice('--release-plan-sha256='.length);
+    } else if (value === '--require-trusted-binding') {
+      options.requireTrustedBinding = true;
+    } else if (value.startsWith('--source-commit=')) {
+      options.sourceCommit = value.slice('--source-commit='.length);
+    } else if (value.startsWith('--tag=')) {
+      options.tag = value.slice('--tag='.length);
     } else if (value.startsWith('--version=')) {
       options.version = value.slice('--version='.length);
     } else {
@@ -92,6 +108,19 @@ function parseArguments(values) {
   }
   if (!['windows', 'linux'].includes(options.platform)) {
     throw new Error(`Unsupported platform: ${options.platform}`);
+  }
+  if (
+    options.requireTrustedBinding &&
+    (!/^[a-f0-9]{40}$/.test(String(options.sourceCommit ?? '')) ||
+      typeof options.tag !== 'string' ||
+      !options.tag ||
+      typeof options.releasePlanPath !== 'string' ||
+      !options.releasePlanPath ||
+      !/^[a-f0-9]{64}$/.test(String(options.releasePlanSha256 ?? '')))
+  ) {
+    throw new Error(
+      'Release validation requires exact source/tag/plan binding',
+    );
   }
   return options;
 }
@@ -935,6 +964,10 @@ async function main() {
         channel: options.channel,
         nodeVersion: actualNodeVersion,
         platform: options.platform,
+        releasePlanPath: options.releasePlanPath,
+        releasePlanSha256: options.releasePlanSha256,
+        sourceCommit: options.sourceCommit,
+        tag: options.tag,
         version,
       },
       checks: validation.checks,

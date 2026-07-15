@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Button, buttonVariants } from '@clodex/stage-ui/components/button';
-import { IconDownload4FillDuo18 } from '@clodex/icons';
-import { cn } from '@clodex/stage-ui/lib/utils';
+import { Button } from '@clodex/stage-ui/components/button';
+import { DownloadUnavailableButton } from '@/components/download-unavailable-button';
 
 export function DownloadButtons({
   className,
@@ -13,10 +12,6 @@ export function DownloadButtons({
   locale?: 'ru' | 'en';
 }) {
   const isRussian = locale === 'ru';
-  const [userOS, setUserOS] = useState<string>(
-    isRussian ? 'вашей ОС' : 'your OS',
-  );
-  const [downloadUrl, setDownloadUrl] = useState<string>('#');
   const [isMobile, setIsMobile] = useState(false);
   const [isOsSupported, setIsOsSupported] = useState(true);
   const [hasDetected, setHasDetected] = useState(false);
@@ -36,22 +31,14 @@ export function DownloadButtons({
       );
     setIsMobile(mobileCheck);
 
-    if (platform.includes('mac') || userAgent.includes('mac')) {
-      setUserOS('macOS · Apple Silicon');
-      setDownloadUrl(
-        'https://ide.clodex.xyz/downloads/clodex-1.16.0-arm64.dmg',
-      );
-    } else if (platform.includes('win') || userAgent.includes('win')) {
-      setUserOS('Windows · x64 Preview');
-      setDownloadUrl(
-        'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-preview.1-windows-x64/clodex-1.16.0-x64-setup.exe',
-      );
-    } else if (platform.includes('linux') || userAgent.includes('linux')) {
-      setUserOS('Linux');
-      setDownloadUrl(
-        'https://dl.clodex.io/download/clodex/release/linux/deb/x86_64',
-      );
-    } else {
+    const isSupportedDesktop =
+      platform.includes('mac') ||
+      userAgent.includes('mac') ||
+      platform.includes('win') ||
+      userAgent.includes('win') ||
+      platform.includes('linux') ||
+      userAgent.includes('linux');
+    if (!isSupportedDesktop) {
       setIsOsSupported(false);
     }
     setHasDetected(true);
@@ -82,15 +69,15 @@ export function DownloadButtons({
   }
 
   return (
-    <a
-      href={downloadUrl}
-      className={cn(
-        buttonVariants({ size: 'lg', variant: 'primary' }),
-        className,
-      )}
-    >
-      {isRussian ? 'Скачать для' : 'Download for'} {userOS}
-      <IconDownload4FillDuo18 className="size-4" />
-    </a>
+    <DownloadUnavailableButton
+      className={className}
+      locale={locale}
+      size="lg"
+      title={
+        isRussian
+          ? 'Загрузка временно недоступна'
+          : 'Download temporarily unavailable'
+      }
+    />
   );
 }

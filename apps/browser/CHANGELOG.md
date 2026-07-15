@@ -2,7 +2,8 @@
 
 ## 1.16.0-preview.2 (2026-07-13)
 
-Technical Preview. Rollback target: `v1.16.0-preview.1`.
+Technical Preview rollback baseline. This build has no earlier trusted rollback
+target and remains non-public until its manifest-bound acceptance is committed.
 
 ### Reliability
 

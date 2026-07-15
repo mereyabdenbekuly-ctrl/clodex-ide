@@ -35,14 +35,15 @@
     "release:attribution:check": "pnpm --dir apps/browser release:attribution:check",
     "release:attribution:test": "pnpm --dir apps/browser release:attribution:test",
     "release:signing:readiness": "node scripts/release/signing-readiness.mjs",
-    "release:signing:readiness:test": "node --test scripts/release/signing-readiness.test.mjs scripts/release/release-plumbing.test.mjs",
+    "release:signing:readiness:test": "node --test scripts/release/signing-readiness.test.mjs scripts/release/release-plumbing.test.mjs scripts/release/release-trust.test.mjs scripts/release/validate-release-identity.test.mjs scripts/release/prepare-release-workflow.test.mjs scripts/release/legacy-download-surface.test.mjs",
     "release:preview:validate": "node scripts/release/validate-technical-preview-plan.mjs --manifest=.release-notes/clodex-technical-preview.json",
+    "release:stable:validate": "node scripts/release/validate-stable-release-plan.mjs --manifest=.release-notes/clodex-stable.json --expected-version=1.16.0 --expected-tag=clodex@1.16.0",
     "version:karton": "tsx scripts/release/index.ts --package karton",
     "extract:compression-test-data": "tsx scripts/experiments/extract-compression-test-data.ts",
-    "security:dependencies": "node scripts/security/audit-production-dependencies.mjs",
-    "security:dependencies:test": "node --test scripts/security/audit-production-dependencies.test.mjs",
     "security:secrets": "scripts/security/scan-secrets.sh working-tree",
     "security:secrets:history": "scripts/security/scan-secrets.sh history",
+    "security:dependencies": "node scripts/security/audit-production-dependencies.mjs",
+    "security:dependencies:test": "node --test scripts/security/audit-production-dependencies.test.mjs",
     "postinstall": "node -e \"const{chmodSync,existsSync}=require('fs');const p='node_modules/node-pty/prebuilds/'+process.platform+'-'+process.arch+'/spawn-helper';try{if(existsSync(p)){chmodSync(p,0o755);console.log('node-pty: fixed spawn-helper permissions')}}catch(e){console.warn('node-pty: spawn-helper chmod failed:',e.message)}\""
   },
   "devDependencies": {

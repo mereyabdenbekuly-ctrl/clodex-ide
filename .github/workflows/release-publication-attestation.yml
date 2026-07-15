@@ -1,0 +1,124 @@
+name: Trusted Release Publication Attestation
+
+on:
+  workflow_call:
+    inputs:
+      release_id:
+        required: true
+        type: number
+      report_name:
+        required: true
+        type: string
+      source_commit:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+    outputs:
+      snapshot_artifact_id:
+        description: "Exact upload-artifact ID containing the attested live publication snapshot"
+        value: ${{ jobs.attest-publication.outputs.snapshot_artifact_id }}
+      snapshot_sha256:
+        description: "SHA-256 of the attested live publication snapshot"
+        value: ${{ jobs.attest-publication.outputs.snapshot_sha256 }}
+
+permissions:
+  contents: read
+
+jobs:
+  attest-publication:
+    name: Verify and attest live publication
+    runs-on: ubuntu-latest
+    environment: Release
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    outputs:
+      snapshot_artifact_id: ${{ steps.snapshot-upload.outputs.artifact-id }}
+      snapshot_sha256: ${{ steps.snapshot.outputs.snapshot_sha256 }}
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require exact canonical main source
+        env:
+          RELEASE_SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$RELEASE_SOURCE_COMMIT"
+          test "$GITHUB_WORKFLOW_SHA" = "$RELEASE_SOURCE_COMMIT"
+          remote_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+          test "$remote_main" = "$RELEASE_SOURCE_COMMIT"
+
+      - name: Download live draft release and API state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/release-assets"
+          gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            > "${RUNNER_TEMP}/release.json"
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir "${RUNNER_TEMP}/release-assets" \
+            --clobber
+
+      - name: Verify exact live report, assets, tag, and committed plan
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_SOURCE_COMMIT: ${{ inputs.source_commit }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          REPORT_NAME: ${{ inputs.report_name }}
+        run: >-
+          node scripts/release/verify-release-publication.mjs
+          --assets="${RUNNER_TEMP}/release-assets"
+          --expected-release-state=draft
+          --expected-run-attempt="${GITHUB_RUN_ATTEMPT}"
+          --expected-source-commit="${RELEASE_SOURCE_COMMIT}"
+          --expected-tag="${RELEASE_TAG}"
+          --expected-workflow-run-id="${GITHUB_RUN_ID}"
+          --release-id="${RELEASE_ID}"
+          --release-json="${RUNNER_TEMP}/release.json"
+          --report="${RUNNER_TEMP}/release-assets/${REPORT_NAME}"
+          --report-name="${REPORT_NAME}"
+          --repository="${GITHUB_REPOSITORY}"
+          --snapshot="${RUNNER_TEMP}/publication-snapshot.json"
+
+      - name: Attest exact publication report bytes
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ runner.temp }}/release-assets/${{ inputs.report_name }}
+
+      - name: Bind exact live publication snapshot bytes
+        id: snapshot
+        run: |
+          snapshot="${RUNNER_TEMP}/publication-snapshot.json"
+          test -f "$snapshot"
+          test ! -L "$snapshot"
+          test -s "$snapshot"
+          snapshot_sha256=$(sha256sum "$snapshot" | awk '{print $1}')
+          test -n "$snapshot_sha256"
+          echo "snapshot_sha256=$snapshot_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Attest exact live publication snapshot bytes and asset IDs
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ runner.temp }}/publication-snapshot.json
+
+      - name: Upload verified publication snapshot
+        id: snapshot-upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clodex-publication-attestation-${{ inputs.tag }}
+          path: ${{ runner.temp }}/publication-snapshot.json
+          if-no-files-found: error
+          retention-days: 90

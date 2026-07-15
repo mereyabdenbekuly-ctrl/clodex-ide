@@ -865,11 +865,11 @@ test('release workflow and Forge packaging wire the attribution gate before publ
   );
   assert.match(
     workflowSource,
-    /release-publication\.mjs stage[\s\S]*if-no-files-found: error/,
+    /args=\([\s\S]*stage[\s\S]*release-publication\.mjs "\$\{args\[@\]\}"[\s\S]*if-no-files-found: error/,
   );
   assert.match(
     workflowSource,
-    /release-publication\.mjs collect[\s\S]*--expected=macos:arm64,macos:x64,linux:x64,windows:x64/,
+    /args=\([\s\S]*collect[\s\S]*--expected=macos:arm64,macos:x64,linux:x64,windows:x64[\s\S]*release-publication\.mjs "\$\{args\[@\]\}"/,
   );
   assert.doesNotMatch(workflowSource, /find artifacts -type f/);
   assert.match(

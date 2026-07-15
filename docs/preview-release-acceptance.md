@@ -1,141 +1,136 @@
-# Preview release acceptance
+# Protected preview acceptance and canary
 
-Target: `v1.16.0-preview.2`
+Release chain:
 
-Rollback target: `v1.16.0-preview.1`
+1. `v1.16.0-preview.2` — signed/notarized protected-draft rollback baseline;
+2. `v1.16.0-preview.3` — exactly-five controlled canary using accepted
+   preview.2 as its rollback baseline;
+3. `clodex@1.16.0` — newly built stable artifacts after accepted preview.3.
 
-Canary: five installations for at least 24 hours
+Both previews remain draft GitHub Releases behind the protected `Release`
+environment. Public preview download links are forbidden. Public website download surfaces remain disabled until an eligible stable release exists.
+Historical preview.1 is not trusted and the product or website must not link
+to preview.1, its static DMG alias, or its GitHub Release assets.
 
-The preview acceptance harness combines deterministic source checks, the
-existing macOS package-validation manifest, explicit manual acceptance, a
-content-free canary aggregate, and a reviewed rollback drill. It never stores
-prompts, messages, workspace data, credentials, user identifiers, installation
-identifiers, or raw logs.
+## Trust model
 
-## Toolchain
+Committed JSON by itself is never release evidence. Two protected workflows
+form the evidence chain:
 
-```bash
-export PATH=/private/tmp/clodex-toolchains/node-v22.23.1-darwin-arm64/bin:$PATH
-node -v
-corepack pnpm -v
-```
+- `release-publication-attestation.yml` queries the live release by database
+  ID, validates the exact remote tag and every asset ID/name/size/API
+  digest/downloaded SHA-256, validates the committed release-plan hash, and
+  attests the exact aggregate publication report bytes.
+- `release-acceptance-evidence.yml` verifies that publication attestation using
+  the canonical repository, `refs/heads/main`, exact source digest, exact signer
+  digest, and `--deny-self-hosted-runners`. Its unprivileged collection job runs
+  real source/product checks without OIDC or attestation-write permissions. A
+  separate minimal protected job downloads only the exact artifact ID, verifies
+  the subject SHA-256 and terminal schema, and attests those bytes without
+  checking out or executing release source.
 
-Expected versions are Node.js `v22.23.1` and pnpm `10.30.3`.
+Preview.3 promotion re-runs both preview.2 attestation checks and live release
+validation. The stable verifier contains recursive preview.3 → preview.2
+validation, but deliberately stops at the `NOT_READY` canary-observation gate
+before it can authorize stable. Deleted, empty, substituted, or additional
+assets fail closed.
 
-## Create an evidence template
+## Publication report
 
-Run this from the exact clean release worktree:
+The release workflow builds all four supported targets and emits one
+`clodex-release-publication.json` asset. It binds:
 
-```bash
-node --import tsx scripts/release/check-preview-acceptance.ts \
-  --print-template \
-  --output=/private/tmp/clodex-preview-2-acceptance-input.json
-```
+- canonical repository, source commit, tag, version, and channel;
+- committed release-plan path and SHA-256;
+- workflow run ID, run attempt, workflow commit, and `refs/heads/main`;
+- all four validation manifests and their check/signing/trust receipt hashes;
+- every published asset name, positive byte size, SHA-256, and build identity;
+- packaged smoke, clean-profile launch, bundled icon, Developer ID,
+  notarization/Gatekeeper, and Windows Authenticode results.
 
-Set only aggregate check statuses in that file. Do not add free-form logs,
-credentials, trace IDs, account IDs, installation IDs, prompts, or workspace
-paths.
+The report is not trusted until the protected publication workflow verifies the
+live draft and creates GitHub build-provenance attestation for those exact
+bytes.
 
-## Automated acceptance
+## Protected acceptance dispatch
 
-When the macOS artifact session emits its validation manifest, run:
+Run `Trusted Release Acceptance Evidence` from canonical `main` only. The
+protected environment must approve the job. Inputs are deliberately bounded:
 
-```bash
-node --import tsx scripts/release/check-preview-acceptance.ts \
-  --input=/private/tmp/clodex-preview-2-acceptance-input.json \
-  --artifact-validation=/path/to/macos-arm64-1.16.0-preview.2.json \
-  --packaged-app=/path/to/Clodex.app \
-  --run-source-checks \
-  --allow-hold \
-  --output=/private/tmp/clodex-preview-2-acceptance-report.json
-```
+- positive draft GitHub Release database ID;
+- exact committed manifest path;
+- JSON object containing exactly the seven documented manual check IDs, each
+  set to `true`;
+- confirmation `ATTEST_ACCEPTANCE`.
 
-Automated checks cover:
+The workflow installs the exact released workspace, builds package
+prerequisites, installs Playwright Chromium, and runs the real Quick Task,
+task, browser, MCP, Guardian/egress, and session-recovery source checks. Artifact
+and distribution-trust checks come only from the attested aggregate publication
+report; the collector cannot synthesize them as passing.
 
-- exact source commit and clean worktree;
-- pinned Node.js and pnpm versions;
-- package validation manifest, packaged smoke, and clean-profile launch;
-- packaged application icon;
-- Developer ID, Gatekeeper, and notarization evidence;
-- green Quick Task visual regression;
-- task creation, controlled browser, MCP, Guardian/Egress, and session recovery
-  contracts.
+The older `check-preview-acceptance.ts` command is diagnostic only. Its local
+output is not trusted promotion evidence and must not be committed as if it
+were attested.
 
-An ad-hoc artifact may prove smoke and UI launch, but it cannot pass the
-`security.distribution-trust` gate.
+## Preview.2 rollback baseline
 
-## Manual acceptance
+Preview.2 may produce only `ready-as-rollback-baseline` evidence:
 
-Use a temporary profile only:
+- canary timestamps and installation observations are `null`;
+- no rollback target tag is claimed;
+- every automated and protected manual check passes;
+- the draft release and its asset set remain unchanged.
 
-```bash
-profile="$(mktemp -d)/profile"
-"/path/to/Clodex.app/Contents/MacOS/Clodex" \
-  --user-data-dir="$profile" \
-  --disable-gpu
-```
+Download the attested workflow artifact, verify it with `gh attestation
+verify`, and only then commit the exact bytes as
+`.release-evidence/v1.16.0-preview.2.json`. Preview.3 validation requires the
+attestation again and requires `refs/tags/v1.16.0-preview.2^{commit}` to resolve
+to the accepted source.
 
-Complete every manual matrix row:
+## Preview.3 canary — NOT_READY
 
-1. Dock or tray surface displays the current Clodex badge.
-2. Quick Task is green, creates a task, and opens it.
-3. Terminal executes `printf 'clodex-acceptance\n'` and closes normally.
-4. Controlled browser opens a local page without unrestricted egress.
-5. A local non-secret MCP fixture connects and exposes one safe tool.
-6. A guarded network action displays the expected Guardian/Egress prompt.
-7. After restart, the accepted task and its workspace state recover correctly.
+Preview.3 may be created only after the complete preview.2 chain passes. Its
+controlled distribution is intended for exactly five installations, but the
+repository does not yet have a trusted distribution/telemetry observation
+source. Therefore the protected collector deliberately rejects every
+preview.3 attempt with `stable promotion is NOT_READY`.
 
-The main user profile must not be used for release acceptance.
+Manual or workflow-dispatch JSON cannot become canary evidence. Before the
+preview.2 release starts, a separate observation producer must be implemented
+and independently reviewed. Its signed, manifest-bound receipt must identify
+the canonical repository, preview source/manifest/tag, distribution system,
+telemetry source, observation artifact digest, signer workflow and signer
+commit. Acceptance must verify that attestation independently before it may
+evaluate:
 
-## Canary-5
+- `startedAt` not earlier than the live release `created_at`;
+- non-null `endedAt`, not in the future;
+- authenticated `distributionClosedAt` at or after `endedAt`;
+- at least 24 hours between start and end;
+- at least ten launches, five authentication attempts, five guarded egress
+  prompts, and five recovery attempts;
+- zero authentication failures, crashes, crash loops, launch/recovery
+  failures, unexpected egress allows, missing prompts, data-loss incidents,
+  Guardian bypasses, and signature/trust failures.
 
-Run exactly five installations for at least 24 hours. Store only aggregate
-counts:
+The first authentication failure is an immediate stop condition. A sixth
+installation is also a stop condition. An operator assertion, open window, or
+incomplete receipt can never produce `ready-for-stable`.
 
-- launch attempts and failures;
-- crashes and crash loops;
-- authentication attempts and failures;
-- Guardian/Egress prompts, missing prompts, and unexpected allows;
-- restart/recovery attempts and failures;
-- data-loss, Guardian-bypass, and signature/trust incidents.
+Do not create or commit `.release-evidence/v1.16.0-preview.3.json` until that
+trusted observation path exists and the fail-closed blocker is intentionally
+replaced under independent review.
 
-Promotion requires:
+## Stable gate
 
-- five installations;
-- ten launches, five auth attempts, five egress prompts, and five recovery
-  attempts;
-- zero failures, crashes, unexpected allows, data-loss incidents, bypasses, or
-  trust failures;
-- a full 24-hour observation window.
+`.release-notes/clodex-stable.json` intentionally does not exist before real,
+fresh, attested preview.3 evidence. Stable promotion is additionally hard
+blocked while trusted canary observation status is `NOT_READY`. Auto Release
+requires the explicit
+`RELEASE_STABLE` confirmation and protected `Release` approval. It then
+live-revalidates preview.3 and preview.2, requires exact remote tags, and builds
+new stable artifacts; preview files are never renamed or promoted in place.
 
-Immediately stop the canary on any crash, launch failure, recovery failure,
-data loss, missing Guardian prompt, unexpected egress allow, Guardian bypass,
-signature/trust failure, or authentication failure rate above 20% after at
-least five attempts. A sixth installation is also a scope violation and stops
-the canary; the acceptance gate requires exactly five unique installations.
-
-## Rollback drill
-
-The harness emits these reviewable commands but never executes them:
-
-```bash
-export ROLLBACK_DIR="$(mktemp -d)"
-gh release view v1.16.0-preview.1 --json tagName,isPrerelease,assets
-gh release view v1.16.0-preview.2 --json tagName,isPrerelease,assets
-gh release download v1.16.0-preview.1 \
-  --pattern '*.dmg' \
-  --pattern '*.sha256' \
-  --dir "$ROLLBACK_DIR"
-shasum -a 256 -c "$ROLLBACK_DIR"/*.sha256
-```
-
-Incident-only distribution stop:
-
-```bash
-gh release edit v1.16.0-preview.2 --draft
-```
-
-Do not run the incident command during rehearsal. Electron updates are
-forward-only: stopping preview.2 protects users who have not upgraded, but an
-already-updated client requires a manual reinstall of preview.1 or a newer
-forward-fix build.
+Any product-code change after an accepted preview source invalidates the chain
+and restarts signing, acceptance, and canary from a new baseline.
