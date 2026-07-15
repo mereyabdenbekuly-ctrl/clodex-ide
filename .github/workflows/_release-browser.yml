@@ -16,10 +16,9 @@ on:
         type: string
         description: "Release channel (preview, alpha, beta, nightly, release)"
       ref:
-        required: false
+        required: true
         type: string
-        default: main
-        description: "Git ref to tag and release"
+        description: "Immutable 40-character commit SHA to tag, build, and release"
     secrets:
       NUCLEO_LICENSE_KEY:
         required: false
@@ -83,6 +82,16 @@ jobs:
               ;;
           esac
 
+      - name: Validate immutable release ref input
+        shell: bash
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+        run: |
+          if [[ ! "$RELEASE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release ref must be an immutable 40-character lowercase commit SHA"
+            exit 1
+          fi
+
       - name: Checkout release candidate
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -105,10 +114,12 @@ jobs:
           AZURE_ACCOUNT_NAME: ${{ secrets.AZURE_ACCOUNT_NAME }}
           AZURE_ACCOUNT_ENDPOINT_URI: ${{ secrets.AZURE_ACCOUNT_ENDPOINT_URI }}
           AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           UPDATE_SERVER_ORIGIN: ${{ vars.UPDATE_SERVER_ORIGIN }}
         run: >-
           node scripts/release/signing-readiness.mjs
           --artifacts=all
+          --channel=${{ inputs.channel }}
           --github-annotations
           --report=${{ runner.temp }}/release-signing-readiness.json
           --summary=${{ runner.temp }}/release-signing-readiness.md
@@ -287,7 +298,7 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     permissions:
-      contents: write
+      contents: read
 
     env:
       NODE_OPTIONS: "--max-old-space-size=8192"
@@ -312,7 +323,19 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Assert immutable release candidate checkout
+        shell: bash
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+        run: |
+          actual_ref=$(git rev-parse HEAD)
+          if [ "$actual_ref" != "$RELEASE_REF" ]; then
+            echo "::error::Release checkout mismatch: expected $RELEASE_REF, got $actual_ref"
+            exit 1
+          fi
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
@@ -510,6 +533,13 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout immutable release candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
@@ -526,6 +556,20 @@ jobs:
 
           echo "Release artifacts:"
           ls -la release/
+
+      - name: Re-assert immutable tag target before publication
+        shell: bash
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          actual_ref=$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")
+          if [ "$actual_ref" != "$RELEASE_REF" ]; then
+            echo "::error::Tag $RELEASE_TAG moved or targets the wrong commit: expected $RELEASE_REF, got $actual_ref"
+            exit 1
+          fi
 
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:

@@ -61,6 +61,17 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+export function assertTechnicalPreviewTagReusable({
+  existingTagCommit,
+  releaseRef,
+  tag,
+}) {
+  assert(
+    existingTagCommit === null || existingTagCommit === releaseRef,
+    `target tag ${tag} points to ${existingTagCommit}, expected ${releaseRef}`,
+  );
+}
+
 function validatePlan(plan, options) {
   assert(plan.schemaVersion === 1, 'schemaVersion must be 1');
   assert(
@@ -179,12 +190,14 @@ function validatePlan(plan, options) {
 
   const releaseRef = git(['rev-parse', 'HEAD']);
   if (options.requireNewTag) {
-    assert(
-      git(['rev-parse', '--verify', `refs/tags/${plan.tag}`], {
-        allowFailure: true,
-      }) === null,
-      `target tag already exists: ${plan.tag}`,
-    );
+    const existingTag = git(['rev-list', '-n', '1', plan.tag], {
+      allowFailure: true,
+    });
+    assertTechnicalPreviewTagReusable({
+      existingTagCommit: existingTag,
+      releaseRef,
+      tag: plan.tag,
+    });
   }
   if (options.requireRollbackTag) {
     assert(
@@ -235,11 +248,17 @@ function main() {
   console.log(JSON.stringify(result, null, 2));
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(
-    `[technical-preview-plan] ${error instanceof Error ? error.message : error}`,
-  );
-  process.exit(1);
+const isEntryPoint =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) ===
+    path.resolve(fileURLToPath(import.meta.url));
+if (isEntryPoint) {
+  try {
+    main();
+  } catch (error) {
+    console.error(
+      `[technical-preview-plan] ${error instanceof Error ? error.message : error}`,
+    );
+    process.exit(1);
+  }
 }

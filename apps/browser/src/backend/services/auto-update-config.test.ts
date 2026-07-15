@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildUpdateFeedURL,
   inferPrereleaseUpdateChannel,
+  isTechnicalPreviewVersion,
   resolveUpdateArchitecture,
   resolveUpdateChannel,
   resolveUpdatePlatform,
@@ -40,6 +41,38 @@ describe('auto-update config', () => {
         preference: 'beta',
       }),
     ).toBe('beta');
+  });
+
+  it('fails closed instead of routing technical previews to beta', () => {
+    expect(isTechnicalPreviewVersion('1.16.0-preview.2')).toBe(true);
+    expect(isTechnicalPreviewVersion('1.16.0-beta002')).toBe(false);
+    expect(inferPrereleaseUpdateChannel('1.16.0-preview.2')).toBeNull();
+    expect(
+      resolveUpdateChannel({
+        releaseChannel: 'prerelease',
+        version: '1.16.0-preview.2',
+        preference: 'beta',
+      }),
+    ).toBeNull();
+    expect(
+      buildUpdateFeedURL({
+        origin: 'https://updates.clodex.xyz',
+        releaseChannel: 'prerelease',
+        version: '1.16.0-preview.2',
+        platform: 'darwin',
+        architecture: 'arm64',
+      }),
+    ).toBeNull();
+    expect(
+      buildUpdateFeedURL({
+        origin: 'https://updates.clodex.xyz',
+        releaseChannel: 'prerelease',
+        version: '1.16.0-preview.2',
+        platform: 'win32',
+        architecture: 'x64',
+        preference: 'beta',
+      }),
+    ).toBeNull();
   });
 
   it('builds a canonical encoded feed URL without duplicate slashes', () => {

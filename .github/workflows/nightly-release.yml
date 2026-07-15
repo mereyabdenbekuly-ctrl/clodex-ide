@@ -79,6 +79,7 @@ jobs:
     permissions:
       contents: read
     outputs:
+      release_ref: ${{ steps.version.outputs.release_ref }}
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
 
@@ -120,6 +121,7 @@ jobs:
             ARGS+=(--counter "$NIGHTLY_COUNTER")
           fi
           pnpm tsx scripts/release/nightly-version.ts "${ARGS[@]}" >> "$GITHUB_OUTPUT"
+          echo "release_ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   release-nightly:
     name: Release nightly
@@ -132,5 +134,5 @@ jobs:
       version: ${{ needs.version.outputs.version }}
       tag: ${{ needs.version.outputs.tag }}
       channel: nightly
-      ref: ${{ inputs.ref || 'main' }}
+      ref: ${{ needs.version.outputs.release_ref }}
     secrets: inherit

@@ -6,6 +6,7 @@ import type {
 } from '@electron-forge/shared-types';
 import path from 'node:path';
 import fs from 'node:fs';
+import { toSquirrelInternalVersion } from '../squirrel-version.mjs';
 
 /**
  * Configuration options for the Squirrel installer name fix plugin.
@@ -40,6 +41,7 @@ export class SquirrelInstallerNameFixPlugin extends PluginBase<SquirrelInstaller
     postMake: ForgeHookFn<'postMake'>;
   } {
     const { appBaseName, version } = this.config;
+    const internalVersion = toSquirrelInternalVersion(version);
 
     return {
       postMake: async (
@@ -96,6 +98,15 @@ export class SquirrelInstallerNameFixPlugin extends PluginBase<SquirrelInstaller
           // Find the original nupkg filename for updating RELEASES
           const nupkgFile = files.find((f) => f.endsWith('-full.nupkg'));
           const newNupkgName = `${appBaseName}-${version}-${arch}-full.nupkg`;
+
+          if (
+            nupkgFile &&
+            !nupkgFile.endsWith(`-${internalVersion}-full.nupkg`)
+          ) {
+            throw new Error(
+              `[squirrel-installer-name-fix] Unexpected internal nupkg version: ${nupkgFile}; expected ${internalVersion}`,
+            );
+          }
 
           // Step 1: Rename and move nupkg file first (gets unique arch-specific name)
           if (nupkgFile) {

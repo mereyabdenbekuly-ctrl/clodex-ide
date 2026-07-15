@@ -12,6 +12,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import yauzl from 'yauzl';
+import { toSquirrelInternalVersion } from '../etc/squirrel-version.mjs';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const browserDirectory = path.resolve(scriptDirectory, '..');
@@ -327,11 +328,13 @@ async function validateWindows({
     );
   }
 
-  const nupkg = await inspectNupkg(nupkgPath, baseName, version);
+  const internalVersion = toSquirrelInternalVersion(version);
+  const nupkg = await inspectNupkg(nupkgPath, baseName, internalVersion);
   return {
     artifacts: [setupPath, nupkgPath, releasesPath],
     checks: {
       nupkg,
+      squirrelInternalVersion: internalVersion,
       packagedExecutableAuthenticode: verifyAuthenticode(
         packagedExecutable,
         allowUnsigned,

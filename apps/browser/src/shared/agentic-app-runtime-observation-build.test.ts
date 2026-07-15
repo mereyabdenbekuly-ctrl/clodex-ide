@@ -20,6 +20,19 @@ describe('Agentic App Runtime observation build', () => {
     });
   });
 
+  it('accepts the explicit technical-preview version with telemetry configured', () => {
+    expect(
+      assertAgenticAppRuntimeObservationBuildReady({
+        releaseChannel: 'prerelease',
+        appVersion: '1.16.0-preview.2',
+        posthogApiKey: 'phc_test',
+      }),
+    ).toMatchObject({
+      releaseChannel: 'prerelease',
+      appVersion: '1.16.0-preview.2',
+    });
+  });
+
   it('rejects stable channels, malformed versions and missing ingestion', () => {
     expect(() =>
       assertAgenticAppRuntimeObservationBuildReady({
@@ -34,7 +47,14 @@ describe('Agentic App Runtime observation build', () => {
         appVersion: '1.16.1-alpha1',
         posthogApiKey: 'phc_test',
       }),
-    ).toThrow('alphaNNN or betaNNN');
+    ).toThrow('alphaNNN, betaNNN, or the explicit preview.N');
+    expect(() =>
+      assertAgenticAppRuntimeObservationBuildReady({
+        releaseChannel: 'prerelease',
+        appVersion: '1.16.1-rc.1',
+        posthogApiKey: 'phc_test',
+      }),
+    ).toThrow('alphaNNN, betaNNN, or the explicit preview.N');
     expect(() =>
       assertAgenticAppRuntimeObservationBuildReady({
         releaseChannel: 'prerelease',

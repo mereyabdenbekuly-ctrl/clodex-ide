@@ -240,7 +240,7 @@ export class AutoUpdateService extends DisposableService {
    * Infer the default update channel from the installed version string.
    * e.g. "1.0.0-alpha003" → 'alpha', "1.0.0-beta001" → 'beta'
    */
-  private inferChannelFromVersion(): UpdateChannel {
+  private inferChannelFromVersion(): UpdateChannel | null {
     return inferPrereleaseUpdateChannel(__APP_VERSION__);
   }
 
@@ -249,14 +249,14 @@ export class AutoUpdateService extends DisposableService {
    * For release builds, always use 'release'.
    * For prerelease builds, use the user's configured channel or infer from version.
    */
-  private getReleaseChannel(): string {
+  private getReleaseChannel(): string | null {
     const prefs = this.preferencesService.get();
     return resolveUpdateChannel({
       releaseChannel: __APP_RELEASE_CHANNEL__,
       version: __APP_VERSION__,
       preference:
         __APP_RELEASE_CHANNEL__ === 'prerelease'
-          ? (prefs.updateChannel ?? this.inferChannelFromVersion())
+          ? (prefs.updateChannel ?? this.inferChannelFromVersion() ?? undefined)
           : undefined,
     });
   }
@@ -275,7 +275,7 @@ export class AutoUpdateService extends DisposableService {
     });
     if (!feedURL) {
       this.logger.warn(
-        '[AutoUpdateService] UPDATE_SERVER_ORIGIN is missing or invalid',
+        '[AutoUpdateService] Auto-update feed is unavailable for this build or UPDATE_SERVER_ORIGIN is missing or invalid',
       );
       return null;
     }

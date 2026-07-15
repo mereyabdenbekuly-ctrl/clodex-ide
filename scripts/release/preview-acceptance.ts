@@ -922,8 +922,27 @@ function hoursBetween(startedAt: string, endedAt: string): number {
   );
 }
 
+function resolveCanaryObservationEnd(
+  metrics: CanaryMetrics,
+  now: Date,
+): string {
+  const nowMs = now.getTime();
+  const startedAtMs = new Date(metrics.startedAt).getTime();
+  const endedAt = metrics.endedAt ?? now.toISOString();
+  const endedAtMs = new Date(endedAt).getTime();
+
+  if (Number.isNaN(nowMs) || startedAtMs > endedAtMs || endedAtMs > nowMs) {
+    throw new Error('acceptance-canary-window-invalid');
+  }
+
+  return endedAt;
+}
+
 export function getCanaryStopReasons(metrics: CanaryMetrics): string[] {
   const reasons: string[] = [];
+  if (metrics.uniqueInstallations > CANARY_5_POLICY.targetInstallations) {
+    reasons.push('canary-installation-scope-exceeded');
+  }
   if (metrics.signatureTrustFailures > 0)
     reasons.push('signature-trust-failure');
   if (metrics.guardianBypassIncidents > 0) reasons.push('guardian-bypass');
@@ -950,8 +969,7 @@ function canaryMeetsExitCriteria(
 ): boolean {
   return (
     observedHours >= CANARY_5_POLICY.targetObservationHours &&
-    metrics.uniqueInstallations >=
-      CANARY_5_POLICY.minimum.uniqueInstallations &&
+    metrics.uniqueInstallations === CANARY_5_POLICY.targetInstallations &&
     metrics.launchAttempts >= CANARY_5_POLICY.minimum.launchAttempts &&
     metrics.launchFailures === 0 &&
     metrics.crashes === 0 &&
@@ -1008,7 +1026,9 @@ export function evaluatePreviewAcceptance(
   }
 
   const canary = input.canary;
-  const endedAt = canary?.endedAt ?? now.toISOString();
+  const endedAt = canary
+    ? resolveCanaryObservationEnd(canary, now)
+    : now.toISOString();
   const observedHours = canary
     ? Math.max(0, hoursBetween(canary.startedAt, endedAt))
     : null;
@@ -1126,7 +1146,9 @@ function validateCanaryMetrics(value: unknown): asserts value is CanaryMetrics {
     Number.isNaN(new Date(value.startedAt).getTime()) ||
     (value.endedAt !== null &&
       (typeof value.endedAt !== 'string' ||
-        Number.isNaN(new Date(value.endedAt).getTime())))
+        Number.isNaN(new Date(value.endedAt).getTime()))) ||
+    (typeof value.endedAt === 'string' &&
+      new Date(value.endedAt).getTime() < new Date(value.startedAt).getTime())
   ) {
     throw new Error('acceptance-canary-window-invalid');
   }

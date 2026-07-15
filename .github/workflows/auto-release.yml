@@ -42,6 +42,8 @@ jobs:
 
       - name: Check package versions against tags
         id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           check_package() {
             local name="$1"
@@ -65,11 +67,28 @@ jobs:
 
             echo "Checking ${name}: previous=${previous_version:-none}, version=${version}, expected tag=${tag}"
 
-            if [ -n "$previous_version" ] && [ "$previous_version" = "$version" ]; then
-              echo "  ✅ Version unchanged — no release requested"
-              echo "${name}_needs_release=false" >> $GITHUB_OUTPUT
-            elif git rev-parse "refs/tags/${tag}" >/dev/null 2>&1; then
-              echo "  ✅ Tag exists — already released"
+            if git rev-parse "refs/tags/${tag}" >/dev/null 2>&1; then
+              local release_state
+              if ! release_state=$(node scripts/release/github-release-state.mjs --tag="${tag}"); then
+                echo "::error::Unable to determine whether GitHub Release ${tag} exists"
+                return 1
+              fi
+              case "$release_state" in
+                exists)
+                  echo "  ✅ Tag and GitHub Release exist — already released"
+                  echo "${name}_needs_release=false" >> $GITHUB_OUTPUT
+                  ;;
+                absent)
+                  echo "  🚀 Tag exists without a GitHub Release — retrying immutable release"
+                  echo "${name}_needs_release=true" >> $GITHUB_OUTPUT
+                  ;;
+                *)
+                  echo "::error::Unexpected GitHub Release state for ${tag}: ${release_state}"
+                  return 1
+                  ;;
+              esac
+            elif [ -n "$previous_version" ] && [ "$previous_version" = "$version" ]; then
+              echo "  ✅ Version unchanged and no poisoned tag exists — no release requested"
               echo "${name}_needs_release=false" >> $GITHUB_OUTPUT
             else
               echo "  🚀 Tag missing — needs release"

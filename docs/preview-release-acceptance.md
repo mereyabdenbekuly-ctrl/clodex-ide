@@ -111,7 +111,8 @@ Promotion requires:
 Immediately stop the canary on any crash, launch failure, recovery failure,
 data loss, missing Guardian prompt, unexpected egress allow, Guardian bypass,
 signature/trust failure, or authentication failure rate above 20% after at
-least five attempts.
+least five attempts. A sixth installation is also a scope violation and stops
+the canary; the acceptance gate requires exactly five unique installations.
 
 ## Rollback drill
 
