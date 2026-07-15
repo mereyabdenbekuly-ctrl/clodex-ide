@@ -200,7 +200,7 @@
     "electron": "40.10.3",
     "electron-context-menu": "^4.1.2",
     "electron-devtools-installer": "^4.0.0",
-    "esbuild": "^0.27.2",
+    "esbuild": "^0.28.1",
     "ignore": "^6.0.2",
     "javascript-time-ago": "^2.6.4",
     "lucide-react": "^0.554.0",

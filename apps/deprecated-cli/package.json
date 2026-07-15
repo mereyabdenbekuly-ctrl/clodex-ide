@@ -19,6 +19,6 @@
   },
   "deprecated": "clodex CLI has been deprecated. Download the desktop app at https://ide.clodex.xyz/download",
   "devDependencies": {
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.28.1"
   }
 }
