@@ -450,6 +450,7 @@ static void capture_directory_state(
   int root_fd,
   const struct stat *root_metadata,
   const char *path,
+  struct stat *captured_metadata,
   char output[65]
 ) {
   const int descriptor = confined_openat2(
@@ -470,6 +471,7 @@ static void capture_directory_state(
     close_quietly(descriptor);
     fail_with("STATE", "not-directory");
   }
+  *captured_metadata = metadata;
   build_directory_commitment(root_metadata, path, &metadata, output);
   close_quietly(descriptor);
 }
@@ -616,15 +618,39 @@ static void execute_create(
     close_quietly(parent.fd);
     fail_errno("IO");
   }
+  struct stat created_metadata;
+  struct stat committed_parent_entry;
+  if (
+    fstat(destination, &created_metadata) < 0 ||
+    !S_ISREG(created_metadata.st_mode) || created_metadata.st_nlink != 1U ||
+    fstatat(
+      parent.fd,
+      parent.basename,
+      &committed_parent_entry,
+      AT_SYMLINK_NOFOLLOW
+    ) < 0 ||
+    committed_parent_entry.st_dev != created_metadata.st_dev ||
+    committed_parent_entry.st_ino != created_metadata.st_ino ||
+    !S_ISREG(committed_parent_entry.st_mode) ||
+    committed_parent_entry.st_nlink != 1U
+  ) {
+    close_quietly(destination);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "create-parent-drift");
+  }
   close_quietly(destination);
   sync_parent(&parent);
   close_quietly(parent.fd);
 
   struct file_snapshot post = { .fd = -1 };
   capture_file_state(root_fd, root_metadata, path, &post);
-  if (strcmp(post.content_sha256, content_sha256) != 0) {
+  if (
+    post.metadata.st_dev != created_metadata.st_dev ||
+    post.metadata.st_ino != created_metadata.st_ino ||
+    strcmp(post.content_sha256, content_sha256) != 0
+  ) {
     close_quietly(post.fd);
-    fail_with("STATE", "post-content");
+    fail_with("STATE", "post-create");
   }
   close_quietly(post.fd);
   (void)printf("OK\t%s\t%s\n", pre_commitment, post.commitment);
@@ -660,7 +686,13 @@ static void execute_mkdir(
     parent.basename,
     O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
   );
-  if (created_directory < 0 || fsync(created_directory) < 0) {
+  struct stat created_metadata;
+  if (
+    created_directory < 0 ||
+    fstat(created_directory, &created_metadata) < 0 ||
+    !S_ISDIR(created_metadata.st_mode) ||
+    fsync(created_directory) < 0
+  ) {
     close_quietly(created_directory);
     close_quietly(parent.fd);
     fail_errno("IO");
@@ -670,12 +702,20 @@ static void execute_mkdir(
   close_quietly(parent.fd);
 
   char post_commitment[65];
+  struct stat post_metadata;
   capture_directory_state(
     root_fd,
     root_metadata,
     path,
+    &post_metadata,
     post_commitment
   );
+  if (
+    post_metadata.st_dev != created_metadata.st_dev ||
+    post_metadata.st_ino != created_metadata.st_ino
+  ) {
+    fail_with("UNCERTAIN", "mkdir-parent-drift");
+  }
   (void)printf("OK\t%s\t%s\n", pre_commitment, post_commitment);
 }
 
