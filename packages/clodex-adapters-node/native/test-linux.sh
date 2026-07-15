@@ -152,20 +152,22 @@ grep -qx $'ERR\tSTATE\tcommitment' "$failure_stderr" || \
   fail 'stale create commitment returned an invalid error record'
 [[ ! -e "$root/rejected.txt" ]] || fail 'stale create commitment mutated the root'
 
+swap_preload="$temporary_directory/parent-swap-preload.so"
+cc -std=c17 -O2 -fPIC -shared -Wall -Wextra -Wconversion -Werror \
+  -Wformat=2 -Wshadow -Wstrict-prototypes \
+  "$script_directory/tests/parent-swap-preload.c" -ldl -o "$swap_preload"
+
 swap_left="$root/swap-left"
 swap_right="$root/swap-right"
 mkdir -m 700 "$swap_left" "$swap_right"
 swap_pre="$(
   parse_one_digest "$(invoke inspect-create swap-left/created.txt - - - 0)"
 )"
-swap_preload="$temporary_directory/parent-swap-preload.so"
-cc -std=c17 -O2 -fPIC -shared -Wall -Wextra -Wconversion -Werror \
-  -Wformat=2 -Wshadow -Wstrict-prototypes \
-  "$script_directory/tests/parent-swap-preload.c" -ldl -o "$swap_preload"
 set +e
 CLODEX_TEST_SWAP_LEFT="$swap_left" \
   CLODEX_TEST_SWAP_RIGHT="$swap_right" \
-  CLODEX_TEST_SWAP_TRIGGER='swap-left/created.txt' \
+  CLODEX_TEST_SWAP_ACTION='exchange-before-open' \
+  CLODEX_TEST_SWAP_TRIGGER='created.txt' \
   LD_PRELOAD="$swap_preload" \
   "$helper" --protocol-v1 execute-create "$device" "$inode" \
     swap-left/created.txt "$swap_pre" - "$create_digest" "$create_bytes" \
@@ -174,12 +176,42 @@ exit_code=$?
 set -e
 [[ "$exit_code" -eq 20 ]] || \
   fail 'parent exchange was not classified as an uncertain post-effect failure'
-grep -qx $'ERR\tUNCERTAIN\tcreate-parent-drift' "$failure_stderr" || \
+grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
   fail 'parent exchange returned an invalid uncertainty record'
-cmp -s "$create_input" "$swap_left/created.txt" || \
-  fail 'root-anchored create did not remain beneath the held workspace root'
-[[ ! -e "$swap_right/created.txt" ]] || \
-  fail 'parent exchange unexpectedly mutated the committed parent inode'
+[[ ! -s "$failure_stdout" ]] || fail 'parent exchange returned false success'
+cmp -s "$create_input" "$swap_right/created.txt" || \
+  fail 'create did not stay relative to the originally captured parent'
+[[ ! -e "$swap_left/created.txt" ]] || \
+  fail 'create followed the exchanged visible parent path'
+
+move_create_left="$root/move-create-left"
+move_create_right="$root/move-create-right"
+mkdir -m 700 "$move_create_left" "$move_create_right"
+move_create_pre="$(
+  parse_one_digest "$(invoke inspect-create move-create-left/created.txt - - - 0)"
+)"
+set +e
+CLODEX_TEST_SWAP_LEFT="$move_create_left" \
+  CLODEX_TEST_SWAP_RIGHT="$move_create_right" \
+  CLODEX_TEST_SWAP_ACTION='move-created-then-exchange' \
+  CLODEX_TEST_SWAP_ENTRY='created.txt' \
+  LD_PRELOAD="$swap_preload" \
+  "$helper" --protocol-v1 execute-create "$device" "$inode" \
+    move-create-left/created.txt "$move_create_pre" - \
+    "$create_digest" "$create_bytes" \
+    <"$create_input" >"$failure_stdout" 2>"$failure_stderr"
+exit_code=$?
+set -e
+[[ "$exit_code" -eq 20 ]] || \
+  fail 'move-then-exchange create did not fail uncertain'
+grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
+  fail 'move-then-exchange create returned an invalid uncertainty record'
+[[ ! -s "$failure_stdout" ]] || \
+  fail 'move-then-exchange create returned false success'
+cmp -s "$create_input" "$move_create_left/created.txt" || \
+  fail 'move-then-exchange create did not expose the moved inode'
+[[ ! -e "$move_create_right/created.txt" ]] || \
+  fail 'move-then-exchange create left the inode in the captured parent'
 
 mkdir_pre="$(parse_one_digest "$(invoke inspect-mkdir build - - - 0)")"
 mkdir_output="$(invoke execute-mkdir build "$mkdir_pre" - - 0)"
@@ -202,7 +234,8 @@ mkdir_swap_pre="$(
 set +e
 CLODEX_TEST_SWAP_LEFT="$mkdir_swap_left" \
   CLODEX_TEST_SWAP_RIGHT="$mkdir_swap_right" \
-  CLODEX_TEST_SWAP_TRIGGER='mkdir-swap-left/created' \
+  CLODEX_TEST_SWAP_ACTION='exchange-after-create' \
+  CLODEX_TEST_SWAP_ENTRY='created' \
   LD_PRELOAD="$swap_preload" \
   "$helper" --protocol-v1 execute-mkdir "$device" "$inode" \
     mkdir-swap-left/created "$mkdir_swap_pre" - - 0 \
@@ -211,12 +244,41 @@ exit_code=$?
 set -e
 [[ "$exit_code" -eq 20 ]] || \
   fail 'mkdir parent exchange was not classified as uncertain'
-grep -qx $'ERR\tUNCERTAIN\tmkdir-parent-drift' "$failure_stderr" || \
+grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
   fail 'mkdir parent exchange returned an invalid uncertainty record'
+[[ ! -s "$failure_stdout" ]] || fail 'mkdir parent exchange returned false success'
 [[ "$(stat -c '%i' "$mkdir_swap_left/created")" == "$decoy_inode" ]] || \
   fail 'mkdir post-state did not expose the replacement-parent decoy'
 [[ -d "$mkdir_swap_right/created" ]] || \
   fail 'mkdir effect was not retained by the originally captured parent'
+
+move_mkdir_left="$root/move-mkdir-left"
+move_mkdir_right="$root/move-mkdir-right"
+mkdir -m 700 "$move_mkdir_left" "$move_mkdir_right"
+move_mkdir_pre="$(
+  parse_one_digest "$(invoke inspect-mkdir move-mkdir-left/created - - - 0)"
+)"
+set +e
+CLODEX_TEST_SWAP_LEFT="$move_mkdir_left" \
+  CLODEX_TEST_SWAP_RIGHT="$move_mkdir_right" \
+  CLODEX_TEST_SWAP_ACTION='move-created-then-exchange' \
+  CLODEX_TEST_SWAP_ENTRY='created' \
+  LD_PRELOAD="$swap_preload" \
+  "$helper" --protocol-v1 execute-mkdir "$device" "$inode" \
+    move-mkdir-left/created "$move_mkdir_pre" - - 0 \
+    >"$failure_stdout" 2>"$failure_stderr"
+exit_code=$?
+set -e
+[[ "$exit_code" -eq 20 ]] || \
+  fail 'move-then-exchange mkdir did not fail uncertain'
+grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
+  fail 'move-then-exchange mkdir returned an invalid uncertainty record'
+[[ ! -s "$failure_stdout" ]] || \
+  fail 'move-then-exchange mkdir returned false success'
+[[ -d "$move_mkdir_left/created" ]] || \
+  fail 'move-then-exchange mkdir did not expose the moved inode'
+[[ ! -e "$move_mkdir_right/created" ]] || \
+  fail 'move-then-exchange mkdir left the inode in the captured parent'
 
 replace_inspect="$(invoke inspect-replace created.txt - "$create_digest" - 0)"
 IFS=$'\t' read -r replace_status replace_pre returned_before replace_extra \

@@ -46,6 +46,7 @@ struct file_snapshot {
 
 struct parent_reference {
   int fd;
+  char selector[MAX_SELECTOR_BYTES + 1U];
   char basename[NAME_MAX + 1U];
   struct stat metadata;
 };
@@ -188,6 +189,16 @@ static bool stable_exchange_file_semantics(
     left->st_size == right->st_size &&
     left->st_mtim.tv_sec == right->st_mtim.tv_sec &&
     left->st_mtim.tv_nsec == right->st_mtim.tv_nsec;
+}
+
+static bool same_identity_type_and_link_count(
+  const struct stat *captured,
+  const struct stat *observed
+) {
+  return captured->st_dev == observed->st_dev &&
+    captured->st_ino == observed->st_ino &&
+    (captured->st_mode & S_IFMT) == (observed->st_mode & S_IFMT) &&
+    captured->st_nlink == observed->st_nlink;
 }
 
 static int confined_openat2(
@@ -339,24 +350,21 @@ static void open_parent_reference(
   memcpy(result->basename, basename, basename_length + 1U);
 
   if (separator == NULL) {
+    memcpy(result->selector, ".", 2U);
     result->fd = fcntl(root_fd, F_DUPFD_CLOEXEC, 5);
   } else {
     const size_t parent_length = (size_t)(separator - path);
-    char *parent_path = malloc(parent_length + 1U);
-    if (parent_path == NULL) {
-      fail_errno("IO");
+    if (parent_length > MAX_SELECTOR_BYTES) {
+      fail_with("ARGUMENT", "parent");
     }
-    memcpy(parent_path, path, parent_length);
-    parent_path[parent_length] = '\0';
+    memcpy(result->selector, path, parent_length);
+    result->selector[parent_length] = '\0';
     result->fd = confined_openat2(
       root_fd,
-      parent_path,
+      result->selector,
       (uint64_t)(O_RDONLY | O_DIRECTORY | O_CLOEXEC),
       0U
     );
-    const int saved_errno = errno;
-    free(parent_path);
-    errno = saved_errno;
   }
   if (result->fd < 0) {
     fail_errno(errno == ENOSYS ? "UNSUPPORTED" : "RESOLUTION");
@@ -367,6 +375,33 @@ static void open_parent_reference(
   if (!S_ISDIR(result->metadata.st_mode)) {
     fail_with("RESOLUTION", "parent");
   }
+}
+
+static int reopen_verified_parent(
+  int root_fd,
+  const struct parent_reference *authorized_parent,
+  const char *failure_detail
+) {
+  const int visible_parent = confined_openat2(
+    root_fd,
+    authorized_parent->selector,
+    (uint64_t)(O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW),
+    0U
+  );
+  if (visible_parent < 0) {
+    fail_with("UNCERTAIN", failure_detail);
+  }
+  struct stat visible_metadata;
+  if (
+    fstat(visible_parent, &visible_metadata) < 0 ||
+    !S_ISDIR(visible_metadata.st_mode) ||
+    visible_metadata.st_dev != authorized_parent->metadata.st_dev ||
+    visible_metadata.st_ino != authorized_parent->metadata.st_ino
+  ) {
+    close_quietly(visible_parent);
+    fail_with("UNCERTAIN", failure_detail);
+  }
+  return visible_parent;
 }
 
 static void capture_absent_state(
@@ -403,21 +438,11 @@ static void capture_absent_state(
   finish_hex(&hash, output);
 }
 
-static void capture_file_state(
-  int root_fd,
+static void capture_open_file_state(
   const struct stat *root_metadata,
   const char *path,
   struct file_snapshot *snapshot
 ) {
-  snapshot->fd = confined_openat2(
-    root_fd,
-    path,
-    (uint64_t)(O_RDONLY | O_CLOEXEC | O_NOFOLLOW),
-    0U
-  );
-  if (snapshot->fd < 0) {
-    fail_errno(errno == ENOSYS ? "UNSUPPORTED" : "RESOLUTION");
-  }
   struct stat before;
   if (fstat(snapshot->fd, &before) < 0) {
     fail_errno("IO");
@@ -446,34 +471,22 @@ static void capture_file_state(
   );
 }
 
-static void capture_directory_state(
+static void capture_file_state(
   int root_fd,
   const struct stat *root_metadata,
   const char *path,
-  struct stat *captured_metadata,
-  char output[65]
+  struct file_snapshot *snapshot
 ) {
-  const int descriptor = confined_openat2(
+  snapshot->fd = confined_openat2(
     root_fd,
     path,
-    (uint64_t)(O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW),
+    (uint64_t)(O_RDONLY | O_CLOEXEC | O_NOFOLLOW),
     0U
   );
-  if (descriptor < 0) {
+  if (snapshot->fd < 0) {
     fail_errno(errno == ENOSYS ? "UNSUPPORTED" : "RESOLUTION");
   }
-  struct stat metadata;
-  if (fstat(descriptor, &metadata) < 0) {
-    close_quietly(descriptor);
-    fail_errno("IO");
-  }
-  if (!S_ISDIR(metadata.st_mode)) {
-    close_quietly(descriptor);
-    fail_with("STATE", "not-directory");
-  }
-  *captured_metadata = metadata;
-  build_directory_commitment(root_metadata, path, &metadata, output);
-  close_quietly(descriptor);
+  capture_open_file_state(root_metadata, path, snapshot);
 }
 
 static void write_exact_stdin(
@@ -603,8 +616,8 @@ static void execute_create(
 
   effect_started = true;
   const int destination = confined_openat2(
-    root_fd,
-    path,
+    parent.fd,
+    parent.basename,
     (uint64_t)(O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW),
     0600U
   );
@@ -638,21 +651,49 @@ static void execute_create(
     close_quietly(parent.fd);
     fail_with("UNCERTAIN", "create-parent-drift");
   }
-  close_quietly(destination);
   sync_parent(&parent);
-  close_quietly(parent.fd);
 
+  const int visible_parent = reopen_verified_parent(
+    root_fd,
+    &parent,
+    "create-final-parent-drift"
+  );
   struct file_snapshot post = { .fd = -1 };
-  capture_file_state(root_fd, root_metadata, path, &post);
+  post.fd = confined_openat2(
+    visible_parent,
+    parent.basename,
+    (uint64_t)(O_RDONLY | O_CLOEXEC | O_NOFOLLOW),
+    0U
+  );
+  if (post.fd < 0) {
+    close_quietly(visible_parent);
+    close_quietly(destination);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "create-final-child-resolution");
+  }
+  capture_open_file_state(root_metadata, path, &post);
+  struct stat held_created_metadata;
   if (
-    post.metadata.st_dev != created_metadata.st_dev ||
-    post.metadata.st_ino != created_metadata.st_ino ||
+    fstat(destination, &held_created_metadata) < 0 ||
+    !S_ISREG(held_created_metadata.st_mode) ||
+    held_created_metadata.st_nlink != 1U ||
+    !same_identity_type_and_link_count(
+      &created_metadata,
+      &held_created_metadata
+    ) ||
+    !same_identity_type_and_link_count(&created_metadata, &post.metadata) ||
     strcmp(post.content_sha256, content_sha256) != 0
   ) {
     close_quietly(post.fd);
-    fail_with("STATE", "post-create");
+    close_quietly(visible_parent);
+    close_quietly(destination);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "create-final-child-drift");
   }
   close_quietly(post.fd);
+  close_quietly(visible_parent);
+  close_quietly(destination);
+  close_quietly(parent.fd);
   (void)printf("OK\t%s\t%s\n", pre_commitment, post.commitment);
 }
 
@@ -697,25 +738,55 @@ static void execute_mkdir(
     close_quietly(parent.fd);
     fail_errno("IO");
   }
-  close_quietly(created_directory);
   sync_parent(&parent);
-  close_quietly(parent.fd);
 
-  char post_commitment[65];
-  struct stat post_metadata;
-  capture_directory_state(
+  const int visible_parent = reopen_verified_parent(
     root_fd,
+    &parent,
+    "mkdir-final-parent-drift"
+  );
+  const int visible_directory = confined_openat2(
+    visible_parent,
+    parent.basename,
+    (uint64_t)(O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW),
+    0U
+  );
+  if (visible_directory < 0) {
+    close_quietly(visible_parent);
+    close_quietly(created_directory);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "mkdir-final-child-resolution");
+  }
+  char post_commitment[65];
+  struct stat held_created_metadata;
+  struct stat post_metadata;
+  if (
+    fstat(created_directory, &held_created_metadata) < 0 ||
+    fstat(visible_directory, &post_metadata) < 0 ||
+    !S_ISDIR(held_created_metadata.st_mode) ||
+    !S_ISDIR(post_metadata.st_mode) ||
+    !same_identity_type_and_link_count(
+      &created_metadata,
+      &held_created_metadata
+    ) ||
+    !same_identity_type_and_link_count(&created_metadata, &post_metadata)
+  ) {
+    close_quietly(visible_directory);
+    close_quietly(visible_parent);
+    close_quietly(created_directory);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "mkdir-final-child-drift");
+  }
+  build_directory_commitment(
     root_metadata,
     path,
     &post_metadata,
     post_commitment
   );
-  if (
-    post_metadata.st_dev != created_metadata.st_dev ||
-    post_metadata.st_ino != created_metadata.st_ino
-  ) {
-    fail_with("UNCERTAIN", "mkdir-parent-drift");
-  }
+  close_quietly(visible_directory);
+  close_quietly(visible_parent);
+  close_quietly(created_directory);
+  close_quietly(parent.fd);
   (void)printf("OK\t%s\t%s\n", pre_commitment, post_commitment);
 }
 

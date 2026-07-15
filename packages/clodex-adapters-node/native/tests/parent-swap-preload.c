@@ -4,10 +4,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fs.h>
+#include <linux/openat2.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -25,20 +29,18 @@ __attribute__((constructor)) static void resolve_next_syscall(void) {
   }
 }
 
-static void exchange_test_directories(const char *openat2_path) {
-  const char *left = getenv("CLODEX_TEST_SWAP_LEFT");
-  const char *right = getenv("CLODEX_TEST_SWAP_RIGHT");
-  const char *trigger = getenv("CLODEX_TEST_SWAP_TRIGGER");
-  if (
-    left == NULL || *left == '\0' || right == NULL || *right == '\0' ||
-    trigger == NULL || *trigger == '\0' || openat2_path == NULL
-  ) {
-    _exit(126);
+static void build_entry_path(
+  char output[PATH_MAX],
+  const char *directory,
+  const char *entry
+) {
+  const int length = snprintf(output, PATH_MAX, "%s/%s", directory, entry);
+  if (length < 0 || (size_t)length >= PATH_MAX) {
+    _exit(127);
   }
-  if (exchanged || strcmp(openat2_path, trigger) != 0) {
-    return;
-  }
-  exchanged = true;
+}
+
+static void exchange_test_directories(const char *left, const char *right) {
   if (
     next_syscall(
       SYS_renameat2,
@@ -49,8 +51,103 @@ static void exchange_test_directories(const char *openat2_path) {
       RENAME_EXCHANGE
     ) < 0
   ) {
-    _exit(127);
+    _exit(128);
   }
+  exchanged = true;
+}
+
+static bool entry_exists(const char *path) {
+  struct stat metadata;
+  const int saved_errno = errno;
+  if (
+    next_syscall(
+      SYS_newfstatat,
+      AT_FDCWD,
+      path,
+      &metadata,
+      AT_SYMLINK_NOFOLLOW
+    ) == 0
+  ) {
+    errno = saved_errno;
+    return true;
+  }
+  if (errno == ENOENT) {
+    errno = saved_errno;
+    return false;
+  }
+  _exit(129);
+}
+
+static const char *leaf_name(const char *path) {
+  const char *separator = strrchr(path, '/');
+  return separator == NULL ? path : separator + 1;
+}
+
+static void mutate_test_namespace(const char *openat2_path) {
+  const char *left = getenv("CLODEX_TEST_SWAP_LEFT");
+  const char *right = getenv("CLODEX_TEST_SWAP_RIGHT");
+  const char *action = getenv("CLODEX_TEST_SWAP_ACTION");
+  if (
+    left == NULL || *left == '\0' || right == NULL || *right == '\0' ||
+    action == NULL || *action == '\0' || openat2_path == NULL
+  ) {
+    _exit(126);
+  }
+  if (exchanged) {
+    return;
+  }
+
+  if (strcmp(action, "exchange-before-open") == 0) {
+    const char *trigger = getenv("CLODEX_TEST_SWAP_TRIGGER");
+    if (
+      trigger == NULL || *trigger == '\0' ||
+      strcmp(leaf_name(openat2_path), trigger) != 0
+    ) {
+      return;
+    }
+    exchange_test_directories(left, right);
+    return;
+  }
+
+  const char *entry = getenv("CLODEX_TEST_SWAP_ENTRY");
+  if (entry == NULL || *entry == '\0') {
+    _exit(126);
+  }
+  char left_entry[PATH_MAX];
+  char right_entry[PATH_MAX];
+  build_entry_path(left_entry, left, entry);
+  build_entry_path(right_entry, right, entry);
+
+  if (strcmp(action, "exchange-after-create") == 0) {
+    if (!entry_exists(left_entry)) {
+      return;
+    }
+    exchange_test_directories(left, right);
+    return;
+  }
+
+  if (strcmp(action, "move-created-then-exchange") != 0) {
+    _exit(126);
+  }
+  const int saved_errno = errno;
+  if (
+    next_syscall(
+      SYS_renameat2,
+      AT_FDCWD,
+      left_entry,
+      AT_FDCWD,
+      right_entry,
+      RENAME_NOREPLACE
+    ) < 0
+  ) {
+    if (errno == ENOENT) {
+      errno = saved_errno;
+      return;
+    }
+    _exit(130);
+  }
+  errno = saved_errno;
+  exchange_test_directories(left, right);
 }
 
 long syscall(long number, ...) {
@@ -65,16 +162,19 @@ long syscall(long number, ...) {
   if (number == SYS_openat2) {
     const int directory_fd = va_arg(arguments, int);
     const char *path = va_arg(arguments, const char *);
-    const void *how = va_arg(arguments, const void *);
+    const struct open_how *how = va_arg(
+      arguments,
+      const struct open_how *
+    );
     const size_t size = va_arg(arguments, size_t);
-    exchange_test_directories(path);
+    mutate_test_namespace(path);
     result = next_syscall(number, directory_fd, path, how, size);
   } else if (number == SYS_renameat2) {
     const int old_directory_fd = va_arg(arguments, int);
-    const char *old_path = va_arg(arguments, const char *);
+    char *old_path = va_arg(arguments, char *);
     const int new_directory_fd = va_arg(arguments, int);
-    const char *new_path = va_arg(arguments, const char *);
-    const unsigned int flags = va_arg(arguments, unsigned int);
+    char *new_path = va_arg(arguments, char *);
+    const int flags = va_arg(arguments, int);
     result = next_syscall(
       number,
       old_directory_fd,
@@ -84,7 +184,7 @@ long syscall(long number, ...) {
       flags
     );
   } else if (number == SYS_getrandom) {
-    void *buffer = va_arg(arguments, void *);
+    unsigned char *buffer = va_arg(arguments, unsigned char *);
     const size_t length = va_arg(arguments, size_t);
     const unsigned int flags = va_arg(arguments, unsigned int);
     result = next_syscall(number, buffer, length, flags);
