@@ -14,6 +14,7 @@ import {
   getCanaryStopReasons,
   MANUAL_CHECK_IDS,
   PREVIEW_ACCEPTANCE_MATRIX,
+  sanitizeChildEnvironment,
   type CanaryMetrics,
   type PreviewAcceptanceContext,
 } from './preview-acceptance.js';
@@ -124,6 +125,38 @@ function acceptedInput(releaseContext: PreviewAcceptanceContext) {
 }
 
 describe('manifest-bound preview release acceptance', () => {
+  it('strips ambient GitHub Actions credentials from every child environment', () => {
+    const blockedNames = [
+      'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+      'ACTIONS_ID_TOKEN_REQUEST_URL',
+      'ACTIONS_RUNTIME_TOKEN',
+      'ACTIONS_RUNTIME_URL',
+      'GH_TOKEN',
+      'GITHUB_ENV',
+      'GITHUB_OUTPUT',
+      'GITHUB_TOKEN',
+    ] as const;
+    const previous = new Map(
+      [...blockedNames, 'CLODEX_TEST_SAFE_MARKER'].map((name) => [
+        name,
+        process.env[name],
+      ]),
+    );
+    try {
+      for (const name of blockedNames) process.env[name] = `dummy-${name}`;
+      process.env.CLODEX_TEST_SAFE_MARKER = 'preserved';
+      const environment = sanitizeChildEnvironment();
+      for (const name of blockedNames)
+        expect(environment[name]).toBeUndefined();
+      expect(environment.CLODEX_TEST_SAFE_MARKER).toBe('preserved');
+    } finally {
+      for (const [name, value] of previous) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   it('covers every required acceptance surface', () => {
     expect(new Set(PREVIEW_ACCEPTANCE_MATRIX.map((check) => check.id))).toEqual(
       new Set([...AUTOMATED_CHECK_IDS, ...MANUAL_CHECK_IDS]),

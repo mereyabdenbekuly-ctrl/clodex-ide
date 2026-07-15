@@ -22,6 +22,13 @@ on:
 permissions:
   contents: read
 
+# npm dist-tags have no compare-and-swap API. Serialize every repository-owned
+# Karton publisher, then reauthorize against live registry state inside the
+# token-bearing effect step immediately before npm publish.
+concurrency:
+  group: karton-npm-publication-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   source-gate:
     name: Validate immutable Karton release identity
@@ -64,64 +71,41 @@ jobs:
           package_version=$(node -p 'require("./packages/karton/package.json").version')
           test "$package_version" = "$RELEASE_VERSION"
 
-      - name: Require exact current canonical main HEAD
+      - name: Require current main or an exact canonical retry tag
         shell: bash
         env:
-          RELEASE_REF: ${{ inputs.ref }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
-          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
-          test -n "$remote_main"
-          test "$remote_main" = "$RELEASE_REF"
-
-  # Create the git tag from the current commit
-  tag:
-    needs: source-gate
-    runs-on: ubuntu-latest
-    environment: Release
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ inputs.ref }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Create exact lightweight tag through GitHub API (idempotent)
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_REF: ${{ inputs.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
+          set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_REF"
           remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
           test -n "$remote_main"
-          test "$remote_main" = "$RELEASE_REF"
-          remote_tag=$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk 'NR == 1 {print $1}')
-          if [ -n "$remote_tag" ]; then
-            git fetch --force --no-tags origin \
-              "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
-            existing_commit=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
-            test "$existing_commit" = "$RELEASE_REF"
-            echo "Tag $RELEASE_TAG already targets the exact release commit"
+          if [ "$remote_main" = "$RELEASE_REF" ]; then
             exit 0
           fi
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-            -f "ref=refs/tags/${RELEASE_TAG}" \
-            -f "sha=${RELEASE_REF}"
 
-  publish:
-    needs: [source-gate, tag]
+          # A rerun may outlive main after this workflow already created the
+          # canonical tag. Only that exact immutable tag authorizes recovery.
+          remote_tag=$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk 'NR == 1 {print $1}')
+          test -n "$remote_tag"
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          retry_commit=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+          test "$retry_commit" = "$RELEASE_REF"
+          echo "Canonical Karton tag authorizes retry after main advanced"
+
+  package:
+    name: Build and pack exact Karton artifact
+    needs: source-gate
     runs-on: ubuntu-latest
-    environment: Release
     permissions:
       contents: read
-
+    outputs:
+      artifact_id: ${{ steps.package-upload.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Checkout exact release source without credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
@@ -133,39 +117,564 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version-file: '.node-version'
-          cache: 'pnpm'
-          registry-url: 'https://registry.npmjs.org'
+          node-version-file: ".node-version"
+          cache: "pnpm"
 
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm --filter @clodex/karton build
 
-      - name: Reassert exact main and tag immediately before npm publication
+      - name: Pack and validate exact npm artifact
+        shell: bash
+        env:
+          ARTIFACT_DIRECTORY: ${{ runner.temp }}/karton-package
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          rm -rf "$ARTIFACT_DIRECTORY"
+          mkdir -p "$ARTIFACT_DIRECTORY"
+          (
+            cd packages/karton
+            npm pack --json --ignore-scripts \
+              --pack-destination "$ARTIFACT_DIRECTORY"
+          ) > "$ARTIFACT_DIRECTORY/npm-pack.json"
+
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { createHash } from 'node:crypto';
+          import {
+            lstatSync,
+            readFileSync,
+            renameSync,
+            writeFileSync,
+          } from 'node:fs';
+          import { basename, dirname, join, resolve } from 'node:path';
+
+          const directory = resolve(process.env.ARTIFACT_DIRECTORY);
+          const version = process.env.RELEASE_VERSION;
+          const packRecords = JSON.parse(
+            readFileSync(join(directory, 'npm-pack.json'), 'utf8'),
+          );
+          assert.equal(packRecords.length, 1, 'npm pack must create exactly one artifact');
+
+          const [record] = packRecords;
+          assert.equal(record.name, '@clodex/karton');
+          assert.equal(record.version, version);
+          assert.equal(record.id, `@clodex/karton@${version}`);
+          assert.match(record.filename, /^[A-Za-z0-9._-]+\.tgz$/);
+
+          const packedPath = resolve(directory, record.filename);
+          assert.equal(dirname(packedPath), directory, 'packed artifact escaped its directory');
+          assert.equal(basename(packedPath), record.filename);
+          const packedStat = lstatSync(packedPath);
+          assert.equal(packedStat.isFile(), true);
+          assert.equal(packedStat.isSymbolicLink(), false);
+
+          const bytes = readFileSync(packedPath);
+          const integrity = `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
+          const shasum = createHash('sha1').update(bytes).digest('hex');
+          assert.equal(record.integrity, integrity, 'npm pack reported a different integrity');
+          assert.equal(record.shasum, shasum, 'npm pack reported a different shasum');
+          assert.equal(record.size, bytes.length, 'npm pack reported a different size');
+
+          const canonicalPath = join(directory, 'karton-package.tgz');
+          renameSync(packedPath, canonicalPath);
+          writeFileSync(
+            join(directory, 'package-identity.json'),
+            `${JSON.stringify({
+              filename: 'karton-package.tgz',
+              integrity,
+              name: record.name,
+              shasum,
+              size: bytes.length,
+              version: record.version,
+            }, null, 2)}\n`,
+          );
+          NODE
+
+          test -s "$ARTIFACT_DIRECTORY/karton-package.tgz"
+          test -s "$ARTIFACT_DIRECTORY/package-identity.json"
+
+      - name: Upload exact packed Karton artifact
+        id: package-upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: karton-package-${{ inputs.ref }}
+          path: |
+            ${{ runner.temp }}/karton-package/karton-package.tgz
+            ${{ runner.temp }}/karton-package/package-identity.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  tag:
+    name: Create canonical Karton tag after package gate
+    needs: [source-gate, package]
+    runs-on: ubuntu-latest
+    environment: Release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact release source without credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Recheck exact current main and create tag with CAS semantics
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          resolve_remote_tag_commit() {
+            local remote_tag
+            remote_tag=$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk 'NR == 1 {print $1}')
+            if [ -z "$remote_tag" ]; then
+              return 1
+            fi
+            git fetch --force --no-tags origin \
+              "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+            git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}"
+          }
+
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          if existing_commit=$(resolve_remote_tag_commit); then
+            test "$existing_commit" = "$RELEASE_REF"
+            echo "Tag $RELEASE_TAG already targets the exact release commit"
+            exit 0
+          fi
+
+          # This is the final current-main check after all package gates and
+          # immediately before the atomic absent-ref -> RELEASE_REF mutation.
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
+          test -z "$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk 'NR == 1 {print $1}')"
+
+          if gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f "ref=refs/tags/${RELEASE_TAG}" \
+            -f "sha=${RELEASE_REF}"; then
+            created_commit=$(resolve_remote_tag_commit)
+            test "$created_commit" = "$RELEASE_REF"
+            exit 0
+          fi
+
+          # A concurrent creator can win the compare-and-swap only by writing
+          # the exact release identity. Any other API failure remains closed.
+          if raced_commit=$(resolve_remote_tag_commit); then
+            test "$raced_commit" = "$RELEASE_REF"
+            echo "Concurrent tag creation resolved to the exact release commit"
+            exit 0
+          fi
+          echo "Tag creation failed without an exact canonical tag" >&2
+          exit 1
+
+  publish-authorization:
+    name: Inspect exact Karton npm state without publication authority
+    needs: [source-gate, package, tag]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      publish_required: ${{ steps.registry-state.outputs.publish_required }}
+
+    steps:
+      - name: Checkout exact release source without credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: ".node-version"
+
+      - name: Download exact packed Karton artifact for read-only inspection
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.package.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/karton-package
+
+      - name: Reassert exact tag before npm authorization
         shell: bash
         env:
           RELEASE_REF: ${{ inputs.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_VERSION: ${{ inputs.version }}
         run: |
+          set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_REF"
-          test "$(node -p 'require("./packages/karton/package.json").version')" = "$RELEASE_VERSION"
-          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
-          test -n "$remote_main"
-          test "$remote_main" = "$RELEASE_REF"
           git fetch --force --no-tags origin \
             "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
           tag_commit=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
           test "$tag_commit" = "$RELEASE_REF"
 
-      - name: Publish to npm
-        working-directory: packages/karton
-        run: npm publish --tag latest --access public
+      - name: Inspect monotonic exact npm publication state
+        id: registry-state
+        shell: bash
         env:
+          ARTIFACT_DIRECTORY: ${{ runner.temp }}/karton-package
+          NPM_REGISTRY_ORIGIN: https://registry.npmjs.org/
+          PACKAGE_NAME: "@clodex/karton"
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release/verify-npm-publication.mjs \
+            --mode=prepublish \
+            --artifact="$ARTIFACT_DIRECTORY/karton-package.tgz" \
+            --identity="$ARTIFACT_DIRECTORY/package-identity.json" \
+            --package="$PACKAGE_NAME" \
+            --version="$RELEASE_VERSION" \
+            --registry="$NPM_REGISTRY_ORIGIN" \
+            --github-output="$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish exact Karton artifact from a fresh effect runner
+    needs: [source-gate, package, tag, publish-authorization]
+    runs-on: ubuntu-latest
+    environment: Release
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Setup pinned Node.js for npm publication
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.23.1"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download exact packed Karton artifact by ID
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.package.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/karton-package
+
+      - name: Publish exact packed artifact to npm when absent
+        shell: bash
+        env:
+          ARTIFACT_DIRECTORY: ${{ runner.temp }}/karton-package
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_REGISTRY_ORIGIN: https://registry.npmjs.org
+          PACKAGE_NAME: "@clodex/karton"
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          [[ "$RELEASE_REF" =~ ^[0-9a-f]{40}$ ]]
+          remote_tag=$(git ls-remote \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${RELEASE_TAG}" \
+            "refs/tags/${RELEASE_TAG}^{}" |
+            awk '
+              NR == 1 { tag = $1 }
+              $2 ~ /\^\{\}$/ { peeled = $1 }
+              END { print peeled != "" ? peeled : tag }
+            ')
+          test "$remote_tag" = "$RELEASE_REF"
+
+          artifact="$ARTIFACT_DIRECTORY/karton-package.tgz"
+          identity="$ARTIFACT_DIRECTORY/package-identity.json"
+          embedded_package="${RUNNER_TEMP}/karton-embedded-package.json"
+          archive_listing="${RUNNER_TEMP}/karton-archive-listing.txt"
+          test "$(find "$ARTIFACT_DIRECTORY" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = "2"
+          test -f "$artifact"
+          test ! -L "$artifact"
+          test -s "$artifact"
+          test -f "$identity"
+          test ! -L "$identity"
+          test -s "$identity"
+          env -u NODE_AUTH_TOKEN tar -tzf "$artifact" > "$archive_listing"
+          archive_entries=$(wc -l < "$archive_listing" | tr -d ' ')
+          test "$archive_entries" -gt 0
+          test "$archive_entries" -le 10000
+          if grep -Eq '(^|/)\.\.(/|$)|^/' "$archive_listing"; then
+            echo "::error::Karton archive contains a non-canonical path"
+            exit 1
+          fi
+          test "$(grep -Fxc 'package/package.json' "$archive_listing")" = "1"
+          test "$(
+            env -u NODE_AUTH_TOKEN tar -tvzf "$artifact" |
+              grep -Ec '^-.* package/package\.json$'
+          )" = "1"
+          env -u NODE_AUTH_TOKEN tar -xOzf "$artifact" package/package.json \
+            > "$embedded_package"
+          test -s "$embedded_package"
+
+          publication_decision=$(
+            env -u NODE_AUTH_TOKEN node --input-type=module - \
+              "$artifact" \
+              "$identity" \
+              "$embedded_package" <<'NODE'
+          import assert from 'node:assert/strict';
+          import { createHash } from 'node:crypto';
+          import { readFile } from 'node:fs/promises';
+
+          const [artifactPath, identityPath, embeddedPackagePath] =
+            process.argv.slice(2);
+          const packageName = process.env.PACKAGE_NAME;
+          const version = process.env.RELEASE_VERSION;
+          const registry = new URL('https://registry.npmjs.org/');
+          const stableSemVer =
+            /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
+          const maxComponent = 9_007_199_254_740_991n;
+          const maxArtifactBytes = 100 * 1024 * 1024;
+
+          function parseSemVer(value, label) {
+            assert.equal(typeof value, 'string', `${label} must be a string`);
+            const match = stableSemVer.exec(value);
+            assert.ok(match, `${label} must be canonical stable SemVer`);
+            const components = match.slice(1).map((part) => BigInt(part));
+            assert.ok(
+              components.every((part) => part <= maxComponent),
+              `${label} is outside npm SemVer numeric range`,
+            );
+            return components;
+          }
+
+          function compareSemVer(left, right) {
+            const leftParts = parseSemVer(left, 'left version');
+            const rightParts = parseSemVer(right, 'right version');
+            for (let index = 0; index < leftParts.length; index += 1) {
+              if (leftParts[index] < rightParts[index]) return -1;
+              if (leftParts[index] > rightParts[index]) return 1;
+            }
+            return 0;
+          }
+
+          async function request(
+            url,
+            label,
+            { accept = 'application/json', allowNotFound = false } = {},
+          ) {
+            const response = await fetch(url, {
+              cache: 'no-store',
+              headers: accept ? { accept } : undefined,
+              redirect: 'error',
+              signal: AbortSignal.timeout(30_000),
+            });
+            if (allowNotFound && response.status === 404) return response;
+            assert.ok(response.ok, `${label} failed with HTTP ${response.status}`);
+            return response;
+          }
+
+          const artifactBytes = await readFile(artifactPath);
+          assert.ok(artifactBytes.length > 0, 'Karton artifact is empty');
+          assert.ok(
+            artifactBytes.length <= maxArtifactBytes,
+            'Karton artifact exceeds the publication bound',
+          );
+          const identity = JSON.parse(await readFile(identityPath, 'utf8'));
+          const embeddedPackage = JSON.parse(
+            await readFile(embeddedPackagePath, 'utf8'),
+          );
+          parseSemVer(version, 'release version');
+          assert.equal(identity.filename, 'karton-package.tgz');
+          assert.equal(identity.name, packageName);
+          assert.equal(identity.version, version);
+          assert.equal(embeddedPackage.name, packageName);
+          assert.equal(embeddedPackage.version, version);
+          assert.notEqual(embeddedPackage.private, true);
+          if (embeddedPackage.publishConfig !== undefined) {
+            assert.ok(
+              embeddedPackage.publishConfig &&
+                typeof embeddedPackage.publishConfig === 'object' &&
+                !Array.isArray(embeddedPackage.publishConfig),
+              'embedded publishConfig is invalid',
+            );
+            if (Object.hasOwn(embeddedPackage.publishConfig, 'registry')) {
+              assert.equal(
+                new URL(embeddedPackage.publishConfig.registry).href,
+                registry.href,
+              );
+            }
+            if (Object.hasOwn(embeddedPackage.publishConfig, 'access')) {
+              assert.equal(embeddedPackage.publishConfig.access, 'public');
+            }
+            if (Object.hasOwn(embeddedPackage.publishConfig, 'tag')) {
+              assert.equal(embeddedPackage.publishConfig.tag, 'latest');
+            }
+          }
+          assert.equal(identity.size, artifactBytes.length);
+          assert.equal(
+            identity.integrity,
+            `sha512-${createHash('sha512')
+              .update(artifactBytes)
+              .digest('base64')}`,
+          );
+          assert.equal(
+            identity.shasum,
+            createHash('sha1').update(artifactBytes).digest('hex'),
+          );
+
+          const encodedPackage = encodeURIComponent(packageName);
+          const encodedVersion = encodeURIComponent(version);
+          const exactResponse = await request(
+            new URL(`${encodedPackage}/${encodedVersion}`, registry),
+            'npm exact-version metadata',
+            { allowNotFound: true },
+          );
+          let exactMetadata = null;
+          if (exactResponse.status !== 404) {
+            exactMetadata = await exactResponse.json();
+            assert.equal(exactMetadata.name, packageName);
+            assert.equal(exactMetadata.version, version);
+            assert.equal(exactMetadata._id, `${packageName}@${version}`);
+            assert.equal(exactMetadata?.dist?.integrity, identity.integrity);
+            assert.equal(exactMetadata?.dist?.shasum, identity.shasum);
+            const tarballUrl = new URL(exactMetadata?.dist?.tarball);
+            const packageBasename = packageName.slice(
+              packageName.lastIndexOf('/') + 1,
+            );
+            assert.equal(tarballUrl.origin, registry.origin);
+            assert.equal(
+              tarballUrl.pathname,
+              `/${packageName}/-/${packageBasename}-${version}.tgz`,
+            );
+            assert.equal(tarballUrl.username, '');
+            assert.equal(tarballUrl.password, '');
+            assert.equal(tarballUrl.search, '');
+            assert.equal(tarballUrl.hash, '');
+            const tarballResponse = await request(
+              tarballUrl,
+              'npm exact-version tarball',
+              { accept: null },
+            );
+            const registryBytes = Buffer.from(
+              await tarballResponse.arrayBuffer(),
+            );
+            assert.equal(registryBytes.length, artifactBytes.length);
+            assert.deepEqual(registryBytes, artifactBytes);
+          }
+
+          const distTagsResponse = await request(
+            exactMetadata === null
+              ? new URL(encodedPackage, registry)
+              : new URL(`-/package/${encodedPackage}/dist-tags`, registry),
+            exactMetadata === null
+              ? 'npm package metadata'
+              : 'npm dist-tags metadata',
+            { allowNotFound: exactMetadata === null },
+          );
+          let latest = null;
+          if (distTagsResponse.status !== 404) {
+            const responseMetadata = await distTagsResponse.json();
+            const distTags =
+              exactMetadata === null
+                ? responseMetadata?.['dist-tags']
+                : responseMetadata;
+            assert.ok(
+              distTags && typeof distTags === 'object' && !Array.isArray(distTags),
+              'npm dist-tags metadata is invalid',
+            );
+            if (Object.hasOwn(distTags, 'latest')) {
+              latest = distTags.latest;
+              parseSemVer(latest, 'npm latest version');
+            } else {
+              assert.equal(
+                exactMetadata,
+                null,
+                'existing exact version requires npm latest',
+              );
+            }
+          }
+
+          if (exactMetadata !== null) {
+            assert.ok(latest !== null, 'existing exact version requires npm latest');
+            assert.ok(
+              compareSemVer(latest, version) >= 0,
+              'npm latest is behind the exact Karton version',
+            );
+            console.log('skip');
+          } else {
+            if (latest !== null) {
+              assert.ok(
+                compareSemVer(version, latest) > 0,
+                'refusing a non-monotonic npm latest publication',
+              );
+            }
+            console.log('publish');
+          }
+          NODE
+          )
+
+          case "$publication_decision" in
+            skip)
+              echo "Exact Karton artifact already exists; skipping duplicate publish"
+              ;;
+            publish)
+              test -n "$NODE_AUTH_TOKEN"
+              npm publish "$artifact" \
+                --tag latest \
+                --access public \
+                --ignore-scripts \
+                --registry="$NPM_REGISTRY_ORIGIN"
+              ;;
+            *)
+              echo "::error::Unexpected Karton publication decision"
+              exit 1
+              ;;
+          esac
+
+  publish-verification:
+    name: Terminally verify exact Karton npm publication
+    needs: [package, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout exact release verifier without credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: ".node-version"
+
+      - name: Download exact packed Karton artifact for terminal verification
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.package.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/karton-package
+
+      - name: Terminally verify exact npm publication
+        id: npm-terminal
+        shell: bash
+        env:
+          ARTIFACT_DIRECTORY: ${{ runner.temp }}/karton-package
+          NPM_REGISTRY_ORIGIN: https://registry.npmjs.org/
+          PACKAGE_NAME: "@clodex/karton"
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release/verify-npm-publication.mjs \
+            --artifact="$ARTIFACT_DIRECTORY/karton-package.tgz" \
+            --identity="$ARTIFACT_DIRECTORY/package-identity.json" \
+            --package="$PACKAGE_NAME" \
+            --version="$RELEASE_VERSION" \
+            --registry="$NPM_REGISTRY_ORIGIN" \
+            --attempts=18 \
+            --delay-ms=10000 \
+            --github-output="$GITHUB_OUTPUT"
 
   release:
-    needs: [source-gate, tag, publish]
+    needs: [source-gate, tag, publish-verification]
     runs-on: ubuntu-latest
     environment: Release
     permissions:
@@ -179,30 +688,84 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Reassert exact main and tag immediately before GitHub Release
+      - name: Reassert exact tag immediately before GitHub Release
         shell: bash
         env:
           RELEASE_REF: ${{ inputs.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
+          set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_REF"
-          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
-          test -n "$remote_main"
-          test "$remote_main" = "$RELEASE_REF"
           git fetch --force --no-tags origin \
             "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
           tag_commit=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
           test "$tag_commit" = "$RELEASE_REF"
 
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: ${{ inputs.tag }}
-          name: "Karton ${{ inputs.version }}"
-          body: |
-            **@clodex/karton ${{ inputs.version }}**
-
-            ```bash
-            npm install @clodex/karton@${{ inputs.version }}
-            ```
+      - name: Stage exact Karton release body
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_BODY_FILE: ${{ runner.temp }}/karton-release-body.md
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          printf '**@clodex/karton %s**\n\n```bash\nnpm install @clodex/karton@%s\n```\n' \
+            "$RELEASE_VERSION" \
+            "$RELEASE_VERSION" \
+            > "$RELEASE_BODY_FILE"
+
+      - name: Create or recover exact published GitHub Release
+        id: exact-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BODY_FILE: ${{ runner.temp }}/karton-release-body.md
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release/create-exact-public-release.mjs \
+            --repository="$GITHUB_REPOSITORY" \
+            --tag="$RELEASE_TAG" \
+            --target-commitish="$RELEASE_REF" \
+            --name="Karton $RELEASE_VERSION" \
+            --body-file="$RELEASE_BODY_FILE" \
+            --github-output="$GITHUB_OUTPUT"
+
+      - name: Verify returned exact GitHub Release ID and state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BODY_FILE: ${{ runner.temp }}/karton-release-body.md
+          RELEASE_ID: ${{ steps.exact-release.outputs.release_id }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_STATE: ${{ steps.exact-release.outputs.release_state }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TARGET: ${{ steps.exact-release.outputs.release_target }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]]
+          test "$RELEASE_STATE" = "published"
+          test "$RELEASE_TARGET" = "$RELEASE_REF"
+          node scripts/release/create-exact-public-release.mjs \
+            --repository="$GITHUB_REPOSITORY" \
+            --tag="$RELEASE_TAG" \
+            --target-commitish="$RELEASE_REF" \
+            --name="Karton $RELEASE_VERSION" \
+            --body-file="$RELEASE_BODY_FILE" \
+            --release-id="$RELEASE_ID"
+
+      - name: Re-resolve exact remote tag after GitHub Release
+        shell: bash
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          remote_tag=$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk 'NR == 1 {print $1}')
+          test -n "$remote_tag"
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          terminal_tag_commit=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+          test "$terminal_tag_commit" = "$RELEASE_REF"

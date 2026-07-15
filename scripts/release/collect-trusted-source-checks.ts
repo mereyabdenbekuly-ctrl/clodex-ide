@@ -39,6 +39,7 @@ function parseArguments(values: string[]): Record<string, string> {
       ![
         'manifest',
         'output',
+        'publication-snapshot',
         'release-id',
         'repository',
         'source-commit',
@@ -61,6 +62,7 @@ function main(): void {
   const options = parseArguments(process.argv.slice(2));
   const manifest = requireOption(options, 'manifest');
   const output = requireOption(options, 'output');
+  const publicationSnapshot = requireOption(options, 'publication-snapshot');
   const releaseIdInput = requireOption(options, 'release-id');
   const repository = requireOption(options, 'repository');
   const sourceCommit = requireOption(options, 'source-commit');
@@ -99,6 +101,7 @@ function main(): void {
     },
     repositoryDirectory,
     runSourceChecks: true,
+    verifiedPublicationSnapshotPath: path.resolve(publicationSnapshot),
   }).filter((receipt) =>
     REQUIRED_SOURCE_CHECK_IDS.includes(
       receipt.id as (typeof REQUIRED_SOURCE_CHECK_IDS)[number],

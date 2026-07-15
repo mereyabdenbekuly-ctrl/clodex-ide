@@ -67,6 +67,24 @@ The readiness CLI defaults to `--channel=release`. Pass `--channel=preview`
 (or `release_channel=preview` in the manual workflow) for the technical
 preview preflight.
 
+## Karton npm single-writer contract
+
+The `Release` Environment may expose `NPM_TOKEN` only to
+`_release-karton.yml`. The credential must be package-scoped to publish
+`@clodex/karton`; do not reuse it in developer machines, other workflows, or
+external automation. Revoke older automation tokens before enabling the
+publisher.
+
+The reusable workflow has a repository-global concurrency group because npm
+dist-tags do not provide compare-and-swap. Its token-bearing effect step
+runs on a fresh runner without a repository checkout or repository verifier.
+It independently checks the packed artifact hashes, the embedded package name
+and version, the exact tag, the exact registry version, and current `latest`
+after entering that single-writer section and immediately before
+`npm publish --tag latest`. Terminal repository verification runs later on a
+different credential-free runner. If exclusive publisher control cannot be
+demonstrated, do not dispatch the Karton release workflow.
+
 ## Content-free blocker codes
 
 Missing Environment entries use deterministic codes:

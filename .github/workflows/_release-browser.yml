@@ -144,6 +144,7 @@ jobs:
           RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
           RELEASE_DRAFT: ${{ inputs.draft }}
           RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_REF: ${{ inputs.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
@@ -164,7 +165,15 @@ jobs:
           if [ "$RELEASE_CHANNEL_INPUT" = "preview" ]; then
             expected_kind=technical-preview
           fi
-          node scripts/release/verify-release-promotion.mjs \
+          env \
+            -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            -u ACTIONS_ID_TOKEN_REQUEST_URL \
+            -u ACTIONS_RUNTIME_TOKEN \
+            -u GITHUB_ENV \
+            -u GITHUB_OUTPUT \
+            -u GITHUB_PATH \
+            -u GITHUB_STEP_SUMMARY \
+            node scripts/release/verify-release-promotion.mjs \
             --manifest="$RELEASE_MANIFEST" \
             --repository="$GITHUB_REPOSITORY" \
             --expected-kind="$expected_kind" \
@@ -188,6 +197,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: Release
     permissions:
+      attestations: read
       contents: read
     steps:
       - name: Checkout verified release candidate
@@ -207,6 +217,42 @@ jobs:
           test "$(git rev-parse HEAD)" = "$RELEASE_REF"
           remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
           test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
+
+      - name: Reverify live promotion authorization after protected approval
+        if: needs.source-gate.outputs.trusted_promotion == 'true'
+        shell: bash
+        env:
+          EXPECTED_RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          actual_sha256=$(shasum -a 256 "$RELEASE_MANIFEST" | awk '{print $1}')
+          test "$actual_sha256" = "$EXPECTED_RELEASE_PLAN_SHA256"
+          expected_kind=stable
+          if [ "$RELEASE_CHANNEL_INPUT" = "preview" ]; then
+            expected_kind=technical-preview
+          fi
+          env \
+            -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            -u ACTIONS_ID_TOKEN_REQUEST_URL \
+            -u ACTIONS_RUNTIME_TOKEN \
+            -u GITHUB_ENV \
+            -u GITHUB_OUTPUT \
+            -u GITHUB_PATH \
+            -u GITHUB_STEP_SUMMARY \
+            node scripts/release/verify-release-promotion.mjs \
+            --manifest="$RELEASE_MANIFEST" \
+            --repository="$GITHUB_REPOSITORY" \
+            --expected-kind="$expected_kind" \
+            --expected-version="$RELEASE_VERSION" \
+            --expected-tag="$RELEASE_TAG"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
           test "$remote_main" = "$RELEASE_REF"
 
       - name: Validate signing and update-server contract
@@ -344,11 +390,77 @@ jobs:
         if: inputs.channel != 'nightly'
         run: pnpm --dir apps/update-server test
 
-  # Create the git tag from the current commit
-  tag:
-    needs: promotion-gate
+  tag-authorization:
+    name: Reauthorize exact release state before tagging
+    needs: [source-gate, promotion-gate, build]
     runs-on: ubuntu-latest
     environment: Release
+    permissions:
+      attestations: read
+      contents: read
+    outputs:
+      authorized_ref: ${{ steps.authorization.outputs.authorized_ref }}
+      release_plan_sha256: ${{ steps.authorization.outputs.release_plan_sha256 }}
+      run_attempt: ${{ steps.authorization.outputs.run_attempt }}
+      run_id: ${{ steps.authorization.outputs.run_id }}
+    steps:
+      - name: Checkout exact release source without credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reverify live promotion with a read-only token
+        id: authorization
+        shell: bash
+        env:
+          EXPECTED_RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test "$remote_main" = "$RELEASE_REF"
+          actual_sha256=""
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            actual_sha256=$(shasum -a 256 "$RELEASE_MANIFEST" | awk '{print $1}')
+            test "$actual_sha256" = "$EXPECTED_RELEASE_PLAN_SHA256"
+            expected_kind=stable
+            if [ "$RELEASE_CHANNEL_INPUT" = "preview" ]; then
+              expected_kind=technical-preview
+            fi
+            env \
+              -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+              -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              -u ACTIONS_RUNTIME_TOKEN \
+              -u GITHUB_ENV \
+              -u GITHUB_OUTPUT \
+              -u GITHUB_PATH \
+              -u GITHUB_STEP_SUMMARY \
+              node scripts/release/verify-release-promotion.mjs \
+              --manifest="$RELEASE_MANIFEST" \
+              --repository="$GITHUB_REPOSITORY" \
+              --expected-kind="$expected_kind" \
+              --expected-version="$RELEASE_VERSION" \
+              --expected-tag="$RELEASE_TAG"
+          fi
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test "$remote_main" = "$RELEASE_REF"
+          echo "authorized_ref=$RELEASE_REF" >> "$GITHUB_OUTPUT"
+          echo "release_plan_sha256=$actual_sha256" >> "$GITHUB_OUTPUT"
+          echo "run_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+
+  # Create the git tag only after build and read-only reauthorization.
+  tag:
+    needs: [source-gate, build, tag-authorization]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -359,13 +471,30 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Create exact lightweight tag through GitHub API (idempotent)
+      - name: Create exact lightweight tag through GitHub API
         env:
+          AUTHORIZED_REF: ${{ needs.tag-authorization.outputs.authorized_ref }}
+          AUTHORIZED_RELEASE_PLAN_SHA256: ${{ needs.tag-authorization.outputs.release_plan_sha256 }}
+          AUTHORIZED_RUN_ATTEMPT: ${{ needs.tag-authorization.outputs.run_attempt }}
+          AUTHORIZED_RUN_ID: ${{ needs.tag-authorization.outputs.run_id }}
+          EXPECTED_RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
           RELEASE_REF: ${{ inputs.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
         run: |
+          test "$AUTHORIZED_REF" = "$RELEASE_REF"
+          test "$AUTHORIZED_RUN_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
+          test "$AUTHORIZED_RUN_ID" = "$GITHUB_RUN_ID"
           test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            test "$AUTHORIZED_RELEASE_PLAN_SHA256" = "$EXPECTED_RELEASE_PLAN_SHA256"
+            actual_sha256=$(shasum -a 256 "$RELEASE_MANIFEST" | awk '{print $1}')
+            test "$actual_sha256" = "$EXPECTED_RELEASE_PLAN_SHA256"
+          else
+            test -z "$AUTHORIZED_RELEASE_PLAN_SHA256"
+          fi
           remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
           test -n "$remote_main"
           test "$remote_main" = "$RELEASE_REF"
@@ -408,7 +537,7 @@ jobs:
       notes: ${{ steps.notes.outputs.notes }}
 
   build:
-    needs: [source-gate, tag]
+    needs: [source-gate, promotion-gate]
     environment: Release
     strategy:
       fail-fast: false
@@ -760,15 +889,88 @@ jobs:
           path: ${{ runner.temp }}/clodex-release-bundle/
           if-no-files-found: error
 
-  release:
+  release-authorization:
+    name: Reauthorize exact release state before GitHub Release creation
     needs: [source-gate, tag, build]
     runs-on: ubuntu-latest
     environment: Release
     permissions:
-      contents: write
+      attestations: read
+      contents: read
     outputs:
-      release_id: ${{ steps.release-state.outputs.release_id }}
-      report_name: ${{ steps.release-state.outputs.report_name }}
+      authorized_ref: ${{ steps.authorization.outputs.authorized_ref }}
+      release_plan_sha256: ${{ steps.authorization.outputs.release_plan_sha256 }}
+      run_attempt: ${{ steps.authorization.outputs.run_attempt }}
+      run_id: ${{ steps.authorization.outputs.run_id }}
+    steps:
+      - name: Checkout exact release source without credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reverify live promotion and tag with a read-only token
+        id: authorization
+        shell: bash
+        env:
+          EXPECTED_RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test "$remote_main" = "$RELEASE_REF"
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "$RELEASE_REF"
+          actual_sha256=""
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            actual_sha256=$(shasum -a 256 "$RELEASE_MANIFEST" | awk '{print $1}')
+            test "$actual_sha256" = "$EXPECTED_RELEASE_PLAN_SHA256"
+            expected_kind=stable
+            if [ "$RELEASE_CHANNEL_INPUT" = "preview" ]; then
+              expected_kind=technical-preview
+            fi
+            env \
+              -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+              -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              -u ACTIONS_RUNTIME_TOKEN \
+              -u GITHUB_ENV \
+              -u GITHUB_OUTPUT \
+              -u GITHUB_PATH \
+              -u GITHUB_STEP_SUMMARY \
+              node scripts/release/verify-release-promotion.mjs \
+              --manifest="$RELEASE_MANIFEST" \
+              --repository="$GITHUB_REPOSITORY" \
+              --expected-kind="$expected_kind" \
+              --expected-version="$RELEASE_VERSION" \
+              --expected-tag="$RELEASE_TAG"
+          fi
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test "$remote_main" = "$RELEASE_REF"
+          echo "authorized_ref=$RELEASE_REF" >> "$GITHUB_OUTPUT"
+          echo "release_plan_sha256=$actual_sha256" >> "$GITHUB_OUTPUT"
+          echo "run_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+
+  release-candidate:
+    name: Collect exact release candidate without publication authority
+    needs: [source-gate, tag, build, release-authorization]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.candidate-upload.outputs.artifact-id }}
+      manifest_sha256: ${{ steps.candidate.outputs.manifest_sha256 }}
+      run_attempt: ${{ steps.candidate.outputs.run_attempt }}
+      run_id: ${{ steps.candidate.outputs.run_id }}
 
     steps:
       - name: Checkout immutable release candidate
@@ -821,7 +1023,15 @@ jobs:
               --run-attempt="$GITHUB_RUN_ATTEMPT"
             )
           fi
-          node apps/browser/scripts/release-publication.mjs "${args[@]}"
+          env \
+            -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            -u ACTIONS_ID_TOKEN_REQUEST_URL \
+            -u ACTIONS_RUNTIME_TOKEN \
+            -u GITHUB_ENV \
+            -u GITHUB_OUTPUT \
+            -u GITHUB_PATH \
+            -u GITHUB_STEP_SUMMARY \
+            node apps/browser/scripts/release-publication.mjs "${args[@]}"
           if [ "$TRUSTED_PROMOTION" = "true" ]; then
             cp "${RUNNER_TEMP}/release-publication-report.json" \
               "release/clodex-release-publication.json"
@@ -836,9 +1046,19 @@ jobs:
       - name: Re-assert immutable tag target before publication
         shell: bash
         env:
+          AUTHORIZED_REF: ${{ needs.release-authorization.outputs.authorized_ref }}
+          AUTHORIZED_RELEASE_PLAN_SHA256: ${{ needs.release-authorization.outputs.release_plan_sha256 }}
+          EXPECTED_RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
           RELEASE_REF: ${{ inputs.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
         run: |
+          test "$AUTHORIZED_REF" = "$RELEASE_REF"
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            test "$AUTHORIZED_RELEASE_PLAN_SHA256" = "$EXPECTED_RELEASE_PLAN_SHA256"
+          else
+            test -z "$AUTHORIZED_RELEASE_PLAN_SHA256"
+          fi
           remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
           if [ -z "$remote_main" ] || [ "$remote_main" != "$RELEASE_REF" ]; then
             echo "::error::Canonical main moved before publication: expected $RELEASE_REF, got ${remote_main:-missing}"
@@ -852,17 +1072,334 @@ jobs:
             exit 1
           fi
 
-      - name: Create or update the exact GitHub Release
+      - name: Build exact release candidate handoff
+        id: candidate
+        shell: bash
+        env:
+          RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+        run: |
+          handoff="${RUNNER_TEMP}/release-candidate-handoff"
+          rm -rf "$handoff"
+          mkdir -m 0700 "$handoff"
+          mv release "$handoff/release"
+          node - "$handoff/release" "$handoff/manifest.json" <<'NODE'
+          const { createHash } = require('node:crypto');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const [releaseDirectory, outputPath] = process.argv.slice(2);
+          const files = fs
+            .readdirSync(releaseDirectory, { withFileTypes: true })
+            .map((entry) => {
+              if (!entry.isFile() || entry.isSymbolicLink()) {
+                throw new Error(`release candidate entry is not a regular file: ${entry.name}`);
+              }
+              if (
+                !entry.name ||
+                entry.name !== path.basename(entry.name) ||
+                entry.name.includes('/') ||
+                entry.name.includes('\\')
+              ) {
+                throw new Error('release candidate filename is invalid');
+              }
+              const filePath = path.join(releaseDirectory, entry.name);
+              const bytes = fs.readFileSync(filePath);
+              if (bytes.length === 0) throw new Error('release candidate contains an empty file');
+              return {
+                bytes: bytes.length,
+                fileName: entry.name,
+                sha256: createHash('sha256').update(bytes).digest('hex'),
+              };
+            })
+            .sort((left, right) => left.fileName.localeCompare(right.fileName));
+          if (files.length === 0) throw new Error('release candidate contains no files');
+          const trustedPromotion = process.env.TRUSTED_PROMOTION === 'true';
+          const reportName = trustedPromotion ? 'clodex-release-publication.json' : '';
+          if (trustedPromotion !== files.some((file) => file.fileName === reportName)) {
+            throw new Error('release candidate report binding is invalid');
+          }
+          fs.writeFileSync(
+            outputPath,
+            `${JSON.stringify({
+              schemaVersion: 1,
+              files,
+              releasePlanSha256: process.env.RELEASE_PLAN_SHA256,
+              reportName,
+              sourceCommit: process.env.RELEASE_REF,
+              tag: process.env.RELEASE_TAG,
+              trustedPromotion,
+              workflowRunAttempt: process.env.WORKFLOW_RUN_ATTEMPT,
+              workflowRunId: process.env.WORKFLOW_RUN_ID,
+            }, null, 2)}\n`,
+          );
+          NODE
+          test -f "$handoff/manifest.json"
+          test ! -L "$handoff/manifest.json"
+          test -s "$handoff/manifest.json"
+          manifest_sha256=$(sha256sum "$handoff/manifest.json" | awk '{print $1}')
+          echo "manifest_sha256=$manifest_sha256" >> "$GITHUB_OUTPUT"
+          echo "run_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact release candidate handoff
+        id: candidate-upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clodex-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-candidate-handoff/
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish exact release candidate from a fresh effect runner
+    needs: [source-gate, tag, release-authorization, release-candidate]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    outputs:
+      release_id: ${{ steps.release-state.outputs.release_id }}
+      report_name: ${{ steps.release-state.outputs.report_name }}
+
+    steps:
+      - name: Checkout exact protected publisher source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pinned Node.js for protected publication
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: ".node-version"
+
+      - name: Reject stale authorization or candidate attempts
+        shell: bash
+        env:
+          AUTHORIZED_RUN_ATTEMPT: ${{ needs.release-authorization.outputs.run_attempt }}
+          AUTHORIZED_RUN_ID: ${{ needs.release-authorization.outputs.run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ needs.release-candidate.outputs.run_attempt }}
+          CANDIDATE_RUN_ID: ${{ needs.release-candidate.outputs.run_id }}
+        run: |
+          test "$AUTHORIZED_RUN_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
+          test "$AUTHORIZED_RUN_ID" = "$GITHUB_RUN_ID"
+          test "$CANDIDATE_RUN_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
+          test "$CANDIDATE_RUN_ID" = "$GITHUB_RUN_ID"
+
+      - name: Download exact bounded release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.release-candidate.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/release-candidate
+
+      - name: Verify exact release candidate handoff without repository code
+        shell: bash
+        env:
+          AUTHORIZED_RUN_ATTEMPT: ${{ needs.release-authorization.outputs.run_attempt }}
+          AUTHORIZED_RUN_ID: ${{ needs.release-authorization.outputs.run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ needs.release-candidate.outputs.run_attempt }}
+          CANDIDATE_RUN_ID: ${{ needs.release-candidate.outputs.run_id }}
+          EXPECTED_MANIFEST_SHA256: ${{ needs.release-candidate.outputs.manifest_sha256 }}
+          EXPECTED_RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
+        run: |
+          test "$AUTHORIZED_RUN_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
+          test "$AUTHORIZED_RUN_ID" = "$GITHUB_RUN_ID"
+          test "$CANDIDATE_RUN_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
+          test "$CANDIDATE_RUN_ID" = "$GITHUB_RUN_ID"
+          candidate="${RUNNER_TEMP}/release-candidate"
+          test "$(find "$candidate" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = "2"
+          test -d "$candidate/release"
+          test ! -L "$candidate/release"
+          test -f "$candidate/manifest.json"
+          test ! -L "$candidate/manifest.json"
+          test -s "$candidate/manifest.json"
+          actual_manifest_sha256=$(sha256sum "$candidate/manifest.json" | awk '{print $1}')
+          test "$actual_manifest_sha256" = "$EXPECTED_MANIFEST_SHA256"
+          node - "$candidate/release" "$candidate/manifest.json" <<'NODE'
+          const { createHash } = require('node:crypto');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const [releaseDirectory, manifestPath] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          const sha256Pattern = /^[a-f0-9]{64}$/;
+          const expectedTrusted = process.env.TRUSTED_PROMOTION === 'true';
+          if (
+            manifest.schemaVersion !== 1 ||
+            manifest.sourceCommit !== process.env.RELEASE_REF ||
+            manifest.tag !== process.env.RELEASE_TAG ||
+            manifest.releasePlanSha256 !== process.env.EXPECTED_RELEASE_PLAN_SHA256 ||
+            manifest.trustedPromotion !== expectedTrusted ||
+            manifest.workflowRunAttempt !== process.env.GITHUB_RUN_ATTEMPT ||
+            manifest.workflowRunId !== process.env.GITHUB_RUN_ID ||
+            manifest.reportName !==
+              (expectedTrusted ? 'clodex-release-publication.json' : '') ||
+            !Array.isArray(manifest.files) ||
+            manifest.files.length === 0
+          ) {
+            throw new Error('release candidate manifest identity is invalid');
+          }
+          const expected = new Map();
+          for (const file of manifest.files) {
+            if (
+              !file ||
+              typeof file.fileName !== 'string' ||
+              file.fileName !== path.basename(file.fileName) ||
+              file.fileName.includes('/') ||
+              file.fileName.includes('\\') ||
+              !Number.isSafeInteger(file.bytes) ||
+              file.bytes <= 0 ||
+              !sha256Pattern.test(String(file.sha256 ?? '')) ||
+              expected.has(file.fileName)
+            ) {
+              throw new Error('release candidate manifest file record is invalid');
+            }
+            expected.set(file.fileName, file);
+          }
+          const entries = fs.readdirSync(releaseDirectory, { withFileTypes: true });
+          if (entries.length !== expected.size) {
+            throw new Error('release candidate file count differs from the handoff');
+          }
+          for (const entry of entries) {
+            if (!entry.isFile() || entry.isSymbolicLink()) {
+              throw new Error('release candidate contains a non-regular entry');
+            }
+            const record = expected.get(entry.name);
+            if (!record) throw new Error('release candidate contains an unexpected file');
+            const bytes = fs.readFileSync(path.join(releaseDirectory, entry.name));
+            const digest = createHash('sha256').update(bytes).digest('hex');
+            if (bytes.length !== record.bytes || digest !== record.sha256) {
+              throw new Error('release candidate bytes differ from the handoff');
+            }
+          }
+          NODE
+
+      - name: Reauthorize exact write target before publication
+        shell: bash
+        env:
+          AUTHORIZED_REF: ${{ needs.release-authorization.outputs.authorized_ref }}
+          AUTHORIZED_RELEASE_PLAN_SHA256: ${{ needs.release-authorization.outputs.release_plan_sha256 }}
+          AUTHORIZED_RUN_ATTEMPT: ${{ needs.release-authorization.outputs.run_attempt }}
+          AUTHORIZED_RUN_ID: ${{ needs.release-authorization.outputs.run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ needs.release-candidate.outputs.run_attempt }}
+          CANDIDATE_RUN_ID: ${{ needs.release-candidate.outputs.run_id }}
+          EXPECTED_RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
+        run: |
+          test "$AUTHORIZED_REF" = "$RELEASE_REF"
+          test "$AUTHORIZED_RUN_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
+          test "$AUTHORIZED_RUN_ID" = "$GITHUB_RUN_ID"
+          test "$CANDIDATE_RUN_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
+          test "$CANDIDATE_RUN_ID" = "$GITHUB_RUN_ID"
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            test "$AUTHORIZED_RELEASE_PLAN_SHA256" = "$EXPECTED_RELEASE_PLAN_SHA256"
+            actual_sha256=$(shasum -a 256 "$RELEASE_MANIFEST" | awk '{print $1}')
+            test "$actual_sha256" = "$EXPECTED_RELEASE_PLAN_SHA256"
+          else
+            test -z "$AUTHORIZED_RELEASE_PLAN_SHA256"
+            test -z "$EXPECTED_RELEASE_PLAN_SHA256"
+            test -z "$RELEASE_MANIFEST"
+          fi
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "$RELEASE_REF"
+
+      - name: Create a new isolated protected draft by exact release ID
+        id: protected-draft
+        if: needs.source-gate.outputs.trusted_promotion == 'true' || inputs.draft
+        shell: bash
+        env:
+          AUTHORIZED_REF: ${{ needs.release-authorization.outputs.authorized_ref }}
+          AUTHORIZED_RELEASE_PLAN_SHA256: ${{ needs.release-authorization.outputs.release_plan_sha256 }}
+          EXPECTED_RELEASE_PLAN_SHA256: ${{ needs.source-gate.outputs.release_plan_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ASSETS_DIRECTORY: ${{ runner.temp }}/release-candidate/release
+          RELEASE_MANIFEST: ${{ inputs.manifest }}
+          RELEASE_NOTES: ${{ needs.tag.outputs.notes }}
+          RELEASE_PRERELEASE: ${{ inputs.channel != 'release' }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
+        run: |
+          test "$AUTHORIZED_REF" = "$RELEASE_REF"
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            test "$AUTHORIZED_RELEASE_PLAN_SHA256" = "$EXPECTED_RELEASE_PLAN_SHA256"
+            actual_sha256=$(shasum -a 256 "$RELEASE_MANIFEST" | awk '{print $1}')
+            test "$actual_sha256" = "$EXPECTED_RELEASE_PLAN_SHA256"
+          else
+            test -z "$AUTHORIZED_RELEASE_PLAN_SHA256"
+          fi
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_REF"
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "$RELEASE_REF"
+          step_output="$GITHUB_OUTPUT"
+          printf '%s\n' "$RELEASE_NOTES" > "${RUNNER_TEMP}/release-notes.md"
+          report_name=""
+          if [ "$TRUSTED_PROMOTION" = "true" ]; then
+            report_name="clodex-release-publication.json"
+          fi
+          trusted_publisher=$(mktemp "${RUNNER_TEMP}/create-protected-release-draft.XXXXXX.mjs")
+          publisher_output=$(mktemp "${RUNNER_TEMP}/protected-release-output.XXXXXX")
+          git show "${RELEASE_REF}:scripts/release/create-protected-release-draft.mjs" \
+            > "$trusted_publisher"
+          test -f "$trusted_publisher"
+          test ! -L "$trusted_publisher"
+          test -s "$trusted_publisher"
+          env \
+            -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            -u ACTIONS_ID_TOKEN_REQUEST_URL \
+            -u ACTIONS_RUNTIME_TOKEN \
+            -u GITHUB_ENV \
+            -u GITHUB_OUTPUT \
+            -u GITHUB_PATH \
+            -u GITHUB_STEP_SUMMARY \
+            node "$trusted_publisher" \
+            --assets="$RELEASE_ASSETS_DIRECTORY" \
+            --body-file="${RUNNER_TEMP}/release-notes.md" \
+            --github-output="$publisher_output" \
+            --name="Clodex Agentic IDE ${RELEASE_VERSION}" \
+            --prerelease="$RELEASE_PRERELEASE" \
+            --report-name="$report_name" \
+            --repository="$GITHUB_REPOSITORY" \
+            --tag="$RELEASE_TAG" \
+            --target-commitish="$RELEASE_REF"
+          test "$(wc -l < "$publisher_output" | tr -d ' ')" = "2"
+          grep -Eq '^release_id=[1-9][0-9]*$' "$publisher_output"
+          grep -Eq '^report_name=([A-Za-z0-9._-]+)?$' "$publisher_output"
+          cat "$publisher_output" >> "$step_output"
+
+      - name: Publish explicitly non-draft, non-trusted GitHub Release
+        id: public-release
+        if: needs.source-gate.outputs.trusted_promotion != 'true' && inputs.draft == false
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ inputs.tag }}
+          target_commitish: ${{ inputs.ref }}
           name: "Clodex Agentic IDE ${{ inputs.version }}"
           body: ${{ needs.tag.outputs.notes }}
           prerelease: ${{ inputs.channel != 'release' }}
-          # Stable promotion is staged as a protected draft first. The exact
-          # live bytes are attested before a separate job may publish them.
-          draft: ${{ needs.source-gate.outputs.trusted_promotion == 'true' && inputs.channel == 'release' || inputs.draft }}
-          files: release/*
+          draft: false
+          files: ${{ runner.temp }}/release-candidate/release/*
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -871,24 +1408,38 @@ jobs:
         id: release-state
         shell: bash
         env:
-          EXPECTED_DRAFT: ${{ needs.source-gate.outputs.trusted_promotion == 'true' && inputs.channel == 'release' || inputs.draft }}
+          EXPECTED_DRAFT: ${{ needs.source-gate.outputs.trusted_promotion == 'true' || inputs.draft }}
           EXPECTED_PRERELEASE: ${{ inputs.channel != 'release' }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.protected-draft.outputs.release_id || steps.public-release.outputs.id }}
+          RELEASE_REF: ${{ inputs.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
           TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
         run: |
+          if [[ ! "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Publisher did not return an exact GitHub Release ID"
+            exit 1
+          fi
           gh api --method GET \
-            "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
             > "${RUNNER_TEMP}/created-release.json"
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          terminal_tag_commit=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+          test "$terminal_tag_commit" = "$RELEASE_REF"
           node - <<'NODE'
           const fs = require('node:fs');
           const release = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/created-release.json`, 'utf8'));
+          const expectedId = Number.parseInt(process.env.RELEASE_ID, 10);
           const expectedDraft = process.env.EXPECTED_DRAFT === 'true';
           const expectedPrerelease = process.env.EXPECTED_PRERELEASE === 'true';
           if (
             !Number.isSafeInteger(release.id) ||
             release.id <= 0 ||
+            release.id !== expectedId ||
             release.tag_name !== process.env.RELEASE_TAG ||
+            (process.env.TRUSTED_PROMOTION === 'true' &&
+              release.target_commitish !== process.env.RELEASE_REF) ||
             release.draft !== expectedDraft ||
             release.prerelease !== expectedPrerelease ||
             (expectedDraft ? release.published_at !== null : typeof release.published_at !== 'string')
@@ -910,15 +1461,15 @@ jobs:
       attestations: write
       contents: read
       id-token: write
-    uses: mereyabdenbekuly-ctrl/clodex-ide/.github/workflows/release-publication-attestation.yml@main
+    uses: ./.github/workflows/release-publication-attestation.yml
     with:
       release_id: ${{ fromJSON(needs.release.outputs.release_id) }}
       report_name: ${{ needs.release.outputs.report_name }}
       source_commit: ${{ inputs.ref }}
       tag: ${{ inputs.tag }}
 
-  publish-stable:
-    name: Publish only the pre-attested stable draft
+  verify-stable-draft:
+    name: Verify pre-attested stable draft; publication NOT_READY
     needs: [source-gate, release, attest-publication]
     if: inputs.channel == 'release' && needs.source-gate.outputs.trusted_promotion == 'true'
     runs-on: ubuntu-latest
@@ -926,7 +1477,7 @@ jobs:
     permissions:
       actions: read
       attestations: read
-      contents: write
+      contents: read
     steps:
       - name: Checkout exact canonical release source without credentials
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -935,7 +1486,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Require exact current canonical main before publication
+      - name: Require exact current canonical main before draft verification
         env:
           RELEASE_REF: ${{ inputs.ref }}
         run: |
@@ -1020,40 +1571,15 @@ jobs:
             "${RUNNER_TEMP}/attested-publication/publication-snapshot.json" \
             "${RUNNER_TEMP}/current-publication-snapshot.json"
 
-      - name: Publish the unchanged attested stable release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_ID: ${{ needs.release.outputs.release_id }}
-          RELEASE_REF: ${{ inputs.ref }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          REPORT_NAME: ${{ needs.release.outputs.report_name }}
+      - name: Block stable publication without a CAS-capable publisher
+        shell: bash
         run: |
-          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
-          test -n "$remote_main"
-          test "$remote_main" = "$RELEASE_REF"
-          gh api --method PATCH \
-            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
-            -F draft=false \
-            -F prerelease=false \
-            > "${RUNNER_TEMP}/published-release.json"
-          node scripts/release/verify-release-publication.mjs \
-            --assets="${RUNNER_TEMP}/release-assets" \
-            --expected-release-state=published \
-            --expected-source-commit="$RELEASE_REF" \
-            --expected-tag="$RELEASE_TAG" \
-            --release-id="$RELEASE_ID" \
-            --release-json="${RUNNER_TEMP}/published-release.json" \
-            --report="${RUNNER_TEMP}/release-assets/${REPORT_NAME}" \
-            --report-name="$REPORT_NAME" \
-            --repository="$GITHUB_REPOSITORY" \
-            --snapshot="${RUNNER_TEMP}/published-publication-snapshot.json"
-          cmp \
-            "${RUNNER_TEMP}/attested-publication/publication-snapshot.json" \
-            "${RUNNER_TEMP}/published-publication-snapshot.json"
+          echo "::error::Stable publication is NOT_READY: a separately reviewed publisher with a documented conditional/CAS transition is required."
+          exit 1
 
   trigger-nightly-after-stable:
     name: Trigger nightly after stable
-    needs: publish-stable
+    needs: verify-stable-draft
     if: inputs.channel == 'release' && github.ref_name == 'main'
     runs-on: ubuntu-latest
     permissions:

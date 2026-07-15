@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url';
 const SEMVER_NUMBER = '(?:0|[1-9][0-9]*)';
 const SEMVER_CORE = `${SEMVER_NUMBER}\\.${SEMVER_NUMBER}\\.${SEMVER_NUMBER}`;
 const PRERELEASE_COUNTER = '(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})';
+const NPM_MAX_SAFE_SEMVER_COMPONENT = 9_007_199_254_740_991n;
+const SEMVER_CORE_COMPONENTS =
+  /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
 
 const STABLE_VERSION = new RegExp(`^${SEMVER_CORE}$`, 'u');
 const PREVIEW_VERSION = new RegExp(
@@ -66,6 +69,31 @@ function isValidCalendarDate(value) {
   );
 }
 
+function assertNpmSafeNumericIdentifier(value) {
+  assert(
+    BigInt(value) <= NPM_MAX_SAFE_SEMVER_COMPONENT,
+    'release version is outside npm SemVer numeric range',
+  );
+}
+
+function assertNpmCompatibleVersionRange(version, channel) {
+  const [core] = version.split('-', 1);
+  const match = SEMVER_CORE_COMPONENTS.exec(core);
+  assert(match !== null, 'release version is not npm-compatible SemVer');
+  for (const component of match.slice(1)) {
+    assertNpmSafeNumericIdentifier(component);
+  }
+
+  // preview.N is the only channel whose prerelease suffix is itself a purely
+  // numeric SemVer identifier. node-semver/npm reject it above MAX_SAFE_INTEGER
+  // even though the SemVer grammar alone permits arbitrarily large integers.
+  if (channel === 'preview') {
+    const preview = PREVIEW_VERSION.exec(version);
+    assert(preview !== null, 'release version is not npm-compatible SemVer');
+    assertNpmSafeNumericIdentifier(preview[1]);
+  }
+}
+
 function expectedClodexTag(channel, version) {
   return channel === 'preview' ? `v${version}` : `clodex@${version}`;
 }
@@ -96,6 +124,7 @@ export function validateReleaseIdentity({
       STABLE_VERSION.test(version),
       'Karton release version is not canonical SemVer',
     );
+    assertNpmCompatibleVersionRange(version, channel);
     assert(
       tag === `@clodex/karton@${version}`,
       'Karton release tag does not match its version',
@@ -130,6 +159,7 @@ export function validateReleaseIdentity({
   }
 
   assert(validVersion, `Clodex ${channel} version is not canonical`);
+  assertNpmCompatibleVersionRange(version, channel);
   assert(
     tag === expectedClodexTag(channel, version),
     'Clodex release tag does not match its channel and version',

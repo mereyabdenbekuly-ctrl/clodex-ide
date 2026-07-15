@@ -128,7 +128,7 @@ jobs:
           console.log('The reusable release workflow will pin the resolved candidate SHA.');
           NODE
 
-      - name: Refuse a completed preview release retry
+      - name: Classify exact preview release retry state
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.plan.outputs.tag }}
@@ -138,12 +138,15 @@ jobs:
             exit 1
           fi
           case "$release_state" in
-            exists)
-              echo "::error::GitHub Release $RELEASE_TAG already exists; completed previews are immutable"
+            published)
+              echo "::error::Published GitHub Release $RELEASE_TAG already exists; completed previews are immutable"
               exit 1
               ;;
+            draft)
+              echo "An exact-tag protected draft exists for $RELEASE_TAG; the publisher must verify and resume its exact identity."
+              ;;
             absent)
-              echo "No completed GitHub Release exists for $RELEASE_TAG; an exact-SHA tag retry is allowed."
+              echo "No GitHub Release exists for $RELEASE_TAG; an exact-SHA tag retry is allowed."
               ;;
             *)
               echo "::error::Unexpected GitHub Release state: $release_state"
