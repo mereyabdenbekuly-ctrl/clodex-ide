@@ -1,6 +1,9 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const pnpmLockfileName = 'pnpm-lock.yaml';
 
 const ignoredLockfileScanDirectories = new Set([
   '.git',
@@ -24,27 +27,65 @@ function findNestedPnpmLockfiles(
   relativeDirectory = '',
   results = [],
 ) {
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+  const entries = readdirSync(directory, { withFileTypes: true }).sort(
+    (left, right) => left.name.localeCompare(right.name, 'en'),
+  );
+  for (const entry of entries) {
     const relativePath = relativeDirectory
       ? `${relativeDirectory}/${entry.name}`
       : entry.name;
     const absolutePath = join(directory, entry.name);
+
+    // Treat symlinks and other non-regular entries with the lockfile name as
+    // install surfaces too. A tracked symlink can otherwise point pnpm at an
+    // alternate dependency graph without ever satisfying Dirent#isFile().
+    if (entry.name === pnpmLockfileName) {
+      if (relativePath !== pnpmLockfileName) results.push(relativePath);
+      continue;
+    }
 
     if (entry.isDirectory()) {
       if (ignoredLockfileScanDirectories.has(entry.name)) continue;
       findNestedPnpmLockfiles(absolutePath, relativePath, results);
       continue;
     }
-
-    if (
-      entry.isFile() &&
-      entry.name === 'pnpm-lock.yaml' &&
-      relativePath !== 'pnpm-lock.yaml'
-    ) {
-      results.push(relativePath);
-    }
   }
   return results;
+}
+
+function findTrackedPnpmLockfiles(rootDirectory) {
+  if (!existsSync(join(rootDirectory, '.git'))) {
+    return { error: null, lockfiles: [] };
+  }
+
+  try {
+    const output = execFileSync(
+      'git',
+      [
+        '-C',
+        rootDirectory,
+        'ls-files',
+        '-z',
+        '--',
+        `:(glob)**/${pnpmLockfileName}`,
+      ],
+      {
+        encoding: 'utf8',
+        maxBuffer: 16 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    return {
+      error: null,
+      lockfiles: output.split('\0').filter(Boolean),
+    };
+  } catch {
+    return {
+      error:
+        'git index inspection failed; cannot verify tracked lockfiles inside ignored generated or dependency trees',
+      lockfiles: [],
+    };
+  }
 }
 
 export function checkPnpmBootstrap(rootDirectory) {
@@ -54,7 +95,15 @@ export function checkPnpmBootstrap(rootDirectory) {
   // only dependency graph CI and release tooling install. A nested workspace
   // lockfile can silently retain vulnerable versions that `pnpm audit` at the
   // root never sees, so reject those stale alternate graphs before setup.
-  for (const nestedLockfile of findNestedPnpmLockfiles(rootDirectory)) {
+  const nestedLockfiles = new Set(findNestedPnpmLockfiles(rootDirectory));
+  const trackedLockfiles = findTrackedPnpmLockfiles(rootDirectory);
+  if (trackedLockfiles.error) errors.push(trackedLockfiles.error);
+  for (const trackedLockfile of trackedLockfiles.lockfiles) {
+    if (trackedLockfile !== pnpmLockfileName) {
+      nestedLockfiles.add(trackedLockfile);
+    }
+  }
+  for (const nestedLockfile of [...nestedLockfiles].sort()) {
     errors.push(
       `${nestedLockfile}: nested workspace lockfiles are not allowed; use the root pnpm-lock.yaml`,
     );
