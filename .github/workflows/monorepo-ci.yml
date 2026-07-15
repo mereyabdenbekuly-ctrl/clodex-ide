@@ -202,6 +202,25 @@ jobs:
       - name: Run release attribution gate tests
         run: pnpm release:attribution:test
 
+  native-helper-linux:
+    name: Native Helper (Linux x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Build and exercise the Linux helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          cc --version
+          make --version
+          make -C packages/clodex-adapters-node/native clean
+          make -C packages/clodex-adapters-node/native test
+
   visual-regression:
     name: Visual Regression
     runs-on: macos-26
@@ -451,7 +470,7 @@ jobs:
   ci-basic:
     name: Basic CI
     if: always()
-    needs: [lint, typecheck, test, build, visual-regression]
+    needs: [lint, typecheck, test, build, native-helper-linux, visual-regression]
     runs-on: ubuntu-latest
     steps:
       - name: Check Basic CI Status
@@ -460,6 +479,7 @@ jobs:
              [ "${{ needs.typecheck.result }}" != "success" ] || \
              [ "${{ needs.test.result }}" != "success" ] || \
              [ "${{ needs.build.result }}" != "success" ] || \
+             [ "${{ needs.native-helper-linux.result }}" != "success" ] || \
              [ "${{ needs.visual-regression.result }}" != "success" ]; then
             echo "Basic CI failed"
             exit 1
@@ -473,7 +493,7 @@ jobs:
     # before the actual pull_request matrix has completed.
     name: "${{ github.event_name == 'pull_request' && 'Full CI (PR)' || 'Full CI (non-PR)' }}"
     if: github.event_name == 'pull_request' && always()
-    needs: [lint, typecheck, test, build, test-windows, build-clodex, visual-regression]
+    needs: [lint, typecheck, test, build, native-helper-linux, test-windows, build-clodex, visual-regression]
     runs-on: ubuntu-latest
     steps:
       - name: Check Full CI Status
@@ -482,6 +502,7 @@ jobs:
              [ "${{ needs.typecheck.result }}" != "success" ] || \
              [ "${{ needs.test.result }}" != "success" ] || \
              [ "${{ needs.build.result }}" != "success" ] || \
+             [ "${{ needs.native-helper-linux.result }}" != "success" ] || \
              [ "${{ needs.visual-regression.result }}" != "success" ] || \
              [ "${{ needs.test-windows.result }}" != "success" ] || \
              [ "${{ needs.build-clodex.result }}" != "success" ]; then
@@ -492,6 +513,7 @@ jobs:
             echo "| Lint | ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Typecheck | ${{ needs.typecheck.result }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Test | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Native helper (Linux x64) | ${{ needs.native-helper-linux.result }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Visual regression | ${{ needs.visual-regression.result }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Test (Windows) | ${{ needs.test-windows.result }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY

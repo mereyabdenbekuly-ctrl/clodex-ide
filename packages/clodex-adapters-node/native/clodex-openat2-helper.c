@@ -6,9 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
-#include <linux/fs.h>
 #include <linux/openat2.h>
-#include <linux/random.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -24,16 +22,14 @@
 #error "A Linux toolchain with openat2 syscall definitions is required"
 #endif
 
-#ifndef SYS_renameat2
-#error "A Linux toolchain with renameat2 syscall definitions is required"
-#endif
-
 #define CLODEX_ROOT_FD 4
 #define MAX_CONTENT_BYTES (256ULL * 1024ULL * 1024ULL)
 #define MAX_TREE_BYTES (1024ULL * 1024ULL * 1024ULL)
 #define MAX_TREE_ENTRIES 100000ULL
 #define MAX_TREE_DEPTH 128U
 #define MAX_SELECTOR_BYTES (16U * 1024U)
+#define CREATE_PERMISSIONS ((mode_t)0600U)
+#define PERMISSION_BITS ((mode_t)07777U)
 
 static bool effect_started = false;
 
@@ -46,6 +42,7 @@ struct file_snapshot {
 
 struct parent_reference {
   int fd;
+  char selector[MAX_SELECTOR_BYTES + 1U];
   char basename[NAME_MAX + 1U];
   struct stat metadata;
 };
@@ -167,27 +164,21 @@ static bool stable_metadata(const struct stat *left, const struct stat *right) {
     left->st_ctim.tv_nsec == right->st_ctim.tv_nsec;
 }
 
-/*
- * renameat2(RENAME_EXCHANGE) may legitimately advance inode ctime even when
- * the exchanged file is still the exact captured inode with unchanged bytes
- * and authorization-relevant file semantics.  Pre-state authorization is
- * checked before the exchange against the full commitment (including ctime).
- * After the exchange, compare the held inode without treating the rename's
- * own ctime update as hostile drift.  Content is re-hashed separately.
- */
-static bool stable_exchange_file_semantics(
-  const struct stat *left,
-  const struct stat *right
+static bool has_exact_permissions(
+  const struct stat *metadata,
+  mode_t expected_permissions
 ) {
-  return left->st_dev == right->st_dev &&
-    left->st_ino == right->st_ino &&
-    left->st_mode == right->st_mode &&
-    left->st_nlink == right->st_nlink &&
-    left->st_uid == right->st_uid &&
-    left->st_gid == right->st_gid &&
-    left->st_size == right->st_size &&
-    left->st_mtim.tv_sec == right->st_mtim.tv_sec &&
-    left->st_mtim.tv_nsec == right->st_mtim.tv_nsec;
+  return (metadata->st_mode & PERMISSION_BITS) == expected_permissions;
+}
+
+static bool stable_directory_descriptor(
+  int descriptor,
+  const struct stat *expected_metadata
+) {
+  struct stat observed_metadata;
+  return fstat(descriptor, &observed_metadata) == 0 &&
+    S_ISDIR(observed_metadata.st_mode) &&
+    stable_metadata(expected_metadata, &observed_metadata);
 }
 
 static int confined_openat2(
@@ -308,23 +299,6 @@ static void build_file_commitment(
   finish_hex(&hash, output);
 }
 
-static void build_directory_commitment(
-  const struct stat *root_metadata,
-  const char *path,
-  const struct stat *directory_metadata,
-  char output[65]
-) {
-  struct clodex_sha256 hash;
-  clodex_sha256_init(&hash);
-  hash_string_field(&hash, "clodex.openat2-directory-state.v1");
-  hash_u64_field(&hash, (uint64_t)root_metadata->st_dev);
-  hash_u64_field(&hash, (uint64_t)root_metadata->st_ino);
-  hash_string_field(&hash, path);
-  hash_string_field(&hash, "directory");
-  hash_stat_fields(&hash, directory_metadata);
-  finish_hex(&hash, output);
-}
-
 static void open_parent_reference(
   int root_fd,
   const char *path,
@@ -339,24 +313,21 @@ static void open_parent_reference(
   memcpy(result->basename, basename, basename_length + 1U);
 
   if (separator == NULL) {
+    memcpy(result->selector, ".", 2U);
     result->fd = fcntl(root_fd, F_DUPFD_CLOEXEC, 5);
   } else {
     const size_t parent_length = (size_t)(separator - path);
-    char *parent_path = malloc(parent_length + 1U);
-    if (parent_path == NULL) {
-      fail_errno("IO");
+    if (parent_length > MAX_SELECTOR_BYTES) {
+      fail_with("ARGUMENT", "parent");
     }
-    memcpy(parent_path, path, parent_length);
-    parent_path[parent_length] = '\0';
+    memcpy(result->selector, path, parent_length);
+    result->selector[parent_length] = '\0';
     result->fd = confined_openat2(
       root_fd,
-      parent_path,
+      result->selector,
       (uint64_t)(O_RDONLY | O_DIRECTORY | O_CLOEXEC),
       0U
     );
-    const int saved_errno = errno;
-    free(parent_path);
-    errno = saved_errno;
   }
   if (result->fd < 0) {
     fail_errno(errno == ENOSYS ? "UNSUPPORTED" : "RESOLUTION");
@@ -366,6 +337,48 @@ static void open_parent_reference(
   }
   if (!S_ISDIR(result->metadata.st_mode)) {
     fail_with("RESOLUTION", "parent");
+  }
+}
+
+static int reopen_verified_parent(
+  int root_fd,
+  const struct parent_reference *authorized_parent,
+  const struct stat *post_effect_metadata,
+  const char *failure_detail
+) {
+  const int visible_parent = confined_openat2(
+    root_fd,
+    authorized_parent->selector,
+    (uint64_t)(O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW),
+    0U
+  );
+  if (visible_parent < 0) {
+    fail_with("UNCERTAIN", failure_detail);
+  }
+  struct stat visible_metadata;
+  if (
+    fstat(visible_parent, &visible_metadata) < 0 ||
+    !S_ISDIR(visible_metadata.st_mode) ||
+    !stable_metadata(post_effect_metadata, &visible_metadata)
+  ) {
+    close_quietly(visible_parent);
+    fail_with("UNCERTAIN", failure_detail);
+  }
+  return visible_parent;
+}
+
+static void capture_post_effect_parent_metadata(
+  const struct parent_reference *parent,
+  struct stat *output,
+  const char *failure_detail
+) {
+  if (
+    fstat(parent->fd, output) < 0 ||
+    !S_ISDIR(output->st_mode) ||
+    output->st_dev != parent->metadata.st_dev ||
+    output->st_ino != parent->metadata.st_ino
+  ) {
+    fail_with("UNCERTAIN", failure_detail);
   }
 }
 
@@ -403,21 +416,11 @@ static void capture_absent_state(
   finish_hex(&hash, output);
 }
 
-static void capture_file_state(
-  int root_fd,
+static void capture_open_file_state(
   const struct stat *root_metadata,
   const char *path,
   struct file_snapshot *snapshot
 ) {
-  snapshot->fd = confined_openat2(
-    root_fd,
-    path,
-    (uint64_t)(O_RDONLY | O_CLOEXEC | O_NOFOLLOW),
-    0U
-  );
-  if (snapshot->fd < 0) {
-    fail_errno(errno == ENOSYS ? "UNSUPPORTED" : "RESOLUTION");
-  }
   struct stat before;
   if (fstat(snapshot->fd, &before) < 0) {
     fail_errno("IO");
@@ -446,32 +449,22 @@ static void capture_file_state(
   );
 }
 
-static void capture_directory_state(
+static void capture_file_state(
   int root_fd,
   const struct stat *root_metadata,
   const char *path,
-  char output[65]
+  struct file_snapshot *snapshot
 ) {
-  const int descriptor = confined_openat2(
+  snapshot->fd = confined_openat2(
     root_fd,
     path,
-    (uint64_t)(O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW),
+    (uint64_t)(O_RDONLY | O_CLOEXEC | O_NOFOLLOW),
     0U
   );
-  if (descriptor < 0) {
+  if (snapshot->fd < 0) {
     fail_errno(errno == ENOSYS ? "UNSUPPORTED" : "RESOLUTION");
   }
-  struct stat metadata;
-  if (fstat(descriptor, &metadata) < 0) {
-    close_quietly(descriptor);
-    fail_errno("IO");
-  }
-  if (!S_ISDIR(metadata.st_mode)) {
-    close_quietly(descriptor);
-    fail_with("STATE", "not-directory");
-  }
-  build_directory_commitment(root_metadata, path, &metadata, output);
-  close_quietly(descriptor);
+  capture_open_file_state(root_metadata, path, snapshot);
 }
 
 static void write_exact_stdin(
@@ -601,32 +594,161 @@ static void execute_create(
 
   effect_started = true;
   const int destination = confined_openat2(
-    root_fd,
-    path,
+    parent.fd,
+    parent.basename,
     (uint64_t)(O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW),
-    0600U
+    CREATE_PERMISSIONS
   );
   if (destination < 0) {
     close_quietly(parent.fd);
     fail_errno(errno == ENOSYS ? "UNSUPPORTED" : "IO");
   }
   write_exact_stdin(destination, content_bytes, content_sha256);
-  if (fchmod(destination, 0600U) < 0 || fsync(destination) < 0) {
+  if (fchmod(destination, CREATE_PERMISSIONS) < 0 || fsync(destination) < 0) {
     close_quietly(destination);
     close_quietly(parent.fd);
     fail_errno("IO");
   }
-  close_quietly(destination);
-  sync_parent(&parent);
-  close_quietly(parent.fd);
-
-  struct file_snapshot post = { .fd = -1 };
-  capture_file_state(root_fd, root_metadata, path, &post);
-  if (strcmp(post.content_sha256, content_sha256) != 0) {
-    close_quietly(post.fd);
-    fail_with("STATE", "post-content");
+  struct stat created_metadata;
+  struct stat committed_parent_entry;
+  if (
+    fstat(destination, &created_metadata) < 0 ||
+    !S_ISREG(created_metadata.st_mode) || created_metadata.st_nlink != 1U ||
+    !has_exact_permissions(&created_metadata, CREATE_PERMISSIONS) ||
+    fstatat(
+      parent.fd,
+      parent.basename,
+      &committed_parent_entry,
+      AT_SYMLINK_NOFOLLOW
+    ) < 0 ||
+    !S_ISREG(committed_parent_entry.st_mode) ||
+    committed_parent_entry.st_nlink != 1U ||
+    !has_exact_permissions(&committed_parent_entry, CREATE_PERMISSIONS) ||
+    !stable_metadata(&created_metadata, &committed_parent_entry)
+  ) {
+    close_quietly(destination);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "create-parent-drift");
   }
+  sync_parent(&parent);
+
+  struct stat parent_post_effect_metadata;
+  capture_post_effect_parent_metadata(
+    &parent,
+    &parent_post_effect_metadata,
+    "create-parent-post-state"
+  );
+
+  const int visible_parent = reopen_verified_parent(
+    root_fd,
+    &parent,
+    &parent_post_effect_metadata,
+    "create-final-parent-drift"
+  );
+  struct file_snapshot post = { .fd = -1 };
+  post.fd = confined_openat2(
+    visible_parent,
+    parent.basename,
+    (uint64_t)(O_RDONLY | O_CLOEXEC | O_NOFOLLOW),
+    0U
+  );
+  if (post.fd < 0) {
+    close_quietly(visible_parent);
+    close_quietly(destination);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "create-final-child-resolution");
+  }
+  capture_open_file_state(root_metadata, path, &post);
+  struct stat held_created_metadata;
+  if (
+    fstat(destination, &held_created_metadata) < 0 ||
+    !S_ISREG(held_created_metadata.st_mode) ||
+    held_created_metadata.st_nlink != 1U ||
+    !has_exact_permissions(&held_created_metadata, CREATE_PERMISSIONS) ||
+    !has_exact_permissions(&post.metadata, CREATE_PERMISSIONS) ||
+    !stable_metadata(&created_metadata, &held_created_metadata) ||
+    !stable_metadata(&created_metadata, &post.metadata) ||
+    strcmp(post.content_sha256, content_sha256) != 0
+  ) {
+    close_quietly(post.fd);
+    close_quietly(visible_parent);
+    close_quietly(destination);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "create-final-child-drift");
+  }
+
+  if (
+    !stable_directory_descriptor(
+      parent.fd,
+      &parent_post_effect_metadata
+    ) ||
+    !stable_directory_descriptor(
+      visible_parent,
+      &parent_post_effect_metadata
+    )
+  ) {
+    close_quietly(post.fd);
+    close_quietly(visible_parent);
+    close_quietly(destination);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "create-final-parent-drift");
+  }
+
+  const int final_visible_parent = reopen_verified_parent(
+    root_fd,
+    &parent,
+    &parent_post_effect_metadata,
+    "create-final-parent-drift"
+  );
+  const int final_child = confined_openat2(
+    final_visible_parent,
+    parent.basename,
+    (uint64_t)(O_RDONLY | O_CLOEXEC | O_NOFOLLOW),
+    0U
+  );
+  if (final_child < 0) {
+    close_quietly(final_visible_parent);
+    close_quietly(post.fd);
+    close_quietly(visible_parent);
+    close_quietly(destination);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "create-final-child-resolution");
+  }
+  struct stat final_child_metadata;
+  if (
+    fstat(final_child, &final_child_metadata) < 0 ||
+    !S_ISREG(final_child_metadata.st_mode) ||
+    final_child_metadata.st_nlink != 1U ||
+    !has_exact_permissions(&final_child_metadata, CREATE_PERMISSIONS) ||
+    !stable_metadata(&created_metadata, &final_child_metadata) ||
+    !stable_metadata(&post.metadata, &final_child_metadata) ||
+    !stable_directory_descriptor(
+      parent.fd,
+      &parent_post_effect_metadata
+    ) ||
+    !stable_directory_descriptor(
+      visible_parent,
+      &parent_post_effect_metadata
+    ) ||
+    !stable_directory_descriptor(
+      final_visible_parent,
+      &parent_post_effect_metadata
+    )
+  ) {
+    close_quietly(final_child);
+    close_quietly(final_visible_parent);
+    close_quietly(post.fd);
+    close_quietly(visible_parent);
+    close_quietly(destination);
+    close_quietly(parent.fd);
+    fail_with("UNCERTAIN", "create-final-binding-drift");
+  }
+  close_quietly(final_child);
+  close_quietly(final_visible_parent);
   close_quietly(post.fd);
+  close_quietly(visible_parent);
+  close_quietly(destination);
+  close_quietly(parent.fd);
   (void)printf("OK\t%s\t%s\n", pre_commitment, post.commitment);
 }
 
@@ -636,79 +758,20 @@ static void execute_mkdir(
   const char *path,
   const char *expected_commitment
 ) {
-  struct parent_reference parent = { .fd = -1 };
-  char pre_commitment[65];
-  capture_absent_state(
-    root_fd,
-    root_metadata,
-    path,
-    &parent,
-    pre_commitment
-  );
-  if (strcmp(pre_commitment, expected_commitment) != 0) {
-    close_quietly(parent.fd);
-    fail_with("STATE", "commitment");
-  }
-
-  effect_started = true;
-  if (mkdirat(parent.fd, parent.basename, 0700U) < 0) {
-    close_quietly(parent.fd);
-    fail_errno("IO");
-  }
-  const int created_directory = openat(
-    parent.fd,
-    parent.basename,
-    O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
-  );
-  if (created_directory < 0 || fsync(created_directory) < 0) {
-    close_quietly(created_directory);
-    close_quietly(parent.fd);
-    fail_errno("IO");
-  }
-  close_quietly(created_directory);
-  sync_parent(&parent);
-  close_quietly(parent.fd);
-
-  char post_commitment[65];
-  capture_directory_state(
-    root_fd,
-    root_metadata,
-    path,
-    post_commitment
-  );
-  (void)printf("OK\t%s\t%s\n", pre_commitment, post_commitment);
-}
-
-static void random_temporary_name(char output[NAME_MAX + 1U]) {
-  unsigned char random_bytes[16];
-  size_t offset = 0U;
-  while (offset < sizeof(random_bytes)) {
-    const ssize_t count = syscall(
-      SYS_getrandom,
-      random_bytes + offset,
-      sizeof(random_bytes) - offset,
-      0U
-    );
-    if (count < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      fail_errno("IO");
-    }
-    if (count == 0) {
-      fail_with("IO", "random-eof");
-    }
-    offset += (size_t)count;
-  }
-  static const char alphabet[] = "0123456789abcdef";
-  const char prefix[] = ".clodex-replace-v1-";
-  memcpy(output, prefix, sizeof(prefix) - 1U);
-  size_t cursor = sizeof(prefix) - 1U;
-  for (size_t index = 0; index < sizeof(random_bytes); ++index) {
-    output[cursor++] = alphabet[random_bytes[index] >> 4U];
-    output[cursor++] = alphabet[random_bytes[index] & 0x0fU];
-  }
-  output[cursor] = '\0';
+  (void)root_fd;
+  (void)root_metadata;
+  (void)path;
+  (void)expected_commitment;
+  /*
+   * mkdirat(2) returns no descriptor.  In an attacker-writable parent, any
+   * lookup after mkdirat can therefore adopt a decoy inode installed between
+   * the syscall return and the first open.  The v1 helper has no separately
+   * provisioned, same-filesystem staging directory owned by a distinct
+   * Guardian principal, so it cannot make the exact-created-inode guarantee.
+   * Keep execution fail-closed and pre-effect until that trust boundary is an
+   * explicit pinned input; inspection remains available for policy planning.
+   */
+  fail_with("UNSUPPORTED", "mkdir-exact-inode");
 }
 
 static void execute_replace(
@@ -720,243 +783,28 @@ static void execute_replace(
   const char *content_sha256,
   uint64_t content_bytes
 ) {
-  struct file_snapshot before = { .fd = -1 };
-  capture_file_state(root_fd, root_metadata, path, &before);
-  if (
-    strcmp(before.commitment, expected_commitment) != 0 ||
-    strcmp(before.content_sha256, before_sha256) != 0
-  ) {
-    close_quietly(before.fd);
-    fail_with("STATE", "commitment");
-  }
-
-  struct parent_reference parent = { .fd = -1 };
-  open_parent_reference(root_fd, path, &parent);
-  struct stat target_before;
-  if (
-    fstatat(
-      parent.fd,
-      parent.basename,
-      &target_before,
-      AT_SYMLINK_NOFOLLOW
-    ) < 0 ||
-    target_before.st_dev != before.metadata.st_dev ||
-    target_before.st_ino != before.metadata.st_ino
-  ) {
-    close_quietly(parent.fd);
-    close_quietly(before.fd);
-    fail_with("STATE", "namespace-drift");
-  }
-
-  char temporary_name[NAME_MAX + 1U];
-  int replacement = -1;
+  (void)root_fd;
+  (void)root_metadata;
+  (void)path;
+  (void)expected_commitment;
+  (void)before_sha256;
+  (void)content_sha256;
+  (void)content_bytes;
   /*
-   * Creating the hidden replacement is already a host effect.  From this
-   * fence onward, even a best-effort unlink cannot justify a certain failure:
-   * cleanup or durability may have failed and callers must close UNCERTAIN.
+   * The v1 helper exchanges the old target into a name in the same mutable
+   * parent before disposing it.  unlinkat(2) addresses only that name, not the
+   * inode previously validated there, so a concurrent writer can exchange a
+   * sibling victim into the disposal name after validation and make the helper
+   * unlink the wrong inode.  Re-stat'ing the name cannot close the final
+   * lookup-to-unlink window.
+   *
+   * A sound implementation requires a pinned, private same-filesystem staging
+   * directory that the competing workspace principal cannot rename into.  No
+   * such directory/principal is part of protocol v1.  Reject execution before
+   * reading stdin or creating a staging file; inspect-replace remains available
+   * only for non-authorizing policy planning.
    */
-  effect_started = true;
-  for (unsigned int attempt = 0U; attempt < 8U; ++attempt) {
-    random_temporary_name(temporary_name);
-    replacement = openat(
-      parent.fd,
-      temporary_name,
-      O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
-      0600U
-    );
-    if (replacement >= 0 || errno != EEXIST) {
-      break;
-    }
-  }
-  if (replacement < 0) {
-    close_quietly(parent.fd);
-    close_quietly(before.fd);
-    fail_errno("IO");
-  }
-
-  write_exact_stdin(replacement, content_bytes, content_sha256);
-  if (fchmod(replacement, 0600U) < 0 || fsync(replacement) < 0) {
-    close_quietly(replacement);
-    (void)unlinkat(parent.fd, temporary_name, 0);
-    close_quietly(parent.fd);
-    close_quietly(before.fd);
-    fail_errno("IO");
-  }
-  struct stat replacement_metadata;
-  if (fstat(replacement, &replacement_metadata) < 0) {
-    close_quietly(replacement);
-    (void)unlinkat(parent.fd, temporary_name, 0);
-    close_quietly(parent.fd);
-    close_quietly(before.fd);
-    fail_errno("IO");
-  }
-  char staged_content_sha256[65];
-  hash_fd_contents(replacement, MAX_CONTENT_BYTES, staged_content_sha256);
-  struct stat replacement_after_hash;
-  if (
-    fstat(replacement, &replacement_after_hash) < 0 ||
-    !stable_metadata(&replacement_metadata, &replacement_after_hash) ||
-    replacement_after_hash.st_size < 0 ||
-    (uint64_t)replacement_after_hash.st_size != content_bytes ||
-    strcmp(staged_content_sha256, content_sha256) != 0
-  ) {
-    close_quietly(replacement);
-    (void)unlinkat(parent.fd, temporary_name, 0);
-    close_quietly(parent.fd);
-    close_quietly(before.fd);
-    fail_with("UNCERTAIN", "staging-validation");
-  }
-  replacement_metadata = replacement_after_hash;
-
-  if (
-    syscall(
-      SYS_renameat2,
-      parent.fd,
-      temporary_name,
-      parent.fd,
-      parent.basename,
-      RENAME_EXCHANGE
-    ) < 0
-  ) {
-    close_quietly(replacement);
-    (void)unlinkat(parent.fd, temporary_name, 0);
-    close_quietly(parent.fd);
-    close_quietly(before.fd);
-    fail_errno(errno == ENOSYS ? "UNSUPPORTED" : "IO");
-  }
-
-  struct stat captured_old;
-  struct stat installed_new;
-  struct stat installed_fd;
-  bool valid_exchange =
-    fstatat(
-      parent.fd,
-      temporary_name,
-      &captured_old,
-      AT_SYMLINK_NOFOLLOW
-    ) == 0 &&
-    fstat(replacement, &installed_fd) == 0 &&
-    fstatat(
-      parent.fd,
-      parent.basename,
-      &installed_new,
-      AT_SYMLINK_NOFOLLOW
-    ) == 0 &&
-    captured_old.st_dev == before.metadata.st_dev &&
-    captured_old.st_ino == before.metadata.st_ino &&
-    stable_exchange_file_semantics(&before.metadata, &captured_old) &&
-    installed_new.st_dev == replacement_metadata.st_dev &&
-    installed_new.st_ino == replacement_metadata.st_ino &&
-    stable_exchange_file_semantics(
-      &replacement_metadata,
-      &installed_new
-    ) &&
-    stable_exchange_file_semantics(&replacement_metadata, &installed_fd);
-
-  struct stat before_after;
-  if (fstat(before.fd, &before_after) < 0) {
-    valid_exchange = false;
-  }
-  char captured_before_sha256[65] = { 0 };
-  if (valid_exchange) {
-    hash_fd_contents(before.fd, MAX_TREE_BYTES, captured_before_sha256);
-    struct stat after_hash;
-    if (fstat(before.fd, &after_hash) < 0 ||
-      !stable_exchange_file_semantics(&before.metadata, &before_after) ||
-      !stable_exchange_file_semantics(&before_after, &after_hash)) {
-      valid_exchange = false;
-    } else {
-      valid_exchange = strcmp(captured_before_sha256, before_sha256) == 0;
-    }
-  }
-
-  char installed_content_sha256[65] = { 0 };
-  if (valid_exchange) {
-    hash_fd_contents(
-      replacement,
-      MAX_CONTENT_BYTES,
-      installed_content_sha256
-    );
-    struct stat installed_after_hash;
-    if (
-      fstat(replacement, &installed_after_hash) < 0 ||
-      !stable_exchange_file_semantics(&installed_fd, &installed_after_hash) ||
-      strcmp(installed_content_sha256, content_sha256) != 0
-    ) {
-      valid_exchange = false;
-    }
-  }
-
-  if (!valid_exchange) {
-    const bool exchanged_back = syscall(
-      SYS_renameat2,
-      parent.fd,
-      temporary_name,
-      parent.fd,
-      parent.basename,
-      RENAME_EXCHANGE
-    ) == 0;
-    bool safe_to_remove_staged = false;
-    if (exchanged_back) {
-      struct stat restored_old;
-      struct stat discarded_new;
-      safe_to_remove_staged =
-        fstatat(
-          parent.fd,
-          parent.basename,
-          &restored_old,
-          AT_SYMLINK_NOFOLLOW
-        ) == 0 &&
-        fstatat(
-          parent.fd,
-          temporary_name,
-          &discarded_new,
-          AT_SYMLINK_NOFOLLOW
-        ) == 0 &&
-        restored_old.st_dev == before.metadata.st_dev &&
-        restored_old.st_ino == before.metadata.st_ino &&
-        discarded_new.st_dev == replacement_metadata.st_dev &&
-        discarded_new.st_ino == replacement_metadata.st_ino &&
-        fsync(parent.fd) == 0;
-    }
-    close_quietly(replacement);
-    if (safe_to_remove_staged) {
-      if (unlinkat(parent.fd, temporary_name, 0) == 0) {
-        (void)fsync(parent.fd);
-      }
-    }
-    close_quietly(parent.fd);
-    close_quietly(before.fd);
-    fail_with("UNCERTAIN", "exchange-validation");
-  }
-
-  if (unlinkat(parent.fd, temporary_name, 0) < 0 || fsync(parent.fd) < 0) {
-    close_quietly(replacement);
-    close_quietly(parent.fd);
-    close_quietly(before.fd);
-    fail_errno("IO");
-  }
-  close_quietly(replacement);
-  close_quietly(parent.fd);
-  close_quietly(before.fd);
-
-  struct file_snapshot post = { .fd = -1 };
-  capture_file_state(root_fd, root_metadata, path, &post);
-  if (
-    post.metadata.st_dev != replacement_metadata.st_dev ||
-    post.metadata.st_ino != replacement_metadata.st_ino ||
-    strcmp(post.content_sha256, content_sha256) != 0
-  ) {
-    close_quietly(post.fd);
-    fail_with("UNCERTAIN", "post-state");
-  }
-  close_quietly(post.fd);
-  (void)printf(
-    "OK\t%s\t%s\t%s\n",
-    expected_commitment,
-    post.commitment,
-    before_sha256
-  );
+  fail_with("UNSUPPORTED", "replace-private-staging");
 }
 
 static int compare_names(const void *left_value, const void *right_value) {

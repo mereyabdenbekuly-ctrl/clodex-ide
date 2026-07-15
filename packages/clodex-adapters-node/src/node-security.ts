@@ -11,12 +11,15 @@ export const LINUX_CONFINED_ADAPTER_PROFILE = Object.freeze({
   platform: 'linux',
   filesystemResolution:
     'descriptor-relative-openat2-beneath-no-symlinks-no-magiclinks-no-xdev',
-  filesystemMutation:
-    'fixed-create-mkdir-and-rename-exchange-replace-with-file-and-directory-fsync',
+  filesystemMutation: 'fixed-create-with-file-and-directory-fsync',
+  filesystemMkdirExecution:
+    'disabled-without-pinned-private-same-filesystem-staging',
+  filesystemReplaceExecution:
+    'disabled-without-pinned-private-same-filesystem-staging',
   filesystemNamespaceFreeze: false,
   filesystemReplaceAtomicInodeCas: false,
   filesystemReplaceRaceDisposition:
-    'post-validate-and-close-uncertain; not a kernel compare-and-swap primitive',
+    'pre-effect-disabled; mutable-name disposal is not inode-bound',
   executableIdentity: 'open-hash-fstat-execute-same-fd-via-procfs',
   executableDependencyClosurePinned: false,
   workspaceIdentity: 'open-directory-fstat-and-hold-descriptor',
@@ -53,6 +56,7 @@ export type NodeAdapterErrorCode =
   | 'executable-integrity-mismatch'
   | 'helper-failure'
   | 'helper-output-invalid'
+  | 'operation-unsupported'
   | 'output-limit-exceeded'
   | 'platform-unsupported'
   | 'process-failure'
