@@ -281,7 +281,11 @@ jobs:
         run: pnpm build
 
       - name: Run Tests
-        run: pnpm test
+        # Running every workspace test task at once can exhaust the Windows
+        # runner and terminate a Vitest worker with ERR_IPC_CHANNEL_CLOSED.
+        # Keep cross-package parallelism bounded; individual suites retain
+        # their own configured test concurrency.
+        run: pnpm exec turbo run test --concurrency=4
 
   # Cross-platform Clodex builds - only on PRs to main/release-tests
   # Required for merge
