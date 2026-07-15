@@ -1,0 +1,423 @@
+{
+  "schemaVersion": 1,
+  "status": "ENGINEERING_REVIEWED",
+  "reviewedAt": "2026-07-15",
+  "legalConclusion": false,
+  "policy": "Exact bundled-component records only. Source archives, local evidence, and fixed binary artifacts are SHA-256 pinned. Missing evidence, hash drift, platform mismatch, or an unreviewed record blocks release. This registry records engineering provenance and does not itself grant redistribution rights.",
+  "components": [
+    {
+      "id": "vscode-eslint-server",
+      "name": "vscode-eslint",
+      "version": "3.0.10",
+      "kind": "bundled-source-build",
+      "platforms": ["linux", "macos", "windows"],
+      "architectures": ["arm64", "x64"],
+      "publisher": "Microsoft Corporation",
+      "repository": "https://github.com/microsoft/vscode-eslint",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "source": {
+        "type": "git-archive",
+        "versionRef": "release/3.0.10",
+        "immutableRevision": "790646388696511b2665a4d119bf0fb713dd990d",
+        "url": "https://github.com/microsoft/vscode-eslint/archive/790646388696511b2665a4d119bf0fb713dd990d.zip",
+        "sha256": "24ebbef9ee5c716d4653c193bca00192b19787cc7152c3d61a474a10920d6239",
+        "sourceReferences": [
+          "https://github.com/microsoft/vscode-eslint/tree/790646388696511b2665a4d119bf0fb713dd990d",
+          "https://github.com/microsoft/vscode-eslint/releases/tag/release%2F3.0.10"
+        ]
+      },
+      "licenseEvidence": {
+        "path": "bundled-component-license-texts/vscode-eslint-3.0.10-MIT.txt",
+        "sha256": "976f8ed671d885872afac0021bd78b3d84fe8d4783a98b46deb5a7dc4e29dbff",
+        "sourceReferences": [
+          "https://github.com/microsoft/vscode-eslint/blob/790646388696511b2665a4d119bf0fb713dd990d/License.txt"
+        ]
+      },
+      "noticeEvidence": {
+        "status": "LICENSE_CONTAINS_COPYRIGHT_NOTICE",
+        "sourceArchiveInspectedSha256": "24ebbef9ee5c716d4653c193bca00192b19787cc7152c3d61a474a10920d6239",
+        "sourceReferences": [
+          "https://github.com/microsoft/vscode-eslint/blob/790646388696511b2665a4d119bf0fb713dd990d/License.txt"
+        ]
+      },
+      "packagedArtifacts": {
+        "mode": "generated-manifest",
+        "manifest": {
+          "location": "resources",
+          "path": "bundled/eslint-server/provenance.json"
+        },
+        "artifactDirectory": {
+          "location": "resources",
+          "path": "bundled/eslint-server"
+        },
+        "fixedFiles": [
+          {
+            "location": "resources",
+            "path": "bundled/eslint-server/License.txt",
+            "role": "license",
+            "bytes": 1119,
+            "sha256": "976f8ed671d885872afac0021bd78b3d84fe8d4783a98b46deb5a7dc4e29dbff"
+          }
+        ],
+        "requiredFiles": [
+          {
+            "path": "eslintServer.cjs",
+            "role": "server-bundle"
+          },
+          {
+            "path": "eslintServer.js.map",
+            "role": "source-map"
+          }
+        ]
+      },
+      "redistributionReview": {
+        "status": "UPSTREAM_LICENSE_RECORDED",
+        "legalConclusion": false,
+        "sourceReferences": [
+          "https://github.com/microsoft/vscode-eslint/blob/790646388696511b2665a4d119bf0fb713dd990d/License.txt"
+        ],
+        "notes": "The exact upstream MIT text and copyright notice are retained; this engineering record is not a legal opinion."
+      },
+      "purl": "pkg:github/microsoft/vscode-eslint@790646388696511b2665a4d119bf0fb713dd990d",
+      "buildTransforms": [
+        {
+          "id": "node22-ts-loader-transpile-only",
+          "targetPath": "shared.webpack.config.js",
+          "beforeSha256": "49a4bce66ba00b017683041e4c371bfc1d8a97a7afa5e07e0f3d33f79506c8a7",
+          "afterSha256": "1348d1f2a73a1e0d23fde6363c9d3fb7657497e062bced4263c809a73dc04da6",
+          "description": "Adds transpileOnly=true to the existing ts-loader options so the pinned server source can be bundled under Node 22 without changing runtime logic."
+        }
+      ],
+      "embeddedDependencyLock": {
+        "path": "bundled-component-evidence/vscode-eslint-3.0.10-server-package-lock.json",
+        "sha256": "7b242318057e0d9d55df95fce3c8679ca2506cf363b19c3c2f7ea7dd2455eb66",
+        "sourceReferences": [
+          "https://github.com/microsoft/vscode-eslint/blob/790646388696511b2665a4d119bf0fb713dd990d/server/package-lock.json"
+        ]
+      },
+      "embeddedDependencies": [
+        {
+          "name": "lru-cache",
+          "version": "6.0.0",
+          "license": "ISC",
+          "publisher": "Isaac Z. Schlueter and contributors",
+          "repository": "https://github.com/isaacs/node-lru-cache",
+          "purl": "pkg:npm/lru-cache@6.0.0",
+          "packageSource": {
+            "registry": "npm",
+            "tarball": "https://registry.npmjs.org/lru-cache/-/lru-cache-6.0.0.tgz",
+            "integrity": "sha512-Jo6dJ04CmSjuznwJSS3pUeWmd/H0ffTlkXXgwZi+eq1UCmqQwCh+eLsYOYCwY991i2Fah4h1BEMCx4qThGbsiA==",
+            "sha256": "5ce40deb031cf6968f3832502a68f8d26be09764dc4f8fc07957a2fd7e8cdf5e"
+          },
+          "licenseEvidence": {
+            "path": "bundled-component-license-texts/eslint-bundle-ISC.txt",
+            "packagePath": "LICENSE",
+            "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b",
+            "sourceReferences": [
+              "https://registry.npmjs.org/lru-cache/-/lru-cache-6.0.0.tgz",
+              "https://www.npmjs.com/package/lru-cache/v/6.0.0"
+            ]
+          }
+        },
+        {
+          "name": "semver",
+          "version": "7.6.0",
+          "license": "ISC",
+          "publisher": "Isaac Z. Schlueter and contributors",
+          "repository": "https://github.com/npm/node-semver",
+          "purl": "pkg:npm/semver@7.6.0",
+          "packageSource": {
+            "registry": "npm",
+            "tarball": "https://registry.npmjs.org/semver/-/semver-7.6.0.tgz",
+            "integrity": "sha512-EnwXhrlwXMk9gKu5/flx5sv/an57AkRplG3hTK68W7FRDN+k+OWBj65M7719OkA82XLBxrcX0KSHj+X5COhOVg==",
+            "sha256": "49ef76bfe28857daa79115d5acc80bfbec8a7852f15dc3c2ac2e6b8777255c0f"
+          },
+          "licenseEvidence": {
+            "path": "bundled-component-license-texts/eslint-bundle-ISC.txt",
+            "packagePath": "LICENSE",
+            "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b",
+            "sourceReferences": [
+              "https://registry.npmjs.org/semver/-/semver-7.6.0.tgz",
+              "https://www.npmjs.com/package/semver/v/7.6.0"
+            ]
+          }
+        },
+        {
+          "name": "vscode-jsonrpc",
+          "version": "9.0.0-next.4",
+          "license": "MIT",
+          "publisher": "Microsoft Corporation",
+          "repository": "https://github.com/microsoft/vscode-languageserver-node",
+          "purl": "pkg:npm/vscode-jsonrpc@9.0.0-next.4",
+          "packageSource": {
+            "registry": "npm",
+            "tarball": "https://registry.npmjs.org/vscode-jsonrpc/-/vscode-jsonrpc-9.0.0-next.4.tgz",
+            "integrity": "sha512-zSVIr58lJSMYKIsZ5P7GtBbv1eEx25eNyOf0NmEzxmn1GhUNJAVAb5hkA1poKUwj1FRMwN6CeyWxZypmr8SsQQ==",
+            "sha256": "dc7f60c7673210215b40d284237e1ceadd4b8072e36b5534d00f952065020da3"
+          },
+          "licenseEvidence": {
+            "path": "bundled-component-license-texts/vscode-languageserver-node-MIT.txt",
+            "packagePath": "License.txt",
+            "sha256": "ec9ee83580841e8eb687aca9867f221503809ba6426c7f876ede17d91b9fcfd0",
+            "sourceReferences": [
+              "https://registry.npmjs.org/vscode-jsonrpc/-/vscode-jsonrpc-9.0.0-next.4.tgz",
+              "https://www.npmjs.com/package/vscode-jsonrpc/v/9.0.0-next.4"
+            ]
+          }
+        },
+        {
+          "name": "vscode-languageserver",
+          "version": "10.0.0-next.6",
+          "license": "MIT",
+          "publisher": "Microsoft Corporation",
+          "repository": "https://github.com/microsoft/vscode-languageserver-node",
+          "purl": "pkg:npm/vscode-languageserver@10.0.0-next.6",
+          "packageSource": {
+            "registry": "npm",
+            "tarball": "https://registry.npmjs.org/vscode-languageserver/-/vscode-languageserver-10.0.0-next.6.tgz",
+            "integrity": "sha512-0Lh1nhQfSxo5Ob+ayYO1QTIsDix2/Lc72Urm1KZrCFxK5zIFYaEh3QFeM9oZih4Rzs0ZkQPXXnoHtpvs5GT+Zw==",
+            "sha256": "b67a23cc459b67af3c2e0d3afe894df8277e85a58478a0f6643f3255a7deaaec"
+          },
+          "licenseEvidence": {
+            "path": "bundled-component-license-texts/vscode-languageserver-node-MIT.txt",
+            "packagePath": "License.txt",
+            "sha256": "ec9ee83580841e8eb687aca9867f221503809ba6426c7f876ede17d91b9fcfd0",
+            "sourceReferences": [
+              "https://registry.npmjs.org/vscode-languageserver/-/vscode-languageserver-10.0.0-next.6.tgz",
+              "https://www.npmjs.com/package/vscode-languageserver/v/10.0.0-next.6"
+            ]
+          }
+        },
+        {
+          "name": "vscode-languageserver-protocol",
+          "version": "3.17.6-next.6",
+          "license": "MIT",
+          "publisher": "Microsoft Corporation",
+          "repository": "https://github.com/microsoft/vscode-languageserver-node",
+          "purl": "pkg:npm/vscode-languageserver-protocol@3.17.6-next.6",
+          "packageSource": {
+            "registry": "npm",
+            "tarball": "https://registry.npmjs.org/vscode-languageserver-protocol/-/vscode-languageserver-protocol-3.17.6-next.6.tgz",
+            "integrity": "sha512-naxM9kc/phpl0kAFNVPejMUWUtzFXdPYY/BtQTYtfbBbHf8sceHOrKkmf6yynZRu1A4oFtRZNqV3wyFRTWqUHw==",
+            "sha256": "c93733de68c7d5dae1bba6bab882e196b7953c529784ae3dba22445f2264b4d0"
+          },
+          "licenseEvidence": {
+            "path": "bundled-component-license-texts/vscode-languageserver-node-MIT.txt",
+            "packagePath": "License.txt",
+            "sha256": "ec9ee83580841e8eb687aca9867f221503809ba6426c7f876ede17d91b9fcfd0",
+            "sourceReferences": [
+              "https://registry.npmjs.org/vscode-languageserver-protocol/-/vscode-languageserver-protocol-3.17.6-next.6.tgz",
+              "https://www.npmjs.com/package/vscode-languageserver-protocol/v/3.17.6-next.6"
+            ]
+          }
+        },
+        {
+          "name": "vscode-languageserver-textdocument",
+          "version": "1.0.11",
+          "license": "MIT",
+          "publisher": "Microsoft Corporation",
+          "repository": "https://github.com/microsoft/vscode-languageserver-node",
+          "purl": "pkg:npm/vscode-languageserver-textdocument@1.0.11",
+          "packageSource": {
+            "registry": "npm",
+            "tarball": "https://registry.npmjs.org/vscode-languageserver-textdocument/-/vscode-languageserver-textdocument-1.0.11.tgz",
+            "integrity": "sha512-X+8T3GoiwTVlJbicx/sIAF+yuJAqz8VvwJyoMVhwEMoEKE/fkDmrqUgDMyBECcM2A2frVZIUj5HI/ErRXCfOeA==",
+            "sha256": "b1923f0ca4233c016febcb2b7728541d25eac4353a8fb21d18aa23ec9d70858c"
+          },
+          "licenseEvidence": {
+            "path": "bundled-component-license-texts/vscode-languageserver-node-MIT.txt",
+            "packagePath": "License.txt",
+            "sha256": "ec9ee83580841e8eb687aca9867f221503809ba6426c7f876ede17d91b9fcfd0",
+            "sourceReferences": [
+              "https://registry.npmjs.org/vscode-languageserver-textdocument/-/vscode-languageserver-textdocument-1.0.11.tgz",
+              "https://www.npmjs.com/package/vscode-languageserver-textdocument/v/1.0.11"
+            ]
+          }
+        },
+        {
+          "name": "vscode-languageserver-types",
+          "version": "3.17.6-next.4",
+          "license": "MIT",
+          "publisher": "Microsoft Corporation",
+          "repository": "https://github.com/microsoft/vscode-languageserver-node",
+          "purl": "pkg:npm/vscode-languageserver-types@3.17.6-next.4",
+          "packageSource": {
+            "registry": "npm",
+            "tarball": "https://registry.npmjs.org/vscode-languageserver-types/-/vscode-languageserver-types-3.17.6-next.4.tgz",
+            "integrity": "sha512-SeJTpH/S14EbxOAVaOUoGVqPToqpRTld5QO5Ghig3AlbFJTFF9Wu7srHMfa85L0SX1RYAuuCSFKJVVCxDIk1/Q==",
+            "sha256": "6ef97aa0eb9c196e50940a6506fae3605e73fe5a57d5864309b3a4f36f4ac121"
+          },
+          "licenseEvidence": {
+            "path": "bundled-component-license-texts/vscode-languageserver-node-MIT.txt",
+            "packagePath": "License.txt",
+            "sha256": "ec9ee83580841e8eb687aca9867f221503809ba6426c7f876ede17d91b9fcfd0",
+            "sourceReferences": [
+              "https://registry.npmjs.org/vscode-languageserver-types/-/vscode-languageserver-types-3.17.6-next.4.tgz",
+              "https://www.npmjs.com/package/vscode-languageserver-types/v/3.17.6-next.4"
+            ]
+          }
+        },
+        {
+          "name": "vscode-uri",
+          "version": "3.0.8",
+          "license": "MIT",
+          "publisher": "Microsoft",
+          "repository": "https://github.com/microsoft/vscode-uri",
+          "purl": "pkg:npm/vscode-uri@3.0.8",
+          "packageSource": {
+            "registry": "npm",
+            "tarball": "https://registry.npmjs.org/vscode-uri/-/vscode-uri-3.0.8.tgz",
+            "integrity": "sha512-AyFQ0EVmsOZOlAnxoFOGOq1SQDWAB7C6aqMGS23svWAllfOaxbuFvcT8D1i8z3Gyn8fraVeZNNmN6e9bxxXkKw==",
+            "sha256": "a716d2fb0b5ba69c557df007f83dee43117a20faee0adc9400de03be10f475f3"
+          },
+          "licenseEvidence": {
+            "path": "bundled-component-license-texts/vscode-uri-3.0.8-MIT.txt",
+            "packagePath": "LICENSE.md",
+            "sha256": "c669138cb1eb01fbb745e8e460b291e4f2869c14a40061390b6095d845ed4c82",
+            "sourceReferences": [
+              "https://registry.npmjs.org/vscode-uri/-/vscode-uri-3.0.8.tgz",
+              "https://www.npmjs.com/package/vscode-uri/v/3.0.8"
+            ]
+          }
+        },
+        {
+          "name": "yallist",
+          "version": "4.0.0",
+          "license": "ISC",
+          "publisher": "Isaac Z. Schlueter and contributors",
+          "repository": "https://github.com/isaacs/yallist",
+          "purl": "pkg:npm/yallist@4.0.0",
+          "packageSource": {
+            "registry": "npm",
+            "tarball": "https://registry.npmjs.org/yallist/-/yallist-4.0.0.tgz",
+            "integrity": "sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A==",
+            "sha256": "a80c78aa276536615891ef66efbc17d3bd07c8cb14e3bd5298eed3006bfa4d49"
+          },
+          "licenseEvidence": {
+            "path": "bundled-component-license-texts/eslint-bundle-ISC.txt",
+            "packagePath": "LICENSE",
+            "sha256": "4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b",
+            "sourceReferences": [
+              "https://registry.npmjs.org/yallist/-/yallist-4.0.0.tgz",
+              "https://www.npmjs.com/package/yallist/v/4.0.0"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "vcruntime-cefsharp-140",
+      "name": "VCRuntime.CefSharp.140",
+      "version": "1.0.5",
+      "kind": "bundled-binary-archive",
+      "platforms": ["windows"],
+      "architectures": ["x64"],
+      "publisher": "Microsoft",
+      "packageOwner": "havendv",
+      "repository": "https://github.com/HavenDV/NuGet.NativeLibraries",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "source": {
+        "type": "nuget-package",
+        "packageId": "VCRuntime.CefSharp.140",
+        "version": "1.0.5",
+        "url": "https://api.nuget.org/v3-flatcontainer/vcruntime.cefsharp.140/1.0.5/vcruntime.cefsharp.140.1.0.5.nupkg",
+        "sha256": "063bbdc41bab3911677feac7a6373ba9d60e0b497b994cfc947bc3735359d2c0",
+        "nugetSha512": "7cEH8GsvFDCxTLhG2q+vOu1+FIaK1tukug+UpGWqrLu8g2cTeYWwHziil5nGLNaHRP0xyOrwjOnoMII/YwjHZw==",
+        "sourceRevision": "3db205447bf52b66b61f7881a9294cf495d92eeb",
+        "signatureEntrySha256": "f416786c9004ff65135d2ff7f8e6eda8240ab1daedd9c8a71a291322bf418ed4",
+        "sourceReferences": [
+          "https://www.nuget.org/packages/VCRuntime.CefSharp.140/1.0.5",
+          "https://api.nuget.org/v3/catalog0/data/2022.04.26.23.35.46/vcruntime.cefsharp.140.1.0.5.json",
+          "https://github.com/HavenDV/NuGet.NativeLibraries/tree/3db205447bf52b66b61f7881a9294cf495d92eeb/src/VCRuntime.CefSharp.140"
+        ]
+      },
+      "licenseEvidence": {
+        "path": "bundled-component-license-texts/vcruntime-cefsharp-140-1.0.5-MIT.txt",
+        "sha256": "8473020e9df2be9d1ca76d9c370783203bd1ba2e1e9a19617c697633942c2596",
+        "sourceReferences": [
+          "https://github.com/HavenDV/NuGet.NativeLibraries/blob/3db205447bf52b66b61f7881a9294cf495d92eeb/LICENSE",
+          "https://licenses.nuget.org/MIT"
+        ]
+      },
+      "metadataEvidence": {
+        "path": "bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec",
+        "sha256": "883fafd27215c4874d295484cbcbd10791e2d2294318e42072d051dd8989d642",
+        "sourceReferences": [
+          "https://api.nuget.org/v3-flatcontainer/vcruntime.cefsharp.140/1.0.5/vcruntime.cefsharp.140.1.0.5.nupkg",
+          "https://api.nuget.org/v3/catalog0/data/2022.04.26.23.35.46/vcruntime.cefsharp.140.1.0.5.json"
+        ]
+      },
+      "noticeEvidence": {
+        "status": "PACKAGE_METADATA_CONTAINS_COPYRIGHT_NOTICE",
+        "sourceArchiveInspectedSha256": "063bbdc41bab3911677feac7a6373ba9d60e0b497b994cfc947bc3735359d2c0",
+        "sourceReferences": [
+          "https://api.nuget.org/v3/catalog0/data/2022.04.26.23.35.46/vcruntime.cefsharp.140.1.0.5.json"
+        ]
+      },
+      "packagedArtifacts": {
+        "mode": "fixed-files",
+        "files": [
+          {
+            "location": "application",
+            "path": "vcruntime140.dll",
+            "archivePath": "vc_redist/x64/vcruntime140.dll",
+            "role": "runtime-library",
+            "bytes": 98224,
+            "sha256": "e686dd4fbd9d2117d74ad817f4f1c4be82b129760b5608facc770b12c3796fce"
+          },
+          {
+            "location": "application",
+            "path": "vcruntime140_1.dll",
+            "archivePath": "vc_redist/x64/vcruntime140_1.dll",
+            "role": "runtime-library",
+            "bytes": 38320,
+            "sha256": "bc6e137696ce75be00733cdb5210de363b4addf62c6a3608abe0331efc7dc395"
+          },
+          {
+            "location": "application",
+            "path": "msvcp140.dll",
+            "archivePath": "vc_redist/x64/msvcp140.dll",
+            "role": "runtime-library",
+            "bytes": 566704,
+            "sha256": "9a72d0c7f0e8df99b32a15f89ff8ed6ae6dc0b6615b7d9fd53605ec98a888b61"
+          },
+          {
+            "location": "application",
+            "path": "msvcp140_1.dll",
+            "archivePath": "vc_redist/x64/msvcp140_1.dll",
+            "role": "runtime-library",
+            "bytes": 25008,
+            "sha256": "79d00d3497fd6c0b84129b914d044cd447b6b9d09a768134a6c6ce86f129eaab"
+          },
+          {
+            "location": "application",
+            "path": "msvcp140_2.dll",
+            "archivePath": "vc_redist/x64/msvcp140_2.dll",
+            "role": "runtime-library",
+            "bytes": 186784,
+            "sha256": "a9afa030ce3b1f86e50a52534e319d03000a15d9bcf40135ac1c2a3803088711"
+          }
+        ],
+        "exclusiveFileMatch": {
+          "location": "application",
+          "path": ".",
+          "fileNamePattern": "^(?:msvcp140.*|vcruntime140.*)\\.dll$"
+        }
+      },
+      "redistributionReview": {
+        "status": "CONDITIONAL_UPSTREAM_TERMS",
+        "legalConclusion": false,
+        "sourceReferences": [
+          "https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/",
+          "https://www.nuget.org/packages/VCRuntime.CefSharp.140/1.0.5"
+        ],
+        "notes": "The NuGet package declares MIT for the package and identifies Microsoft copyright for the DLLs. This record does not assert that the package MIT expression alone grants redistribution rights to the Microsoft runtime binaries; the release owner and specialist counsel must verify the applicable Microsoft runtime terms and organizational entitlement before distribution."
+      },
+      "purl": "pkg:nuget/VCRuntime.CefSharp.140@1.0.5"
+    }
+  ]
+}

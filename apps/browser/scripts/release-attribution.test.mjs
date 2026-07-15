@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   cpSync,
   mkdirSync,
@@ -17,10 +18,15 @@ import {
   AttributionGateError,
   ATTRIBUTION_DIRECTORY_NAME,
   collectReleaseDependencyInventory,
+  inspectBundledComponentArtifacts,
   inspectPackagedAttribution,
+  loadBundledComponentRegistry,
   prepareReleaseAttributionBundle,
   resolveElectronRuntimeNoticePaths,
   sha256FileSync,
+  verifyBundledComponentFixedArtifactBytes,
+  verifyBundledComponentSourceBytes,
+  verifyBundledEmbeddedDependencySourceBytes,
   writeFinalArtifactSbom,
 } from './release-attribution.mjs';
 
@@ -55,6 +61,30 @@ function makeFixture() {
     ['CLODEX_VS_UPSTREAM.md', '# lineage\n'],
     ['CONTRIBUTORS.md', '# contributors\n'],
     ['packages/karton/LICENSE.md', 'fixture Karton MIT license\n'],
+    [
+      'docs/provenance/bundled-component-license-texts/vscode-eslint-3.0.10-MIT.txt',
+      'fixture vscode-eslint MIT license\n',
+    ],
+    [
+      'docs/provenance/bundled-component-license-texts/vcruntime-cefsharp-140-1.0.5-MIT.txt',
+      'fixture VCRuntime package MIT license\n',
+    ],
+    [
+      'docs/provenance/bundled-component-license-texts/eslint-bundle-ISC.txt',
+      'fixture embedded ISC license\n',
+    ],
+    [
+      'docs/provenance/bundled-component-license-texts/vscode-languageserver-node-MIT.txt',
+      'fixture embedded Microsoft MIT license\n',
+    ],
+    [
+      'docs/provenance/bundled-component-license-texts/vscode-uri-3.0.8-MIT.txt',
+      'fixture embedded vscode-uri MIT license\n',
+    ],
+    [
+      'docs/provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec',
+      '<package>fixture metadata</package>\n',
+    ],
   ]) {
     writeText(path.join(root, relativePath), content);
   }
@@ -84,6 +114,20 @@ function makeFixture() {
       legalConclusion: false,
       entries: [],
     },
+  );
+  writeJson(path.join(root, 'docs/provenance/BUNDLED_COMPONENTS.json'), {
+    schemaVersion: 1,
+    status: 'ENGINEERING_REVIEWED',
+    reviewedAt: '2026-07-15',
+    legalConclusion: false,
+    components: [],
+  });
+  writeJson(
+    path.join(
+      root,
+      'docs/provenance/bundled-component-evidence/vscode-eslint-3.0.10-server-package-lock.json',
+    ),
+    { lockfileVersion: 3, packages: {} },
   );
   writeJson(path.join(appDirectory, 'package.json'), {
     name: 'fixture-app',
@@ -139,6 +183,272 @@ function makeFixture() {
   return { appDirectory, outputDirectory, root };
 }
 
+function writeBundledComponents(fixture, components) {
+  writeJson(
+    path.join(fixture.root, 'docs/provenance/BUNDLED_COMPONENTS.json'),
+    {
+      schemaVersion: 1,
+      status: 'ENGINEERING_REVIEWED',
+      reviewedAt: '2026-07-15',
+      legalConclusion: false,
+      components,
+    },
+  );
+}
+
+function generatedBundleComponent(fixture) {
+  const licensePath = path.join(
+    fixture.root,
+    'docs/provenance/bundled-component-license-texts/vscode-eslint-3.0.10-MIT.txt',
+  );
+  const sourceSha256 = '1'.repeat(64);
+  const embeddedLicensePath = path.join(
+    fixture.root,
+    'docs/provenance/bundled-component-license-texts/eslint-bundle-ISC.txt',
+  );
+  const embeddedLockPath = path.join(
+    fixture.root,
+    'docs/provenance/bundled-component-evidence/vscode-eslint-3.0.10-server-package-lock.json',
+  );
+  const embeddedIntegrity = `sha512-${Buffer.alloc(64, 8).toString('base64')}`;
+  const embeddedTarball =
+    'https://registry.npmjs.org/fixture-bundle-dep/-/fixture-bundle-dep-1.2.3.tgz';
+  writeJson(embeddedLockPath, {
+    lockfileVersion: 3,
+    packages: {
+      '': { name: 'fixture-eslint-server', version: '3.0.10' },
+      'node_modules/fixture-bundle-dep': {
+        version: '1.2.3',
+        resolved: embeddedTarball,
+        integrity: embeddedIntegrity,
+      },
+    },
+  });
+  return {
+    id: 'fixture-eslint-server',
+    name: 'fixture-eslint',
+    version: '3.0.10',
+    kind: 'bundled-source-build',
+    platforms: ['linux', 'macos', 'windows'],
+    architectures: ['arm64', 'x64'],
+    publisher: 'Fixture Publisher',
+    repository: 'https://example.test/fixture-eslint',
+    purl: `pkg:github/example/fixture-eslint@${'2'.repeat(40)}`,
+    license: 'MIT',
+    reviewStatus: 'ENGINEERING_REVIEWED',
+    reviewedAt: '2026-07-15',
+    buildTransforms: [
+      {
+        id: 'node22-ts-loader-transpile-only',
+        targetPath: 'shared.webpack.config.js',
+        beforeSha256: '6'.repeat(64),
+        afterSha256: '7'.repeat(64),
+        description: 'Fixture reviewed source transform.',
+      },
+    ],
+    embeddedDependencyLock: {
+      path: 'bundled-component-evidence/vscode-eslint-3.0.10-server-package-lock.json',
+      sha256: sha256FileSync(embeddedLockPath),
+      sourceReferences: [
+        `https://example.test/fixture-eslint/source/${'2'.repeat(40)}/server/package-lock.json`,
+      ],
+    },
+    embeddedDependencies: [
+      {
+        name: 'fixture-bundle-dep',
+        version: '1.2.3',
+        license: 'ISC',
+        publisher: 'Fixture Publisher',
+        repository: 'https://example.test/fixture-bundle-dep',
+        purl: 'pkg:npm/fixture-bundle-dep@1.2.3',
+        packageSource: {
+          registry: 'npm',
+          tarball: embeddedTarball,
+          integrity: embeddedIntegrity,
+          sha256: '8'.repeat(64),
+        },
+        licenseEvidence: {
+          path: 'bundled-component-license-texts/eslint-bundle-ISC.txt',
+          packagePath: 'LICENSE',
+          sha256: sha256FileSync(embeddedLicensePath),
+          sourceReferences: [
+            embeddedTarball,
+            'https://www.npmjs.com/package/fixture-bundle-dep/v/1.2.3',
+          ],
+        },
+      },
+    ],
+    source: {
+      type: 'git-archive',
+      versionRef: 'release/3.0.10',
+      immutableRevision: '2'.repeat(40),
+      url: `https://example.test/fixture-eslint/archive/${'2'.repeat(40)}.zip`,
+      sha256: sourceSha256,
+      sourceReferences: [
+        `https://example.test/fixture-eslint/source/${'2'.repeat(40)}`,
+      ],
+    },
+    licenseEvidence: {
+      path: 'bundled-component-license-texts/vscode-eslint-3.0.10-MIT.txt',
+      sha256: sha256FileSync(licensePath),
+      sourceReferences: ['https://example.test/fixture-eslint/license'],
+    },
+    noticeEvidence: {
+      status: 'LICENSE_CONTAINS_COPYRIGHT_NOTICE',
+      sourceArchiveInspectedSha256: sourceSha256,
+      sourceReferences: ['https://example.test/fixture-eslint/license'],
+    },
+    packagedArtifacts: {
+      mode: 'generated-manifest',
+      manifest: {
+        location: 'resources',
+        path: 'bundled/eslint-server/provenance.json',
+      },
+      artifactDirectory: {
+        location: 'resources',
+        path: 'bundled/eslint-server',
+      },
+      requiredFiles: [
+        { path: 'eslintServer.cjs', role: 'server-bundle' },
+        { path: 'eslintServer.js.map', role: 'source-map' },
+      ],
+      fixedFiles: [
+        {
+          location: 'resources',
+          path: 'bundled/eslint-server/License.txt',
+          role: 'license',
+          bytes: statSync(licensePath).size,
+          sha256: sha256FileSync(licensePath),
+        },
+      ],
+    },
+    redistributionReview: {
+      status: 'UPSTREAM_LICENSE_RECORDED',
+      legalConclusion: false,
+      sourceReferences: ['https://example.test/fixture-eslint/license'],
+      notes: 'Fixture engineering evidence only.',
+    },
+  };
+}
+
+function fixedBinaryComponent(fixture, files) {
+  const licensePath = path.join(
+    fixture.root,
+    'docs/provenance/bundled-component-license-texts/vcruntime-cefsharp-140-1.0.5-MIT.txt',
+  );
+  const metadataPath = path.join(
+    fixture.root,
+    'docs/provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec',
+  );
+  const sourceSha256 = '3'.repeat(64);
+  return {
+    id: 'fixture-vcruntime',
+    name: 'Fixture.VCRuntime',
+    version: '1.0.5',
+    kind: 'bundled-binary-archive',
+    platforms: ['windows'],
+    architectures: ['x64'],
+    publisher: 'Fixture Publisher',
+    repository: 'https://example.test/fixture-vcruntime',
+    purl: 'pkg:nuget/Fixture.VCRuntime@1.0.5',
+    license: 'MIT',
+    reviewStatus: 'ENGINEERING_REVIEWED',
+    reviewedAt: '2026-07-15',
+    source: {
+      type: 'nuget-package',
+      packageId: 'Fixture.VCRuntime',
+      version: '1.0.5',
+      url: 'https://api.nuget.org/v3-flatcontainer/fixture.vcruntime/1.0.5/fixture.vcruntime.1.0.5.nupkg',
+      sha256: sourceSha256,
+      nugetSha512: Buffer.alloc(64, 6).toString('base64'),
+      sourceRevision: '4'.repeat(40),
+      signatureEntrySha256: '5'.repeat(64),
+      sourceReferences: [
+        `https://example.test/fixture-vcruntime/source/${'4'.repeat(40)}`,
+      ],
+    },
+    licenseEvidence: {
+      path: 'bundled-component-license-texts/vcruntime-cefsharp-140-1.0.5-MIT.txt',
+      sha256: sha256FileSync(licensePath),
+      sourceReferences: ['https://example.test/fixture-vcruntime/license'],
+    },
+    metadataEvidence: {
+      path: 'bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec',
+      sha256: sha256FileSync(metadataPath),
+      sourceReferences: ['https://example.test/fixture-vcruntime/metadata'],
+    },
+    noticeEvidence: {
+      status: 'PACKAGE_METADATA_CONTAINS_COPYRIGHT_NOTICE',
+      sourceArchiveInspectedSha256: sourceSha256,
+      sourceReferences: ['https://example.test/fixture-vcruntime/metadata'],
+    },
+    packagedArtifacts: {
+      mode: 'fixed-files',
+      files,
+      exclusiveFileMatch: {
+        location: 'application',
+        path: '.',
+        fileNamePattern: '^(?:msvcp140.*|vcruntime140.*)\\.dll$',
+      },
+    },
+    redistributionReview: {
+      status: 'CONDITIONAL_UPSTREAM_TERMS',
+      legalConclusion: false,
+      sourceReferences: ['https://example.test/fixture-vcruntime/terms'],
+      notes: 'Fixture terms require release-owner review.',
+    },
+  };
+}
+
+function writeGeneratedBundle(resourcesDirectory, component) {
+  const bundleDirectory = path.join(
+    resourcesDirectory,
+    'bundled/eslint-server',
+  );
+  const serverPath = path.join(bundleDirectory, 'eslintServer.cjs');
+  const mapPath = path.join(bundleDirectory, 'eslintServer.js.map');
+  const licenseSourcePath = path.join(
+    path.dirname(
+      path.join(
+        resourcesDirectory,
+        'release-attribution/provenance/BUNDLED_COMPONENTS.json',
+      ),
+    ),
+    component.licenseEvidence.path,
+  );
+  writeText(serverPath, 'fixture bundled server\n');
+  writeText(mapPath, '{"version":3}\n');
+  mkdirSync(bundleDirectory, { recursive: true });
+  cpSync(licenseSourcePath, path.join(bundleDirectory, 'License.txt'));
+  const artifacts = [
+    { path: 'eslintServer.cjs', role: 'server-bundle' },
+    { path: 'eslintServer.js.map', role: 'source-map' },
+  ].map((entry) => {
+    const filePath = path.join(bundleDirectory, entry.path);
+    return {
+      ...entry,
+      bytes: statSync(filePath).size,
+      sha256: sha256FileSync(filePath),
+    };
+  });
+  writeJson(path.join(bundleDirectory, 'provenance.json'), {
+    schemaVersion: 1,
+    componentId: component.id,
+    name: component.name,
+    version: component.version,
+    reviewStatus: component.reviewStatus,
+    source: component.source,
+    buildTransforms: component.buildTransforms,
+    embeddedDependencyLock: component.embeddedDependencyLock,
+    embeddedDependencies: component.embeddedDependencies.map(
+      ({ licenseText: _licenseText, ...dependency }) => dependency,
+    ),
+    licenseEvidence: component.licenseEvidence,
+    artifacts,
+  });
+  return bundleDirectory;
+}
+
 test('builds a deterministic notice and dependency-license bundle', () => {
   const fixture = makeFixture();
   try {
@@ -187,6 +497,14 @@ test('builds a deterministic notice and dependency-license bundle', () => {
       'CONTRIBUTORS.md',
       'packages/karton/LICENSE.md',
       'provenance/DEPENDENCY_LICENSE_OVERRIDES.json',
+      'provenance/BUNDLED_COMPONENTS.json',
+      'provenance/bundled-component-license-texts/vscode-eslint-3.0.10-MIT.txt',
+      'provenance/bundled-component-license-texts/vcruntime-cefsharp-140-1.0.5-MIT.txt',
+      'provenance/bundled-component-license-texts/eslint-bundle-ISC.txt',
+      'provenance/bundled-component-license-texts/vscode-languageserver-node-MIT.txt',
+      'provenance/bundled-component-license-texts/vscode-uri-3.0.8-MIT.txt',
+      'provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec',
+      'provenance/bundled-component-evidence/vscode-eslint-3.0.10-server-package-lock.json',
       'dependency-licenses.json',
       'manifest.json',
     ]) {
@@ -195,6 +513,215 @@ test('builds a deterministic notice and dependency-license bundle', () => {
           0,
       );
     }
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('bundled source records require immutable pins and exact license evidence', () => {
+  const fixture = makeFixture();
+  try {
+    const component = generatedBundleComponent(fixture);
+    writeBundledComponents(fixture, [component]);
+    const inventory = collectReleaseDependencyInventory({
+      appDirectory: fixture.appDirectory,
+      arch: 'x64',
+      platform: 'linux',
+      repositoryDirectory: fixture.root,
+      strict: true,
+    });
+    const entry = inventory.entries.find(
+      (candidate) => candidate.kind === 'bundled_component',
+    );
+    assert.equal(entry.name, 'fixture-eslint');
+    assert.equal(
+      entry.bundledComponentEvidence.source.immutableRevision,
+      '2'.repeat(40),
+    );
+    assert.equal(inventory.bundledComponents.applicableCount, 1);
+    assert.equal(
+      inventory.bundledComponents.applicableEmbeddedDependencyCount,
+      1,
+    );
+
+    const embeddedLicensePath = path.join(
+      fixture.root,
+      'docs/provenance/bundled-component-license-texts/eslint-bundle-ISC.txt',
+    );
+    writeText(embeddedLicensePath, 'tampered embedded license\n');
+    assert.throws(
+      () =>
+        collectReleaseDependencyInventory({
+          appDirectory: fixture.appDirectory,
+          arch: 'x64',
+          platform: 'linux',
+          repositoryDirectory: fixture.root,
+          strict: true,
+        }),
+      (error) =>
+        error instanceof AttributionGateError &&
+        error.blockers.some(
+          (blocker) =>
+            blocker.code === 'BUNDLED_COMPONENT_EVIDENCE_HASH_MISMATCH' &&
+            blocker.message.includes('fixture-bundle-dep@1.2.3'),
+        ),
+    );
+    writeText(embeddedLicensePath, 'fixture embedded ISC license\n');
+
+    writeText(
+      path.join(
+        fixture.root,
+        'docs/provenance/bundled-component-license-texts/vscode-eslint-3.0.10-MIT.txt',
+      ),
+      'tampered license\n',
+    );
+    assert.throws(
+      () =>
+        collectReleaseDependencyInventory({
+          appDirectory: fixture.appDirectory,
+          arch: 'x64',
+          platform: 'linux',
+          repositoryDirectory: fixture.root,
+          strict: true,
+        }),
+      (error) =>
+        error instanceof AttributionGateError &&
+        error.blockers.some(
+          (blocker) =>
+            blocker.code === 'BUNDLED_COMPONENT_EVIDENCE_HASH_MISMATCH',
+        ),
+    );
+
+    writeText(
+      path.join(
+        fixture.root,
+        'docs/provenance/bundled-component-license-texts/vscode-eslint-3.0.10-MIT.txt',
+      ),
+      'fixture vscode-eslint MIT license\n',
+    );
+    component.source.url =
+      'https://example.test/fixture-eslint/archive/refs/tags/release/3.0.10.zip';
+    writeBundledComponents(fixture, [component]);
+    assert.throws(
+      () =>
+        collectReleaseDependencyInventory({
+          appDirectory: fixture.appDirectory,
+          arch: 'x64',
+          platform: 'linux',
+          repositoryDirectory: fixture.root,
+          strict: true,
+        }),
+      (error) =>
+        error instanceof AttributionGateError &&
+        error.blockers.some(
+          (blocker) => blocker.code === 'BUNDLED_COMPONENT_GIT_PIN_INVALID',
+        ),
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('source archives and fixed bundled binaries fail closed on byte drift', () => {
+  const fixture = makeFixture();
+  try {
+    const sourceBytes = Buffer.from('fixture immutable archive\n');
+    const generated = generatedBundleComponent(fixture);
+    generated.source.sha256 = createHash('sha256')
+      .update(sourceBytes)
+      .digest('hex');
+    generated.noticeEvidence.sourceArchiveInspectedSha256 =
+      generated.source.sha256;
+    assert.equal(
+      verifyBundledComponentSourceBytes({
+        bytes: sourceBytes,
+        component: generated,
+      }).sha256,
+      generated.source.sha256,
+    );
+    assert.throws(
+      () =>
+        verifyBundledComponentSourceBytes({
+          bytes: Buffer.from('changed archive\n'),
+          component: generated,
+        }),
+      /source archive hash mismatch/,
+    );
+
+    const embeddedPackageBytes = Buffer.from('fixture embedded npm tgz\n');
+    const embeddedDependency = generated.embeddedDependencies[0];
+    embeddedDependency.packageSource.sha256 = createHash('sha256')
+      .update(embeddedPackageBytes)
+      .digest('hex');
+    embeddedDependency.packageSource.integrity = `sha512-${createHash('sha512')
+      .update(embeddedPackageBytes)
+      .digest('base64')}`;
+    assert.equal(
+      verifyBundledEmbeddedDependencySourceBytes({
+        bytes: embeddedPackageBytes,
+        componentId: generated.id,
+        dependency: embeddedDependency,
+      }).sha256,
+      embeddedDependency.packageSource.sha256,
+    );
+    assert.throws(
+      () =>
+        verifyBundledEmbeddedDependencySourceBytes({
+          bytes: Buffer.from('changed embedded npm tgz\n'),
+          componentId: generated.id,
+          dependency: embeddedDependency,
+        }),
+      /embedded package source drift/,
+    );
+
+    const artifactBytes = Buffer.from('fixture runtime dll\n');
+    const artifact = {
+      location: 'application',
+      path: 'runtime.dll',
+      archivePath: 'vc_redist/x64/runtime.dll',
+      role: 'runtime-library',
+      bytes: artifactBytes.length,
+      sha256: createHash('sha256').update(artifactBytes).digest('hex'),
+    };
+    const fixed = fixedBinaryComponent(fixture, [artifact]);
+    const nupkgBytes = Buffer.from('fixture nupkg bytes\n');
+    fixed.source.sha256 = createHash('sha256').update(nupkgBytes).digest('hex');
+    fixed.source.nugetSha512 = createHash('sha512')
+      .update(nupkgBytes)
+      .digest('base64');
+    assert.equal(
+      verifyBundledComponentSourceBytes({
+        bytes: nupkgBytes,
+        component: fixed,
+      }).sha512,
+      fixed.source.nugetSha512,
+    );
+    fixed.source.nugetSha512 = Buffer.alloc(64, 9).toString('base64');
+    assert.throws(
+      () =>
+        verifyBundledComponentSourceBytes({
+          bytes: nupkgBytes,
+          component: fixed,
+        }),
+      /NuGet catalog SHA-512 mismatch/,
+    );
+    assert.equal(
+      verifyBundledComponentFixedArtifactBytes({
+        artifact,
+        bytes: artifactBytes,
+        component: fixed,
+      }).sha256,
+      artifact.sha256,
+    );
+    assert.throws(
+      () =>
+        verifyBundledComponentFixedArtifactBytes({
+          artifact,
+          bytes: Buffer.from('changed runtime dll\n'),
+          component: fixed,
+        }),
+      /fixed artifact drift/,
+    );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
   }
@@ -840,6 +1367,325 @@ test('writes a final-artifact CycloneDX SBOM and rejects uninventoried native pa
   }
 });
 
+test('final SBOM verifies generated vscode-eslint provenance and bundle bytes', async () => {
+  const fixture = makeFixture();
+  try {
+    const component = generatedBundleComponent(fixture);
+    writeBundledComponents(fixture, [component]);
+    prepareReleaseAttributionBundle({
+      appDirectory: fixture.appDirectory,
+      arch: 'x64',
+      outputDirectory: fixture.outputDirectory,
+      platform: 'linux',
+      releaseChannel: 'release',
+      repositoryDirectory: fixture.root,
+    });
+    const applicationDirectory = path.join(fixture.root, 'packaged-eslint-app');
+    const resourcesDirectory = path.join(applicationDirectory, 'resources');
+    const packagedAttributionDirectory = path.join(
+      resourcesDirectory,
+      ATTRIBUTION_DIRECTORY_NAME,
+    );
+    mkdirSync(resourcesDirectory, { recursive: true });
+    cpSync(fixture.outputDirectory, packagedAttributionDirectory, {
+      recursive: true,
+    });
+    writeText(path.join(resourcesDirectory, 'app.asar'), 'synthetic asar\n');
+    const electronNotices = resolveElectronRuntimeNoticePaths({
+      appDirectory: fixture.appDirectory,
+    });
+    cpSync(electronNotices.electron, path.join(resourcesDirectory, 'LICENSE'));
+    cpSync(
+      electronNotices.chromium,
+      path.join(resourcesDirectory, 'LICENSES.chromium.html'),
+    );
+    const bundleDirectory = writeGeneratedBundle(resourcesDirectory, component);
+
+    const packagedRegistry = loadBundledComponentRegistry({
+      arch: 'x64',
+      platform: 'linux',
+      registryPath: path.join(
+        packagedAttributionDirectory,
+        'provenance/BUNDLED_COMPONENTS.json',
+      ),
+      strict: true,
+    });
+    const inspectedBundle = inspectBundledComponentArtifacts({
+      applicationDirectory,
+      component: packagedRegistry.applicableComponents[0],
+      resourcesDirectory,
+    });
+    assert.equal(inspectedBundle.files.length, 4);
+
+    const attribution = inspectPackagedAttribution({
+      attributionDirectory: packagedAttributionDirectory,
+    });
+    const sbomPath = path.join(fixture.root, 'validation/eslint.cdx.json');
+    const report = await writeFinalArtifactSbom({
+      applicationDirectory,
+      appName: 'Fixture App',
+      appVersion: '1.0.0',
+      arch: 'x64',
+      attribution,
+      electronRuntime: {
+        license: 'MIT',
+        name: 'electron',
+        version: '39.0.0',
+      },
+      outputPath: sbomPath,
+      platform: 'linux',
+      resourcesDirectory,
+      timestamp: new Date('2026-07-15T00:00:00.000Z'),
+    });
+    const sbom = JSON.parse(readFileSync(sbomPath, 'utf8'));
+    assert.equal(report.bundledComponentCount, 1);
+    assert.equal(report.bundledArtifactCount, 4);
+    assert.equal(report.bundledEmbeddedDependencyCount, 1);
+    assert.ok(
+      sbom.components.some(
+        (entry) =>
+          entry.name === 'fixture-eslint' && entry.version === '3.0.10',
+      ),
+    );
+    assert.ok(
+      sbom.components.some(
+        (entry) =>
+          entry.name === 'fixture-bundle-dep' &&
+          entry.version === '1.2.3' &&
+          entry.purl === 'pkg:npm/fixture-bundle-dep@1.2.3',
+      ),
+    );
+    assert.ok(sbom.dependencies.some((entry) => entry.dependsOn.length === 1));
+    assert.ok(
+      sbom.components.some(
+        (entry) =>
+          entry.name === 'eslintServer.cjs' &&
+          entry.hashes?.[0]?.alg === 'SHA-256',
+      ),
+    );
+
+    const provenancePath = path.join(bundleDirectory, 'provenance.json');
+    const originalProvenance = JSON.parse(readFileSync(provenancePath, 'utf8'));
+    writeJson(provenancePath, {
+      ...originalProvenance,
+      embeddedDependencies: [],
+    });
+    await assert.rejects(
+      writeFinalArtifactSbom({
+        applicationDirectory,
+        appName: 'Fixture App',
+        appVersion: '1.0.0',
+        arch: 'x64',
+        attribution,
+        electronRuntime: {
+          license: 'MIT',
+          name: 'electron',
+          version: '39.0.0',
+        },
+        outputPath: sbomPath,
+        platform: 'linux',
+        resourcesDirectory,
+      }),
+      /generated provenance manifest does not match/,
+    );
+    writeJson(provenancePath, originalProvenance);
+
+    rmSync(path.join(bundleDirectory, 'eslintServer.cjs'));
+    writeJson(provenancePath, {
+      ...originalProvenance,
+      artifacts: originalProvenance.artifacts.filter(
+        (entry) => entry.path !== 'eslintServer.cjs',
+      ),
+    });
+    await assert.rejects(
+      writeFinalArtifactSbom({
+        applicationDirectory,
+        appName: 'Fixture App',
+        appVersion: '1.0.0',
+        arch: 'x64',
+        attribution,
+        electronRuntime: {
+          license: 'MIT',
+          name: 'electron',
+          version: '39.0.0',
+        },
+        outputPath: sbomPath,
+        platform: 'linux',
+        resourcesDirectory,
+      }),
+      /generated file set does not match/,
+    );
+
+    writeText(
+      path.join(bundleDirectory, 'eslintServer.cjs'),
+      'fixture bundled server\n',
+    );
+    writeJson(provenancePath, originalProvenance);
+    writeText(path.join(bundleDirectory, 'eslintServer.cjs'), 'tampered\n');
+    await assert.rejects(
+      writeFinalArtifactSbom({
+        applicationDirectory,
+        appName: 'Fixture App',
+        appVersion: '1.0.0',
+        arch: 'x64',
+        attribution,
+        electronRuntime: {
+          license: 'MIT',
+          name: 'electron',
+          version: '39.0.0',
+        },
+        outputPath: sbomPath,
+        platform: 'linux',
+        resourcesDirectory,
+      }),
+      /generated artifact drift/,
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('final Windows SBOM verifies every pinned VCRuntime DLL', async () => {
+  const fixture = makeFixture();
+  try {
+    const binaryDefinitions = [
+      ['vcruntime140.dll', 'fixture vcruntime140\n'],
+      ['vcruntime140_1.dll', 'fixture vcruntime140_1\n'],
+      ['msvcp140.dll', 'fixture msvcp140\n'],
+      ['msvcp140_1.dll', 'fixture msvcp140_1\n'],
+      ['msvcp140_2.dll', 'fixture msvcp140_2\n'],
+    ];
+    const scratchDirectory = path.join(fixture.root, 'binary-source');
+    const files = binaryDefinitions.map(([fileName, content]) => {
+      const sourcePath = path.join(scratchDirectory, fileName);
+      writeText(sourcePath, content);
+      return {
+        location: 'application',
+        path: fileName,
+        archivePath: `vc_redist/x64/${fileName}`,
+        role: 'runtime-library',
+        bytes: statSync(sourcePath).size,
+        sha256: sha256FileSync(sourcePath),
+      };
+    });
+    const component = fixedBinaryComponent(fixture, files);
+    writeBundledComponents(fixture, [component]);
+    prepareReleaseAttributionBundle({
+      appDirectory: fixture.appDirectory,
+      arch: 'x64',
+      outputDirectory: fixture.outputDirectory,
+      platform: 'windows',
+      releaseChannel: 'release',
+      repositoryDirectory: fixture.root,
+    });
+    const applicationDirectory = path.join(
+      fixture.root,
+      'packaged-windows-app',
+    );
+    const resourcesDirectory = path.join(applicationDirectory, 'resources');
+    const packagedAttributionDirectory = path.join(
+      resourcesDirectory,
+      ATTRIBUTION_DIRECTORY_NAME,
+    );
+    mkdirSync(resourcesDirectory, { recursive: true });
+    cpSync(fixture.outputDirectory, packagedAttributionDirectory, {
+      recursive: true,
+    });
+    writeText(path.join(resourcesDirectory, 'app.asar'), 'synthetic asar\n');
+    const electronNotices = resolveElectronRuntimeNoticePaths({
+      appDirectory: fixture.appDirectory,
+    });
+    cpSync(electronNotices.electron, path.join(resourcesDirectory, 'LICENSE'));
+    cpSync(
+      electronNotices.chromium,
+      path.join(resourcesDirectory, 'LICENSES.chromium.html'),
+    );
+    for (const [fileName] of binaryDefinitions) {
+      cpSync(
+        path.join(scratchDirectory, fileName),
+        path.join(applicationDirectory, fileName),
+      );
+    }
+
+    const attribution = inspectPackagedAttribution({
+      attributionDirectory: packagedAttributionDirectory,
+    });
+    const sbomPath = path.join(fixture.root, 'validation/windows.cdx.json');
+    const report = await writeFinalArtifactSbom({
+      applicationDirectory,
+      appName: 'Fixture App',
+      appVersion: '1.0.0',
+      arch: 'x64',
+      attribution,
+      electronRuntime: {
+        license: 'MIT',
+        name: 'electron',
+        version: '39.0.0',
+      },
+      outputPath: sbomPath,
+      platform: 'windows',
+      resourcesDirectory,
+      timestamp: new Date('2026-07-15T00:00:00.000Z'),
+    });
+    const sbom = JSON.parse(readFileSync(sbomPath, 'utf8'));
+    assert.equal(report.bundledComponentCount, 1);
+    assert.equal(report.bundledArtifactCount, 5);
+    assert.equal(
+      sbom.components.filter((entry) =>
+        binaryDefinitions.some(([fileName]) => entry.name === fileName),
+      ).length,
+      5,
+    );
+
+    const unexpectedDllPath = path.join(
+      applicationDirectory,
+      'msvcp140_atomic_wait.dll',
+    );
+    writeText(unexpectedDllPath, 'unreviewed extra runtime\n');
+    await assert.rejects(
+      writeFinalArtifactSbom({
+        applicationDirectory,
+        appName: 'Fixture App',
+        appVersion: '1.0.0',
+        arch: 'x64',
+        attribution,
+        electronRuntime: {
+          license: 'MIT',
+          name: 'electron',
+          version: '39.0.0',
+        },
+        outputPath: sbomPath,
+        platform: 'windows',
+        resourcesDirectory,
+      }),
+      /unreviewed matching packaged artifacts/,
+    );
+    rmSync(unexpectedDllPath);
+
+    writeText(path.join(applicationDirectory, 'msvcp140.dll'), 'tampered\n');
+    await assert.rejects(
+      writeFinalArtifactSbom({
+        applicationDirectory,
+        appName: 'Fixture App',
+        appVersion: '1.0.0',
+        arch: 'x64',
+        attribution,
+        electronRuntime: {
+          license: 'MIT',
+          name: 'electron',
+          version: '39.0.0',
+        },
+        outputPath: sbomPath,
+        platform: 'windows',
+        resourcesDirectory,
+      }),
+      /packaged artifact drift/,
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
 test('release workflow and Forge packaging wire the attribution gate before publication', () => {
   const forgeSource = readFileSync(
     path.join(browserDirectory, 'forge.config.mts'),
@@ -884,6 +1730,75 @@ test('release workflow and Forge packaging wire the attribution gate before publ
   );
 });
 
+test('repository bundled-component registry pins exact upstream archives and DLLs', () => {
+  const registry = loadBundledComponentRegistry({
+    registryPath: path.join(
+      repositoryDirectory,
+      'docs/provenance/BUNDLED_COMPONENTS.json',
+    ),
+    strict: true,
+  });
+  assert.equal(registry.entryCount, 2);
+  const eslint = registry.components.find(
+    (component) => component.id === 'vscode-eslint-server',
+  );
+  assert.equal(eslint.version, '3.0.10');
+  assert.equal(
+    eslint.source.immutableRevision,
+    '790646388696511b2665a4d119bf0fb713dd990d',
+  );
+  assert.equal(
+    eslint.source.sha256,
+    '24ebbef9ee5c716d4653c193bca00192b19787cc7152c3d61a474a10920d6239',
+  );
+  assert.equal(eslint.embeddedDependencies.length, 9);
+  assert.equal(
+    eslint.embeddedDependencyLock.sha256,
+    '7b242318057e0d9d55df95fce3c8679ca2506cf363b19c3c2f7ea7dd2455eb66',
+  );
+
+  const vcRuntime = registry.components.find(
+    (component) => component.id === 'vcruntime-cefsharp-140',
+  );
+  assert.equal(
+    vcRuntime.source.sha256,
+    '063bbdc41bab3911677feac7a6373ba9d60e0b497b994cfc947bc3735359d2c0',
+  );
+  assert.equal(vcRuntime.redistributionReview.legalConclusion, false);
+  assert.equal(
+    vcRuntime.redistributionReview.status,
+    'CONDITIONAL_UPSTREAM_TERMS',
+  );
+  assert.deepEqual(
+    vcRuntime.packagedArtifacts.files.map((entry) => [
+      entry.path,
+      entry.sha256,
+    ]),
+    [
+      [
+        'vcruntime140.dll',
+        'e686dd4fbd9d2117d74ad817f4f1c4be82b129760b5608facc770b12c3796fce',
+      ],
+      [
+        'vcruntime140_1.dll',
+        'bc6e137696ce75be00733cdb5210de363b4addf62c6a3608abe0331efc7dc395',
+      ],
+      [
+        'msvcp140.dll',
+        '9a72d0c7f0e8df99b32a15f89ff8ed6ae6dc0b6615b7d9fd53605ec98a888b61',
+      ],
+      [
+        'msvcp140_1.dll',
+        '79d00d3497fd6c0b84129b914d044cd447b6b9d09a768134a6c6ce86f129eaab',
+      ],
+      [
+        'msvcp140_2.dll',
+        'a9afa030ce3b1f86e50a52534e319d03000a15d9bcf40135ac1c2a3803088711',
+      ],
+    ],
+  );
+});
+
 test('the exact installed repository dependency graph is strict-green', () => {
   const overrideRegistry = JSON.parse(
     readFileSync(
@@ -900,6 +1815,13 @@ test('the exact installed repository dependency graph is strict-green', () => {
     strict: true,
   });
   assert.equal(inventory.blockers.length, 0);
+  assert.equal(inventory.bundledComponents.status, 'ENGINEERING_REVIEWED');
+  assert.equal(inventory.bundledComponents.entryCount, 2);
+  assert.ok(inventory.bundledComponents.applicableCount >= 1);
+  assert.equal(
+    inventory.bundledComponents.applicableEmbeddedDependencyCount,
+    9,
+  );
   assert.equal(inventory.licenseOverrides.status, 'ENGINEERING_REVIEWED');
   assert.equal(inventory.licenseOverrides.entryCount, 54);
   assert.ok(inventory.licenseOverrides.appliedCount >= 40);
@@ -915,7 +1837,7 @@ test('the exact installed repository dependency graph is strict-green', () => {
   assert.equal(inventory.nucleo.status, 'NOT_REQUIRED');
 });
 
-test('the repository package graph has no nucleo-* package or import', () => {
+test('the repository has no Nucleo package, import, or license-key release path', () => {
   const forbidden = [];
   const roots = ['apps', 'packages', 'agent'].map((entry) =>
     path.join(repositoryDirectory, entry),
@@ -941,5 +1863,28 @@ test('the repository package graph has no nucleo-* package or import', () => {
     }
   };
   for (const root of roots) visit(root);
+  for (const policyPath of [
+    path.join(repositoryDirectory, 'package.json'),
+    path.join(repositoryDirectory, 'pnpm-lock.yaml'),
+    path.join(repositoryDirectory, 'pnpm-workspace.yaml'),
+  ]) {
+    const source = readFileSync(policyPath, 'utf8');
+    if (
+      /NUCLEO_LICENSE_KEY/.test(source) ||
+      /(?:^|\n)\s*(?:['"]?nucleo-[^:\s'"]+['"]?\s*:|nucleo-[^:\s]+:)/.test(
+        source,
+      )
+    ) {
+      forbidden.push(policyPath);
+    }
+  }
+  const workflowDirectory = path.join(repositoryDirectory, '.github/workflows');
+  for (const entry of readdirSync(workflowDirectory, { withFileTypes: true })) {
+    if (!entry.isFile() || !/\.ya?ml$/.test(entry.name)) continue;
+    const workflowPath = path.join(workflowDirectory, entry.name);
+    if (/NUCLEO_LICENSE_KEY/.test(readFileSync(workflowPath, 'utf8'))) {
+      forbidden.push(workflowPath);
+    }
+  }
   assert.deepEqual(forbidden, []);
 });

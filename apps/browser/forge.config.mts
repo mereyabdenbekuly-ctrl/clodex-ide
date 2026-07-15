@@ -13,6 +13,7 @@ import { getWindowsSignConfig } from './etc/windows/windowsSign';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { createHash } from 'node:crypto';
 import { execFileSync, execSync } from 'node:child_process';
 import * as buildConstants from './build-constants';
 import {
@@ -20,8 +21,12 @@ import {
   formatBytes,
 } from './src/backend/utils/bundled-assets';
 import {
+  inspectBundledComponentArtifacts,
+  loadBundledComponentRegistry,
   prepareReleaseAttributionBundle,
   resolveElectronRuntimeNoticePaths,
+  verifyBundledComponentFixedArtifactBytes,
+  verifyBundledComponentSourceBytes,
 } from './scripts/release-attribution.mjs';
 
 // Get Windows signing configuration (returns undefined if not configured)
@@ -52,6 +57,24 @@ const releaseAttributionPath = path.resolve(
   '.generated',
   'release-attribution',
 );
+const bundledComponentRegistry = loadBundledComponentRegistry({
+  registryPath: path.join(
+    repositoryPath,
+    'docs/provenance/BUNDLED_COMPONENTS.json',
+  ),
+  strict: true,
+});
+const vcRuntimeComponent = (() => {
+  const reviewedComponent = bundledComponentRegistry.components.find(
+    (component) => component.id === 'vcruntime-cefsharp-140',
+  );
+  if (!reviewedComponent) {
+    throw new Error(
+      'Reviewed bundled-component registry has no vcruntime-cefsharp-140 record.',
+    );
+  }
+  return reviewedComponent;
+})();
 const electronRuntimeNoticePaths = resolveElectronRuntimeNoticePaths({
   appDirectory: __dirname,
 });
@@ -331,47 +354,30 @@ const pruneNonPlatformPrebuilds = (
 };
 
 /**
- * Downloads the VC++ 2015-2022 runtime DLLs from the official NuGet package
- * (VCRuntime.CefSharp.140, authored and signed by Microsoft) and copies the
- * x64 DLLs next to the packaged executable.
- *
- * Runs as an afterComplete hook — buildPath is the final output directory
- * (e.g. out/clodex-win32-x64/) containing the .exe.
- *
- * Using NuGet guarantees the correct architecture and the latest patch-level
- * DLLs without depending on a VS installation being present on the machine.
- * The .nupkg is a plain ZIP; extraction uses PowerShell's Expand-Archive
- * (built into every Windows install).
- *
- * No-op on non-Windows platforms.
+ * Copies the exact reviewed x64 VC++ runtime files from
+ * VCRuntime.CefSharp.140@1.0.5. The NuGet owner is `havendv`; its metadata
+ * names Microsoft as author/copyright holder and declares MIT for the package.
+ * The engineering registry does not treat that declaration as a standalone
+ * legal conclusion for Microsoft's DLLs. Source and DLL hashes fail closed.
  */
-
-// NuGet package that ships x64 + x86 VC++ 2015-2022 CRT DLLs.
-// Authored by Microsoft, package-signed (.signature.p7s included).
-const VC_NUPKG_URL =
-  'https://api.nuget.org/v3-flatcontainer/vcruntime.cefsharp.140/1.0.5/vcruntime.cefsharp.140.1.0.5.nupkg';
-
-// Paths inside the extracted .nupkg
-const VC_NUPKG_X64_DIR = path.join('vc_redist', 'x64');
-
-const VC_REQUIRED_DLLS = [
-  'vcruntime140.dll',
-  'vcruntime140_1.dll',
-  'msvcp140.dll',
-  'msvcp140_1.dll',
-  'msvcp140_2.dll',
-];
-const VC_HARD_REQUIRED = ['vcruntime140.dll', 'msvcp140.dll'];
 
 const copyVcRedist = (
   buildPath: string,
   _electronVersion: string,
   platform: string,
-  _arch: string,
+  arch: string,
   callback: (error?: Error) => void,
 ) => {
   if (platform !== 'win32') {
     callback();
+    return;
+  }
+  if (!vcRuntimeComponent.architectures.some((value) => value === arch)) {
+    callback(
+      new Error(
+        `[forge.config] ${vcRuntimeComponent.id} is not reviewed for ${arch}`,
+      ),
+    );
     return;
   }
 
@@ -383,17 +389,21 @@ const copyVcRedist = (
 
     try {
       console.log(
-        `[forge.config] Downloading VC++ CRT DLLs from NuGet: ${VC_NUPKG_URL}`,
+        `[forge.config] Downloading pinned VC++ CRT package: ${vcRuntimeComponent.source.url}`,
       );
-      const resp = await fetch(VC_NUPKG_URL);
+      const resp = await fetch(vcRuntimeComponent.source.url);
       if (!resp.ok)
         throw new Error(
           `[forge.config] NuGet fetch failed: ${resp.status} ${resp.statusText}`,
         );
       const buf = Buffer.from(await resp.arrayBuffer());
+      const archiveVerification = verifyBundledComponentSourceBytes({
+        bytes: buf,
+        component: vcRuntimeComponent,
+      });
       fs.writeFileSync(nupkgPath, buf);
       console.log(
-        `[forge.config] Downloaded ${(buf.length / 1024).toFixed(1)} KB`,
+        `[forge.config] Verified ${(buf.length / 1024).toFixed(1)} KB NuGet archive (${archiveVerification.sha256})`,
       );
 
       fs.mkdirSync(extractDir, { recursive: true });
@@ -402,25 +412,74 @@ const copyVcRedist = (
         { stdio: 'inherit' },
       );
 
-      const srcDir = path.join(extractDir, VC_NUPKG_X64_DIR);
-      const missing: string[] = [];
-      const copied: string[] = [];
-
-      for (const dll of VC_REQUIRED_DLLS) {
-        const src = path.join(srcDir, dll);
-        if (fs.existsSync(src)) {
-          fs.copyFileSync(src, path.join(buildPath, dll));
-          copied.push(dll);
-        } else if (VC_HARD_REQUIRED.includes(dll)) {
-          missing.push(dll);
+      const metadataPath = path.join(
+        extractDir,
+        'VCRuntime.CefSharp.140.nuspec',
+      );
+      const signaturePath = path.join(extractDir, '.signature.p7s');
+      if (!vcRuntimeComponent.metadataEvidence) {
+        throw new Error(
+          `[forge.config] ${vcRuntimeComponent.id} has no exact NuGet metadata evidence`,
+        );
+      }
+      for (const [label, filePath, expectedHash] of [
+        [
+          'NuGet metadata',
+          metadataPath,
+          vcRuntimeComponent.metadataEvidence.sha256,
+        ],
+        [
+          'NuGet signature entry',
+          signaturePath,
+          vcRuntimeComponent.source.signatureEntrySha256,
+        ],
+      ] as const) {
+        if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+          throw new Error(`[forge.config] ${label} is missing: ${filePath}`);
+        }
+        const actualHash = createHash('sha256')
+          .update(fs.readFileSync(filePath))
+          .digest('hex');
+        if (actualHash !== expectedHash) {
+          throw new Error(
+            `[forge.config] ${label} hash mismatch: ${actualHash} != ${expectedHash}`,
+          );
         }
       }
 
-      if (missing.length > 0) {
+      const copied: string[] = [];
+      if (vcRuntimeComponent.packagedArtifacts.mode !== 'fixed-files') {
         throw new Error(
-          `[forge.config] Required VC++ DLLs missing in NuGet package: ${missing.join(', ')}`,
+          `[forge.config] ${vcRuntimeComponent.id} must use fixed-file artifact verification`,
         );
       }
+      for (const artifact of vcRuntimeComponent.packagedArtifacts.files) {
+        if (!artifact.archivePath) {
+          throw new Error(
+            `[forge.config] ${vcRuntimeComponent.id} artifact ${artifact.path} has no archive path`,
+          );
+        }
+        const sourcePath = path.join(extractDir, artifact.archivePath);
+        if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
+          throw new Error(
+            `[forge.config] Required VC++ DLL is missing: ${artifact.archivePath}`,
+          );
+        }
+        const bytes = fs.readFileSync(sourcePath);
+        verifyBundledComponentFixedArtifactBytes({
+          artifact,
+          bytes,
+          component: vcRuntimeComponent,
+        });
+        fs.writeFileSync(path.join(buildPath, artifact.path), bytes);
+        copied.push(artifact.path);
+      }
+
+      inspectBundledComponentArtifacts({
+        applicationDirectory: buildPath,
+        component: vcRuntimeComponent,
+        resourcesDirectory: path.join(buildPath, 'resources'),
+      });
 
       console.log(
         `[forge.config] Copied ${copied.length} VC++ DLL(s): ${copied.join(', ')}`,
@@ -524,10 +583,7 @@ const config: ForgeConfig = {
       pruneNonPlatformPrebuilds,
       uploadSourceMapsAndCleanup,
     ],
-    afterComplete: [
-      copyVcRedist, // sources DLLs directly from VS install on the runner
-      signUnsignedLocalMacApplication,
-    ],
+    afterComplete: [copyVcRedist, signUnsignedLocalMacApplication],
     icon: packagerIconPath,
     appCopyright: `Copyright © ${new Date().getFullYear()} Clodex Labs`,
     win32metadata: {

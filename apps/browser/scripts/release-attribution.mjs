@@ -20,6 +20,8 @@ export const NUCLEO_EVIDENCE_RELATIVE_PATH =
   'docs/provenance/NUCLEO_REDISTRIBUTION_EVIDENCE.json';
 export const LICENSE_OVERRIDE_REGISTRY_RELATIVE_PATH =
   'docs/provenance/DEPENDENCY_LICENSE_OVERRIDES.json';
+export const BUNDLED_COMPONENT_REGISTRY_RELATIVE_PATH =
+  'docs/provenance/BUNDLED_COMPONENTS.json';
 export const PNPM_LOCK_RELATIVE_PATH = 'pnpm-lock.yaml';
 
 const REQUIRED_NOTICE_SOURCES = [
@@ -39,6 +41,51 @@ const REQUIRED_NOTICE_SOURCES = [
     source: LICENSE_OVERRIDE_REGISTRY_RELATIVE_PATH,
     target: 'provenance/DEPENDENCY_LICENSE_OVERRIDES.json',
   },
+  {
+    source: BUNDLED_COMPONENT_REGISTRY_RELATIVE_PATH,
+    target: 'provenance/BUNDLED_COMPONENTS.json',
+  },
+  {
+    source:
+      'docs/provenance/bundled-component-license-texts/vscode-eslint-3.0.10-MIT.txt',
+    target:
+      'provenance/bundled-component-license-texts/vscode-eslint-3.0.10-MIT.txt',
+  },
+  {
+    source:
+      'docs/provenance/bundled-component-license-texts/vcruntime-cefsharp-140-1.0.5-MIT.txt',
+    target:
+      'provenance/bundled-component-license-texts/vcruntime-cefsharp-140-1.0.5-MIT.txt',
+  },
+  {
+    source:
+      'docs/provenance/bundled-component-license-texts/eslint-bundle-ISC.txt',
+    target: 'provenance/bundled-component-license-texts/eslint-bundle-ISC.txt',
+  },
+  {
+    source:
+      'docs/provenance/bundled-component-license-texts/vscode-languageserver-node-MIT.txt',
+    target:
+      'provenance/bundled-component-license-texts/vscode-languageserver-node-MIT.txt',
+  },
+  {
+    source:
+      'docs/provenance/bundled-component-license-texts/vscode-uri-3.0.8-MIT.txt',
+    target:
+      'provenance/bundled-component-license-texts/vscode-uri-3.0.8-MIT.txt',
+  },
+  {
+    source:
+      'docs/provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec',
+    target:
+      'provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec',
+  },
+  {
+    source:
+      'docs/provenance/bundled-component-evidence/vscode-eslint-3.0.10-server-package-lock.json',
+    target:
+      'provenance/bundled-component-evidence/vscode-eslint-3.0.10-server-package-lock.json',
+  },
 ];
 
 export const REQUIRED_ATTRIBUTION_PATHS = [
@@ -54,6 +101,9 @@ const LICENSE_FILE_PATTERNS = [
 ];
 
 const LICENSE_OVERRIDE_REVIEW_STATUS = 'ENGINEERING_REVIEWED';
+const BUNDLED_COMPONENT_REVIEW_STATUS = 'ENGINEERING_REVIEWED';
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const GIT_REVISION_PATTERN = /^[a-f0-9]{40}$/;
 
 const BUILD_ONLY_PATTERNS = [
   /^@types\//,
@@ -125,11 +175,842 @@ export function sha256FileSync(filePath) {
   return sha256Bytes(readFileSync(filePath));
 }
 
+function normalizeReleasePlatform(platform) {
+  if (platform === 'darwin') return 'macos';
+  if (platform === 'win32') return 'windows';
+  return String(platform ?? '')
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeReleaseArchitecture(arch) {
+  if (arch === 'aarch64') return 'arm64';
+  if (arch === 'x86_64') return 'x64';
+  return String(arch ?? '')
+    .trim()
+    .toLowerCase();
+}
+
+function isCanonicalSha512Base64(value) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9+/]+={2}$/.test(value)) {
+    return false;
+  }
+  try {
+    const decoded = Buffer.from(value, 'base64');
+    return decoded.length === 64 && decoded.toString('base64') === value;
+  } catch {
+    return false;
+  }
+}
+
+function isPublicHttpsReference(reference) {
+  return typeof reference === 'string' && reference.startsWith('https://');
+}
+
+function bundledComponentEvidenceFile({
+  blockers,
+  componentId,
+  evidence,
+  label,
+  registryDirectory,
+}) {
+  if (
+    !evidence ||
+    typeof evidence.path !== 'string' ||
+    !evidence.path.trim() ||
+    !SHA256_PATTERN.test(String(evidence.sha256 ?? '')) ||
+    !Array.isArray(evidence.sourceReferences) ||
+    evidence.sourceReferences.length === 0 ||
+    evidence.sourceReferences.some(
+      (reference) => !isPublicHttpsReference(reference),
+    )
+  ) {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_EVIDENCE_INVALID',
+      message: `${componentId} ${label} evidence has an incomplete path, hash, or source reference.`,
+    });
+    return '';
+  }
+
+  let relativePath = '';
+  try {
+    relativePath = safeRelativePath(evidence.path);
+  } catch (error) {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_EVIDENCE_PATH_UNSAFE',
+      message: `${componentId} ${label} evidence path is unsafe: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return '';
+  }
+  const evidencePath = path.join(registryDirectory, relativePath);
+  if (!existsSync(evidencePath) || !statSync(evidencePath).isFile()) {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_EVIDENCE_MISSING',
+      message: `${componentId} ${label} evidence is missing: ${evidencePath}.`,
+    });
+    return '';
+  }
+  const text = readFileSync(evidencePath, 'utf8');
+  if (!text.trim()) {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_EVIDENCE_EMPTY',
+      message: `${componentId} ${label} evidence is empty: ${evidencePath}.`,
+    });
+  }
+  const actualHash = sha256FileSync(evidencePath);
+  if (actualHash !== evidence.sha256) {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_EVIDENCE_HASH_MISMATCH',
+      message: `${componentId} ${label} evidence hash ${actualHash} does not match ${evidence.sha256}.`,
+    });
+  }
+  return text;
+}
+
+function bundledArtifactRecordBlockers(componentId, record) {
+  const blockers = [];
+  if (
+    !record ||
+    !['application', 'resources'].includes(record.location) ||
+    typeof record.path !== 'string' ||
+    !record.path.trim()
+  ) {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_ARTIFACT_INVALID',
+      message: `${componentId} contains an artifact with an invalid location or path.`,
+    });
+    return blockers;
+  }
+  try {
+    safeRelativePath(record.path);
+  } catch (error) {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_ARTIFACT_PATH_UNSAFE',
+      message: `${componentId} artifact path is unsafe: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+  if (
+    !Number.isSafeInteger(record.bytes) ||
+    record.bytes <= 0 ||
+    !SHA256_PATTERN.test(String(record.sha256 ?? '')) ||
+    typeof record.role !== 'string' ||
+    !record.role.trim()
+  ) {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_ARTIFACT_DIGEST_INVALID',
+      message: `${componentId} artifact ${record.path || '<missing>'} needs an exact byte count, SHA-256, and role.`,
+    });
+  }
+  if (record.archivePath !== undefined) {
+    try {
+      safeRelativePath(String(record.archivePath));
+    } catch (error) {
+      blockers.push({
+        code: 'BUNDLED_COMPONENT_ARCHIVE_PATH_UNSAFE',
+        message: `${componentId} archive path is unsafe: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+  return blockers;
+}
+
+function bundledComponentSourceBlockers(componentId, component) {
+  const blockers = [];
+  const source = component.source;
+  if (
+    !source ||
+    !['git-archive', 'nuget-package'].includes(source.type) ||
+    typeof source.url !== 'string' ||
+    !source.url.startsWith('https://') ||
+    !SHA256_PATTERN.test(String(source.sha256 ?? '')) ||
+    !Array.isArray(source.sourceReferences) ||
+    source.sourceReferences.length === 0 ||
+    source.sourceReferences.some(
+      (reference) => !isPublicHttpsReference(reference),
+    )
+  ) {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_SOURCE_INVALID',
+      message: `${componentId} source must have an HTTPS URL, exact type, SHA-256, and public references.`,
+    });
+    return blockers;
+  }
+
+  if (source.type === 'git-archive') {
+    if (
+      !GIT_REVISION_PATTERN.test(String(source.immutableRevision ?? '')) ||
+      typeof source.versionRef !== 'string' ||
+      !source.versionRef.trim() ||
+      !source.url.includes(source.immutableRevision) ||
+      !source.sourceReferences.some((reference) =>
+        reference.includes(source.immutableRevision),
+      )
+    ) {
+      blockers.push({
+        code: 'BUNDLED_COMPONENT_GIT_PIN_INVALID',
+        message: `${componentId} Git archive must bind its version ref to an immutable 40-character revision in the download URL.`,
+      });
+    }
+  } else {
+    const packageId = String(source.packageId ?? '');
+    const version = String(source.version ?? '');
+    const expectedUrl = `https://api.nuget.org/v3-flatcontainer/${packageId.toLowerCase()}/${version.toLowerCase()}/${packageId.toLowerCase()}.${version.toLowerCase()}.nupkg`;
+    if (
+      packageId !== component.name ||
+      version !== component.version ||
+      source.url !== expectedUrl ||
+      !isCanonicalSha512Base64(source.nugetSha512) ||
+      !GIT_REVISION_PATTERN.test(String(source.sourceRevision ?? '')) ||
+      !SHA256_PATTERN.test(String(source.signatureEntrySha256 ?? '')) ||
+      !source.sourceReferences.some((reference) =>
+        reference.includes(source.sourceRevision),
+      )
+    ) {
+      blockers.push({
+        code: 'BUNDLED_COMPONENT_NUGET_PIN_INVALID',
+        message: `${componentId} NuGet source must bind the exact package/version URL, SHA-256, catalog SHA-512, source revision, and signature-entry hash.`,
+      });
+    }
+  }
+  return blockers;
+}
+
+function loadEmbeddedBundledDependencies({
+  component,
+  componentId,
+  registryDirectory,
+}) {
+  const blockers = [];
+  const lockText = bundledComponentEvidenceFile({
+    blockers,
+    componentId,
+    evidence: component?.embeddedDependencyLock,
+    label: 'embedded dependency lock',
+    registryDirectory,
+  });
+  let lock = null;
+  if (lockText) {
+    try {
+      lock = JSON.parse(lockText);
+    } catch (error) {
+      blockers.push({
+        code: 'BUNDLED_COMPONENT_EMBEDDED_LOCK_INVALID',
+        message: `${componentId} embedded dependency lock is not readable JSON: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+  const lockByIdentity = new Map();
+  if (!lock?.packages || typeof lock.packages !== 'object') {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_EMBEDDED_LOCK_PACKAGES_MISSING',
+      message: `${componentId} embedded dependency lock has no packages map.`,
+    });
+  } else {
+    for (const [packagePath, record] of Object.entries(lock.packages)) {
+      if (
+        !packagePath.startsWith('node_modules/') ||
+        !record ||
+        typeof record !== 'object' ||
+        record.dev === true
+      ) {
+        continue;
+      }
+      const packageName = packagePath.slice('node_modules/'.length);
+      const version = String(record.version ?? '').trim();
+      if (packageName && version) {
+        lockByIdentity.set(`${packageName}@${version}`, record);
+      }
+    }
+  }
+
+  if (
+    !Array.isArray(component?.embeddedDependencies) ||
+    component.embeddedDependencies.length === 0
+  ) {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_EMBEDDED_DEPENDENCIES_MISSING',
+      message: `${componentId} source bundle has no exact embedded dependency inventory.`,
+    });
+  }
+  const dependencies = [];
+  const seenIdentities = new Set();
+  for (const dependency of component?.embeddedDependencies ?? []) {
+    const name = String(dependency?.name ?? '').trim();
+    const version = String(dependency?.version ?? '').trim();
+    const identity = `${name}@${version}`;
+    const recordBlockers = [];
+    if (
+      !name ||
+      !version ||
+      seenIdentities.has(identity) ||
+      typeof dependency?.license !== 'string' ||
+      !dependency.license.trim() ||
+      UNKNOWN_LICENSE_PATTERN.test(dependency.license.trim()) ||
+      typeof dependency?.publisher !== 'string' ||
+      !dependency.publisher.trim() ||
+      typeof dependency?.repository !== 'string' ||
+      !dependency.repository.startsWith('https://') ||
+      typeof dependency?.purl !== 'string' ||
+      !dependency.purl.startsWith('pkg:npm/')
+    ) {
+      recordBlockers.push({
+        code: 'BUNDLED_COMPONENT_EMBEDDED_DEPENDENCY_INVALID',
+        message: `${componentId} embedded dependency has incomplete or duplicate metadata: ${identity}.`,
+      });
+    }
+    seenIdentities.add(identity);
+    const locked = lockByIdentity.get(identity);
+    const packageSource = dependency?.packageSource;
+    if (
+      !locked ||
+      packageSource?.registry !== 'npm' ||
+      packageSource?.tarball !== locked.resolved ||
+      packageSource?.integrity !== locked.integrity ||
+      !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(
+        String(packageSource?.integrity ?? ''),
+      ) ||
+      !SHA256_PATTERN.test(String(packageSource?.sha256 ?? ''))
+    ) {
+      recordBlockers.push({
+        code: 'BUNDLED_COMPONENT_EMBEDDED_PACKAGE_SOURCE_INVALID',
+        message: `${componentId} embedded dependency ${identity} is not bound to its exact archived npm lock record and SHA-256.`,
+      });
+    }
+    const licenseText = bundledComponentEvidenceFile({
+      blockers: recordBlockers,
+      componentId: `${componentId}/${identity}`,
+      evidence: dependency?.licenseEvidence,
+      label: 'embedded dependency license',
+      registryDirectory,
+    });
+    try {
+      safeRelativePath(String(dependency?.licenseEvidence?.packagePath ?? ''));
+    } catch (error) {
+      recordBlockers.push({
+        code: 'BUNDLED_COMPONENT_EMBEDDED_LICENSE_PATH_UNSAFE',
+        message: `${componentId} embedded dependency ${identity} package license path is unsafe: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    if (
+      typeof dependency?.licenseEvidence?.packagePath !== 'string' ||
+      !dependency.licenseEvidence.packagePath.trim()
+    ) {
+      recordBlockers.push({
+        code: 'BUNDLED_COMPONENT_EMBEDDED_LICENSE_PATH_MISSING',
+        message: `${componentId} embedded dependency ${identity} has no exact package license path.`,
+      });
+    }
+    blockers.push(...recordBlockers);
+    if (recordBlockers.length === 0) {
+      dependencies.push({
+        ...dependency,
+        license: dependency.license.trim(),
+        licenseText,
+      });
+    }
+  }
+  const lockedIdentities = [...lockByIdentity.keys()].sort();
+  const reviewedIdentities = [...seenIdentities].sort();
+  if (JSON.stringify(lockedIdentities) !== JSON.stringify(reviewedIdentities)) {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_EMBEDDED_LOCK_COVERAGE_MISMATCH',
+      message: `${componentId} embedded dependency inventory does not exactly cover its production lock: expected ${lockedIdentities.join(', ')}; got ${reviewedIdentities.join(', ')}.`,
+    });
+  }
+  return { blockers, dependencies, lockText };
+}
+
+export function loadBundledComponentRegistry({
+  arch = undefined,
+  platform = undefined,
+  registryPath,
+  strict = false,
+}) {
+  const blockers = [];
+  const components = [];
+  if (!existsSync(registryPath) || !statSync(registryPath).isFile()) {
+    blockers.push({
+      code: 'BUNDLED_COMPONENT_REGISTRY_MISSING',
+      message: `Reviewed bundled-component registry is missing: ${registryPath}.`,
+    });
+  } else {
+    const registry = readJson(registryPath, 'Bundled component registry');
+    if (registry.schemaVersion !== 1) {
+      blockers.push({
+        code: 'BUNDLED_COMPONENT_REGISTRY_SCHEMA_UNSUPPORTED',
+        message: `Bundled component registry schemaVersion must be 1, got ${String(registry.schemaVersion ?? '<missing>')}.`,
+      });
+    }
+    if (registry.status !== BUNDLED_COMPONENT_REVIEW_STATUS) {
+      blockers.push({
+        code: 'BUNDLED_COMPONENT_REGISTRY_UNREVIEWED',
+        message: `Bundled component registry status must be ${BUNDLED_COMPONENT_REVIEW_STATUS}.`,
+      });
+    }
+    if (registry.legalConclusion !== false) {
+      blockers.push({
+        code: 'BUNDLED_COMPONENT_REGISTRY_LEGAL_CLAIM_INVALID',
+        message:
+          'Bundled component registry must explicitly state legalConclusion=false.',
+      });
+    }
+    if (!Array.isArray(registry.components)) {
+      blockers.push({
+        code: 'BUNDLED_COMPONENT_REGISTRY_COMPONENTS_INVALID',
+        message: 'Bundled component registry components must be an array.',
+      });
+    }
+
+    const registryDirectory = path.dirname(registryPath);
+    const seenIds = new Set();
+    const seenIdentities = new Set();
+    for (const component of Array.isArray(registry.components)
+      ? registry.components
+      : []) {
+      const componentBlockers = [];
+      const componentId = String(component?.id ?? '').trim();
+      const name = String(component?.name ?? '').trim();
+      const version = String(component?.version ?? '').trim();
+      const identity = `${name}@${version}`;
+      if (!componentId || !name || !version) {
+        componentBlockers.push({
+          code: 'BUNDLED_COMPONENT_IDENTITY_INVALID',
+          message: `Bundled component has an incomplete identity: ${componentId || '<missing-id>'}/${identity}.`,
+        });
+      }
+      if (seenIds.has(componentId) || seenIdentities.has(identity)) {
+        componentBlockers.push({
+          code: 'BUNDLED_COMPONENT_DUPLICATE',
+          message: `Bundled component registry duplicates ${componentId || identity}.`,
+        });
+      }
+      seenIds.add(componentId);
+      seenIdentities.add(identity);
+      if (
+        !['bundled-source-build', 'bundled-binary-archive'].includes(
+          component?.kind,
+        ) ||
+        component?.reviewStatus !== BUNDLED_COMPONENT_REVIEW_STATUS ||
+        typeof component?.license !== 'string' ||
+        !component.license.trim() ||
+        UNKNOWN_LICENSE_PATTERN.test(component.license.trim()) ||
+        typeof component?.publisher !== 'string' ||
+        !component.publisher.trim() ||
+        typeof component?.repository !== 'string' ||
+        !component.repository.startsWith('https://') ||
+        typeof component?.purl !== 'string' ||
+        !component.purl.startsWith('pkg:') ||
+        !Array.isArray(component?.platforms) ||
+        component.platforms.length === 0 ||
+        component.platforms.some(
+          (value) => !['linux', 'macos', 'windows'].includes(value),
+        ) ||
+        !Array.isArray(component?.architectures) ||
+        component.architectures.length === 0 ||
+        component.architectures.some(
+          (value) => !['arm64', 'x64'].includes(value),
+        )
+      ) {
+        componentBlockers.push({
+          code: 'BUNDLED_COMPONENT_METADATA_INVALID',
+          message: `${componentId || identity} has incomplete reviewed license, publisher, repository, platform, architecture, or kind metadata.`,
+        });
+      }
+      componentBlockers.push(
+        ...bundledComponentSourceBlockers(componentId || identity, component),
+      );
+      let embeddedDependencyLockText = '';
+      let embeddedDependencies = [];
+      if (component?.kind === 'bundled-source-build') {
+        if (
+          !Array.isArray(component.buildTransforms) ||
+          component.buildTransforms.length === 0
+        ) {
+          componentBlockers.push({
+            code: 'BUNDLED_COMPONENT_BUILD_TRANSFORMS_MISSING',
+            message: `${componentId || identity} source build must record every local source transform.`,
+          });
+        }
+        const transformIds = new Set();
+        for (const transform of component.buildTransforms ?? []) {
+          let targetPath = '';
+          try {
+            targetPath = safeRelativePath(String(transform?.targetPath ?? ''));
+          } catch (error) {
+            componentBlockers.push({
+              code: 'BUNDLED_COMPONENT_BUILD_TRANSFORM_PATH_UNSAFE',
+              message: `${componentId || identity} build transform path is unsafe: ${error instanceof Error ? error.message : String(error)}`,
+            });
+          }
+          if (
+            typeof transform?.id !== 'string' ||
+            !transform.id.trim() ||
+            transformIds.has(transform.id) ||
+            !targetPath ||
+            !SHA256_PATTERN.test(String(transform?.beforeSha256 ?? '')) ||
+            !SHA256_PATTERN.test(String(transform?.afterSha256 ?? '')) ||
+            transform.beforeSha256 === transform.afterSha256 ||
+            typeof transform?.description !== 'string' ||
+            !transform.description.trim()
+          ) {
+            componentBlockers.push({
+              code: 'BUNDLED_COMPONENT_BUILD_TRANSFORM_INVALID',
+              message: `${componentId || identity} build transform is incomplete, duplicated, or not digest-bound: ${String(transform?.id ?? '<missing>')}.`,
+            });
+          }
+          transformIds.add(transform?.id);
+        }
+        const embedded = loadEmbeddedBundledDependencies({
+          component,
+          componentId: componentId || identity,
+          registryDirectory,
+        });
+        componentBlockers.push(...embedded.blockers);
+        embeddedDependencyLockText = embedded.lockText;
+        embeddedDependencies = embedded.dependencies;
+      }
+      const licenseText = bundledComponentEvidenceFile({
+        blockers: componentBlockers,
+        componentId: componentId || identity,
+        evidence: component?.licenseEvidence,
+        label: 'license',
+        registryDirectory,
+      });
+      let metadataText = '';
+      if (component?.kind === 'bundled-binary-archive') {
+        metadataText = bundledComponentEvidenceFile({
+          blockers: componentBlockers,
+          componentId: componentId || identity,
+          evidence: component?.metadataEvidence,
+          label: 'package metadata',
+          registryDirectory,
+        });
+      }
+      if (
+        !component?.noticeEvidence ||
+        typeof component.noticeEvidence.status !== 'string' ||
+        !component.noticeEvidence.status.trim() ||
+        component.noticeEvidence.sourceArchiveInspectedSha256 !==
+          component?.source?.sha256 ||
+        !Array.isArray(component.noticeEvidence.sourceReferences) ||
+        component.noticeEvidence.sourceReferences.length === 0 ||
+        component.noticeEvidence.sourceReferences.some(
+          (reference) => !isPublicHttpsReference(reference),
+        )
+      ) {
+        componentBlockers.push({
+          code: 'BUNDLED_COMPONENT_NOTICE_EVIDENCE_INVALID',
+          message: `${componentId || identity} notice evidence is missing or is not bound to the exact source archive.`,
+        });
+      }
+      if (
+        !component?.redistributionReview ||
+        !['CONDITIONAL_UPSTREAM_TERMS', 'UPSTREAM_LICENSE_RECORDED'].includes(
+          component.redistributionReview.status,
+        ) ||
+        component.redistributionReview.legalConclusion !== false ||
+        !Array.isArray(component.redistributionReview.sourceReferences) ||
+        component.redistributionReview.sourceReferences.length === 0 ||
+        component.redistributionReview.sourceReferences.some(
+          (reference) => !isPublicHttpsReference(reference),
+        ) ||
+        typeof component.redistributionReview.notes !== 'string' ||
+        !component.redistributionReview.notes.trim()
+      ) {
+        componentBlockers.push({
+          code: 'BUNDLED_COMPONENT_REDISTRIBUTION_REVIEW_INVALID',
+          message: `${componentId || identity} must retain a non-legal redistribution review status, notes, and upstream references.`,
+        });
+      }
+
+      const packagedArtifacts = component?.packagedArtifacts;
+      if (
+        !packagedArtifacts ||
+        !['fixed-files', 'generated-manifest'].includes(packagedArtifacts.mode)
+      ) {
+        componentBlockers.push({
+          code: 'BUNDLED_COMPONENT_ARTIFACT_POLICY_INVALID',
+          message: `${componentId || identity} has no supported packaged-artifact policy.`,
+        });
+      } else if (packagedArtifacts.mode === 'fixed-files') {
+        if (
+          !Array.isArray(packagedArtifacts.files) ||
+          packagedArtifacts.files.length === 0
+        ) {
+          componentBlockers.push({
+            code: 'BUNDLED_COMPONENT_ARTIFACTS_MISSING',
+            message: `${componentId || identity} has no fixed packaged artifacts.`,
+          });
+        }
+        const fixedArtifactPaths = new Set();
+        const fixedArchivePaths = new Set();
+        for (const record of packagedArtifacts.files ?? []) {
+          componentBlockers.push(
+            ...bundledArtifactRecordBlockers(componentId || identity, record),
+          );
+          if (typeof record?.archivePath !== 'string') {
+            componentBlockers.push({
+              code: 'BUNDLED_COMPONENT_ARCHIVE_PATH_MISSING',
+              message: `${componentId || identity} fixed artifact ${record?.path || '<missing>'} has no exact archive path.`,
+            });
+          }
+          const artifactIdentity = `${record?.location}\0${record?.path}`;
+          if (
+            fixedArtifactPaths.has(artifactIdentity) ||
+            fixedArchivePaths.has(record?.archivePath)
+          ) {
+            componentBlockers.push({
+              code: 'BUNDLED_COMPONENT_ARTIFACT_DUPLICATE',
+              message: `${componentId || identity} duplicates fixed artifact or archive path ${record?.path || '<missing>'}.`,
+            });
+          }
+          fixedArtifactPaths.add(artifactIdentity);
+          fixedArchivePaths.add(record?.archivePath);
+        }
+        const exclusiveMatch = packagedArtifacts.exclusiveFileMatch;
+        if (
+          !exclusiveMatch ||
+          !['application', 'resources'].includes(exclusiveMatch.location) ||
+          typeof exclusiveMatch.path !== 'string' ||
+          !exclusiveMatch.path.trim() ||
+          typeof exclusiveMatch.fileNamePattern !== 'string' ||
+          !exclusiveMatch.fileNamePattern.startsWith('^') ||
+          !exclusiveMatch.fileNamePattern.endsWith('$')
+        ) {
+          componentBlockers.push({
+            code: 'BUNDLED_COMPONENT_EXCLUSIVE_MATCH_INVALID',
+            message: `${componentId || identity} fixed binary policy needs an anchored exclusive file-name match.`,
+          });
+        } else {
+          try {
+            safeRelativePath(exclusiveMatch.path);
+            new RegExp(exclusiveMatch.fileNamePattern);
+          } catch (error) {
+            componentBlockers.push({
+              code: 'BUNDLED_COMPONENT_EXCLUSIVE_MATCH_UNSAFE',
+              message: `${componentId || identity} exclusive file match is invalid: ${error instanceof Error ? error.message : String(error)}`,
+            });
+          }
+        }
+      } else {
+        for (const locationRecord of [
+          packagedArtifacts.manifest,
+          packagedArtifacts.artifactDirectory,
+        ]) {
+          if (
+            !locationRecord ||
+            locationRecord.location !== 'resources' ||
+            typeof locationRecord.path !== 'string' ||
+            !locationRecord.path.trim()
+          ) {
+            componentBlockers.push({
+              code: 'BUNDLED_COMPONENT_GENERATED_PATH_INVALID',
+              message: `${componentId || identity} generated bundle needs resource-relative manifest and artifact-directory paths.`,
+            });
+            continue;
+          }
+          try {
+            safeRelativePath(locationRecord.path);
+          } catch (error) {
+            componentBlockers.push({
+              code: 'BUNDLED_COMPONENT_GENERATED_PATH_UNSAFE',
+              message: `${componentId || identity} generated path is unsafe: ${error instanceof Error ? error.message : String(error)}`,
+            });
+          }
+        }
+        if (
+          !Array.isArray(packagedArtifacts.fixedFiles) ||
+          packagedArtifacts.fixedFiles.length === 0
+        ) {
+          componentBlockers.push({
+            code: 'BUNDLED_COMPONENT_FIXED_EVIDENCE_MISSING',
+            message: `${componentId || identity} generated bundle must ship at least one fixed license/notice file.`,
+          });
+        }
+        if (
+          !Array.isArray(packagedArtifacts.requiredFiles) ||
+          packagedArtifacts.requiredFiles.length === 0
+        ) {
+          componentBlockers.push({
+            code: 'BUNDLED_COMPONENT_GENERATED_FILES_MISSING',
+            message: `${componentId || identity} generated bundle must name every required output file and role.`,
+          });
+        }
+        const generatedRequiredPaths = new Set();
+        for (const record of packagedArtifacts.requiredFiles ?? []) {
+          let relativePath = '';
+          try {
+            relativePath = safeRelativePath(String(record?.path ?? ''));
+          } catch (error) {
+            componentBlockers.push({
+              code: 'BUNDLED_COMPONENT_GENERATED_FILE_PATH_UNSAFE',
+              message: `${componentId || identity} generated file path is unsafe: ${error instanceof Error ? error.message : String(error)}`,
+            });
+          }
+          if (
+            !relativePath ||
+            typeof record?.role !== 'string' ||
+            !record.role.trim() ||
+            generatedRequiredPaths.has(relativePath)
+          ) {
+            componentBlockers.push({
+              code: 'BUNDLED_COMPONENT_GENERATED_FILE_INVALID',
+              message: `${componentId || identity} generated file record is incomplete or duplicated: ${relativePath || '<missing>'}.`,
+            });
+          }
+          generatedRequiredPaths.add(relativePath);
+        }
+        const generatedFixedPaths = new Set();
+        for (const record of packagedArtifacts.fixedFiles ?? []) {
+          componentBlockers.push(
+            ...bundledArtifactRecordBlockers(componentId || identity, record),
+          );
+          const artifactIdentity = `${record?.location}\0${record?.path}`;
+          if (generatedFixedPaths.has(artifactIdentity)) {
+            componentBlockers.push({
+              code: 'BUNDLED_COMPONENT_ARTIFACT_DUPLICATE',
+              message: `${componentId || identity} duplicates generated fixed artifact ${record?.path || '<missing>'}.`,
+            });
+          }
+          generatedFixedPaths.add(artifactIdentity);
+        }
+      }
+
+      blockers.push(...componentBlockers);
+      if (componentBlockers.length === 0) {
+        components.push({
+          ...component,
+          license: component.license.trim(),
+          licenseText,
+          metadataText,
+          embeddedDependencyLockText,
+          embeddedDependencies,
+        });
+      }
+    }
+  }
+
+  const normalizedPlatform = normalizeReleasePlatform(platform);
+  const normalizedArch = normalizeReleaseArchitecture(arch);
+  const applicableComponents = components.filter(
+    (component) =>
+      (!normalizedPlatform ||
+        component.platforms.includes(normalizedPlatform)) &&
+      (!normalizedArch || component.architectures.includes(normalizedArch)),
+  );
+  const deduplicatedBlockers = [
+    ...new Map(
+      blockers.map((blocker) => [
+        `${blocker.code}\0${blocker.message}`,
+        blocker,
+      ]),
+    ).values(),
+  ].sort((left, right) =>
+    `${left.code}:${left.message}`.localeCompare(
+      `${right.code}:${right.message}`,
+    ),
+  );
+  if (strict && deduplicatedBlockers.length > 0) {
+    throw new AttributionGateError(deduplicatedBlockers);
+  }
+  return {
+    applicableComponents,
+    applicableEmbeddedDependencyCount: applicableComponents.reduce(
+      (count, component) =>
+        count + (component.embeddedDependencies?.length ?? 0),
+      0,
+    ),
+    blockers: deduplicatedBlockers,
+    components,
+    embeddedDependencyCount: components.reduce(
+      (count, component) =>
+        count + (component.embeddedDependencies?.length ?? 0),
+      0,
+    ),
+    entryCount: components.length,
+    registryPath,
+    status:
+      deduplicatedBlockers.length === 0
+        ? BUNDLED_COMPONENT_REVIEW_STATUS
+        : 'BLOCKED',
+  };
+}
+
 async function sha256File(filePath) {
   const { createReadStream } = await import('node:fs');
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(filePath)) hash.update(chunk);
   return hash.digest('hex');
+}
+
+export function verifyBundledComponentSourceBytes({ component, bytes }) {
+  const sourceBytes = Buffer.from(bytes);
+  const actualSha256 = sha256Bytes(sourceBytes);
+  if (actualSha256 !== component.source.sha256) {
+    throw new Error(
+      `${component.id} source archive hash mismatch: ${actualSha256} != ${component.source.sha256}`,
+    );
+  }
+  let actualSha512 = null;
+  if (component.source.type === 'nuget-package') {
+    actualSha512 = createHash('sha512').update(sourceBytes).digest('base64');
+    if (actualSha512 !== component.source.nugetSha512) {
+      throw new Error(
+        `${component.id} NuGet catalog SHA-512 mismatch: ${actualSha512} != ${component.source.nugetSha512}`,
+      );
+    }
+  }
+  return {
+    bytes: sourceBytes.byteLength,
+    sha256: actualSha256,
+    sha512: actualSha512,
+  };
+}
+
+export function verifyBundledComponentFixedArtifactBytes({
+  artifact,
+  bytes,
+  component,
+}) {
+  const artifactBytes = Buffer.from(bytes);
+  const actualHash = sha256Bytes(artifactBytes);
+  if (
+    artifactBytes.byteLength !== artifact.bytes ||
+    actualHash !== artifact.sha256
+  ) {
+    throw new Error(
+      `${component.id} fixed artifact drift for ${artifact.path}: ${artifactBytes.byteLength} bytes/${actualHash} != ${artifact.bytes} bytes/${artifact.sha256}`,
+    );
+  }
+  return {
+    bytes: artifactBytes.byteLength,
+    sha256: actualHash,
+  };
+}
+
+export function verifyBundledEmbeddedDependencySourceBytes({
+  componentId,
+  dependency,
+  bytes,
+}) {
+  const packageBytes = Buffer.from(bytes);
+  const actualSha256 = sha256Bytes(packageBytes);
+  const actualIntegrity = `sha512-${createHash('sha512')
+    .update(packageBytes)
+    .digest('base64')}`;
+  if (
+    actualSha256 !== dependency.packageSource.sha256 ||
+    actualIntegrity !== dependency.packageSource.integrity
+  ) {
+    throw new Error(
+      `${componentId} embedded package source drift for ${dependency.name}@${dependency.version}: SHA-256 ${actualSha256}, integrity ${actualIntegrity}`,
+    );
+  }
+  return {
+    bytes: packageBytes.byteLength,
+    integrity: actualIntegrity,
+    sha256: actualSha256,
+  };
 }
 
 function isBuildOnly(packageName) {
@@ -827,6 +1708,12 @@ function validateNucleoEvidence(evidence, nucleoPackageNames, now) {
   return blockers;
 }
 
+/**
+ * @returns {{
+ *   blockers: import('./release-attribution.mjs').AttributionBlocker[];
+ *   entry: import('./release-attribution.mjs').AttributionEntry;
+ * }}
+ */
 function makeOpenSourceEntry({
   licenseOverride,
   lockPackageSources,
@@ -866,6 +1753,46 @@ function makeOpenSourceEntry({
       ...(appliedOverride.evidence
         ? { licenseEvidence: appliedOverride.evidence }
         : {}),
+    },
+  };
+}
+
+/**
+ * @param {import('./release-attribution.mjs').BundledComponent} component
+ * @returns {import('./release-attribution.mjs').AttributionEntry}
+ */
+function makeBundledComponentEntry(component) {
+  return {
+    kind: 'bundled_component',
+    name: component.name,
+    version: component.version,
+    license: component.license,
+    repository: component.repository,
+    purl: component.purl,
+    publisher: component.publisher,
+    licenseText: component.licenseText,
+    bundledComponentEvidence: {
+      registryId: component.id,
+      reviewStatus: component.reviewStatus,
+      source: component.source,
+      licenseEvidence: component.licenseEvidence,
+      ...(component.metadataEvidence
+        ? { metadataEvidence: component.metadataEvidence }
+        : {}),
+      noticeEvidence: component.noticeEvidence,
+      packagedArtifacts: component.packagedArtifacts,
+      ...(component.buildTransforms
+        ? { buildTransforms: component.buildTransforms }
+        : {}),
+      ...(component.embeddedDependencyLock
+        ? { embeddedDependencyLock: component.embeddedDependencyLock }
+        : {}),
+      ...(component.embeddedDependencies
+        ? { embeddedDependencies: component.embeddedDependencies }
+        : {}),
+      redistributionReview: component.redistributionReview,
+      platforms: component.platforms,
+      architectures: component.architectures,
     },
   };
 }
@@ -910,11 +1837,34 @@ function licenseEntryBlockers(entry) {
       });
     }
   }
+  if (entry.kind === 'bundled_component') {
+    const evidence = entry.bundledComponentEvidence;
+    if (
+      !evidence ||
+      typeof evidence.registryId !== 'string' ||
+      !evidence.registryId ||
+      evidence.reviewStatus !== BUNDLED_COMPONENT_REVIEW_STATUS ||
+      evidence.licenseEvidence?.sha256 !== sha256Bytes(entry.licenseText) ||
+      !SHA256_PATTERN.test(String(evidence.source?.sha256 ?? '')) ||
+      typeof evidence.source?.url !== 'string' ||
+      !evidence.source.url.startsWith('https://') ||
+      !evidence.packagedArtifacts ||
+      !evidence.redistributionReview ||
+      evidence.redistributionReview.legalConclusion !== false
+    ) {
+      blockers.push({
+        code: 'BUNDLED_COMPONENT_EVIDENCE_INVALID',
+        message: `${entry.name}@${entry.version} has invalid bundled-component provenance metadata.`,
+      });
+    }
+  }
   return blockers;
 }
 
 export function collectReleaseDependencyInventory({
+  arch = process.arch,
   appDirectory,
+  platform = process.platform,
   repositoryDirectory,
   now = new Date(),
   strict = false,
@@ -930,6 +1880,14 @@ export function collectReleaseDependencyInventory({
     'Nucleo redistribution evidence',
   );
   const licenseOverrides = loadLicenseOverrideRegistry(repositoryDirectory);
+  const bundledComponents = loadBundledComponentRegistry({
+    arch,
+    platform,
+    registryPath: path.join(
+      repositoryDirectory,
+      BUNDLED_COMPONENT_REGISTRY_RELATIVE_PATH,
+    ),
+  });
   const lockPackageSources = loadPnpmLockPackageSources(repositoryDirectory);
   const exactRemovalOverrides =
     loadExactDependencyRemovalOverrides(repositoryDirectory);
@@ -946,8 +1904,14 @@ export function collectReleaseDependencyInventory({
       requesterManifestPath: appManifestPath,
     }));
   const visitedManifests = new Set();
-  const entries = [];
-  const blockers = [...licenseOverrides.blockers];
+  /** @type {import('./release-attribution.mjs').AttributionEntry[]} */
+  const entries = bundledComponents.applicableComponents.map(
+    makeBundledComponentEntry,
+  );
+  const blockers = [
+    ...licenseOverrides.blockers,
+    ...bundledComponents.blockers,
+  ];
   const nucleoPackageNames = new Set();
 
   while (queue.length > 0) {
@@ -1091,6 +2055,15 @@ export function collectReleaseDependencyInventory({
       registryPath: LICENSE_OVERRIDE_REGISTRY_RELATIVE_PATH,
       status: licenseOverrides.status,
     },
+    bundledComponents: {
+      applicableCount: bundledComponents.applicableComponents.length,
+      applicableEmbeddedDependencyCount:
+        bundledComponents.applicableEmbeddedDependencyCount,
+      embeddedDependencyCount: bundledComponents.embeddedDependencyCount,
+      entryCount: bundledComponents.entryCount,
+      registryPath: BUNDLED_COMPONENT_REGISTRY_RELATIVE_PATH,
+      status: bundledComponents.status,
+    },
     nucleo: {
       evidencePath: NUCLEO_EVIDENCE_RELATIVE_PATH,
       packageNames: sortedNucleoPackages,
@@ -1115,15 +2088,19 @@ function safeRelativePath(relativePath) {
 }
 
 export function prepareReleaseAttributionBundle({
+  arch = process.arch,
   appDirectory,
   outputDirectory,
+  platform = process.platform,
   releaseChannel = 'dev',
   repositoryDirectory,
   now = new Date(),
 }) {
   const strict = releaseChannel !== 'dev';
   const inventory = collectReleaseDependencyInventory({
+    arch,
     appDirectory,
+    platform,
     repositoryDirectory,
     now,
     strict,
@@ -1147,6 +2124,7 @@ export function prepareReleaseAttributionBundle({
     releaseChannel,
     blockers: inventory.blockers,
     entries: inventory.entries,
+    bundledComponents: inventory.bundledComponents,
     licenseOverrides: inventory.licenseOverrides,
     nucleo: inventory.nucleo,
   };
@@ -1183,6 +2161,14 @@ export function prepareReleaseAttributionBundle({
     files,
     dependencyCount: inventory.entries.length,
     blockerCount: inventory.blockers.length,
+    bundledComponentApplicableCount:
+      inventory.bundledComponents.applicableCount,
+    bundledComponentApplicableEmbeddedDependencyCount:
+      inventory.bundledComponents.applicableEmbeddedDependencyCount,
+    bundledComponentEmbeddedDependencyCount:
+      inventory.bundledComponents.embeddedDependencyCount,
+    bundledComponentEntryCount: inventory.bundledComponents.entryCount,
+    bundledComponentStatus: inventory.bundledComponents.status,
     licenseOverrideAppliedCount: inventory.licenseOverrides.appliedCount,
     licenseOverrideEntryCount: inventory.licenseOverrides.entryCount,
     licenseOverrideStatus: inventory.licenseOverrides.status,
@@ -1285,6 +2271,71 @@ export function inspectPackagedAttribution({
     throw new Error('Dependency license inventory blockers must be an array');
   }
   if (
+    !inventory.bundledComponents ||
+    inventory.bundledComponents.status !== BUNDLED_COMPONENT_REVIEW_STATUS
+  ) {
+    throw new Error(
+      `Bundled component registry is not ${BUNDLED_COMPONENT_REVIEW_STATUS}.`,
+    );
+  }
+  const packagedBundledComponents = loadBundledComponentRegistry({
+    registryPath: path.join(
+      attributionDirectory,
+      'provenance/BUNDLED_COMPONENTS.json',
+    ),
+    strict: true,
+  });
+  if (
+    packagedBundledComponents.entryCount !==
+      inventory.bundledComponents.entryCount ||
+    packagedBundledComponents.embeddedDependencyCount !==
+      inventory.bundledComponents.embeddedDependencyCount ||
+    packagedBundledComponents.status !== inventory.bundledComponents.status
+  ) {
+    throw new Error(
+      'Packaged bundled-component registry does not match the reviewed inventory metadata.',
+    );
+  }
+  const packagedBundledById = new Map(
+    packagedBundledComponents.components.map((component) => [
+      component.id,
+      component,
+    ]),
+  );
+  const bundledInventoryEntries = inventory.entries.filter(
+    (entry) => entry.kind === 'bundled_component',
+  );
+  if (
+    bundledInventoryEntries.length !==
+    inventory.bundledComponents.applicableCount
+  ) {
+    throw new Error(
+      'Packaged bundled-component applicable count does not match the inventory entries.',
+    );
+  }
+  const seenBundledIds = new Set();
+  for (const entry of bundledInventoryEntries) {
+    const registryId = entry.bundledComponentEvidence?.registryId;
+    if (!registryId || seenBundledIds.has(registryId)) {
+      throw new Error(
+        `Packaged bundled-component identity is missing or duplicated: ${String(registryId ?? '<missing>')}.`,
+      );
+    }
+    seenBundledIds.add(registryId);
+    const component = packagedBundledById.get(registryId);
+    const expectedEntry = component
+      ? makeBundledComponentEntry(component)
+      : null;
+    if (
+      !expectedEntry ||
+      JSON.stringify(expectedEntry) !== JSON.stringify(entry)
+    ) {
+      throw new Error(
+        `Packaged bundled-component evidence does not match ${entry.name}@${entry.version}.`,
+      );
+    }
+  }
+  if (
     !inventory.licenseOverrides ||
     inventory.licenseOverrides.status !== LICENSE_OVERRIDE_REVIEW_STATUS
   ) {
@@ -1368,6 +2419,15 @@ export function inspectPackagedAttribution({
     );
   }
   if (
+    manifest.bundledComponentApplicableCount !==
+      inventory.bundledComponents.applicableCount ||
+    manifest.bundledComponentApplicableEmbeddedDependencyCount !==
+      inventory.bundledComponents.applicableEmbeddedDependencyCount ||
+    manifest.bundledComponentEmbeddedDependencyCount !==
+      inventory.bundledComponents.embeddedDependencyCount ||
+    manifest.bundledComponentEntryCount !==
+      inventory.bundledComponents.entryCount ||
+    manifest.bundledComponentStatus !== inventory.bundledComponents.status ||
     manifest.licenseOverrideAppliedCount !==
       inventory.licenseOverrides.appliedCount ||
     manifest.licenseOverrideEntryCount !==
@@ -1375,7 +2435,7 @@ export function inspectPackagedAttribution({
     manifest.licenseOverrideStatus !== inventory.licenseOverrides.status
   ) {
     throw new Error(
-      'Attribution manifest license-override metadata does not match the dependency inventory.',
+      'Attribution manifest bundled-component or license-override metadata does not match the dependency inventory.',
     );
   }
   const blockers = inventory.entries
@@ -1489,6 +2549,324 @@ function componentReference(entry) {
   return `urn:clodex:dependency:${sha256Bytes(`${entry.name}\0${entry.version}`).slice(0, 32)}`;
 }
 
+function resolveBundledArtifactPath(
+  record,
+  applicationDirectory,
+  resourcesDirectory,
+) {
+  const root =
+    record.location === 'application'
+      ? applicationDirectory
+      : resourcesDirectory;
+  return path.join(root, safeRelativePath(record.path));
+}
+
+function inspectExactBundledArtifact({
+  applicationDirectory,
+  componentId,
+  record,
+  resourcesDirectory,
+}) {
+  const filePath = resolveBundledArtifactPath(
+    record,
+    applicationDirectory,
+    resourcesDirectory,
+  );
+  const stats = assertFile(filePath, `${componentId} ${record.role}`);
+  const actualHash = sha256FileSync(filePath);
+  if (stats.size !== record.bytes || actualHash !== record.sha256) {
+    throw new Error(
+      `${componentId} packaged artifact drift for ${record.path}: ${stats.size} bytes/${actualHash} != ${record.bytes} bytes/${record.sha256}`,
+    );
+  }
+  return {
+    bytes: stats.size,
+    location: record.location,
+    path: record.path,
+    role: record.role,
+    sha256: actualHash,
+  };
+}
+
+function collectRegularFilesStrict(rootDirectory) {
+  const files = [];
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw new Error(
+          `Bundled component directory contains a symbolic link: ${entryPath}`,
+        );
+      }
+      if (entry.isDirectory()) visit(entryPath);
+      else if (entry.isFile()) files.push(entryPath);
+      else {
+        throw new Error(
+          `Bundled component directory contains a non-regular file: ${entryPath}`,
+        );
+      }
+    }
+  };
+  visit(rootDirectory);
+  return files.sort();
+}
+
+function embeddedDependencyProvenance(component) {
+  return (component.embeddedDependencies ?? []).map(
+    ({ licenseText: _licenseText, ...dependency }) => dependency,
+  );
+}
+
+export function inspectBundledComponentArtifacts({
+  applicationDirectory,
+  component,
+  resourcesDirectory,
+}) {
+  const policy = component.packagedArtifacts;
+  if (policy.mode === 'fixed-files') {
+    const files = policy.files.map((record) =>
+      inspectExactBundledArtifact({
+        applicationDirectory,
+        componentId: component.id,
+        record,
+        resourcesDirectory,
+      }),
+    );
+    const exclusiveDirectory = resolveBundledArtifactPath(
+      policy.exclusiveFileMatch,
+      applicationDirectory,
+      resourcesDirectory,
+    );
+    if (
+      !existsSync(exclusiveDirectory) ||
+      !statSync(exclusiveDirectory).isDirectory()
+    ) {
+      throw new Error(
+        `${component.id} exclusive artifact directory is missing: ${exclusiveDirectory}`,
+      );
+    }
+    const expectedPaths = new Set(
+      policy.files.map((record) =>
+        path.resolve(
+          resolveBundledArtifactPath(
+            record,
+            applicationDirectory,
+            resourcesDirectory,
+          ),
+        ),
+      ),
+    );
+    const pattern = new RegExp(policy.exclusiveFileMatch.fileNamePattern);
+    const unexpected = readdirSync(exclusiveDirectory, {
+      withFileTypes: true,
+    })
+      .filter((entry) => pattern.test(entry.name))
+      .map((entry) => {
+        const entryPath = path.resolve(exclusiveDirectory, entry.name);
+        if (!entry.isFile()) {
+          throw new Error(
+            `${component.id} matched artifact is not a regular file: ${entryPath}`,
+          );
+        }
+        return entryPath;
+      })
+      .filter((entryPath) => !expectedPaths.has(entryPath));
+    if (unexpected.length > 0) {
+      throw new Error(
+        `${component.id} has unreviewed matching packaged artifacts: ${unexpected.join(', ')}`,
+      );
+    }
+    return {
+      componentId: component.id,
+      files,
+      mode: policy.mode,
+    };
+  }
+
+  const artifactDirectory = resolveBundledArtifactPath(
+    policy.artifactDirectory,
+    applicationDirectory,
+    resourcesDirectory,
+  );
+  if (
+    !existsSync(artifactDirectory) ||
+    !statSync(artifactDirectory).isDirectory()
+  ) {
+    throw new Error(
+      `${component.id} generated artifact directory is missing: ${artifactDirectory}`,
+    );
+  }
+  const manifestPath = resolveBundledArtifactPath(
+    policy.manifest,
+    applicationDirectory,
+    resourcesDirectory,
+  );
+  assertFile(manifestPath, `${component.id} generated provenance manifest`);
+  const manifest = readJson(
+    manifestPath,
+    `${component.id} generated provenance manifest`,
+  );
+  if (
+    manifest.schemaVersion !== 1 ||
+    manifest.componentId !== component.id ||
+    manifest.name !== component.name ||
+    manifest.version !== component.version ||
+    manifest.reviewStatus !== component.reviewStatus ||
+    JSON.stringify(manifest.source) !== JSON.stringify(component.source) ||
+    JSON.stringify(manifest.buildTransforms) !==
+      JSON.stringify(component.buildTransforms) ||
+    JSON.stringify(manifest.embeddedDependencyLock) !==
+      JSON.stringify(component.embeddedDependencyLock) ||
+    JSON.stringify(manifest.embeddedDependencies) !==
+      JSON.stringify(embeddedDependencyProvenance(component)) ||
+    manifest.licenseEvidence?.sha256 !== component.licenseEvidence.sha256 ||
+    !Array.isArray(manifest.artifacts) ||
+    manifest.artifacts.length === 0
+  ) {
+    throw new Error(
+      `${component.id} generated provenance manifest does not match the reviewed registry.`,
+    );
+  }
+  const expectedGeneratedFiles = policy.requiredFiles
+    .map((record) => `${record.path}\0${record.role}`)
+    .sort();
+  const manifestedGeneratedFiles = manifest.artifacts
+    .map(
+      (record) =>
+        `${String(record?.path ?? '')}\0${String(record?.role ?? '')}`,
+    )
+    .sort();
+  if (
+    JSON.stringify(expectedGeneratedFiles) !==
+    JSON.stringify(manifestedGeneratedFiles)
+  ) {
+    throw new Error(
+      `${component.id} generated file set does not match the reviewed registry: expected ${expectedGeneratedFiles.join(', ')}; got ${manifestedGeneratedFiles.join(', ')}.`,
+    );
+  }
+
+  const generatedFiles = [];
+  const expectedAbsolutePaths = new Set([path.resolve(manifestPath)]);
+  const reservedAbsolutePaths = new Set([
+    path.resolve(manifestPath),
+    ...policy.fixedFiles.map((record) =>
+      path.resolve(
+        resolveBundledArtifactPath(
+          record,
+          applicationDirectory,
+          resourcesDirectory,
+        ),
+      ),
+    ),
+  ]);
+  const seenRelativePaths = new Set();
+  for (const artifact of manifest.artifacts) {
+    let relativePath;
+    try {
+      relativePath = safeRelativePath(String(artifact?.path ?? ''));
+    } catch (error) {
+      throw new Error(
+        `${component.id} generated artifact path is unsafe: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (
+      !relativePath ||
+      seenRelativePaths.has(relativePath) ||
+      !Number.isSafeInteger(artifact.bytes) ||
+      artifact.bytes <= 0 ||
+      !SHA256_PATTERN.test(String(artifact.sha256 ?? '')) ||
+      typeof artifact.role !== 'string' ||
+      !artifact.role.trim()
+    ) {
+      throw new Error(
+        `${component.id} generated artifact record is incomplete or duplicated: ${relativePath || '<missing>'}.`,
+      );
+    }
+    seenRelativePaths.add(relativePath);
+    const absolutePath = path.resolve(artifactDirectory, relativePath);
+    const artifactRoot = `${path.resolve(artifactDirectory)}${path.sep}`;
+    if (!absolutePath.startsWith(artifactRoot)) {
+      throw new Error(
+        `${component.id} generated artifact escapes its directory: ${relativePath}.`,
+      );
+    }
+    if (reservedAbsolutePaths.has(absolutePath)) {
+      throw new Error(
+        `${component.id} generated artifact overlaps fixed evidence or its provenance manifest: ${relativePath}.`,
+      );
+    }
+    const stats = assertFile(
+      absolutePath,
+      `${component.id} generated artifact ${relativePath}`,
+    );
+    const actualHash = sha256FileSync(absolutePath);
+    if (stats.size !== artifact.bytes || actualHash !== artifact.sha256) {
+      throw new Error(
+        `${component.id} generated artifact drift for ${relativePath}: ${stats.size} bytes/${actualHash} != ${artifact.bytes} bytes/${artifact.sha256}`,
+      );
+    }
+    expectedAbsolutePaths.add(absolutePath);
+    generatedFiles.push({
+      bytes: stats.size,
+      location: policy.artifactDirectory.location,
+      path: path
+        .join(policy.artifactDirectory.path, relativePath)
+        .split(path.sep)
+        .join('/'),
+      role: artifact.role,
+      sha256: actualHash,
+    });
+  }
+
+  const fixedFiles = policy.fixedFiles.map((record) => {
+    const inspected = inspectExactBundledArtifact({
+      applicationDirectory,
+      componentId: component.id,
+      record,
+      resourcesDirectory,
+    });
+    expectedAbsolutePaths.add(
+      resolveBundledArtifactPath(
+        record,
+        applicationDirectory,
+        resourcesDirectory,
+      ),
+    );
+    return inspected;
+  });
+  const actualPaths = collectRegularFilesStrict(artifactDirectory).map(
+    (value) => path.resolve(value),
+  );
+  const missingOrExtra = [
+    ...new Set([
+      ...actualPaths.filter((value) => !expectedAbsolutePaths.has(value)),
+      ...[...expectedAbsolutePaths].filter(
+        (value) => !actualPaths.includes(value),
+      ),
+    ]),
+  ];
+  if (missingOrExtra.length > 0) {
+    throw new Error(
+      `${component.id} generated artifact set differs from its provenance manifest: ${missingOrExtra.join(', ')}`,
+    );
+  }
+  return {
+    componentId: component.id,
+    files: [
+      ...generatedFiles,
+      ...fixedFiles,
+      {
+        bytes: statSync(manifestPath).size,
+        location: policy.manifest.location,
+        path: policy.manifest.path,
+        role: 'provenance-manifest',
+        sha256: sha256FileSync(manifestPath),
+      },
+    ].sort((left, right) => left.path.localeCompare(right.path)),
+    mode: policy.mode,
+  };
+}
+
 export async function writeFinalArtifactSbom({
   applicationDirectory,
   appName,
@@ -1544,11 +2922,46 @@ export async function writeFinalArtifactSbom({
     );
   }
 
+  const bundledRegistry = loadBundledComponentRegistry({
+    arch,
+    platform,
+    registryPath: path.join(
+      attribution.attributionDirectory,
+      'provenance/BUNDLED_COMPONENTS.json',
+    ),
+    strict: true,
+  });
+  const expectedBundledIds = bundledRegistry.applicableComponents
+    .map((component) => component.id)
+    .sort();
+  const inventoriedBundledIds = attribution.inventory.entries
+    .filter((entry) => entry.kind === 'bundled_component')
+    .map((entry) => entry.bundledComponentEvidence?.registryId)
+    .sort();
+  if (
+    JSON.stringify(expectedBundledIds) !== JSON.stringify(inventoriedBundledIds)
+  ) {
+    throw new Error(
+      `Packaged bundled-component inventory does not match ${normalizeReleasePlatform(platform)}/${normalizeReleaseArchitecture(arch)}: expected ${expectedBundledIds.join(', ') || '<none>'}; got ${inventoriedBundledIds.join(', ') || '<none>'}.`,
+    );
+  }
+  const bundledArtifactReports = bundledRegistry.applicableComponents.map(
+    (component) => ({
+      component,
+      report: inspectBundledComponentArtifacts({
+        applicationDirectory,
+        component,
+        resourcesDirectory,
+      }),
+    }),
+  );
+
   const components = attribution.inventory.entries.map((entry) => ({
     type: entry.kind === 'commercial_asset' ? 'library' : 'library',
     'bom-ref': componentReference(entry),
     name: entry.name,
     version: entry.version,
+    ...(entry.purl ? { purl: entry.purl } : {}),
     licenses: [cyclonedxLicense(entry.license)],
     properties: [
       {
@@ -1565,8 +2978,84 @@ export async function writeFinalArtifactSbom({
         name: 'clodex:packaged-native-manifest-observed',
         value: String(nativeKeys.has(`${entry.name}\0${entry.version}`)),
       },
+      ...(entry.kind === 'bundled_component'
+        ? [
+            {
+              name: 'clodex:bundled-component-registry-id',
+              value: entry.bundledComponentEvidence.registryId,
+            },
+            {
+              name: 'clodex:source-archive-sha256',
+              value: entry.bundledComponentEvidence.source.sha256,
+            },
+            {
+              name: 'clodex:source-url',
+              value: entry.bundledComponentEvidence.source.url,
+            },
+            {
+              name: 'clodex:redistribution-review-status',
+              value: entry.bundledComponentEvidence.redistributionReview.status,
+            },
+          ]
+        : []),
     ],
   }));
+  const bundledDependencyRelationships = [];
+  for (const { component } of bundledArtifactReports) {
+    const parentEntry = attribution.inventory.entries.find(
+      (entry) =>
+        entry.kind === 'bundled_component' &&
+        entry.bundledComponentEvidence?.registryId === component.id,
+    );
+    if (!parentEntry) {
+      throw new Error(
+        `Bundled component ${component.id} has no parent attribution entry.`,
+      );
+    }
+    const childReferences = [];
+    for (const dependency of component.embeddedDependencies ?? []) {
+      const childReference = `urn:clodex:bundled-dependency:${sha256Bytes(
+        `${component.id}\0${dependency.name}\0${dependency.version}`,
+      ).slice(0, 32)}`;
+      childReferences.push(childReference);
+      components.push({
+        type: 'library',
+        'bom-ref': childReference,
+        name: dependency.name,
+        version: dependency.version,
+        purl: dependency.purl,
+        licenses: [cyclonedxLicense(dependency.license)],
+        properties: [
+          {
+            name: 'clodex:component-kind',
+            value: 'embedded-bundle-dependency',
+          },
+          {
+            name: 'clodex:bundled-component-registry-id',
+            value: component.id,
+          },
+          {
+            name: 'clodex:package-integrity',
+            value: dependency.packageSource.integrity,
+          },
+          {
+            name: 'clodex:package-tarball-sha256',
+            value: dependency.packageSource.sha256,
+          },
+          {
+            name: 'clodex:license-text-sha256',
+            value: dependency.licenseEvidence.sha256,
+          },
+        ],
+      });
+    }
+    if (childReferences.length > 0) {
+      bundledDependencyRelationships.push({
+        ref: componentReference(parentEntry),
+        dependsOn: childReferences,
+      });
+    }
+  }
   components.push({
     type: 'framework',
     'bom-ref': `urn:clodex:runtime:${sha256Bytes(
@@ -1623,6 +3112,36 @@ export async function writeFinalArtifactSbom({
       ],
     });
   }
+  for (const { component, report } of bundledArtifactReports) {
+    for (const artifact of report.files) {
+      components.push({
+        type: 'file',
+        'bom-ref': `urn:clodex:bundled-artifact:${sha256Bytes(
+          `${component.id}\0${artifact.location}\0${artifact.path}`,
+        ).slice(0, 32)}`,
+        name: path.basename(artifact.path),
+        hashes: [{ alg: 'SHA-256', content: artifact.sha256 }],
+        properties: [
+          {
+            name: 'clodex:bundled-component-registry-id',
+            value: component.id,
+          },
+          {
+            name: 'clodex:artifact-location',
+            value: artifact.location,
+          },
+          {
+            name: 'clodex:artifact-path',
+            value: artifact.path,
+          },
+          {
+            name: 'clodex:artifact-role',
+            value: artifact.role,
+          },
+        ],
+      });
+    }
+  }
 
   const sbom = {
     bomFormat: 'CycloneDX',
@@ -1655,6 +3174,9 @@ export async function writeFinalArtifactSbom({
       },
     },
     components,
+    ...(bundledDependencyRelationships.length > 0
+      ? { dependencies: bundledDependencyRelationships }
+      : {}),
   };
   writeJson(outputPath, sbom);
   return {
@@ -1666,6 +3188,16 @@ export async function writeFinalArtifactSbom({
       version: electronRuntime.version,
     },
     nativePackageCount: nativePackages.length,
+    bundledComponentCount: bundledArtifactReports.length,
+    bundledEmbeddedDependencyCount: bundledRegistry.applicableComponents.reduce(
+      (count, component) =>
+        count + (component.embeddedDependencies?.length ?? 0),
+      0,
+    ),
+    bundledArtifactCount: bundledArtifactReports.reduce(
+      (count, entry) => count + entry.report.files.length,
+      0,
+    ),
     electronNotices: Object.fromEntries(
       Object.entries(electronNotices).map(([name, notice]) => [
         name,

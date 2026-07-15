@@ -1,0 +1,3 @@
+# Preserve byte-identical reviewed upstream evidence, including original CRLF.
+docs/provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec binary
+docs/provenance/bundled-component-license-texts/vscode-eslint-3.0.10-MIT.txt binary

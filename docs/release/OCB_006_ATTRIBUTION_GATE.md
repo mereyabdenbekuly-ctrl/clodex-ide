@@ -1,6 +1,8 @@
 # OCB-006 desktop attribution and SBOM gate
 
-**Status:** source-tree strict gate GREEN (834 dependencies, 0 blockers);
+**Status:** source-tree strict gate GREEN (835 macOS arm64 components: 834
+package versions plus the bundled `vscode-eslint` server, whose 9 embedded
+production dependencies are separately license/integrity bound; 0 blockers);
 final artifact evidence must still pass before a distributable build can be
 promoted
 
@@ -19,10 +21,14 @@ unless all of the following are true:
 3. the packaged attribution manifest hashes match the bytes in the final
    application;
 4. platform validation emits a CycloneDX SBOM from the packaged `app.asar`, the
-   attribution inventory, and observed unpacked/native package manifests;
+   attribution inventory, observed unpacked/native package manifests, and every
+   applicable non-npm bundled component;
 5. every native package observed in the packaged application is present in the
    approved dependency-license inventory; and
-6. Nucleo assets are absent or covered by an `APPROVED`, unexpired record
+6. every downloaded source archive and fixed binary bundle is immutable-version
+   and SHA-256 pinned, and every final bundled file matches its reviewed or
+   generated provenance record; and
+7. Nucleo assets are absent or covered by an `APPROVED`, unexpired record
    in
    [`NUCLEO_REDISTRIBUTION_EVIDENCE.json`](../provenance/NUCLEO_REDISTRIBUTION_EVIDENCE.json).
 
@@ -92,6 +98,31 @@ those custom terms. The sharp-libvips bundle likewise retains GPL/LGPL terms
 and pinned third-party notices, but final artifact/source-obligation review is
 still mandatory.
 
+## Non-npm bundled components
+
+[`BUNDLED_COMPONENTS.json`](../provenance/BUNDLED_COMPONENTS.json) covers
+runtime material that package-manifest traversal cannot discover:
+
+- the `vscode-eslint` `3.0.10` server build is bound to immutable Git revision
+  `790646388696511b2665a4d119bf0fb713dd990d`, a SHA-256-pinned source archive,
+  and the exact upstream MIT text. The build emits `provenance.json` with the
+  byte count and SHA-256 of every generated file and the exact before/after
+  hashes for its reviewed Node 22 webpack transform. Final validation rejects
+  missing, extra, or changed bundle files. Its exact archived server lock and
+  nine production packages are also integrity/license bound and emitted as
+  child CycloneDX components;
+- Windows x64 `VCRuntime.CefSharp.140` `1.0.5` is bound to the exact NuGet URL,
+  archive SHA-256, NuGet catalog SHA-512, exact nuspec, signature-entry hash,
+  and five independently pinned DLLs. The package metadata and project MIT text
+  are retained as evidence.
+
+The VCRuntime record is deliberately
+`CONDITIONAL_UPSTREAM_TERMS`. The engineering gate does not infer from the
+NuGet package's MIT expression that redistribution of Microsoft runtime DLLs is
+automatically authorized. Release ownership and specialist counsel must verify
+the applicable Microsoft runtime terms and organizational entitlement before
+distribution. No `APPROVED` rights record is fabricated.
+
 ## Generated and packaged files
 
 Electron Forge generates `apps/browser/.generated/release-attribution/` and
@@ -105,6 +136,7 @@ not preserve the files at the application root. The attribution bundle contains:
 - `dependency-licenses.json` with the complete gate result;
 - the public Nucleo evidence record;
 - the reviewed exact-version dependency-license override registry; and
+- the bundled-component registry plus exact upstream license/metadata evidence;
 - `manifest.json` with byte counts and SHA-256 hashes.
 
 The Windows/Linux and macOS release validators re-read this directory from the
@@ -122,7 +154,8 @@ environment-variable bypass for a release-channel build.
 ## Commands
 
 ```bash
-# Must print 834 dependencies and 0 blockers on the current exact lockfile.
+# Must print 835 dependencies and 0 blockers on macOS arm64: 834 package
+# versions plus the bundled vscode-eslint component.
 pnpm --dir apps/browser release:attribution:check -- --channel=release
 
 # Development-only bundle; blockers remain recorded in the manifest.
