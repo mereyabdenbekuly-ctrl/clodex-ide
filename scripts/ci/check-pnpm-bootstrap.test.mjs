@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -30,6 +37,101 @@ test('rejects repository pnpmfile hooks', () => {
   const root = fixture();
   writeFileSync(join(root, '.pnpmfile.cjs'), 'module.exports = {};\n');
   assert.equal(checkPnpmBootstrap(root).length, 1);
+});
+
+test('rejects nested workspace lockfiles', () => {
+  const root = fixture();
+  const packageRoot = join(root, 'apps', 'browser', 'scripts', 'example');
+  mkdirSync(packageRoot, { recursive: true });
+  writeFileSync(
+    join(packageRoot, 'pnpm-lock.yaml'),
+    "lockfileVersion: '9.0'\n",
+  );
+
+  assert.deepEqual(checkPnpmBootstrap(root), [
+    'apps/browser/scripts/example/pnpm-lock.yaml: nested workspace lockfiles are not allowed; use the root pnpm-lock.yaml',
+  ]);
+});
+
+test('rejects lockfiles in hidden source directories', () => {
+  const root = fixture();
+  const packageRoot = join(root, 'packages', 'example', '.policy');
+  mkdirSync(packageRoot, { recursive: true });
+  writeFileSync(
+    join(packageRoot, 'pnpm-lock.yaml'),
+    "lockfileVersion: '9.0'\n",
+  );
+
+  assert.deepEqual(checkPnpmBootstrap(root), [
+    'packages/example/.policy/pnpm-lock.yaml: nested workspace lockfiles are not allowed; use the root pnpm-lock.yaml',
+  ]);
+});
+
+test('rejects symlinked nested lockfiles', (context) => {
+  const root = fixture();
+  const packageRoot = join(root, 'packages', 'example');
+  mkdirSync(packageRoot, { recursive: true });
+  try {
+    symlinkSync(
+      'alternate-lock.yaml',
+      join(packageRoot, 'pnpm-lock.yaml'),
+      'file',
+    );
+  } catch (error) {
+    if (
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      ['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)
+    ) {
+      context.skip(`file symlinks are unavailable: ${error.code}`);
+      return;
+    }
+    throw error;
+  }
+
+  assert.deepEqual(checkPnpmBootstrap(root), [
+    'packages/example/pnpm-lock.yaml: nested workspace lockfiles are not allowed; use the root pnpm-lock.yaml',
+  ]);
+});
+
+test('ignores generated and dependency lockfiles outside the source graph', () => {
+  const root = fixture();
+  for (const directory of [
+    join(root, 'node_modules', 'example'),
+    join(root, 'apps', 'website', '.next', 'standalone'),
+    join(root, 'apps', 'browser', 'out', 'package'),
+  ]) {
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      join(directory, 'pnpm-lock.yaml'),
+      "lockfileVersion: '9.0'\n",
+    );
+  }
+
+  assert.deepEqual(checkPnpmBootstrap(root), []);
+});
+
+test('rejects tracked lockfiles even inside ignored generated and dependency trees', () => {
+  const root = fixture();
+  const lockfiles = [
+    'apps/browser/out/package/pnpm-lock.yaml',
+    'apps/website/.next/standalone/pnpm-lock.yaml',
+    'node_modules/example/pnpm-lock.yaml',
+  ];
+  for (const lockfile of lockfiles) {
+    const absolutePath = join(root, lockfile);
+    mkdirSync(dirname(absolutePath), { recursive: true });
+    writeFileSync(absolutePath, "lockfileVersion: '9.0'\n");
+  }
+  execFileSync('git', ['init', '--quiet'], { cwd: root });
+  execFileSync('git', ['add', '--', ...lockfiles], { cwd: root });
+
+  assert.deepEqual(checkPnpmBootstrap(root), [
+    'apps/browser/out/package/pnpm-lock.yaml: nested workspace lockfiles are not allowed; use the root pnpm-lock.yaml',
+    'apps/website/.next/standalone/pnpm-lock.yaml: nested workspace lockfiles are not allowed; use the root pnpm-lock.yaml',
+    'node_modules/example/pnpm-lock.yaml: nested workspace lockfiles are not allowed; use the root pnpm-lock.yaml',
+  ]);
 });
 
 test('rejects root and workspace config dependencies', () => {
