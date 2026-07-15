@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createShellSession,
   executeShellCommand,
   type GuardianApprovalDeps,
   type SmartApprovalDeps,
@@ -29,6 +30,33 @@ const createShellService = (): ShellService =>
   }) as unknown as ShellService;
 
 describe('executeShellCommand approval', () => {
+  it('includes current 16-hex workspace prefixes in unknown-cwd diagnostics', async () => {
+    const currentPrefix = 'w2c9ed34e414edf8e';
+    const tool = createShellSession(
+      createShellService(),
+      'agent-1',
+      () =>
+        new Map([
+          [currentPrefix, '/tmp'],
+          ['att', '/tmp/attachments'],
+        ]),
+      {
+        stage: vi.fn(async () => undefined),
+        consume: vi.fn(async () => undefined),
+      },
+    );
+    if (typeof tool.needsApproval !== 'function') {
+      throw new Error('Expected createShellSession to define needsApproval');
+    }
+
+    await expect(
+      tool.needsApproval(
+        { cwd: 'wmissing' },
+        { toolCallId: 'tool-1', messages: [] },
+      ),
+    ).rejects.toThrow(`Available: ${currentPrefix}, att.`);
+  });
+
   it('stages and consumes the exact action before PTY execution', async () => {
     const shellService = createShellService();
     const executeInSession = vi.fn(async () => ({

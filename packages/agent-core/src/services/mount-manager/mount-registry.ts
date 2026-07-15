@@ -21,17 +21,45 @@ type AgentInstanceId = string;
 type MountPrefix = string;
 type WorkspacePath = string;
 
-/**
- * 4-char stable hash prefix for a workspace path. Identical across
- * processes for the same absolute path; the UI and `att/` mount both
- * rely on this determinism.
- */
-export function mountPrefixForPath(workspacePath: string): MountPrefix {
+const LEGACY_MOUNT_PREFIX_DIGEST_HEX_LENGTH = 4;
+const MOUNT_PREFIX_DIGEST_HEX_LENGTH = 16;
+
+function mountPrefixForPathWithDigestLength(
+  workspacePath: string,
+  digestHexLength: number,
+): MountPrefix {
   const hash = createHash('sha256')
     .update(workspacePath)
     .digest('hex')
-    .slice(0, 4);
+    .slice(0, digestHexLength);
   return `w${hash}`;
+}
+
+/**
+ * Stable hash prefix for a workspace path. Identical across processes for the
+ * same absolute path; the UI and `att/` mount both rely on this determinism.
+ *
+ * Sixteen hexadecimal digest characters provide a 64-bit namespace. The
+ * registry still detects a collision and fails closed before aliasing two
+ * distinct workspace paths.
+ */
+export function mountPrefixForPath(workspacePath: string): MountPrefix {
+  return mountPrefixForPathWithDigestLength(
+    workspacePath,
+    MOUNT_PREFIX_DIGEST_HEX_LENGTH,
+  );
+}
+
+/**
+ * Prefix emitted before the 64-bit mount namespace rollout. Kept only for
+ * deterministic migration of persisted message history; it must never be
+ * used to register a new mount because its 16-bit namespace collides easily.
+ */
+export function legacyMountPrefixForPath(workspacePath: string): MountPrefix {
+  return mountPrefixForPathWithDigestLength(
+    workspacePath,
+    LEGACY_MOUNT_PREFIX_DIGEST_HEX_LENGTH,
+  );
 }
 
 export interface MountManagerOptions {
@@ -85,6 +113,22 @@ export class MountManager {
     Map<MountPrefix, MountEntry>
   > = new Map();
 
+  /**
+   * Mount requests are serialized per agent. Besides making duplicate mount
+   * calls idempotent while an async attach is in flight, this prevents two
+   * different workspace mounts from racing the agent's Set/entry updates.
+   */
+  private mountOperationsPerAgent: Map<AgentInstanceId, Promise<void>> =
+    new Map();
+
+  /**
+   * A prefix is written to `workspacePathsPerMount` before its host attach
+   * hook is awaited. Other agents mounting the same path wait on this promise;
+   * a distinct path that resolves to the same prefix fails closed against the
+   * reservation instead of entering a second attach hook.
+   */
+  private workspaceInitializations: Map<MountPrefix, Promise<void>> = new Map();
+
   private watchersPerPath: Map<WorkspacePath, FSWatcher> = new Map();
   private watcherDebounceTimers: Map<
     WorkspacePath,
@@ -114,21 +158,63 @@ export class MountManager {
     agentInstanceId: string,
     workspacePath: string,
   ): Promise<void> {
-    const isNewWorkspace = !this.workspacePathsPerMount.has(
-      mountPrefixForPath(workspacePath),
-    );
+    const previous = this.mountOperationsPerAgent.get(agentInstanceId);
+    const operation = (
+      previous ? previous.catch(() => undefined) : Promise.resolve()
+    ).then(() => this.mountWorkspaceSerial(agentInstanceId, workspacePath));
+    this.mountOperationsPerAgent.set(agentInstanceId, operation);
+
+    try {
+      await operation;
+    } finally {
+      if (this.mountOperationsPerAgent.get(agentInstanceId) === operation) {
+        this.mountOperationsPerAgent.delete(agentInstanceId);
+      }
+    }
+  }
+
+  private async mountWorkspaceSerial(
+    agentInstanceId: string,
+    workspacePath: string,
+  ): Promise<void> {
+    const prefix = mountPrefixForPath(workspacePath);
+    const registeredWorkspacePath = this.workspacePathsPerMount.get(prefix);
+    if (
+      registeredWorkspacePath !== undefined &&
+      registeredWorkspacePath !== workspacePath
+    ) {
+      throw new Error(
+        `Workspace mount prefix collision for ${prefix}; refusing to alias distinct paths`,
+      );
+    }
+    const isNewWorkspace = registeredWorkspacePath === undefined;
 
     // Bail if this agent already has this workspace mounted.
     const existing = this.agentMounts.get(agentInstanceId);
-    const prefix = mountPrefixForPath(workspacePath);
     if (existing?.has(prefix)) return;
 
     if (isNewWorkspace) {
-      // Host spins up ClientRuntime / LSP first so subsequent reads
-      // (and watcher refreshes) find a ready runtime.
-      await this.hooks.onWorkspaceAttached?.(workspacePath);
+      // Reserve synchronously before awaiting the host. This closes the
+      // check/attach/write race for both same-path and colliding-path mounts.
       this.workspacePathsPerMount.set(prefix, workspacePath);
-      this.startWorkspaceWatcher(workspacePath);
+      const initialization = this.initializeWorkspace(workspacePath);
+      this.workspaceInitializations.set(prefix, initialization);
+      try {
+        await initialization;
+      } catch (error) {
+        if (this.workspacePathsPerMount.get(prefix) === workspacePath) {
+          this.workspacePathsPerMount.delete(prefix);
+        }
+        throw error;
+      } finally {
+        if (this.workspaceInitializations.get(prefix) === initialization) {
+          this.workspaceInitializations.delete(prefix);
+        }
+      }
+    } else {
+      // Another agent may have claimed this path immediately before awaiting
+      // its host attach hook. Do not expose a half-initialized workspace.
+      await this.workspaceInitializations.get(prefix);
     }
 
     const mounts = existing ?? new Set<MountPrefix>();
@@ -170,6 +256,26 @@ export class MountManager {
       agent_type: this.getAgentType(agentInstanceId),
       agent_instance_id: agentInstanceId,
     });
+  }
+
+  private async initializeWorkspace(workspacePath: string): Promise<void> {
+    try {
+      // Host spins up ClientRuntime / LSP first so subsequent reads (and
+      // watcher refreshes) find a ready runtime.
+      await this.hooks.onWorkspaceAttached?.(workspacePath);
+      this.startWorkspaceWatcher(workspacePath);
+    } catch (error) {
+      this.stopWorkspaceWatcher(workspacePath);
+      try {
+        this.hooks.onWorkspaceReleased?.(workspacePath);
+      } catch (releaseError) {
+        this.logger.debug(
+          '[MountManager] Failed to release workspace after attach failure',
+          { error: releaseError, path: workspacePath },
+        );
+      }
+      throw error;
+    }
   }
 
   /**

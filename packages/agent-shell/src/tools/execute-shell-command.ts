@@ -247,7 +247,7 @@ function resolveCwd(
     if (!mountRoot) {
       throw new Error(
         `Unknown mount prefix "${prefix}". ` +
-          `Available: ${[...mounts.keys()].filter((k) => k.length <= 6).join(', ')}.`,
+          `Available: ${[...mounts.keys()].join(', ')}.`,
       );
     }
     if (!rest) return mountRoot;

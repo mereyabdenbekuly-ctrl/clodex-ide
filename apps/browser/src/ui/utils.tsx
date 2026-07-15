@@ -6,6 +6,7 @@ import { extractMentionsFromTiptapContent } from '@ui/screens/main/agent-chat/ch
 import { clsx, type ClassValue } from 'clsx';
 import { extendTailwindMerge } from 'tailwind-merge';
 import type { Content } from '@tiptap/core';
+import { stripWorkspaceMountPrefix } from '@shared/utils/mount-prefix';
 
 const customTwMerge = extendTailwindMerge({
   extend: {
@@ -153,16 +154,9 @@ export const openFileUrl = async (url: string, filename?: string) => {
 const NON_WORKSPACE_PREFIXES = ['att/', 'plugins/', 'apps/'] as const;
 
 /**
- * Workspace mount prefixes are generated as `w` + 4 hex chars (SHA-256
- * of the workspace path, see `mountPrefixForPath`).
- * This regex matches that pattern at the start of a path.
- */
-const WORKSPACE_PREFIX_RE = /^w[0-9a-f]{1,8}\//;
-
-/**
- * Strip a mount prefix (e.g. "wda51/", "att/", "plugins/") from a
- * workspace-relative path so it can be displayed without the internal
- * addressing scheme.
+ * Strip a mount prefix (e.g. legacy "wda51/", current
+ * "w2c9ed34e414edf8e/", "att/", "plugins/") from a workspace-relative
+ * path so it can be displayed without the internal addressing scheme.
  */
 export function stripMountPrefix(rawPath: string): string {
   const path = rawPath.replace(/\\/g, '/');
@@ -171,7 +165,7 @@ export function stripMountPrefix(rawPath: string): string {
     if (path.startsWith(prefix)) return path.slice(prefix.length);
   }
 
-  return path.replace(WORKSPACE_PREFIX_RE, '');
+  return stripWorkspaceMountPrefix(path);
 }
 
 /**

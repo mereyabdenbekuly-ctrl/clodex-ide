@@ -123,6 +123,36 @@ describe('MountManager registry (unit)', () => {
     return p;
   }
 
+  it('does not alias paths that collide under the legacy 16-bit prefix', () => {
+    const first = '/tmp/clodex-mount-collision-181';
+    const second = '/tmp/clodex-mount-collision-501';
+
+    expect(mountPrefixForPath(first)).toBe('w2c9ed34e414edf8e');
+    expect(mountPrefixForPath(second)).toBe('w2c9e1217d0e8ca6e');
+    expect(mountPrefixForPath(first)).not.toBe(mountPrefixForPath(second));
+  });
+
+  it('fails closed if two distinct paths resolve to one registered prefix', async () => {
+    const store = new MountWriteRecorder();
+    const telemetry = makeTelemetry();
+    const { manager, hooks } = makeManager(store, telemetry);
+    const workspace = tempWorkspace('collision-target');
+    const prefix = mountPrefixForPath(workspace);
+    const conflictingPath = tempWorkspace('already-registered');
+    const internals = manager as unknown as {
+      workspacePathsPerMount: Map<string, string>;
+    };
+    internals.workspacePathsPerMount.set(prefix, conflictingPath);
+
+    await expect(manager.mountWorkspace('agent-1', workspace)).rejects.toThrow(
+      `Workspace mount prefix collision for ${prefix}`,
+    );
+    expect(store.writes).toEqual([]);
+    expect(hooks.onWorkspaceAttached).not.toHaveBeenCalled();
+    expect(hooks.onMountsChanged).not.toHaveBeenCalled();
+    expect(telemetry.capture).not.toHaveBeenCalled();
+  });
+
   it('mountWorkspace writes a fresh array with a fresh entry through the store', async () => {
     const store = new MountWriteRecorder();
     const telemetry = makeTelemetry();
@@ -178,6 +208,65 @@ describe('MountManager registry (unit)', () => {
 
     expect(hooks.onWorkspaceAttached).toHaveBeenCalledTimes(1);
     expect(hooks.onWorkspaceAttached).toHaveBeenCalledWith(ws);
+  });
+
+  it('reserves a prefix before awaiting attach and shares one deferred initialization', async () => {
+    const store = new MountWriteRecorder();
+    const telemetry = makeTelemetry();
+    let releaseAttach: (() => void) | undefined;
+    const attachGate = new Promise<void>((resolve) => {
+      releaseAttach = resolve;
+    });
+    const { manager, hooks } = makeManager(store, telemetry, {
+      hooks: {
+        onWorkspaceAttached: vi.fn(() => attachGate),
+      },
+    });
+
+    const ws = tempWorkspace('shared-deferred');
+    const prefix = mountPrefixForPath(ws);
+    const first = manager.mountWorkspace('agent-1', ws);
+
+    await vi.waitFor(() => {
+      expect(hooks.onWorkspaceAttached).toHaveBeenCalledTimes(1);
+    });
+    // The path is already claimed while the host hook is still pending, so a
+    // colliding path cannot pass a stale check and enter a second hook.
+    expect(manager.getWorkspacePathForPrefix(prefix)).toBe(ws);
+
+    let secondSettled = false;
+    const second = manager.mountWorkspace('agent-2', ws).finally(() => {
+      secondSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(hooks.onWorkspaceAttached).toHaveBeenCalledTimes(1);
+    expect(secondSettled).toBe(false);
+    expect(store.writes).toEqual([]);
+
+    releaseAttach?.();
+    await Promise.all([first, second]);
+
+    expect(hooks.onWorkspaceAttached).toHaveBeenCalledTimes(1);
+    expect(manager.getMountPrefixes('agent-1')).toEqual([prefix]);
+    expect(manager.getMountPrefixes('agent-2')).toEqual([prefix]);
+  });
+
+  it('serializes concurrent mounts for one agent without losing either path', async () => {
+    const store = new MountWriteRecorder();
+    const telemetry = makeTelemetry();
+    const { manager } = makeManager(store, telemetry);
+    const first = tempWorkspace('concurrent-first');
+    const second = tempWorkspace('concurrent-second');
+
+    await Promise.all([
+      manager.mountWorkspace('agent-1', first),
+      manager.mountWorkspace('agent-1', second),
+    ]);
+
+    expect(new Set(manager.getMountPrefixes('agent-1'))).toEqual(
+      new Set([mountPrefixForPath(first), mountPrefixForPath(second)]),
+    );
   });
 
   it('onWorkspaceReleased fires exactly once when the last agent unmounts', async () => {

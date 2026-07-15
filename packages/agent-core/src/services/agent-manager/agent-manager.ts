@@ -63,6 +63,7 @@ import type {
   AgentStatePersistRequest,
 } from '../../agents/state-persistence';
 import { serializeAgentStatePersistMessage } from '../../agents/state-persistence';
+import { migrateLegacyMountPrefixes } from './mount-prefix-migration';
 
 import {
   AgentSessionCheckpointSafePointError,
@@ -1553,6 +1554,18 @@ export class AgentManager extends DisposableService {
     const resumedModelValid =
       agent.activeModelId && this.host.models.has(agent.activeModelId);
 
+    const persistedWorkspaces = Array.isArray(agent.mountedWorkspaces)
+      ? agent.mountedWorkspaces
+      : [];
+    const migratedPersistedState = migrateLegacyMountPrefixes(
+      {
+        history: agent.history,
+        queuedMessages: agent.queuedMessages,
+        inputState: agent.inputState,
+      },
+      persistedWorkspaces,
+    );
+
     const createdAgent = await this.createAgent(
       agent.type,
       agent.instanceConfig as any,
@@ -1560,13 +1573,14 @@ export class AgentManager extends DisposableService {
       {
         title: agent.title,
         titleLockedByUser: agent.titleLockedByUser ?? undefined,
-        history: agent.history as AgentMessage[],
-        queuedMessages: agent.queuedMessages as (AgentMessage & {
-          role: 'user';
-        })[],
+        history: migratedPersistedState.history as AgentMessage[],
+        queuedMessages:
+          migratedPersistedState.queuedMessages as (AgentMessage & {
+            role: 'user';
+          })[],
         activeModelId: resumedModelValid ? agent.activeModelId : undefined,
         toolApprovalMode: agent.toolApprovalMode ?? DEFAULT_TOOL_APPROVAL_MODE,
-        inputState: agent.inputState,
+        inputState: migratedPersistedState.inputState,
         usedTokens: agent.usedTokens,
         goal: agent.goal,
         isWorking: false,
@@ -1574,8 +1588,8 @@ export class AgentManager extends DisposableService {
       instanceId,
     );
 
-    if (agent.mountedWorkspaces && Array.isArray(agent.mountedWorkspaces)) {
-      for (const ws of agent.mountedWorkspaces) {
+    if (persistedWorkspaces.length > 0) {
+      for (const ws of persistedWorkspaces) {
         try {
           await this.managerToolbox.handleMountWorkspace(
             instanceId,

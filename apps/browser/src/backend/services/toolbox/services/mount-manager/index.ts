@@ -206,6 +206,10 @@ export class MountManagerService extends DisposableService {
     AgentInstanceId,
     Map<MountPrefix, MountPermission[]>
   > = new Map();
+  private mountOperationsPerAgent: Map<
+    AgentInstanceId,
+    Map<MountPrefix, Promise<void>>
+  > = new Map();
 
   private clientRuntimesPerPath: Map<string, ClientRuntimeNode> = new Map();
   private lspServicesPerPath: Map<string, LspService> = new Map();
@@ -871,7 +875,9 @@ export class MountManagerService extends DisposableService {
     permissions?: MountPermission[],
   ): Promise<void> {
     const resolvedPermissions: MountPermission[] =
-      permissions ?? ([...FULL_PERMISSIONS] as MountPermission[]);
+      permissions !== undefined
+        ? [...permissions]
+        : ([...FULL_PERMISSIONS] as MountPermission[]);
 
     let resolvedWorkspacePath: string | undefined;
     if (!workspacePath) {
@@ -907,17 +913,39 @@ export class MountManagerService extends DisposableService {
     });
 
     const prefix = mountPrefixForPath(resolvedWorkspacePath);
-    let perAgent = this.agentPermissions.get(agentInstanceId);
-    if (!perAgent) {
-      perAgent = new Map<MountPrefix, MountPermission[]>();
-      this.agentPermissions.set(agentInstanceId, perAgent);
-    }
-    // Record permissions up-front so `getMountedPathsWithRuntimes`
-    // can observe them in the `onMountsChanged` callback that fires
-    // from within `core.mountWorkspace`.
-    perAgent.set(prefix, resolvedPermissions);
+    await this.runSerializedMount(agentInstanceId, prefix, async () => {
+      let perAgent = this.agentPermissions.get(agentInstanceId);
+      if (!perAgent) {
+        perAgent = new Map<MountPrefix, MountPermission[]>();
+        this.agentPermissions.set(agentInstanceId, perAgent);
+      }
+      const hadPreviousPermissions = perAgent.has(prefix);
+      const previousPermissions = perAgent.get(prefix);
+      // Record permissions up-front so `getMountedPathsWithRuntimes`
+      // can observe them in the `onMountsChanged` callback that fires
+      // from within `core.mountWorkspace`.
+      perAgent.set(prefix, resolvedPermissions);
 
-    await this.core.mountWorkspace(agentInstanceId, resolvedWorkspacePath);
+      try {
+        await this.core.mountWorkspace(agentInstanceId, resolvedWorkspacePath);
+      } catch (error) {
+        // Core can reject before a mount is registered (most importantly on a
+        // prefix collision). Do not leave the speculative permission write
+        // behind or overwrite permissions for an existing mount.
+        if (hadPreviousPermissions && previousPermissions) {
+          perAgent.set(prefix, previousPermissions);
+        } else {
+          perAgent.delete(prefix);
+          if (
+            perAgent.size === 0 &&
+            this.agentPermissions.get(agentInstanceId) === perAgent
+          ) {
+            this.agentPermissions.delete(agentInstanceId);
+          }
+        }
+        throw error;
+      }
+    });
 
     // Worktree-setup is host-side git tooling: if this mount corresponds
     // to a worktree we just created, kick off its setup commands now that
@@ -927,6 +955,36 @@ export class MountManagerService extends DisposableService {
     );
     if (pendingSetup) {
       void this.worktreeSetupRunner.start(pendingSetup);
+    }
+  }
+
+  private async runSerializedMount(
+    agentInstanceId: AgentInstanceId,
+    prefix: MountPrefix,
+    mount: () => Promise<void>,
+  ): Promise<void> {
+    let operations = this.mountOperationsPerAgent.get(agentInstanceId);
+    if (!operations) {
+      operations = new Map<MountPrefix, Promise<void>>();
+      this.mountOperationsPerAgent.set(agentInstanceId, operations);
+    }
+
+    const previous = operations.get(prefix);
+    const operation = (
+      previous ? previous.catch(() => undefined) : Promise.resolve()
+    ).then(mount);
+    operations.set(prefix, operation);
+
+    try {
+      await operation;
+    } finally {
+      if (operations.get(prefix) === operation) operations.delete(prefix);
+      if (
+        operations.size === 0 &&
+        this.mountOperationsPerAgent.get(agentInstanceId) === operations
+      ) {
+        this.mountOperationsPerAgent.delete(agentInstanceId);
+      }
     }
   }
 
