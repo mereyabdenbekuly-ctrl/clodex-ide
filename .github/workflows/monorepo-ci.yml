@@ -93,6 +93,9 @@ jobs:
       - name: Validate release plumbing contracts
         run: pnpm release:signing:readiness:test
 
+      - name: Validate release acceptance contracts
+        run: pnpm release:acceptance:test
+
       - name: Test production dependency audit policy
         run: pnpm security:dependencies:test
 
@@ -138,7 +141,9 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-pnpmfile
 
       - name: Run Typecheck
-        run: pnpm typecheck
+        run: |
+          pnpm typecheck
+          pnpm typecheck:scripts
 
   # Build - runs in parallel with lint
   build:

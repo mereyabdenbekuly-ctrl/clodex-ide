@@ -8,9 +8,20 @@ const DEFAULT_CAPABILITIES: ModelCapabilities = modelCapabilitiesSchema.parse({
   toolCalling: true,
 });
 
-export function createCliHostModels(defaultModelId: string): HostModels {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
+export interface CliHostModelOptions {
+  readonly apiKey?: string;
+}
+
+export function createCliHostModels(
+  defaultModelId: string,
+  options: CliHostModelOptions = {},
+): HostModels {
+  const normalizedDefaultModelId = defaultModelId.trim();
+  if (normalizedDefaultModelId.length === 0) {
+    throw new Error('A non-empty default Anthropic model id is required');
+  }
+  const apiKey = (options.apiKey ?? process.env.ANTHROPIC_API_KEY)?.trim();
+  if (apiKey === undefined || apiKey.length === 0) {
     throw new Error('ANTHROPIC_API_KEY is required');
   }
 
@@ -18,7 +29,7 @@ export function createCliHostModels(defaultModelId: string): HostModels {
 
   return {
     async getWithOptions(modelId: string, _traceId: string) {
-      const id = modelId || defaultModelId;
+      const id = modelId.trim() || normalizedDefaultModelId;
       const model = anthropic(id);
       return {
         model,

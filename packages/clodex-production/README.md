@@ -81,14 +81,34 @@ container effect atomic with that storage transaction; ambiguous effects close
 No production write, package, plugin, shell, network, secret, commit, or push
 gate default is changed by this package.
 
-## Deferred verification
+## Verification status
 
-The implementation tranche intentionally did not run tests, typechecks,
-linters, installs, builds, smoke tests, or validation commands. The next test
-owner must cover at least:
+The first independent verification tranche adds executable Vitest coverage for
+the fail-closed input boundary. It covers exact deployment, adapter
+attestation, protected-head, reviewed-decision, recovery-profile/admission,
+registry expectation/membership, and adapter-binding validation. Adversarial
+cases include accessors without getter execution, hidden and symbol fields,
+foreign prototypes, sparse and extended arrays, malformed digests and
+timestamps, validity-window drift, Promise-returning synchronous fences, and
+hash-output drift.
 
-- every single blocker returning `authority: null` and zero leaked callbacks;
-- local POSIX/in-memory registry heads rejected as not independently protected;
+Bootstrap tests currently prove that invalid or accessor-backed deployment
+input, current-deployment drift, and an asynchronous deployment fence all
+return `authority: null`, publish no authority callbacks, and do not invoke
+later adapter, promotion, or recovery ports. They also stop on capability-scope
+drift, stale adapter evidence, an asynchronous adapter fence, and a registry
+head that is not independently protected before crossing the next authority
+boundary.
+
+The following larger matrix remains deferred and must not be represented as
+verified by the current suite:
+
+- a complete successful bootstrap fixture through signed registry admission,
+  reviewed promotion, durable control-plane construction, recovery, and final
+  authority publication;
+- every remaining blocker returning `authority: null` with zero leaked
+  callbacks, including concrete local POSIX/in-memory registry-head port
+  wiring rejected for absence of an independently protected profile;
 - registry rollback, fork, stale signer, expiry, scope/digest drift, and exact
   adapter/runner/effect membership failures;
 - missing/blocked promotion evidence and absence, expiry, revocation, or drift
@@ -101,12 +121,12 @@ owner must cover at least:
   caught-rejection, retained, late, and pre-await adapter consumption of the
   dispatch capability;
 - terminal closure remaining possible after gate revocation; and
-- adversarial accessors, prototypes, symbols, sparse arrays, non-canonical
-  timestamps/digests, Promise-returning final fences, and port replacement.
+- port replacement and revocation races across every asynchronous boundary.
 
-Suggested commands for the test owner (not executed in this tranche):
+Targeted verification commands for this package are:
 
 ```sh
+pnpm --dir packages/clodex-production test
 pnpm --dir packages/clodex-production typecheck
 pnpm exec biome check packages/clodex-production
 pnpm typecheck
