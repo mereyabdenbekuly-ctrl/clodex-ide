@@ -38,8 +38,10 @@ import { AgentCorePersistence } from '@clodex/agent-core/persistence';
 import { MountManager } from '@clodex/agent-core/mount-manager';
 import { AgentTypes } from '@clodex/agent-core/types/agent';
 import type { AgentMessage, AgentState } from '@clodex/agent-core/types/agent';
+import { CliUsageError, formatCliHelp, parseCliArgs } from './cli-args.js';
 import { createCliHostModels } from './cli-host-models.js';
 import { createCliHostPaths } from './cli-host-paths.js';
+import { lastAssistantText } from './cli-state.js';
 import { createCliToolboxPort } from './cli-toolbox-port.js';
 import {
   ShellService,
@@ -51,64 +53,6 @@ import {
   createShellsDomainAdapter,
 } from '@clodex/agent-shell/env';
 import { CliChatAgent } from './cli-chat-agent.js';
-
-const DEFAULT_MODEL = 'claude-sonnet-4.6';
-
-function parseArgs(argv: string[]): {
-  cwd: string;
-  modelId: string;
-  prompt: string;
-} {
-  let cwd = process.cwd();
-  let modelId = process.env.CLODEX_CLI_MODEL ?? DEFAULT_MODEL;
-  const rest: string[] = [];
-
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!;
-    if (a === '--cwd' && argv[i + 1]) {
-      cwd = path.resolve(argv[++i]!);
-      continue;
-    }
-    if (a.startsWith('--cwd=')) {
-      cwd = path.resolve(a.slice('--cwd='.length));
-      continue;
-    }
-    if (a === '--model' && argv[i + 1]) {
-      modelId = argv[++i]!;
-      continue;
-    }
-    if (a.startsWith('--model=')) {
-      modelId = a.slice('--model='.length);
-      continue;
-    }
-    if (a === '--help' || a === '-h') {
-      printHelp();
-      process.exit(0);
-    }
-    rest.push(a);
-  }
-
-  const prompt = rest.join(' ').trim();
-  if (!prompt) {
-    console.error('Missing prompt. Usage: clodex-cli [options] <prompt>');
-    printHelp();
-    process.exit(1);
-  }
-
-  return { cwd, modelId, prompt };
-}
-
-function printHelp() {
-  console.error(`clodex-cli — minimal headless agent (Anthropic)
-
-Usage:
-  clodex-cli [--cwd <dir>] [--model <id>] <prompt>
-
-Environment:
-  ANTHROPIC_API_KEY   Required
-  CLODEX_CLI_MODEL Optional default model id (${DEFAULT_MODEL})
-`);
-}
 
 function ensureRuntimeDirs(host: AgentHost): void {
   const roots = [
@@ -135,19 +79,6 @@ function ensureRuntimeDirs(host: AgentHost): void {
   }
 }
 
-function lastAssistantText(state: AgentState): string {
-  for (let i = state.history.length - 1; i >= 0; i--) {
-    const m = state.history[i];
-    if (!m || m.role !== 'assistant') continue;
-    const parts = m.parts as Array<{ type: string; text?: string }>;
-    const texts = parts
-      .filter((p) => p.type === 'text' && typeof p.text === 'string')
-      .map((p) => p.text as string);
-    if (texts.length) return texts.join('\n');
-  }
-  return '';
-}
-
 async function waitUntilIdle(
   store: AgentStore,
   instanceId: string,
@@ -166,7 +97,14 @@ async function waitUntilIdle(
 }
 
 async function main() {
-  const { cwd, modelId, prompt } = parseArgs(process.argv.slice(2));
+  const invocation = parseCliArgs(process.argv.slice(2), {
+    environmentModelId: process.env.CLODEX_CLI_MODEL,
+  });
+  if (invocation.kind === 'help') {
+    process.stderr.write(`${formatCliHelp()}\n`);
+    return;
+  }
+  const { cwd, modelId, prompt } = invocation;
 
   const sessionId = randomUUID();
   const sessionRoot = path.join(tmpdir(), 'clodex-cli', sessionId);
@@ -359,15 +297,19 @@ async function main() {
   }
 
   if (finalState?.error) {
-    console.error('Agent error:', finalState.error);
-    process.exit(1);
+    throw new Error(`Agent error: ${String(finalState.error)}`);
   }
 
-  const text = finalState ? lastAssistantText(finalState) : '';
+  const text = finalState ? lastAssistantText(finalState.history) : '';
   process.stdout.write(text ? `${text}\n` : '(no assistant text)\n');
 }
 
 main().catch((err) => {
+  if (err instanceof CliUsageError) {
+    process.stderr.write(`${err.message}\n\n${formatCliHelp()}\n`);
+    process.exitCode = 1;
+    return;
+  }
   console.error(err);
-  process.exit(1);
+  process.exitCode = 1;
 });

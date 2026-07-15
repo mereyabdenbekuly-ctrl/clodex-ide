@@ -12,7 +12,7 @@
     "dev": "pnpm -F @clodex/agent-core build && pnpm -F @clodex/agent-shell build && tsx src/index.ts",
     "start": "pnpm build && node dist/index.js",
     "typecheck": "pnpm -F @clodex/agent-core build && pnpm -F @clodex/agent-shell build && tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "tsc -p tsconfig.test.json --noEmit && vitest run"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "3.0.76",
