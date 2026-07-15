@@ -91,14 +91,18 @@ to the accepted source.
 ## Preview.3 canary — NOT_READY
 
 Preview.3 may be created only after the complete preview.2 chain passes. Its
-controlled distribution is intended for exactly five installations, but the
-repository does not yet have a trusted distribution/telemetry observation
-source. Therefore the protected collector deliberately rejects every
-preview.3 attempt with `stable promotion is NOT_READY`.
+controlled distribution is intended for exactly five installations. The
+public repository now defines closed content-free distribution and health
+summary schemas, canonical byte validation, deterministic receipt assembly,
+nested producer/attestation binding verification, and schema-v4 acceptance
+plumbing. It still has no configured trusted producer or real attested
+distribution/health source. Therefore the protected collector deliberately
+rejects every preview.3 attempt with `stable promotion is NOT_READY`.
 
 Manual or workflow-dispatch JSON cannot become canary evidence. Before the
-preview.2 release starts, a separate observation producer must be implemented
-and independently reviewed. Its signed, manifest-bound receipt must identify
+preview.2 release starts, separate distribution and health producers must be
+implemented outside the public operational boundary and independently
+reviewed. Their signed summaries and the canonical manifest-bound receipt must identify
 the canonical repository, preview source/manifest/tag, distribution system,
 telemetry source, observation artifact digest, signer workflow and signer
 commit. Acceptance must verify that attestation independently before it may
@@ -117,6 +121,15 @@ evaluate:
 The first authentication failure is an immediate stop condition. A sixth
 installation is also a stop condition. An operator assertion, open window, or
 incomplete receipt can never produce `ready-for-stable`.
+
+The public schemas are:
+
+- `scripts/release/schemas/content-free-canary-distribution-summary-v1.schema.json`;
+- `scripts/release/schemas/content-free-canary-health-summary-v1.schema.json`.
+
+They deliberately contain aggregate counters only. Installation identifiers,
+machine identifiers, prompts, source, traces, raw logs, customer data,
+credentials, and production topology are not valid fields.
 
 Do not create or commit `.release-evidence/v1.16.0-preview.3.json` until that
 trusted observation path exists and the fail-closed blocker is intentionally

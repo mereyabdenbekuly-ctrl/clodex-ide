@@ -18,6 +18,14 @@ import {
   sha256Text,
   validateReleasePlan,
 } from './release-plan.mjs';
+import { assembleCanaryObservationEvidenceBundle } from './assemble-canary-observation-receipt.mjs';
+import { canonicalCanaryArtifactBytes } from './canary-observation-summaries.mjs';
+import {
+  CANARY_FIXTURE_NOW,
+  canaryDistributionSummary,
+  canaryHealthSummary,
+  canaryReceiptProducer,
+} from './canary-observation-test-fixtures.mjs';
 
 const repositoryRoot = new URL('../../', import.meta.url);
 
@@ -159,6 +167,18 @@ function acceptedEvidence({ plan, sourceCommit, status, canary }) {
         sha256: sha256Text(historicalManifest),
         sourceCommit,
       },
+      inputs: {
+        automatedChecks: {
+          path: 'automated-checks.json',
+          sha256: 'a'.repeat(64),
+          sourceCommit,
+        },
+        manualChecks: {
+          path: 'manual-checks.json',
+          sha256: 'b'.repeat(64),
+          sourceCommit: '4'.repeat(40),
+        },
+      },
       publication: {
         assets: [
           {
@@ -195,11 +215,43 @@ function acceptedEvidence({ plan, sourceCommit, status, canary }) {
           ? { targetTag: 'v1.16.0-preview.2' }
           : {}),
       },
-      schemaVersion: 3,
+      schemaVersion: 4,
       status,
     },
     historicalManifest,
   };
+}
+
+function observationEvidenceForAcceptedPlan({
+  manifestSha256,
+  plan,
+  reportSha256,
+  sourceCommit,
+}) {
+  const distribution = canaryDistributionSummary();
+  const health = canaryHealthSummary();
+  for (const summary of [distribution, health]) {
+    summary.source.commit = sourceCommit;
+    summary.manifest.sha256 = manifestSha256;
+    summary.manifest.sourceCommit = sourceCommit;
+    summary.release.sourceCommit = sourceCommit;
+    summary.release.tag = plan.tag;
+    summary.release.version = plan.version;
+    summary.publication.createdAt = '2026-07-12T23:00:00.000Z';
+    summary.publication.releaseId = 123;
+    summary.publication.reportAssetId = 1002;
+    summary.publication.reportSha256 = reportSha256;
+    summary.publication.sourceCommit = sourceCommit;
+    summary.publication.tag = plan.tag;
+  }
+  return assembleCanaryObservationEvidenceBundle(
+    {
+      distributionBytes: canonicalCanaryArtifactBytes(distribution),
+      healthBytes: canonicalCanaryArtifactBytes(health),
+      producer: canaryReceiptProducer(),
+    },
+    { now: CANARY_FIXTURE_NOW },
+  );
 }
 
 test('schema-v2 preview.2 is a draft rollback baseline without a target tag', () => {
@@ -247,6 +299,7 @@ test('preview.3 requires committed manifest-bound preview.2 acceptance', () => {
       authFailures: 0,
       distributionClosedAt: null,
       endedAt: null,
+      observationEvidence: null,
       observedHours: null,
       observedInstallations: null,
       startedAt: null,
@@ -383,14 +436,23 @@ test('stable release requires real preview.3 canary-5 evidence', () => {
     tag: `v${canaryVersion}`,
   };
   const sourceCommit = '3'.repeat(40);
+  const canaryManifest = `${JSON.stringify(canaryPlan, null, 2)}\n`;
+  const observationEvidence = observationEvidenceForAcceptedPlan({
+    manifestSha256: sha256Text(canaryManifest),
+    plan: canaryPlan,
+    reportSha256: '8'.repeat(64),
+    sourceCommit,
+  });
+  const observation = observationEvidence.receipt.value.observation;
   const { evidence, historicalManifest } = acceptedEvidence({
     canary: {
       authFailures: 0,
-      distributionClosedAt: '2026-07-14T00:00:00.000Z',
-      endedAt: '2026-07-14T00:00:00.000Z',
-      observedHours: 24,
+      distributionClosedAt: observation.distributionClosedAt,
+      endedAt: observation.endedAt,
+      observationEvidence,
+      observedHours: observation.observedHours,
       observedInstallations: 5,
-      startedAt: '2026-07-13T00:00:00.000Z',
+      startedAt: observation.startedAt,
       stopReasons: [],
       targetInstallations: 5,
       targetObservationHours: 24,
@@ -1619,6 +1681,11 @@ test('trusted release evidence is attested and verified with exact workflow dige
   assert.match(attestJob, /artifact-ids:/);
   assert.match(attestJob, /actual_sha256.*EXPECTED_SHA256/s);
   assert.match(attestJob, /requiredCheckIds/);
+  assert.match(attestJob, /const hasExactKeys/);
+  assert.match(attestJob, /hasExactKeys\(evidence, \[/);
+  assert.match(attestJob, /hasExactKeys\(evidence\.inputs/);
+  assert.match(attestJob, /evidence\.schemaVersion !== 4/);
+  assert.match(attestJob, /canary\.observationEvidence !== null/);
   assert.match(attestJob, /subject_bytes.*1048576/s);
   assert.doesNotMatch(
     attestJob,
@@ -1646,6 +1713,8 @@ test('trusted release evidence is attested and verified with exact workflow dige
     'utf8',
   );
   assert.match(collector, /stable promotion is NOT_READY/);
+  assert.match(collector, /schemaVersion: 4/);
+  assert.match(collector, /observationEvidence: null/);
   assert.doesNotMatch(collector, /canary metrics are required/);
 });
 

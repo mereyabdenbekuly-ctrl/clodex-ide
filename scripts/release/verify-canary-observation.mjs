@@ -1,7 +1,20 @@
 import {
+  CANARY_DISTRIBUTION_SUMMARY_KIND,
+  CANARY_HEALTH_SUMMARY_KIND,
   validateCanaryObservationBindings,
   validateCanaryObservationReceipt,
+  validateCanaryReceiptProducer,
 } from './canary-observation-receipt.mjs';
+import {
+  validateCanaryObservationEvidenceBundle,
+  validateCanaryObservationReceiptSubject,
+} from './assemble-canary-observation-receipt.mjs';
+import {
+  canonicalCanaryJson,
+  validateCanarySummaryProducer,
+  validateVerifiedCanaryAttestation,
+  verifyCanarySummaryAttestationBinding,
+} from './canary-observation-summaries.mjs';
 
 function fail(message) {
   throw new Error(message);
@@ -11,17 +24,14 @@ function isObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function canonicalJson(value) {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
+function assertExactKeys(value, expected, label) {
+  if (
+    !isObject(value) ||
+    JSON.stringify(Object.keys(value).sort()) !==
+      JSON.stringify([...expected].sort())
+  ) {
+    fail(`${label} contains missing or unsupported fields`);
   }
-  if (isObject(value)) {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function assertExpectedBindings(expected) {
@@ -30,9 +40,35 @@ function assertExpectedBindings(expected) {
 }
 
 function assertExactBinding(actual, expected, label) {
-  if (canonicalJson(actual) !== canonicalJson(expected)) {
+  if (canonicalCanaryJson(actual) !== canonicalCanaryJson(expected)) {
     fail(`canary observation ${label} does not match the expected binding`);
   }
+}
+
+function verifyReceiptAttestationBinding(
+  subject,
+  attestation,
+  expectedProducer,
+  { now },
+) {
+  validateCanaryObservationReceiptSubject(subject, { now });
+  validateVerifiedCanaryAttestation(attestation);
+  validateCanaryReceiptProducer(expectedProducer);
+  const producer = subject.value.producer;
+  assertExactBinding(producer, expectedProducer, 'receipt producer');
+  if (
+    attestation.repository !== producer.repository ||
+    attestation.signerWorkflow !== producer.workflow ||
+    attestation.sourceRef !== producer.sourceRef ||
+    attestation.sourceDigest !== producer.sourceCommit ||
+    attestation.signerDigest !== producer.workflowCommit ||
+    attestation.subjectSha256 !== subject.sha256
+  ) {
+    fail(
+      'verified canary receipt attestation does not bind the exact producer and subject',
+    );
+  }
+  return { attestation, producer, subject };
 }
 
 /**
@@ -65,4 +101,61 @@ export function verifyCanaryObservationReceipt(
     assertExactBinding(actual[label], expected[label], label);
   }
   return validated;
+}
+
+/**
+ * Binds a self-contained receipt/summary bundle to attestation claims that were
+ * already cryptographically verified by the caller. This function never turns
+ * caller-authored claims into attestations; promotion code must obtain the
+ * claims from a successful external verifier first.
+ */
+export function verifyCanaryObservationEvidenceBundle(
+  value,
+  { expected, expectedProducers, now = new Date(), verifiedAttestations } = {},
+) {
+  assertExpectedBindings(expected);
+  assertExactKeys(
+    expectedProducers,
+    ['distribution', 'health', 'receipt'],
+    'expected canary producers',
+  );
+  validateCanarySummaryProducer(expectedProducers.distribution);
+  validateCanarySummaryProducer(expectedProducers.health);
+  validateCanaryReceiptProducer(expectedProducers.receipt);
+  assertExactKeys(
+    verifiedAttestations,
+    ['distribution', 'health', 'receipt'],
+    'verified canary attestations',
+  );
+
+  const validated = validateCanaryObservationEvidenceBundle(value, { now });
+  const receipt = verifyCanaryObservationReceipt(value.receipt.value, {
+    expected,
+    now,
+  });
+  verifyCanarySummaryAttestationBinding(
+    value.distribution,
+    verifiedAttestations.distribution,
+    {
+      expectedProducer: expectedProducers.distribution,
+      kind: CANARY_DISTRIBUTION_SUMMARY_KIND,
+      now,
+    },
+  );
+  verifyCanarySummaryAttestationBinding(
+    value.health,
+    verifiedAttestations.health,
+    {
+      expectedProducer: expectedProducers.health,
+      kind: CANARY_HEALTH_SUMMARY_KIND,
+      now,
+    },
+  );
+  verifyReceiptAttestationBinding(
+    value.receipt,
+    verifiedAttestations.receipt,
+    expectedProducers.receipt,
+    { now },
+  );
+  return { ...validated, receipt };
 }

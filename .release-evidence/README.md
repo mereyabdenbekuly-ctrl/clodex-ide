@@ -104,7 +104,7 @@ image and signs the resulting bundle with the protected collector identity.
 
 ### Desktop release acceptance
 
-Desktop preview promotion uses content-free schema-v3 evidence produced only by
+Desktop preview promotion uses content-free schema-v4 evidence produced only by
 the protected `Trusted Release Acceptance Evidence` workflow. The workflow
 revalidates the canonical live draft release, exact remote tag, complete asset
 inventory and SHA-256 digests, then verifies the publication report attestation
@@ -120,9 +120,10 @@ A desktop release report may be committed only when:
 - it identifies the unchanged real draft GitHub Release and every live asset by
   database ID, name, positive byte size, API digest, and downloaded SHA-256;
 - preview.2 status is `ready-as-rollback-baseline`; or
-- preview.3 remains `NOT_READY` until a separately attested, manifest-bound
-  distribution/telemetry observation source exists. Operator-authored JSON is
-  not canary evidence and cannot open the stable gate.
+- preview.3 remains `NOT_READY` until separately attested, manifest-bound
+  distribution and health producers exist and match the public canonical
+  summary/receipt contracts. Operator-authored JSON is not canary evidence and
+  cannot open the stable gate.
 
 Never hand-author a passing report or add templates, placeholder hashes,
 synthetic release IDs, raw logs, or per-installation data. The release-plan

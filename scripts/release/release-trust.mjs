@@ -2,14 +2,25 @@ import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-export const CANONICAL_REPOSITORY = 'mereyabdenbekuly-ctrl/clodex-ide';
-export const PUBLICATION_ATTESTATION_WORKFLOW =
-  'mereyabdenbekuly-ctrl/clodex-ide/.github/workflows/release-publication-attestation.yml';
-export const ACCEPTANCE_ATTESTATION_WORKFLOW =
-  'mereyabdenbekuly-ctrl/clodex-ide/.github/workflows/release-acceptance-evidence.yml';
-export const TRUSTED_SOURCE_REF = 'refs/heads/main';
-export const EVIDENCE_MAX_AGE_MS = 72 * 60 * 60 * 1000;
-export const PUBLICATION_REPORT_FILE_NAME = 'clodex-release-publication.json';
+import { validateCanaryObservationEvidenceBundle } from './assemble-canary-observation-receipt.mjs';
+import {
+  ACCEPTANCE_ATTESTATION_WORKFLOW,
+  CANARY_OBSERVATION_ATTESTATION_WORKFLOW,
+  CANONICAL_REPOSITORY,
+  EVIDENCE_MAX_AGE_MS,
+  PUBLICATION_REPORT_FILE_NAME,
+  TRUSTED_SOURCE_REF,
+} from './release-trust-constants.mjs';
+
+export {
+  ACCEPTANCE_ATTESTATION_WORKFLOW,
+  CANARY_OBSERVATION_ATTESTATION_WORKFLOW,
+  CANONICAL_REPOSITORY,
+  EVIDENCE_MAX_AGE_MS,
+  PUBLICATION_ATTESTATION_WORKFLOW,
+  PUBLICATION_REPORT_FILE_NAME,
+  TRUSTED_SOURCE_REF,
+} from './release-trust-constants.mjs';
 export const REQUIRED_ACCEPTANCE_CHECK_IDS = [
   'source.commit-bound',
   'source.clean-tree',
@@ -85,6 +96,15 @@ function assertExactStrings(actual, expected, message) {
   assert(
     JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort()),
     message,
+  );
+}
+
+function assertExactKeys(value, expected, label) {
+  assert(isObject(value), `${label} must be an object`);
+  assert(
+    JSON.stringify(Object.keys(value).sort()) ===
+      JSON.stringify([...expected].sort()),
+    `${label} contains missing or unsupported fields`,
   );
 }
 
@@ -408,8 +428,27 @@ export function validateTrustedAcceptanceEvidence(
   { now = new Date() } = {},
 ) {
   assert(isObject(evidence), 'trusted acceptance evidence must be an object');
+  assertExactKeys(
+    evidence,
+    [
+      'blockers',
+      'canary',
+      'checks',
+      'collector',
+      'evidenceKind',
+      'generatedAt',
+      'inputs',
+      'manifest',
+      'publication',
+      'release',
+      'rollback',
+      'schemaVersion',
+      'status',
+    ],
+    'trusted acceptance evidence',
+  );
   assert(
-    evidence.schemaVersion === 3 &&
+    evidence.schemaVersion === 4 &&
       evidence.evidenceKind === 'release-acceptance' &&
       ['ready-as-rollback-baseline', 'ready-for-stable'].includes(
         evidence.status,
@@ -426,6 +465,19 @@ export function validateTrustedAcceptanceEvidence(
     nowMs - generatedAt <= EVIDENCE_MAX_AGE_MS,
     'trusted acceptance evidence is stale',
   );
+  assertExactKeys(
+    evidence.collector,
+    [
+      'repository',
+      'runAttempt',
+      'runId',
+      'sourceCommit',
+      'sourceRef',
+      'workflow',
+      'workflowCommit',
+    ],
+    'trusted collector',
+  );
   assert(
     evidence.collector?.repository === CANONICAL_REPOSITORY &&
       evidence.collector?.workflow === ACCEPTANCE_ATTESTATION_WORKFLOW &&
@@ -439,6 +491,11 @@ export function validateTrustedAcceptanceEvidence(
       evidence.collector.runAttempt > 0,
     'trusted collector identity is invalid',
   );
+  assertExactKeys(
+    evidence.manifest,
+    ['path', 'sha256', 'sourceCommit'],
+    'trusted manifest',
+  );
   assert(
     isObject(evidence.manifest) &&
       isNormalizedRepositorySubpath(evidence.manifest.path, '.release-notes') &&
@@ -446,6 +503,21 @@ export function validateTrustedAcceptanceEvidence(
       SHA256.test(String(evidence.manifest.sha256 ?? '')) &&
       COMMIT.test(String(evidence.manifest.sourceCommit ?? '')),
     'trusted manifest binding is invalid',
+  );
+  assertExactKeys(
+    evidence.publication,
+    [
+      'assets',
+      'createdAt',
+      'releaseId',
+      'reportAssetId',
+      'reportFileName',
+      'reportSha256',
+      'repository',
+      'sourceCommit',
+      'tag',
+    ],
+    'trusted publication',
   );
   assert(
     evidence.publication?.repository === CANONICAL_REPOSITORY &&
@@ -465,6 +537,11 @@ export function validateTrustedAcceptanceEvidence(
   const publicationNames = new Set();
   const publicationIds = new Set();
   for (const asset of evidence.publication.assets) {
+    assertExactKeys(
+      asset,
+      ['bytes', 'fileName', 'releaseAssetId', 'sha256'],
+      'trusted publication asset',
+    );
     validateAssetRecord(asset, 'trusted publication asset', {
       requireId: true,
     });
@@ -483,6 +560,11 @@ export function validateTrustedAcceptanceEvidence(
     reportAsset?.releaseAssetId === evidence.publication.reportAssetId &&
       reportAsset.sha256 === evidence.publication.reportSha256,
     'trusted publication report asset binding is invalid',
+  );
+  assertExactKeys(
+    evidence.release,
+    ['channel', 'promotionRole', 'tag', 'version'],
+    'trusted release',
   );
   assert(
     isObject(evidence.release) &&
@@ -514,6 +596,13 @@ export function validateTrustedAcceptanceEvidence(
         evidence.checks.length,
     'trusted acceptance checks are invalid or duplicated',
   );
+  for (const check of evidence.checks) {
+    assertExactKeys(
+      check,
+      ['id', 'reasonCode', 'status'],
+      'trusted acceptance check',
+    );
+  }
   assertExactStrings(
     evidence.checks.map((check) => check.id),
     REQUIRED_ACCEPTANCE_CHECK_IDS,
@@ -530,12 +619,59 @@ export function validateTrustedAcceptanceEvidence(
 
   const canary = evidence.canary;
   assert(isObject(canary), 'trusted canary receipt is missing');
+  assertExactKeys(
+    canary,
+    [
+      'authFailures',
+      'distributionClosedAt',
+      'endedAt',
+      'observationEvidence',
+      'observedHours',
+      'observedInstallations',
+      'startedAt',
+      'stopReasons',
+      'targetInstallations',
+      'targetObservationHours',
+    ],
+    'trusted canary receipt',
+  );
+  assertExactKeys(
+    evidence.inputs,
+    ['automatedChecks', 'manualChecks'],
+    'trusted acceptance inputs',
+  );
+  assertExactKeys(
+    evidence.inputs.automatedChecks,
+    ['path', 'sha256', 'sourceCommit'],
+    'trusted automated-check input',
+  );
+  assertExactKeys(
+    evidence.inputs.manualChecks,
+    ['path', 'sha256', 'sourceCommit'],
+    'trusted manual-check input',
+  );
+  assert(
+    typeof evidence.inputs.automatedChecks.path === 'string' &&
+      evidence.inputs.automatedChecks.path ===
+        path.basename(evidence.inputs.automatedChecks.path) &&
+      SHA256.test(String(evidence.inputs.automatedChecks.sha256 ?? '')) &&
+      evidence.inputs.automatedChecks.sourceCommit ===
+        evidence.manifest.sourceCommit &&
+      typeof evidence.inputs.manualChecks.path === 'string' &&
+      evidence.inputs.manualChecks.path ===
+        path.basename(evidence.inputs.manualChecks.path) &&
+      SHA256.test(String(evidence.inputs.manualChecks.sha256 ?? '')) &&
+      evidence.inputs.manualChecks.sourceCommit ===
+        evidence.collector.sourceCommit,
+    'trusted acceptance input bindings are invalid',
+  );
   assert(
     isObject(evidence.rollback) &&
       evidence.rollback.mode === 'distribution-stop-only',
     'trusted rollback policy is invalid',
   );
   if (evidence.status === 'ready-as-rollback-baseline') {
+    assertExactKeys(evidence.rollback, ['mode'], 'trusted rollback policy');
     assert(
       evidence.release.promotionRole === 'rollback-baseline' &&
         !Object.hasOwn(evidence.rollback, 'targetTag') &&
@@ -547,11 +683,22 @@ export function validateTrustedAcceptanceEvidence(
         canary.targetInstallations === 0 &&
         canary.targetObservationHours === 24 &&
         canary.authFailures === 0 &&
+        canary.observationEvidence === null &&
         Array.isArray(canary.stopReasons) &&
         canary.stopReasons.length === 0,
       'rollback baseline must not claim a canary window',
     );
   } else {
+    assertExactKeys(
+      evidence.rollback,
+      ['mode', 'targetTag'],
+      'trusted rollback policy',
+    );
+    const observationEvidence = validateCanaryObservationEvidenceBundle(
+      canary.observationEvidence,
+      { now },
+    );
+    const observationReceipt = observationEvidence.bundle.receipt.value;
     const startedAt = parseDate(canary.startedAt, 'canary startedAt');
     const endedAt = parseDate(canary.endedAt, 'canary endedAt');
     const distributionClosedAt = parseDate(
@@ -575,6 +722,13 @@ export function validateTrustedAcceptanceEvidence(
       'evidence predates distribution closure',
     );
     assert(
+      parseDate(
+        observationReceipt.generatedAt,
+        'canary observation receipt generatedAt',
+      ) <= generatedAt,
+      'acceptance evidence predates the canary observation receipt',
+    );
+    assert(
       endedAt - startedAt >= 24 * 60 * 60 * 1000,
       'canary window is shorter than 24 hours',
     );
@@ -592,6 +746,48 @@ export function validateTrustedAcceptanceEvidence(
         Array.isArray(canary.stopReasons) &&
         canary.stopReasons.length === 0,
       'canary receipt violates exactly-five or zero-failure policy',
+    );
+    assert(
+      observationEvidence.policy.policySatisfied === true &&
+        observationReceipt.source.commit === evidence.manifest.sourceCommit &&
+        observationReceipt.manifest.path === evidence.manifest.path &&
+        observationReceipt.manifest.sha256 === evidence.manifest.sha256 &&
+        observationReceipt.manifest.sourceCommit ===
+          evidence.manifest.sourceCommit &&
+        observationReceipt.release.sourceCommit ===
+          evidence.manifest.sourceCommit &&
+        observationReceipt.release.version === evidence.release.version &&
+        observationReceipt.release.tag === evidence.release.tag &&
+        observationReceipt.release.promotionRole ===
+          evidence.release.promotionRole &&
+        observationReceipt.publication.repository ===
+          evidence.publication.repository &&
+        observationReceipt.publication.releaseId ===
+          evidence.publication.releaseId &&
+        observationReceipt.publication.reportAssetId ===
+          evidence.publication.reportAssetId &&
+        observationReceipt.publication.reportFileName ===
+          evidence.publication.reportFileName &&
+        observationReceipt.publication.reportSha256 ===
+          evidence.publication.reportSha256 &&
+        observationReceipt.publication.sourceCommit ===
+          evidence.publication.sourceCommit &&
+        observationReceipt.publication.tag === evidence.publication.tag &&
+        observationReceipt.observation.startedAt === canary.startedAt &&
+        observationReceipt.observation.endedAt === canary.endedAt &&
+        observationReceipt.observation.distributionClosedAt ===
+          canary.distributionClosedAt &&
+        observationReceipt.observation.observedHours === canary.observedHours &&
+        observationReceipt.observation.counters.uniqueInstallations ===
+          canary.observedInstallations &&
+        observationReceipt.observation.counters.authFailures ===
+          canary.authFailures &&
+        JSON.stringify(observationReceipt.observation.stopReasons) ===
+          JSON.stringify(canary.stopReasons) &&
+        observationReceipt.producer.repository === CANONICAL_REPOSITORY &&
+        observationReceipt.producer.workflow ===
+          CANARY_OBSERVATION_ATTESTATION_WORKFLOW,
+      'trusted acceptance evidence is not bound to the exact canary observation subjects',
     );
   }
   return evidence;
