@@ -203,3 +203,38 @@ for (const workflowPath of [
     }
   });
 }
+
+test('push runs cannot emit the required Full CI (PR) context', () => {
+  const workflow = parseYaml(
+    readFileSync(
+      join(repositoryRoot, '.github/workflows/monorepo-ci.yml'),
+      'utf8',
+    ),
+  );
+  const aggregate = workflow.jobs?.['ci-full'];
+
+  assert.match(
+    aggregate?.name ?? '',
+    /github\.event_name == 'pull_request'.*Full CI \(PR\).*Full CI \(non-PR\)/,
+  );
+  assert.equal(
+    aggregate?.if,
+    "github.event_name == 'pull_request' && always()",
+  );
+
+  const secretWorkflow = parseYaml(
+    readFileSync(
+      join(repositoryRoot, '.github/workflows/secret-scanning.yml'),
+      'utf8',
+    ),
+  );
+  const changedCommits = secretWorkflow.jobs?.['changed-commits'];
+  assert.match(
+    changedCommits?.name ?? '',
+    /github\.event_name == 'pull_request'.*Changed commits.*Changed commits \(push\)/,
+  );
+  assert.equal(
+    changedCommits?.if,
+    "github.event_name == 'push' || github.event_name == 'pull_request'",
+  );
+});

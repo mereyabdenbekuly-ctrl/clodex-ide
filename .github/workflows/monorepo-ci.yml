@@ -468,7 +468,10 @@ jobs:
 
   # Summary job for PR merge requirements
   ci-full:
-    name: Full CI (PR)
+    # Use a different context name on push runs. A skipped push job named
+    # "Full CI (PR)" can otherwise satisfy the branch-protection context
+    # before the actual pull_request matrix has completed.
+    name: "${{ github.event_name == 'pull_request' && 'Full CI (PR)' || 'Full CI (non-PR)' }}"
     if: github.event_name == 'pull_request' && always()
     needs: [lint, typecheck, test, build, test-windows, build-clodex, visual-regression]
     runs-on: ubuntu-latest
