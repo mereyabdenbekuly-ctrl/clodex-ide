@@ -1,7 +1,7 @@
 import { memo, useMemo } from 'react';
 import { useKartonState } from '@ui/hooks/use-karton';
 import { useOpenAgent } from '@ui/hooks/use-open-chat';
-import { IconClipboardContent } from 'nucleo-micro-bold';
+import { IconClipboardContent } from '@clodex/icons';
 import { getLastOwnedPlanPath, PLANS_PREFIX } from '@clodex/agent-core/plans';
 import type { AgentMessage } from '@shared/karton-contracts/ui/agent';
 

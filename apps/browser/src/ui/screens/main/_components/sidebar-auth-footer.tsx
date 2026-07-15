@@ -12,7 +12,7 @@ import {
   IconGear3Outline18,
   IconHotDrinkOutline18,
   IconOpenRectArrowInOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 
 export function SidebarAuthFooter() {
   const track = useTrack();

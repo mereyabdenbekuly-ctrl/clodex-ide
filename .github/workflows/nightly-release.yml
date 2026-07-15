@@ -104,8 +104,6 @@ jobs:
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
-        env:
-          NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
 
       - name: Compute version
         id: version

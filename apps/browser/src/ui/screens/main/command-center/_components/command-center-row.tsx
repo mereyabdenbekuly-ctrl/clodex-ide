@@ -1,5 +1,5 @@
 import { useCallback, useEffect, type ReactNode } from 'react';
-import { IconPinTackFill18 } from 'nucleo-ui-fill-18';
+import { IconPinTackFill18 } from '@clodex/icons';
 import { MessageSquareIcon } from 'lucide-react';
 import { ShortcutKey } from '@clodex/stage-ui/components/shortcut-key';
 import { HotkeyCombo } from '@ui/components/hotkey-combo';

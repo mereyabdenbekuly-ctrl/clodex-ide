@@ -1,10 +1,10 @@
 import {
   IconChevronDownOutline18,
   IconLoader6Outline18,
+  IconWindowPointerOutline18,
   IconXmarkOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { IconWindowPointerOutline18 } from 'nucleo-ui-outline-18';
 import {
   Collapsible,
   CollapsibleTrigger,

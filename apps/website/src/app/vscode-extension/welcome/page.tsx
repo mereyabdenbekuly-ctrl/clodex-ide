@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Button, buttonVariants } from '@clodex/stage-ui/components/button';
 import { cn } from '@clodex/stage-ui/lib/utils';
-import { IconDownload4FillDuo18 } from 'nucleo-ui-fill-duo-18';
+import { IconDownload4FillDuo18 } from '@clodex/icons';
 import { ScrollReveal } from '@/components/landing/scroll-reveal';
 import { Logo } from '@/components/landing/logo';
 import { AnimatedGradientBackground } from '@/components/landing/animated-gradient-background';

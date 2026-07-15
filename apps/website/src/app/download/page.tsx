@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { Suspense, useState, useEffect } from 'react';
-import { IconDownload4FillDuo18 } from 'nucleo-ui-fill-duo-18';
+import { IconDownload4FillDuo18 } from '@clodex/icons';
 import { Button, buttonVariants } from '@clodex/stage-ui/components/button';
 import { cn } from '@clodex/stage-ui/lib/utils';
 import { Navbar } from '../(home)/navbar';

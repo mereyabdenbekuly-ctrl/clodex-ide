@@ -4,7 +4,7 @@ import { cn } from '@clodex/stage-ui/lib/utils';
 import {
   IconTriangleWarningOutline18,
   IconCircleInfoOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import { SidebarToast } from '../../../_components/sidebar-toast';
 
 export function NotificationBanners() {

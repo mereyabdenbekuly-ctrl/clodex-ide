@@ -28,8 +28,18 @@ Karton retains the Stagewise MIT copyright and license notice in
 [`packages/karton/LICENSE.md`](./packages/karton/LICENSE.md). The upstream
 `agent-core`, `agent-shell`, and Node agent runtime package metadata also
 declared MIT licensing and Stagewise authorship; their current package metadata
-preserves that origin. A complete package-level notice and license audit is
-required before any of those packages are published independently.
+preserves that origin, and their package directories now retain the matching
+MIT text. Independent publication still requires a package-specific provenance
+and legal review rather than relying on the desktop inventory alone.
+
+## Lucide
+
+The local `@clodex/icons` compatibility package delegates icon rendering to
+[`lucide-react`](https://github.com/lucide-icons/lucide), distributed under the
+ISC license. Its historical export names are compatibility aliases only; the
+desktop dependency graph contains no `nucleo-*` package and no Nucleo vendor
+asset. The exact Lucide version and license text are recorded in the generated
+desktop dependency inventory and CycloneDX SBOM.
 
 ## class-variance-authority
 
@@ -41,3 +51,35 @@ Copyright (c) 2022 Joe Bell
 
 - Source: [joe-bell/cva](https://github.com/joe-bell/cva)
 - License: [Apache License 2.0](https://github.com/joe-bell/cva/blob/main/LICENSE)
+
+## Desktop dependency inventory
+
+The distributable desktop application includes a generated exact-version
+dependency inventory rather than relying on this summary alone. Some exact npm
+tarballs declare a license but omit its standalone text. The reviewed,
+SHA-256-pinned engineering records for those cases are public in
+[`docs/provenance/DEPENDENCY_LICENSE_OVERRIDES.json`](./docs/provenance/DEPENDENCY_LICENSE_OVERRIDES.json),
+and the corresponding texts are retained under
+[`docs/provenance/dependency-license-texts/`](./docs/provenance/dependency-license-texts/).
+The final application embeds each applicable text in its dependency inventory
+and retains a CycloneDX SBOM.
+
+These records do not relicense dependencies and are not a legal conclusion.
+They may supplement only an exact package whose text or metadata is missing;
+an upstream declaration conflict or evidence hash drift blocks release.
+
+## GSAP
+
+The desktop dependency graph includes `gsap` and `@gsap/react`, which reference
+Webflow's custom standard license rather than an OSI open-source license. A
+public terms snapshot and exact package provenance are retained in the reviewed
+registry. Distribution requires release-owner and specialist counsel review of
+the actual CLODEx use; inclusion in the inventory is not a permission finding.
+
+## sharp-libvips
+
+The supported macOS and Linux graphs include prebuilt `@img/sharp-libvips-*`
+distributions. The reviewed evidence bundle retains the applicable GPL/LGPL
+terms, the sharp-libvips build-wrapper license, and the exact pinned upstream
+third-party notice table. Final artifact review must confirm the notices and
+applicable corresponding-source obligations for each shipped binary.

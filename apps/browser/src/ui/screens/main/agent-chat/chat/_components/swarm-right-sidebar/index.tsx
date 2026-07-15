@@ -17,7 +17,7 @@ import {
   IconChevronDownOutline18,
   IconCodeBranchOutline18,
   IconXmarkOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import { OverlayScrollbar } from '@clodex/stage-ui/components/overlay-scrollbar';
 import type {
   SwarmRunState,

@@ -1,0 +1,1517 @@
+{
+  "schemaVersion": 1,
+  "status": "ENGINEERING_REVIEWED",
+  "reviewedAt": "2026-07-15",
+  "legalConclusion": false,
+  "policy": "Exact package@version overrides only. An override may fill missing text or missing/Unknown license metadata; it may not contradict a non-empty package declaration. Hash or identity drift fails closed.",
+  "entries": [
+    {
+      "package": "@ai-sdk/provider-utils",
+      "version": "4.0.27",
+      "license": "Apache-2.0",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@ai-sdk/provider-utils/-/provider-utils-4.0.27.tgz",
+        "integrity": "sha512-ubkAJ+xODouwtmN1tYlvTPphH1hPOBfZaEQe8U7skGvFAnIRs9PPpsq57bC2+Ky/MB4yzhd6YOsxTAx9sGpazw==",
+        "repository": {
+          "url": "git+https://github.com/vercel/ai.git",
+          "type": "git",
+          "directory": "packages/provider-utils"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/vercel-ai-provider-utils-4.0.27-APACHE-2.0.txt",
+        "sha256": "b4f9adb7c568904834d0dd6cc98d16c390d21ca32fc17ae7a267715269bd5529",
+        "sourceReferences": [
+          "https://github.com/vercel/ai/tree/02882860df29ae2aa8140003c87a493af80bef08/packages/provider-utils",
+          "https://github.com/vercel/ai/blob/02882860df29ae2aa8140003c87a493af80bef08/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@aws-sdk/credential-provider-http",
+      "version": "3.972.36",
+      "license": "Apache-2.0",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@aws-sdk/credential-provider-http/-/credential-provider-http-3.972.36.tgz",
+        "integrity": "sha512-DPoGWfy7J7RKxvbf5kOKIGQkD2ek3dbKgzKIGrnLuvZBz5myU+Im/H6pmc14QcnFbqHMqxvtWSgRDSJW3qXLQg==",
+        "repository": {
+          "url": "git+https://github.com/aws/aws-sdk-js-v3.git",
+          "type": "git",
+          "directory": "packages-internal/credential-provider-http"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/aws-sdk-js-v3-3.972-APACHE-2.0.txt",
+        "sha256": "edea91454b811f127fbdea3d86f378f6719bd372ed440abf82b232f6fca06c3d",
+        "sourceReferences": [
+          "https://github.com/aws/aws-sdk-js-v3/tree/c47a84766e65e9a7f3d7151ff10d58aba29e6df0/packages-internal/credential-provider-http",
+          "https://github.com/aws/aws-sdk-js-v3/blob/c47a84766e65e9a7f3d7151ff10d58aba29e6df0/LICENSE"
+        ]
+      },
+      "notes": "Exact npm package declares Apache-2.0; the pinned root license is from release-series tag v3.972.0."
+    },
+    {
+      "package": "@aws-sdk/credential-provider-login",
+      "version": "3.972.38",
+      "license": "Apache-2.0",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.38.tgz",
+        "integrity": "sha512-g1NosS8qe4OF++G2UFCM5ovSkgipC7YYor5KCWatG0UoMSO5YFj9C8muePlyVmOBV/WTI16Jo3/s1NUo/o1Bww==",
+        "repository": {
+          "url": "git+https://github.com/aws/aws-sdk-js-v3.git",
+          "type": "git",
+          "directory": "packages-internal/credential-provider-login"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/aws-sdk-js-v3-3.972-APACHE-2.0.txt",
+        "sha256": "edea91454b811f127fbdea3d86f378f6719bd372ed440abf82b232f6fca06c3d",
+        "sourceReferences": [
+          "https://github.com/aws/aws-sdk-js-v3/tree/c47a84766e65e9a7f3d7151ff10d58aba29e6df0/packages-internal/credential-provider-login",
+          "https://github.com/aws/aws-sdk-js-v3/blob/c47a84766e65e9a7f3d7151ff10d58aba29e6df0/LICENSE"
+        ]
+      },
+      "notes": "Exact npm package declares Apache-2.0; the pinned root license is from release-series tag v3.972.0."
+    },
+    {
+      "package": "@aws-sdk/nested-clients",
+      "version": "3.997.6",
+      "license": "Apache-2.0",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@aws-sdk/nested-clients/-/nested-clients-3.997.6.tgz",
+        "integrity": "sha512-WBDnqatJl+kGObpfmfSxqnXeYTu3Me8wx8WCtvoxX3pfWrrTv8I4WTMSSs7PZqcRcVh8WeUKMgGFjMG+52SR1w==",
+        "repository": {
+          "url": "git+https://github.com/aws/aws-sdk-js-v3.git",
+          "type": "git",
+          "directory": "packages/nested-clients"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/aws-sdk-js-v3-3.997-APACHE-2.0.txt",
+        "sha256": "edea91454b811f127fbdea3d86f378f6719bd372ed440abf82b232f6fca06c3d",
+        "sourceReferences": [
+          "https://github.com/aws/aws-sdk-js-v3/tree/637dcf0ea7467a0b9e432575da50579bc432b3c5/packages/nested-clients",
+          "https://github.com/aws/aws-sdk-js-v3/blob/637dcf0ea7467a0b9e432575da50579bc432b3c5/LICENSE"
+        ]
+      },
+      "notes": "Exact npm package declares Apache-2.0; the pinned root license is from release-series tag v3.997.0."
+    },
+    {
+      "package": "@better-auth/utils",
+      "version": "0.4.0",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_CANONICAL_LICENSE_SUPPLEMENT",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@better-auth/utils/-/utils-0.4.0.tgz",
+        "integrity": "sha512-RpMtLUIQAEWMgdPLNVbIF5ON2mm+CH0U3rCdUCU1VyeAUui4m38DyK7/aXMLZov2YDjG684pS1D0MBllrmgjQA==",
+        "repository": {
+          "url": "git+https://github.com/better-auth/utils.git",
+          "type": "git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/SPDX-MIT.txt",
+        "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+        "sourceReferences": [
+          "https://github.com/better-auth/utils/tree/23a924c1e52c741fe7eedcce29bd68de70d9bf9d",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/MIT.txt"
+        ]
+      },
+      "notes": "The exact upstream manifest and README declare MIT but the repository and npm tarball omit a standalone text; the pinned SPDX template supplements that declaration."
+    },
+    {
+      "package": "@better-auth/utils",
+      "version": "0.4.1",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_CANONICAL_LICENSE_SUPPLEMENT",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@better-auth/utils/-/utils-0.4.1.tgz",
+        "integrity": "sha512-SZBPRPF3z0nBvE5ygOkxae35wnnXPRShmqFo78S+qslLeFoPu/pMgnXAuNKFMMybac3tiLaVg1e3MQW5MC+1iA==",
+        "repository": {
+          "url": "https://github.com/better-auth/utils",
+          "type": "git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/SPDX-MIT.txt",
+        "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+        "sourceReferences": [
+          "https://github.com/better-auth/utils/tree/b2863063cb1ff90d96751f75a851c871fd05ae43",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/MIT.txt"
+        ]
+      },
+      "notes": "The exact upstream manifest and README declare MIT but the repository and npm tarball omit a standalone text; the pinned SPDX template supplements that declaration."
+    },
+    {
+      "package": "@better-auth/utils",
+      "version": "0.4.2",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_CANONICAL_LICENSE_SUPPLEMENT",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@better-auth/utils/-/utils-0.4.2.tgz",
+        "integrity": "sha512-AUxrvu+HaaODsUyzDxFgwd/8RZ1yZaYo42LXKSrU2oGgR38pS1ij8nqQKNgtTWoYGpNevNXtCfgTy6loHveW9A==",
+        "repository": {
+          "url": "git+https://github.com/better-auth/utils.git",
+          "type": "git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/SPDX-MIT.txt",
+        "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+        "sourceReferences": [
+          "https://github.com/better-auth/utils/tree/10b6572844c99ed9a4410a687bd6f2c565e5341e",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/MIT.txt"
+        ]
+      },
+      "notes": "The exact upstream manifest and README declare MIT but the repository and npm tarball omit a standalone text; the pinned SPDX template supplements that declaration."
+    },
+    {
+      "package": "@better-fetch/fetch",
+      "version": "1.1.21",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "EXACT_PACKAGE_FILE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@better-fetch/fetch/-/fetch-1.1.21.tgz",
+        "integrity": "sha512-/ImESw0sskqlVR94jB+5+Pxjf+xBwDZF/N5+y2/q4EqD7IARUTSpPfIo8uf39SYpCxyOCtbyYpUrZ3F/k0zT4A==",
+        "repository": null,
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "package-file",
+        "path": "LICENSE",
+        "sha256": "54d710e643b5fd218f0c29cddea92432b2c730dddd594c7047c97993dd9f9a59",
+        "sourceReferences": [
+          "https://registry.npmjs.org/@better-fetch/fetch/-/fetch-1.1.21.tgz"
+        ]
+      },
+      "notes": "The exact tarball contains the MIT text but omits package.json license metadata."
+    },
+    {
+      "package": "@bokuweb/zstd-wasm",
+      "version": "0.0.27",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@bokuweb/zstd-wasm/-/zstd-wasm-0.0.27.tgz",
+        "integrity": "sha512-GDm2uOTK3ESjnYmSeLQifJnBsRCWajKLvN32D2ZcQaaCIJI/Hse9s74f7APXjHit95S10UImsRGkTsbwHmrtmg==",
+        "repository": {
+          "type": "git",
+          "url": "git+ssh://git@github.com/bokuweb/zstd-wasm.git"
+        },
+        "gitHead": "87277ab93c2861d6c265a2ff43c7e7fb14d9a8c5"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/bokuweb-zstd-wasm-0.0.27-MIT-and-Zstd-notice.txt",
+        "sha256": "5ad01960bdbbd80cfce961f0b537e196081fc2838ede03984b31ba38ffb313f7",
+        "sourceReferences": [
+          "https://github.com/bokuweb/zstd-wasm/tree/87277ab93c2861d6c265a2ff43c7e7fb14d9a8c5",
+          "https://github.com/facebook/zstd/blob/794ea1b0afca0f020f4e57b6732332231fb23c70/LICENSE",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/MIT.txt"
+        ]
+      },
+      "notes": "The exact package declares MIT and bundles Zstandard wasm; upstream build logic selected the latest Zstandard tag at build time. Zstandard v1.5.6 was the latest release before this npm version was published; this record supplies license terms, not source-correspondence proof."
+    },
+    {
+      "package": "@cfworker/json-schema",
+      "version": "4.1.1",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@cfworker/json-schema/-/json-schema-4.1.1.tgz",
+        "integrity": "sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/cfworker/cfworker.git"
+        },
+        "gitHead": "5409fdc2bd144f68e8b28c61c71fcb16600000a6"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/cfworker-json-schema-4.1.1-MIT.txt",
+        "sha256": "376944252ab78ca6b41aee44ddea8894927ee67891e77e61eb9d59af63e35094",
+        "sourceReferences": [
+          "https://github.com/cfworker/cfworker/tree/5409fdc2bd144f68e8b28c61c71fcb16600000a6/packages/json-schema",
+          "https://github.com/cfworker/cfworker/blob/5409fdc2bd144f68e8b28c61c71fcb16600000a6/LICENSE.md"
+        ]
+      }
+    },
+    {
+      "package": "@gsap/react",
+      "version": "2.1.2",
+      "license": "SEE LICENSE AT https://gsap.com/standard-license",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_CUSTOM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@gsap/react/-/react-2.1.2.tgz",
+        "integrity": "sha512-JqliybO1837UcgH2hVOM4VO+38APk3ECNrsuSM4MuXp+rbf+/2IG2K1YJiqfTcXQHH7XlA0m3ykniFYstfq0Iw==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/greensock/react.git"
+        },
+        "gitHead": "b7f44ca767eb93390f965d6f19679e2b77be7966"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/gsap-standard-license-2026-07-15.txt",
+        "sha256": "0a27665b40ac0378474e0cceff1fe33416da93a6aabb41867c5c8be6466f1322",
+        "sourceReferences": [
+          "https://github.com/greensock/react/tree/b7f44ca767eb93390f965d6f19679e2b77be7966",
+          "https://gsap.com/community/standard-license/"
+        ]
+      },
+      "notes": "Public license snapshot only; release/legal owner must separately confirm the product use is permitted."
+    },
+    {
+      "package": "@img/sharp-libvips-darwin-arm64",
+      "version": "1.2.4",
+      "license": "LGPL-3.0-or-later",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.2.4.tgz",
+        "integrity": "sha512-zqjjo7RatFfFoP0MkQ51jfuFZBnVE2pRiaydKJ1G/rHZvnsrHAOcQALIi9sA5co5xenQdTugCvtb1cuf78Vf4g==",
+        "repository": {
+          "url": "git+https://github.com/lovell/sharp-libvips.git",
+          "type": "git",
+          "directory": "npm/darwin-arm64"
+        },
+        "gitHead": "20b5e899954907a3039d6e3d4c200aaa0ec52c4c"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.2.4-LGPL-and-notices.txt",
+        "sha256": "a368601679e1370ed88084e6fb77170d5e101af845b53a3dd7a8df6d15235285",
+        "sourceReferences": [
+          "https://github.com/lovell/sharp-libvips/tree/20b5e899954907a3039d6e3d4c200aaa0ec52c4c/npm/darwin-arm64",
+          "https://github.com/lovell/sharp-libvips/blob/20b5e899954907a3039d6e3d4c200aaa0ec52c4c/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
+        ]
+      },
+      "notes": "Includes GPL/LGPL terms, the build-wrapper Apache terms, and exact pinned third-party notices for the prebuilt libvips distribution."
+    },
+    {
+      "package": "@img/sharp-libvips-darwin-x64",
+      "version": "1.2.4",
+      "license": "LGPL-3.0-or-later",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.2.4.tgz",
+        "integrity": "sha512-1IOd5xfVhlGwX+zXv2N93k0yMONvUlANylbJw1eTah8K/Jtpi15KC+WSiaX/nBmbm2HxRM1gZ0nSdjSsrZbGKg==",
+        "repository": {
+          "url": "git+https://github.com/lovell/sharp-libvips.git",
+          "type": "git",
+          "directory": "npm/darwin-x64"
+        },
+        "gitHead": "20b5e899954907a3039d6e3d4c200aaa0ec52c4c"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.2.4-LGPL-and-notices.txt",
+        "sha256": "a368601679e1370ed88084e6fb77170d5e101af845b53a3dd7a8df6d15235285",
+        "sourceReferences": [
+          "https://github.com/lovell/sharp-libvips/tree/20b5e899954907a3039d6e3d4c200aaa0ec52c4c/npm/darwin-x64",
+          "https://github.com/lovell/sharp-libvips/blob/20b5e899954907a3039d6e3d4c200aaa0ec52c4c/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
+        ]
+      },
+      "notes": "Includes GPL/LGPL terms, the build-wrapper Apache terms, and exact pinned third-party notices for the prebuilt libvips distribution. Exact release-matrix platform package; license text is shared by the same upstream version."
+    },
+    {
+      "package": "@img/sharp-libvips-linux-x64",
+      "version": "1.2.4",
+      "license": "LGPL-3.0-or-later",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.2.4.tgz",
+        "integrity": "sha512-tJxiiLsmHc9Ax1bz3oaOYBURTXGIRDODBqhveVHonrHJ9/+k89qbLl0bcJns+e4t4rvaNBxaEZsFtSfAdquPrw==",
+        "repository": {
+          "url": "git+https://github.com/lovell/sharp-libvips.git",
+          "type": "git",
+          "directory": "npm/linux-x64"
+        },
+        "gitHead": "20b5e899954907a3039d6e3d4c200aaa0ec52c4c"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.2.4-LGPL-and-notices.txt",
+        "sha256": "a368601679e1370ed88084e6fb77170d5e101af845b53a3dd7a8df6d15235285",
+        "sourceReferences": [
+          "https://github.com/lovell/sharp-libvips/tree/20b5e899954907a3039d6e3d4c200aaa0ec52c4c/npm/linux-x64",
+          "https://github.com/lovell/sharp-libvips/blob/20b5e899954907a3039d6e3d4c200aaa0ec52c4c/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
+        ]
+      },
+      "notes": "Includes GPL/LGPL terms, the build-wrapper Apache terms, and exact pinned third-party notices for the prebuilt libvips distribution. Exact release-matrix platform package; license text is shared by the same upstream version."
+    },
+    {
+      "package": "@libsql/client",
+      "version": "0.15.15",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@libsql/client/-/client-0.15.15.tgz",
+        "integrity": "sha512-twC0hQxPNHPKfeOv3sNT6u2pturQjLcI+CnpTM0SjRpocEGgfiZ7DWKXLNnsothjyJmDqEsBQJ5ztq9Wlu470w==",
+        "repository": {
+          "url": "git+https://github.com/libsql/libsql-client-ts.git",
+          "type": "git",
+          "directory": "packages/libsql-client"
+        },
+        "gitHead": "e0b105fcd9e12e63f50ccf3dcf8ddee791d54e99"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/libsql-client-ts-0.15.15-MIT.txt",
+        "sha256": "f7984723ac416cb45f9eb462c4da22ad4a7d7996bd3f9c7a92288e047cce003f",
+        "sourceReferences": [
+          "https://github.com/libsql/libsql-client-ts/tree/e0b105fcd9e12e63f50ccf3dcf8ddee791d54e99/packages/libsql-client",
+          "https://github.com/libsql/libsql-client-ts/blob/e0b105fcd9e12e63f50ccf3dcf8ddee791d54e99/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@libsql/client",
+      "version": "0.17.3",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@libsql/client/-/client-0.17.3.tgz",
+        "integrity": "sha512-HXk9wiAoJbKFbyBH4O+aEhN6ir5ERXuXvwE5OD2eR4/5RUa3Pw/8L9zrnVdU+iNJitRvisPWaIwmhkO3bH7giA==",
+        "repository": {
+          "url": "git+https://github.com/tursodatabase/libsql-client-ts.git",
+          "type": "git",
+          "directory": "packages/libsql-client"
+        },
+        "gitHead": "9d158a718ab655024e175d47a36565bd0178810b"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/libsql-client-ts-0.17.3-MIT.txt",
+        "sha256": "f7984723ac416cb45f9eb462c4da22ad4a7d7996bd3f9c7a92288e047cce003f",
+        "sourceReferences": [
+          "https://github.com/tursodatabase/libsql-client-ts/tree/9d158a718ab655024e175d47a36565bd0178810b/packages/libsql-client",
+          "https://github.com/tursodatabase/libsql-client-ts/blob/9d158a718ab655024e175d47a36565bd0178810b/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@libsql/core",
+      "version": "0.15.15",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@libsql/core/-/core-0.15.15.tgz",
+        "integrity": "sha512-C88Z6UKl+OyuKKPwz224riz02ih/zHYI3Ho/LAcVOgjsunIRZoBw7fjRfaH9oPMmSNeQfhGklSG2il1URoOIsA==",
+        "repository": {
+          "url": "git+https://github.com/libsql/libsql-client-ts.git",
+          "type": "git",
+          "directory": "packages/libsql-core"
+        },
+        "gitHead": "e0b105fcd9e12e63f50ccf3dcf8ddee791d54e99"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/libsql-client-ts-0.15.15-MIT.txt",
+        "sha256": "f7984723ac416cb45f9eb462c4da22ad4a7d7996bd3f9c7a92288e047cce003f",
+        "sourceReferences": [
+          "https://github.com/libsql/libsql-client-ts/tree/e0b105fcd9e12e63f50ccf3dcf8ddee791d54e99/packages/libsql-core",
+          "https://github.com/libsql/libsql-client-ts/blob/e0b105fcd9e12e63f50ccf3dcf8ddee791d54e99/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@libsql/core",
+      "version": "0.17.3",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@libsql/core/-/core-0.17.3.tgz",
+        "integrity": "sha512-2UjK1i7JBkMduJo4WdvvBxMMvVJ31pArBZNONyz/GCJJAH+1UHat2X6vn10S/WpY5fKzIT98WqYFl2vzWRLOfg==",
+        "repository": {
+          "url": "git+https://github.com/tursodatabase/libsql-client-ts.git",
+          "type": "git",
+          "directory": "packages/libsql-core"
+        },
+        "gitHead": "9d158a718ab655024e175d47a36565bd0178810b"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/libsql-client-ts-0.17.3-MIT.txt",
+        "sha256": "f7984723ac416cb45f9eb462c4da22ad4a7d7996bd3f9c7a92288e047cce003f",
+        "sourceReferences": [
+          "https://github.com/tursodatabase/libsql-client-ts/tree/9d158a718ab655024e175d47a36565bd0178810b/packages/libsql-core",
+          "https://github.com/tursodatabase/libsql-client-ts/blob/9d158a718ab655024e175d47a36565bd0178810b/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@libsql/darwin-arm64",
+      "version": "0.5.29",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@libsql/darwin-arm64/-/darwin-arm64-0.5.29.tgz",
+        "integrity": "sha512-K+2RIB1OGFPYQbfay48GakLhqf3ArcbHqPFu7EZiaUcRgFcdw8RoltsMyvbj5ix2fY0HV3Q3Ioa/ByvQdaSM0A==",
+        "repository": {
+          "url": "git+https://github.com/tursodatabase/libsql-js.git",
+          "type": "git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/libsql-js-0.5.29-MIT.txt",
+        "sha256": "81680d013513cf3003b03b7074948609dfb90dfeca0b8292b3c16e0172a189f4",
+        "sourceReferences": [
+          "https://github.com/tursodatabase/libsql-js/tree/55bee86d1c284f1ddf2b9e280e870d2b6cef884a",
+          "https://github.com/tursodatabase/libsql-js/blob/55bee86d1c284f1ddf2b9e280e870d2b6cef884a/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@libsql/darwin-x64",
+      "version": "0.5.29",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@libsql/darwin-x64/-/darwin-x64-0.5.29.tgz",
+        "integrity": "sha512-OtT+KFHsKFy1R5FVadr8FJ2Bb1mghtXTyJkxv0trocq7NuHntSki1eUbxpO5ezJesDvBlqFjnWaYYY516QNLhQ==",
+        "repository": {
+          "url": "git+https://github.com/tursodatabase/libsql-js.git",
+          "type": "git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/libsql-js-0.5.29-MIT.txt",
+        "sha256": "81680d013513cf3003b03b7074948609dfb90dfeca0b8292b3c16e0172a189f4",
+        "sourceReferences": [
+          "https://github.com/tursodatabase/libsql-js/tree/55bee86d1c284f1ddf2b9e280e870d2b6cef884a",
+          "https://github.com/tursodatabase/libsql-js/blob/55bee86d1c284f1ddf2b9e280e870d2b6cef884a/LICENSE"
+        ]
+      },
+      "notes": "Exact release-matrix platform package; license text is shared by the same upstream version."
+    },
+    {
+      "package": "@libsql/isomorphic-fetch",
+      "version": "0.3.1",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@libsql/isomorphic-fetch/-/isomorphic-fetch-0.3.1.tgz",
+        "integrity": "sha512-6kK3SUK5Uu56zPq/Las620n5aS9xJq+jMBcNSOmjhNf/MUvdyji4vrMTqD7ptY7/4/CAVEAYDeotUz60LNQHtw==",
+        "repository": {
+          "url": "git+https://github.com/libsql/isomorphic-ts.git",
+          "type": "git",
+          "directory": "isomorphic-fetch"
+        },
+        "gitHead": "ab3b09a269a7385bab85684aae3a469e5c1b2797"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/libsql-isomorphic-ts-MIT.txt",
+        "sha256": "cecf589818a56c2da8a0a6cc82c8a215c9770988c033b6016c2b74bf79f38152",
+        "sourceReferences": [
+          "https://github.com/libsql/isomorphic-ts/tree/ab3b09a269a7385bab85684aae3a469e5c1b2797/isomorphic-fetch",
+          "https://github.com/libsql/isomorphic-ts/blob/ab3b09a269a7385bab85684aae3a469e5c1b2797/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@libsql/isomorphic-ws",
+      "version": "0.1.5",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@libsql/isomorphic-ws/-/isomorphic-ws-0.1.5.tgz",
+        "integrity": "sha512-DtLWIH29onUYR00i0GlQ3UdcTRC6EP4u9w/h9LxpUZJWRMARk6dQwZ6Jkd+QdwVpuAOrdxt18v0K2uIYR3fwFg==",
+        "repository": {
+          "url": "git+https://github.com/libsql/isomorphic-ts.git",
+          "type": "git",
+          "directory": "isomorphic-ws"
+        },
+        "gitHead": "87331abc53d4e77deb2f3d6384438d4804a07e0a"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/libsql-isomorphic-ts-MIT.txt",
+        "sha256": "cecf589818a56c2da8a0a6cc82c8a215c9770988c033b6016c2b74bf79f38152",
+        "sourceReferences": [
+          "https://github.com/libsql/isomorphic-ts/tree/87331abc53d4e77deb2f3d6384438d4804a07e0a/isomorphic-ws",
+          "https://github.com/libsql/isomorphic-ts/blob/87331abc53d4e77deb2f3d6384438d4804a07e0a/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@libsql/linux-x64-gnu",
+      "version": "0.5.29",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@libsql/linux-x64-gnu/-/linux-x64-gnu-0.5.29.tgz",
+        "integrity": "sha512-y14V0vY0nmMC6G0pHeJcEarcnGU2H6cm21ZceRkacWHvQAEhAG0latQkCtoS2njFOXiYIg+JYPfAoWKbi82rkg==",
+        "repository": {
+          "url": "git+https://github.com/tursodatabase/libsql-js.git",
+          "type": "git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/libsql-js-0.5.29-MIT.txt",
+        "sha256": "81680d013513cf3003b03b7074948609dfb90dfeca0b8292b3c16e0172a189f4",
+        "sourceReferences": [
+          "https://github.com/tursodatabase/libsql-js/tree/55bee86d1c284f1ddf2b9e280e870d2b6cef884a",
+          "https://github.com/tursodatabase/libsql-js/blob/55bee86d1c284f1ddf2b9e280e870d2b6cef884a/LICENSE"
+        ]
+      },
+      "notes": "Exact release-matrix platform package; license text is shared by the same upstream version."
+    },
+    {
+      "package": "@libsql/linux-x64-musl",
+      "version": "0.5.29",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@libsql/linux-x64-musl/-/linux-x64-musl-0.5.29.tgz",
+        "integrity": "sha512-gquqwA/39tH4pFl+J9n3SOMSymjX+6kZ3kWgY3b94nXFTwac9bnFNMffIomgvlFaC4ArVqMnOZD3nuJ3H3VO1w==",
+        "repository": {
+          "url": "git+https://github.com/tursodatabase/libsql-js.git",
+          "type": "git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/libsql-js-0.5.29-MIT.txt",
+        "sha256": "81680d013513cf3003b03b7074948609dfb90dfeca0b8292b3c16e0172a189f4",
+        "sourceReferences": [
+          "https://github.com/tursodatabase/libsql-js/tree/55bee86d1c284f1ddf2b9e280e870d2b6cef884a",
+          "https://github.com/tursodatabase/libsql-js/blob/55bee86d1c284f1ddf2b9e280e870d2b6cef884a/LICENSE"
+        ]
+      },
+      "notes": "Exact release-matrix platform package; license text is shared by the same upstream version."
+    },
+    {
+      "package": "@libsql/win32-x64-msvc",
+      "version": "0.5.29",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@libsql/win32-x64-msvc/-/win32-x64-msvc-0.5.29.tgz",
+        "integrity": "sha512-4/0CvEdhi6+KjMxMaVbFM2n2Z44escBRoEYpR+gZg64DdetzGnYm8mcNLcoySaDJZNaBd6wz5DNdgRmcI4hXcg==",
+        "repository": {
+          "url": "git+https://github.com/tursodatabase/libsql-js.git",
+          "type": "git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/libsql-js-0.5.29-MIT.txt",
+        "sha256": "81680d013513cf3003b03b7074948609dfb90dfeca0b8292b3c16e0172a189f4",
+        "sourceReferences": [
+          "https://github.com/tursodatabase/libsql-js/tree/55bee86d1c284f1ddf2b9e280e870d2b6cef884a",
+          "https://github.com/tursodatabase/libsql-js/blob/55bee86d1c284f1ddf2b9e280e870d2b6cef884a/LICENSE"
+        ]
+      },
+      "notes": "Exact release-matrix platform package; license text is shared by the same upstream version."
+    },
+    {
+      "package": "@napi-rs/canvas-darwin-arm64",
+      "version": "0.1.100",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@napi-rs/canvas-darwin-arm64/-/canvas-darwin-arm64-0.1.100.tgz",
+        "integrity": "sha512-2PcswRaC7Ly645DGt88///zuFDhJxJYdKAs1uU3mfk1atYkXufgcgLfBpk6Tm12nCQBaNt1wpybuPZ4qOhTo8A==",
+        "repository": {
+          "url": "git+https://github.com/Brooooooklyn/canvas.git",
+          "type": "git"
+        },
+        "gitHead": "db337893b9b53483050ca7b24c6d306e4da06741"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/napi-rs-canvas-0.1.100-MIT.txt",
+        "sha256": "8802fecf9da4367bc23bcf20b21cc143785fc6c92b152f3fa7fbe6ce08d344d6",
+        "sourceReferences": [
+          "https://github.com/Brooooooklyn/canvas/tree/db337893b9b53483050ca7b24c6d306e4da06741",
+          "https://github.com/Brooooooklyn/canvas/blob/db337893b9b53483050ca7b24c6d306e4da06741/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@napi-rs/canvas-darwin-x64",
+      "version": "0.1.100",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@napi-rs/canvas-darwin-x64/-/canvas-darwin-x64-0.1.100.tgz",
+        "integrity": "sha512-ePNZtj7pNIva/siZMg+HmbeozkIjqUIYdoymH8HaA3qK7LfzFN4WMBM8G6HQ9ZC+H3+Dnn5pqtiXpgLykaPOhw==",
+        "repository": {
+          "url": "git+https://github.com/Brooooooklyn/canvas.git",
+          "type": "git"
+        },
+        "gitHead": "db337893b9b53483050ca7b24c6d306e4da06741"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/napi-rs-canvas-0.1.100-MIT.txt",
+        "sha256": "8802fecf9da4367bc23bcf20b21cc143785fc6c92b152f3fa7fbe6ce08d344d6",
+        "sourceReferences": [
+          "https://github.com/Brooooooklyn/canvas/tree/db337893b9b53483050ca7b24c6d306e4da06741",
+          "https://github.com/Brooooooklyn/canvas/blob/db337893b9b53483050ca7b24c6d306e4da06741/LICENSE"
+        ]
+      },
+      "notes": "Exact release-matrix platform package; license text is shared by the same upstream version."
+    },
+    {
+      "package": "@napi-rs/canvas-linux-x64-gnu",
+      "version": "0.1.100",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@napi-rs/canvas-linux-x64-gnu/-/canvas-linux-x64-gnu-0.1.100.tgz",
+        "integrity": "sha512-1eCvkDCazm7FFhsT7DfGOdSaHgZVK3bt/dSBl5EWHOWmnz+I7j8tPseJqqD81NF+MH21jKUK4wQSDjN0mdhnTg==",
+        "repository": {
+          "url": "git+https://github.com/Brooooooklyn/canvas.git",
+          "type": "git"
+        },
+        "gitHead": "db337893b9b53483050ca7b24c6d306e4da06741"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/napi-rs-canvas-0.1.100-MIT.txt",
+        "sha256": "8802fecf9da4367bc23bcf20b21cc143785fc6c92b152f3fa7fbe6ce08d344d6",
+        "sourceReferences": [
+          "https://github.com/Brooooooklyn/canvas/tree/db337893b9b53483050ca7b24c6d306e4da06741",
+          "https://github.com/Brooooooklyn/canvas/blob/db337893b9b53483050ca7b24c6d306e4da06741/LICENSE"
+        ]
+      },
+      "notes": "Exact release-matrix platform package; license text is shared by the same upstream version."
+    },
+    {
+      "package": "@napi-rs/canvas-win32-x64-msvc",
+      "version": "0.1.100",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@napi-rs/canvas-win32-x64-msvc/-/canvas-win32-x64-msvc-0.1.100.tgz",
+        "integrity": "sha512-MyT1j3mHC2+Lu4pBi9mKyMJhtP6U7k7EldY7sj/uS5gJA65gTXt8MefJQXLJo5d/vZbuWmfxzkEUNc/urV3pHA==",
+        "repository": {
+          "url": "git+https://github.com/Brooooooklyn/canvas.git",
+          "type": "git"
+        },
+        "gitHead": "db337893b9b53483050ca7b24c6d306e4da06741"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/napi-rs-canvas-0.1.100-MIT.txt",
+        "sha256": "8802fecf9da4367bc23bcf20b21cc143785fc6c92b152f3fa7fbe6ce08d344d6",
+        "sourceReferences": [
+          "https://github.com/Brooooooklyn/canvas/tree/db337893b9b53483050ca7b24c6d306e4da06741",
+          "https://github.com/Brooooooklyn/canvas/blob/db337893b9b53483050ca7b24c6d306e4da06741/LICENSE"
+        ]
+      },
+      "notes": "Exact release-matrix platform package; license text is shared by the same upstream version."
+    },
+    {
+      "package": "@nodable/entities",
+      "version": "2.1.0",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@nodable/entities/-/entities-2.1.0.tgz",
+        "integrity": "sha512-nyT7T3nbMyBI/lvr6L5TyWbFJAI9FTgVRakNoBqCD+PmID8DzFrrNdLLtHMwMszOtqZa8PAOV24ZqDnQrhQINA==",
+        "repository": {
+          "url": "git+https://github.com/nodable/val-parsers.git",
+          "type": "git"
+        },
+        "gitHead": "f1c61a65e7b967c17b13822ef71e91bd25f17ce2"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/nodable-entities-2.1.0-MIT.txt",
+        "sha256": "750cb3fb6362804957ef52caaf9b5c824015be44d494637330d7cd8834d31d40",
+        "sourceReferences": [
+          "https://github.com/nodable/val-parsers/tree/f1c61a65e7b967c17b13822ef71e91bd25f17ce2",
+          "https://github.com/nodable/val-parsers/blob/f1c61a65e7b967c17b13822ef71e91bd25f17ce2/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@posthog/core",
+      "version": "1.28.4",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@posthog/core/-/core-1.28.4.tgz",
+        "integrity": "sha512-wmtUYHYqA3zIAKDKvYWRNWAQsWOIBwxV08e+bWzVy0wQQzpaS/LzzRupXWRMRrLOk+1x3JKFxbqA3n0QGvpqsQ==",
+        "repository": {
+          "url": "git+https://github.com/PostHog/posthog-js.git",
+          "type": "git",
+          "directory": "packages/core"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/posthog-core-1.28.4-MIT.txt",
+        "sha256": "7b0a9bcc42676b3e430d22af54ae6e7f25bc49dd1be02de6496ae31e4f9db547",
+        "sourceReferences": [
+          "https://github.com/PostHog/posthog-js/tree/550b3bd9c5c145eff499b673b19d6667fc409432/packages/core",
+          "https://github.com/PostHog/posthog-js/blob/550b3bd9c5c145eff499b673b19d6667fc409432/LICENSE"
+        ]
+      },
+      "notes": "Pinned upstream license text with trailing whitespace normalized; license terms are unchanged."
+    },
+    {
+      "package": "@posthog/core",
+      "version": "1.30.4",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@posthog/core/-/core-1.30.4.tgz",
+        "integrity": "sha512-57RyT+moR9YGzMTZxbMEPnx6elDeBLzyUd1rfn5XB5yZO425ylKy1nZ1YuKT3CG27bAspUz5J1zHo9y4ygNRCQ==",
+        "repository": {
+          "url": "git+https://github.com/PostHog/posthog-js.git",
+          "type": "git",
+          "directory": "packages/core"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/posthog-core-1.30.4-MIT.txt",
+        "sha256": "7b0a9bcc42676b3e430d22af54ae6e7f25bc49dd1be02de6496ae31e4f9db547",
+        "sourceReferences": [
+          "https://github.com/PostHog/posthog-js/tree/808862de025f2d1b0f0fad7deaa1e3e3c09feb96/packages/core",
+          "https://github.com/PostHog/posthog-js/blob/808862de025f2d1b0f0fad7deaa1e3e3c09feb96/LICENSE"
+        ]
+      },
+      "notes": "Pinned upstream license text for the exact @posthog/core 1.30.4 tag with trailing whitespace normalized; license terms are unchanged."
+    },
+    {
+      "package": "@react-three/fiber",
+      "version": "9.6.1",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@react-three/fiber/-/fiber-9.6.1.tgz",
+        "integrity": "sha512-zF0rsKcVYpcJwbFEnv2HkHX9cvOEgsfQo/X8lwmR2dn13S4qEQJXir9fxf5js2LQFoXqxOY7MDkOkYx2uZ4gSg==",
+        "repository": {
+          "url": "git+https://github.com/pmndrs/react-three-fiber.git",
+          "type": "git"
+        },
+        "gitHead": "2a528745e9aa7c9e6cca41e404b59d45cf0d0cc7"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/react-three-fiber-9.6.1-MIT.txt",
+        "sha256": "9c35b5de7b7493a707fffe4eb23bd2f7f449153c1911f7c6eefb4e591fd5349a",
+        "sourceReferences": [
+          "https://github.com/pmndrs/react-three-fiber/tree/2a528745e9aa7c9e6cca41e404b59d45cf0d0cc7",
+          "https://github.com/pmndrs/react-three-fiber/blob/2a528745e9aa7c9e6cca41e404b59d45cf0d0cc7/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@xterm/addon-serialize",
+      "version": "0.14.0",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@xterm/addon-serialize/-/addon-serialize-0.14.0.tgz",
+        "integrity": "sha512-uteyTU1EkrQa2Ux6P/uFl2fzmXI46jy5uoQMKEOM0fKTyiW7cSn0WrFenHm5vO5uEXX/GpwW/FgILvv3r0WbkA==",
+        "repository": {
+          "url": "git+https://github.com/xtermjs/xterm.js.git#master",
+          "type": "git"
+        },
+        "gitHead": "f447274f430fd22513f6adbf9862d19524471c04"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/xterm-6.0.0-MIT.txt",
+        "sha256": "b569f629d00f2626a8100df2a1798210535621e42164dfd426a6fe5aac7b0ccd",
+        "sourceReferences": [
+          "https://github.com/xtermjs/xterm.js/tree/f447274f430fd22513f6adbf9862d19524471c04/addons/addon-serialize",
+          "https://github.com/xtermjs/xterm.js/blob/f447274f430fd22513f6adbf9862d19524471c04/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@xterm/headless",
+      "version": "6.0.0",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@xterm/headless/-/headless-6.0.0.tgz",
+        "integrity": "sha512-5Yj1QINYCyzrZtf8OFIHi47iQtI+0qYFPHmouEfG8dHNxbZ9Tb9YGSuLcsEwj9Z+OL75GJqPyJbyoFer80a2Hw==",
+        "repository": {
+          "url": "git+https://github.com/xtermjs/xterm.js.git",
+          "type": "git"
+        },
+        "gitHead": "f447274f430fd22513f6adbf9862d19524471c04"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/xterm-6.0.0-MIT.txt",
+        "sha256": "b569f629d00f2626a8100df2a1798210535621e42164dfd426a6fe5aac7b0ccd",
+        "sourceReferences": [
+          "https://github.com/xtermjs/xterm.js/tree/f447274f430fd22513f6adbf9862d19524471c04/headless",
+          "https://github.com/xtermjs/xterm.js/blob/f447274f430fd22513f6adbf9862d19524471c04/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "boolbase",
+      "version": "1.0.0",
+      "license": "ISC",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_CANONICAL_LICENSE_SUPPLEMENT",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/boolbase/-/boolbase-1.0.0.tgz",
+        "integrity": "sha512-JZOSA7Mo9sNGB8+UjSgzdLtokWAky1zbztM3WRLCbZ70/3cTANmQmOdR7y2g+J0e2WXywy1yS468tY+IruqEww==",
+        "repository": {
+          "url": "https://github.com/fb55/boolbase",
+          "type": "git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/SPDX-ISC.txt",
+        "sha256": "f2ec607f67bb0dd3053b49835b02110d5cd0f8eb6da3aac4dc0b142a6b299be9",
+        "sourceReferences": [
+          "https://github.com/fb55/boolbase",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/ISC.txt"
+        ]
+      },
+      "notes": "The exact package declares ISC but omits a standalone license text."
+    },
+    {
+      "package": "data-uri-to-buffer",
+      "version": "4.0.1",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_CANONICAL_LICENSE_SUPPLEMENT",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/data-uri-to-buffer/-/data-uri-to-buffer-4.0.1.tgz",
+        "integrity": "sha512-0R9ikRb668HB7QDxT1vkpuUBtqc53YyAwMwGeUFKRojY/NWKvdZ+9UYtRfGmhqNbRkTSVpMbmyhXipFFv2cb/A==",
+        "repository": {
+          "url": "git://github.com/TooTallNate/node-data-uri-to-buffer.git",
+          "type": "git"
+        },
+        "gitHead": "85cd8c854aefbf1bb636789d80364cfac8ea1583"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/SPDX-MIT.txt",
+        "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+        "sourceReferences": [
+          "https://github.com/TooTallNate/node-data-uri-to-buffer/tree/85cd8c854aefbf1bb636789d80364cfac8ea1583",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/MIT.txt"
+        ]
+      },
+      "notes": "The exact package declares MIT but omits a standalone license text."
+    },
+    {
+      "package": "drizzle-orm",
+      "version": "0.45.2",
+      "license": "Apache-2.0",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/drizzle-orm/-/drizzle-orm-0.45.2.tgz",
+        "integrity": "sha512-kY0BSaTNYWnoDMVoyY8uxmyHjpJW1geOmBMdSSicKo9CIIWkSxMIj2rkeSR51b8KAPB7m+qysjuHme5nKP+E5Q==",
+        "repository": {
+          "url": "git+https://github.com/drizzle-team/drizzle-orm.git",
+          "type": "git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/drizzle-orm-0.45.2-APACHE-2.0.txt",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "sourceReferences": [
+          "https://github.com/drizzle-team/drizzle-orm/tree/273c78071d4841b497f5144734b38294df7ec64b",
+          "https://github.com/drizzle-team/drizzle-orm/blob/273c78071d4841b497f5144734b38294df7ec64b/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "eastasianwidth",
+      "version": "0.2.0",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/eastasianwidth/-/eastasianwidth-0.2.0.tgz",
+        "integrity": "sha512-I88TYZWc9XiYHRQ4/3c5rjjfgkjhLyW2luGIheGERbNQ6OY7yTybanSpDXZa8y7VUP9YmDcYa+eyq4ca7iLqWA==",
+        "repository": {
+          "type": "git",
+          "url": "git://github.com/komagata/eastasianwidth.git"
+        },
+        "gitHead": "b89f04d44dc786885615e94cd6e2ba1ef7866fa4"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/eastasianwidth-0.2.0-MIT.txt",
+        "sha256": "94aa6016fb9d436508366433e9caba061443ca58f4c7eb515caec7badf90ae5a",
+        "sourceReferences": [
+          "https://github.com/komagata/eastasianwidth/tree/b89f04d44dc786885615e94cd6e2ba1ef7866fa4",
+          "https://github.com/komagata/eastasianwidth/blob/4da17029e91bd4e7a96237f1409d233f3c79b5ee/MIT-LICENSE.txt"
+        ]
+      },
+      "notes": "The exact release commit declared MIT but omitted a text; a later pinned upstream commit supplies the project MIT text."
+    },
+    {
+      "package": "gsap",
+      "version": "3.15.0",
+      "license": "Standard 'no charge' license: https://gsap.com/standard-license.",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_CUSTOM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/gsap/-/gsap-3.15.0.tgz",
+        "integrity": "sha512-dMW4CWBTUK1AEEDeZc1g4xpPGIrSf9fJF960qbTZmN/QwZIWY5wgliS6JWl9/25fpTGJrMRtSjGtOmPnfjZB+A==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/greensock/GSAP.git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/gsap-standard-license-2026-07-15.txt",
+        "sha256": "0a27665b40ac0378474e0cceff1fe33416da93a6aabb41867c5c8be6466f1322",
+        "sourceReferences": [
+          "https://github.com/greensock/GSAP/tree/13e2b790546426a1a2e0e9b409f3f8dc6d6611f2",
+          "https://gsap.com/community/standard-license/"
+        ]
+      },
+      "notes": "Public license snapshot only; release/legal owner must separately confirm the product use is permitted."
+    },
+    {
+      "package": "input-otp",
+      "version": "1.4.2",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/input-otp/-/input-otp-1.4.2.tgz",
+        "integrity": "sha512-l3jWwYNvrEa6NTCt7BECfCm48GvwuZzkoeG3gBL2w4CHeOXW3eKFmf9UNYkNfYc3mxMrthMnxjIE07MT0zLBQA==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/guilhermerodz/input-otp.git",
+          "directory": "packages/input-otp"
+        },
+        "gitHead": "81ccdb48c010d800b24942aa231909f0c971b1ca"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/input-otp-1.4.2-MIT.txt",
+        "sha256": "079031192fea535a245aa64a637d8433c406b82a14f91c3606b1d63e41c00152",
+        "sourceReferences": [
+          "https://github.com/guilhermerodz/input-otp/tree/81ccdb48c010d800b24942aa231909f0c971b1ca/packages/input-otp",
+          "https://github.com/guilhermerodz/input-otp/blob/81ccdb48c010d800b24942aa231909f0c971b1ca/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "js-tiktoken",
+      "version": "1.0.21",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/js-tiktoken/-/js-tiktoken-1.0.21.tgz",
+        "integrity": "sha512-biOj/6M5qdgx5TKjDnFT1ymSpM5tbd3ylwDtrQvFQSu0Z7bBYko2dF+W/aUkXUPuk6IVpRxk/3Q2sHOzGlS36g==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/dqbd/tiktoken.git"
+        },
+        "gitHead": "4c8b748e07992c00386f3180af5c574b27b65139"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/js-tiktoken-1.0.21-MIT.txt",
+        "sha256": "418cb499b436128d653d79941333a5437b7be2ea9213dcc2f04d15d5d2c51d86",
+        "sourceReferences": [
+          "https://github.com/dqbd/tiktoken/tree/4c8b748e07992c00386f3180af5c574b27b65139",
+          "https://github.com/dqbd/tiktoken/blob/4c8b748e07992c00386f3180af5c574b27b65139/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "khroma",
+      "version": "2.1.0",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "EXACT_PACKAGE_FILE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/khroma/-/khroma-2.1.0.tgz",
+        "integrity": "sha512-Ls993zuzfayK269Svk9hzpeGUKob/sIgZzyHYdjQoAdQetRKpOLj+k/QQQ/6Qi0Yz65mlROrfd+Ev+1+7dz9Kw==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/fabiospampinato/khroma.git"
+        },
+        "gitHead": "4968165afb0d3d09be66497e7985a34f7bfe6d42"
+      },
+      "licenseTextSource": {
+        "type": "package-file",
+        "path": "license",
+        "sha256": "66b333b0f66759a0b710459e03f7029abe17f4358114a128d2c972e642961b49",
+        "sourceReferences": [
+          "https://github.com/fabiospampinato/khroma/blob/4968165afb0d3d09be66497e7985a34f7bfe6d42/license"
+        ]
+      },
+      "notes": "The exact tarball contains the MIT text but omits package.json license metadata."
+    },
+    {
+      "package": "langsmith",
+      "version": "0.6.0",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/langsmith/-/langsmith-0.6.0.tgz",
+        "integrity": "sha512-GGaj5IMRfLv2HXXFzGk9diISMYLTpSTh6fzCZGKxWYW/NqEztIFtnXLq6G/RVhzFRmCykLap1fuC67LVKoQLcg==",
+        "repository": {
+          "url": "git+https://github.com/langchain-ai/langsmith-sdk.git",
+          "type": "git"
+        },
+        "gitHead": "fd049c84648aa168e42636744587be0e0589da01"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/langsmith-0.6.0-MIT.txt",
+        "sha256": "34e0b9842c7a31d34e53bc7eb224e81e07a34996106e029bbc72dea2d449f496",
+        "sourceReferences": [
+          "https://github.com/langchain-ai/langsmith-sdk/tree/fd049c84648aa168e42636744587be0e0589da01",
+          "https://github.com/langchain-ai/langsmith-sdk/blob/fd049c84648aa168e42636744587be0e0589da01/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "ogl",
+      "version": "1.0.11",
+      "license": "Unlicense",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_CANONICAL_LICENSE_SUPPLEMENT",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/ogl/-/ogl-1.0.11.tgz",
+        "integrity": "sha512-kUpC154AFfxi16pmZUK4jk3J+8zxwTWGPo03EoYA8QPbzikHoaC82n6pNTbd+oEaJonaE8aPWBlX7ad9zrqLsA==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://gordonnl@github.com/oframe/ogl.git"
+        },
+        "gitHead": "b9e653ccac8e08211ce0678695d0a01f722e1fc2"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/SPDX-Unlicense.txt",
+        "sha256": "0bdebfeda07d45dada625ae1317c6f833186e798b171d0db640bcf32e92a8240",
+        "sourceReferences": [
+          "https://github.com/oframe/ogl/tree/b9e653ccac8e08211ce0678695d0a01f722e1fc2",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/Unlicense.txt"
+        ]
+      },
+      "notes": "The exact package declares Unlicense but omits a standalone license text."
+    },
+    {
+      "package": "overlayscrollbars-react",
+      "version": "0.5.6",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/overlayscrollbars-react/-/overlayscrollbars-react-0.5.6.tgz",
+        "integrity": "sha512-E5To04bL5brn9GVCZ36SnfGanxa2I2MDkWoa4Cjo5wol7l+diAgi4DBc983V7l2nOk/OLJ6Feg4kySspQEGDBw==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/KingSora/OverlayScrollbars.git",
+          "directory": "packages/overlayscrollbars-react"
+        },
+        "gitHead": "e0ad5d026909b85d10e9ed0f7605cddd067408c9"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/overlayscrollbars-react-0.5.6-MIT.txt",
+        "sha256": "e15ad22c5d4a4e4d63ddfe8cf1993e9fecfcf87dd320a701daa939d55beeefbc",
+        "sourceReferences": [
+          "https://github.com/KingSora/OverlayScrollbars/tree/e0ad5d026909b85d10e9ed0f7605cddd067408c9/packages/overlayscrollbars-react",
+          "https://github.com/KingSora/OverlayScrollbars/blob/e0ad5d026909b85d10e9ed0f7605cddd067408c9/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "overlayscrollbars",
+      "version": "2.16.0",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/overlayscrollbars/-/overlayscrollbars-2.16.0.tgz",
+        "integrity": "sha512-N03oje/q7j93D0aLZtoCdsDSYLmhheSsv8H7oSLE7HhdV9P/bmCURtLV/KbPye7P/bpfyt/obSfDpGUYoJ0OWg==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/KingSora/OverlayScrollbars.git",
+          "directory": "packages/overlayscrollbars"
+        },
+        "gitHead": "dfa819688a529db0085c6416a94e816bfbaeaf29"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/overlayscrollbars-2.16.0-MIT.txt",
+        "sha256": "e15ad22c5d4a4e4d63ddfe8cf1993e9fecfcf87dd320a701daa939d55beeefbc",
+        "sourceReferences": [
+          "https://github.com/KingSora/OverlayScrollbars/tree/dfa819688a529db0085c6416a94e816bfbaeaf29/packages/overlayscrollbars",
+          "https://github.com/KingSora/OverlayScrollbars/blob/dfa819688a529db0085c6416a94e816bfbaeaf29/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "promise-limit",
+      "version": "2.7.0",
+      "license": "ISC",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_CANONICAL_LICENSE_SUPPLEMENT",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/promise-limit/-/promise-limit-2.7.0.tgz",
+        "integrity": "sha512-7nJ6v5lnJsXwGprnGXga4wx6d1POjvi5Qmf1ivTRxTjH4Z/9Czja/UCMLVmB9N93GeWOU93XaFaEt6jbuoagNw==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/featurist/promise-limit.git"
+        },
+        "gitHead": "5b911ce33253ec0a7ea9cf079d8c0434efbe3244"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/SPDX-ISC.txt",
+        "sha256": "f2ec607f67bb0dd3053b49835b02110d5cd0f8eb6da3aac4dc0b142a6b299be9",
+        "sourceReferences": [
+          "https://github.com/featurist/promise-limit/tree/5b911ce33253ec0a7ea9cf079d8c0434efbe3244",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/ISC.txt"
+        ]
+      },
+      "notes": "The exact package declares ISC but omits a standalone license text."
+    },
+    {
+      "package": "rehype-katex",
+      "version": "7.0.1",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/rehype-katex/-/rehype-katex-7.0.1.tgz",
+        "integrity": "sha512-OiM2wrZ/wuhKkigASodFoo8wimG3H12LWQaH8qSPVJn9apWKFSH3YOCtbKpBorTVw/eI7cuT21XBbvwEswbIOA==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/remarkjs/remark-math.git#main"
+        },
+        "gitHead": "88a9497e1ede93b958237c85edbf5651faeca7af"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/rehype-katex-7.0.1-MIT.txt",
+        "sha256": "cb992262f361a5359e6771c28740d33c7041e15332ae8537fae40538992591a9",
+        "sourceReferences": [
+          "https://github.com/remarkjs/remark-math/tree/88a9497e1ede93b958237c85edbf5651faeca7af/packages/rehype-katex",
+          "https://github.com/remarkjs/remark-math/blob/88a9497e1ede93b958237c85edbf5651faeca7af/license"
+        ]
+      }
+    },
+    {
+      "package": "remark-math",
+      "version": "6.0.0",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/remark-math/-/remark-math-6.0.0.tgz",
+        "integrity": "sha512-MMqgnP74Igy+S3WwnhQ7kqGlEerTETXMvJhrUzDikVZ2/uogJCb+WHUg97hK9/jcfc0dkD73s3LN8zU49cTEtA==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/remarkjs/remark-math.git#main"
+        },
+        "gitHead": "d5d0660b150810a535bbb07eac6cc96a4510aa24"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/remark-math-6.0.0-MIT.txt",
+        "sha256": "cb992262f361a5359e6771c28740d33c7041e15332ae8537fae40538992591a9",
+        "sourceReferences": [
+          "https://github.com/remarkjs/remark-math/tree/d5d0660b150810a535bbb07eac6cc96a4510aa24/packages/remark-math",
+          "https://github.com/remarkjs/remark-math/blob/d5d0660b150810a535bbb07eac6cc96a4510aa24/license"
+        ]
+      }
+    },
+    {
+      "package": "seti-icons",
+      "version": "0.0.4",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_CANONICAL_LICENSE_SUPPLEMENT",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/seti-icons/-/seti-icons-0.0.4.tgz",
+        "integrity": "sha512-DXP6OzUzPtfSHQHKQ++U4mFByATGlN/fs5e43W3EAUtWf1FKauA3Li6Z2SQDB70l1m1Kr0mYzCtP6TsvRYT4Uw==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/elviswolcott/seti-icons.git"
+        },
+        "gitHead": "de7d1eaff790419724e6b996033b4485048707c2"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/SPDX-MIT.txt",
+        "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+        "sourceReferences": [
+          "https://github.com/elviswolcott/seti-icons/tree/de7d1eaff790419724e6b996033b4485048707c2",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/MIT.txt"
+        ]
+      },
+      "notes": "The exact package declares MIT but omits a standalone license text."
+    },
+    {
+      "package": "stable",
+      "version": "0.1.8",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_CANONICAL_LICENSE_SUPPLEMENT",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/stable/-/stable-0.1.8.tgz",
+        "integrity": "sha512-ji9qxRnOVfcuLDySj9qzhGSEFVobyt1kIOSkj1qZzYLzq7Tos/oUUWvotUPQLlrsidqsK6tBH89Bc9kL5zHA6w==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/Two-Screen/stable.git"
+        },
+        "gitHead": "2d20475dc7646b4b5427a956182c5f274f2b6551"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/SPDX-MIT.txt",
+        "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+        "sourceReferences": [
+          "https://github.com/Two-Screen/stable/tree/2d20475dc7646b4b5427a956182c5f274f2b6551",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/MIT.txt"
+        ]
+      },
+      "notes": "The exact package declares MIT but omits a standalone license text."
+    },
+    {
+      "package": "type-fest",
+      "version": "2.19.0",
+      "license": "(MIT OR CC0-1.0)",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/type-fest/-/type-fest-2.19.0.tgz",
+        "integrity": "sha512-RAH822pAdBgcNMAfWnCBU3CFZcfZ/i1eZjwFU/dsLKumyuuP3niueg2UAukXYF0E2AAoc82ZSSf9J0WQBinzHA==",
+        "repository": {
+          "url": "git+https://github.com/sindresorhus/type-fest.git",
+          "type": "git"
+        },
+        "gitHead": "d07df21f8b79e35ad8411cb9ceb8b5cb8f40f9d4"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/type-fest-2.19.0-MIT-OR-CC0-1.0.txt",
+        "sha256": "bc29ad415e6e49d02537184710e6839b703451eb2026ea57df68a3c33dcf6375",
+        "sourceReferences": [
+          "https://github.com/sindresorhus/type-fest/tree/d07df21f8b79e35ad8411cb9ceb8b5cb8f40f9d4",
+          "https://github.com/sindresorhus/type-fest/blob/d07df21f8b79e35ad8411cb9ceb8b5cb8f40f9d4/license-mit",
+          "https://github.com/sindresorhus/type-fest/blob/d07df21f8b79e35ad8411cb9ceb8b5cb8f40f9d4/license-cc0"
+        ]
+      }
+    },
+    {
+      "package": "victory-vendor",
+      "version": "37.3.6",
+      "license": "MIT AND ISC",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-15",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/victory-vendor/-/victory-vendor-37.3.6.tgz",
+        "integrity": "sha512-SbPDPdDBYp+5MJHhBCAyI7wKM3d5ivekigc2Dk2s7pgbZ9wIgIBYGVw4zGHBml/qTFbexrofXW6Gu4noGxrOwQ==",
+        "repository": {
+          "url": "git+https://github.com/FormidableLabs/victory.git",
+          "type": "git"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/victory-vendor-37.3.6-MIT-AND-ISC.txt",
+        "sha256": "cb09a2ff8181e86970f71394aace96390f277c72b06b030ec60901051674459d",
+        "sourceReferences": [
+          "https://github.com/FormidableLabs/victory/tree/d9d9ca2d5038d6ef9de91f2cef39e6fb2733baa6/packages/victory-vendor",
+          "https://registry.npmjs.org/victory-vendor/-/victory-vendor-37.3.6.tgz",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/MIT.txt"
+        ]
+      },
+      "notes": "Includes the pinned MIT template plus every unique LICENSE file shipped under lib-vendor/ in the exact installed tarball."
+    }
+  ]
+}

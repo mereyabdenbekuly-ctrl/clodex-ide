@@ -3,10 +3,10 @@
 import { toast as sonnerToast } from 'sonner';
 import { Button } from './button';
 import {
-  IconTriangleWarningOutline18,
   IconCircleInfoOutline18,
-} from 'nucleo-ui-outline-18';
-import { IconXmark } from 'nucleo-micro-bold';
+  IconTriangleWarningOutline18,
+  IconXmark,
+} from '@clodex/icons';
 import { cn } from '../lib/utils';
 import { PopoverFooter } from './popover';
 

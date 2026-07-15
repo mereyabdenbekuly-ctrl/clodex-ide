@@ -81,7 +81,7 @@ Backend entry point:
 - `packages/karton` — typed RPC and state synchronization;
 - `packages/runner-sdk` — custom runner contracts;
 - `packages/stage-ui` — UI primitives;
-- `packages/nucleo-*` — icons.
+- `packages/clodex-icons` — AGPL compatibility aliases backed by Lucide.
 
 ## 5. Task Lifecycle
 

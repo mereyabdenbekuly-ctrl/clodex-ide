@@ -24,6 +24,12 @@ import {
   inspectUpdateServerOrigin,
   parseCodesignAuthorities,
 } from '../../../scripts/release/signing-readiness.mjs';
+import {
+  ATTRIBUTION_DIRECTORY_NAME,
+  inspectPackagedAttribution,
+  resolveElectronRuntimeNoticePaths,
+  writeFinalArtifactSbom,
+} from './release-attribution.mjs';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const browserDirectory = path.resolve(scriptDirectory, '..');
@@ -637,6 +643,26 @@ function findMountedApplication(mountPath, expectedName) {
   return applications[0];
 }
 
+function validateZipEntryNames(zipPath) {
+  const entries = run('/usr/bin/unzip', ['-Z1', zipPath])
+    .stdout.split(/\r?\n/)
+    .filter(Boolean);
+  for (const entry of entries) {
+    if (entry === '.' || entry === './') continue;
+    const normalized = entry.replaceAll('\\', '/').replace(/^\.\//, '');
+    if (
+      !normalized ||
+      normalized.includes('\0') ||
+      normalized.startsWith('/') ||
+      /^[A-Za-z]:\//.test(normalized) ||
+      normalized.split('/').some((segment) => segment === '..')
+    ) {
+      throw new Error(`Unsafe ZIP entry: ${entry}`);
+    }
+  }
+  return { entryCount: entries.length };
+}
+
 async function main() {
   if (process.platform !== 'darwin') {
     throw new Error('macOS release validation must run on macOS');
@@ -676,6 +702,14 @@ async function main() {
   const packageJsonPath = path.join(browserDirectory, 'package.json');
   const packageJsonSource = readFileSync(packageJsonPath, 'utf8');
   const packageJson = JSON.parse(packageJsonSource);
+  const electronPackage = resolveElectronRuntimeNoticePaths({
+    appDirectory: browserDirectory,
+  });
+  const electronRuntime = {
+    license: electronPackage.license,
+    name: 'electron',
+    version: electronPackage.version,
+  };
   const version = options.version ?? packageJson.version;
   const config = channelConfig[options.channel];
   const outputRoot = path.join(browserDirectory, 'out', options.channel);
@@ -818,15 +852,62 @@ async function main() {
 
     printStep('Verifying ASAR integrity, Electron fuses, and entitlements');
     const asarIntegrity = await inspectAsarIntegrity(appPath, infoPlistPath);
+    const packagedAttribution = inspectPackagedAttribution({
+      attributionDirectory: path.join(
+        appPath,
+        'Contents',
+        'Resources',
+        ATTRIBUTION_DIRECTORY_NAME,
+      ),
+      requireReady: options.channel !== 'dev',
+    });
     const fuses = inspectElectronFuses(appPath);
     const entitlements =
       options.allowAdhoc && packageSignature.isAdhoc
         ? { skipped: 'ad-hoc-local-build' }
         : inspectSignedEntitlements(appPath, temporaryRoot);
 
-    printStep('Verifying DMG checksum and ZIP integrity');
+    printStep('Verifying DMG checksum and final ZIP application payload');
     run('/usr/bin/hdiutil', ['verify', dmgPath], { inherit: true });
     run('/usr/bin/unzip', ['-t', zipPath]);
+    const zipEntries = validateZipEntryNames(zipPath);
+    const zipExtractionPath = path.join(temporaryRoot, 'zip');
+    mkdirSync(zipExtractionPath);
+    run('/usr/bin/ditto', ['-x', '-k', zipPath, zipExtractionPath]);
+    const zipAppPath = findMountedApplication(
+      zipExtractionPath,
+      config.baseName,
+    );
+    const zipInfoPlistPath = path.join(zipAppPath, 'Contents', 'Info.plist');
+    const zipAttribution = inspectPackagedAttribution({
+      attributionDirectory: path.join(
+        zipAppPath,
+        'Contents',
+        'Resources',
+        ATTRIBUTION_DIRECTORY_NAME,
+      ),
+      requireReady: options.channel !== 'dev',
+    });
+    if (zipAttribution.manifestSha256 !== packagedAttribution.manifestSha256) {
+      throw new Error(
+        'Final ZIP application attribution manifest differs from the packaged application',
+      );
+    }
+    const zipSignature = inspectSignature(zipAppPath);
+    assertSignatureSecurity(
+      zipSignature,
+      options.allowAdhoc,
+      'Final ZIP application',
+    );
+    const zipAsarIntegrity = await inspectAsarIntegrity(
+      zipAppPath,
+      zipInfoPlistPath,
+    );
+    if (zipAsarIntegrity.fileSha256 !== asarIntegrity.fileSha256) {
+      throw new Error(
+        'Final ZIP app.asar differs from the validated packaged application',
+      );
+    }
     const dmgGatekeeper = assessDiskImage(dmgPath);
     const dmgStapler = validateStapler(dmgPath);
     if (!options.allowAdhoc && !dmgGatekeeper.passed) {
@@ -878,6 +959,22 @@ async function main() {
         mountPath,
         config.displayName,
       );
+      const mountedAttribution = inspectPackagedAttribution({
+        attributionDirectory: path.join(
+          mountedAppPath,
+          'Contents',
+          'Resources',
+          ATTRIBUTION_DIRECTORY_NAME,
+        ),
+        requireReady: options.channel !== 'dev',
+      });
+      if (
+        mountedAttribution.manifestSha256 !== packagedAttribution.manifestSha256
+      ) {
+        throw new Error(
+          'Mounted DMG application attribution manifest differs from the packaged application',
+        );
+      }
       mountedSignature = inspectSignature(mountedAppPath);
       assertSignatureSecurity(
         mountedSignature,
@@ -908,6 +1005,22 @@ async function main() {
     }
 
     const copiedSignature = inspectSignature(copiedAppPath);
+    const copiedAttribution = inspectPackagedAttribution({
+      attributionDirectory: path.join(
+        copiedAppPath,
+        'Contents',
+        'Resources',
+        ATTRIBUTION_DIRECTORY_NAME,
+      ),
+      requireReady: options.channel !== 'dev',
+    });
+    if (
+      copiedAttribution.manifestSha256 !== packagedAttribution.manifestSha256
+    ) {
+      throw new Error(
+        'Copied application attribution manifest differs from the packaged application',
+      );
+    }
     assertSignatureSecurity(
       copiedSignature,
       options.allowAdhoc,
@@ -955,6 +1068,31 @@ async function main() {
       );
     }
 
+    const sbomPath = path.join(
+      validationDirectory,
+      `macos-${options.arch}-${version}.cdx.json`,
+    );
+    const sbom = await writeFinalArtifactSbom({
+      applicationDirectory: zipAppPath,
+      appName: config.displayName,
+      appVersion: version,
+      arch: options.arch,
+      attribution: zipAttribution,
+      electronRuntime,
+      outputPath: sbomPath,
+      platform: 'macos',
+      resourcesDirectory: path.join(zipAppPath, 'Contents', 'Resources'),
+    });
+    const sbomDocument = JSON.parse(readFileSync(sbom.path, 'utf8'));
+    const sbomAppAsarSha256 = sbomDocument.components
+      .find((component) => component.name === 'app.asar')
+      ?.hashes?.find((hash) => hash.alg === 'SHA-256')?.content;
+    if (sbomAppAsarSha256 !== zipAsarIntegrity.fileSha256) {
+      throw new Error(
+        'Final ZIP app.asar hash is not bound to the generated SBOM',
+      );
+    }
+
     const artifacts = {};
     for (const [name, artifactPath] of Object.entries({
       dmg: dmgPath,
@@ -973,15 +1111,29 @@ async function main() {
         ) * 1024,
       path: appPath,
     };
+    artifacts.sbom = sbom;
+
+    const publicationAssets = ['dmg', 'zip', 'sbom'].map((name) => ({
+      bytes: artifacts[name].bytes,
+      fileName: path.basename(artifacts[name].path),
+      sha256: artifacts[name].sha256,
+    }));
+    if (
+      new Set(publicationAssets.map((asset) => asset.fileName)).size !==
+      publicationAssets.length
+    ) {
+      throw new Error('Validated publication asset filenames are not unique');
+    }
 
     const manifest = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       status: 'passed',
       generatedAt: new Date().toISOString(),
       build: {
         arch: options.arch,
         channel: options.channel,
         nodeVersion: actualNodeVersion,
+        platform: 'macos',
         pnpmVersion: actualPnpmVersion,
         updateServerConfigured,
         version,
@@ -991,6 +1143,7 @@ async function main() {
         copied: copiedSignature,
         mounted: mountedSignature,
         packaged: packageSignature,
+        zip: zipSignature,
         requiredMode: options.allowAdhoc ? 'adhoc-allowed' : 'developer-id',
       },
       trust: {
@@ -1002,10 +1155,27 @@ async function main() {
         dmgStapler,
       },
       checks: {
+        attribution: {
+          dependencyCount: packagedAttribution.dependencyCount,
+          manifestSha256: packagedAttribution.manifestSha256,
+          noticePaths: packagedAttribution.noticePaths,
+          status: packagedAttribution.manifest.status,
+        },
         cleanProfileUiLaunch: uiLaunch,
         dmgVerified: true,
+        sbom,
         smoke,
-        zipVerified: true,
+        zip: {
+          asarIntegrity: zipAsarIntegrity,
+          attribution: {
+            dependencyCount: zipAttribution.dependencyCount,
+            manifestSha256: zipAttribution.manifestSha256,
+            noticePaths: zipAttribution.noticePaths,
+            status: zipAttribution.manifest.status,
+          },
+          entries: zipEntries.entryCount,
+          sbomAppAsarSha256,
+        },
       },
       security: {
         asarIntegrity,
@@ -1014,6 +1184,10 @@ async function main() {
         hardenedRuntimeRequired: !options.allowAdhoc,
       },
       artifacts,
+      publication: {
+        assets: publicationAssets,
+        status: 'validated',
+      },
     };
 
     mkdirSync(path.dirname(manifestPath), { recursive: true });
@@ -1023,6 +1197,7 @@ async function main() {
       [
         `${artifacts.dmg.sha256}  ${path.basename(dmgPath)}`,
         `${artifacts.zip.sha256}  ${path.basename(zipPath)}`,
+        `${artifacts.sbom.sha256}  ${path.basename(sbomPath)}`,
         '',
       ].join('\n'),
     );

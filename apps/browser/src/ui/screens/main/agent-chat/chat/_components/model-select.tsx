@@ -1,5 +1,9 @@
 import { Combobox as ComboboxBase } from '@base-ui/react/combobox';
-import { IconXmarkOutline18, IconBrainOutline18 } from 'nucleo-ui-outline-18';
+import {
+  IconBrainOutline18,
+  IconChevronDownFill18,
+  IconXmarkOutline18,
+} from '@clodex/icons';
 import { Button } from '@clodex/stage-ui/components/button';
 import {
   Combobox,
@@ -17,7 +21,6 @@ import {
 } from '@clodex/stage-ui/components/tooltip';
 import type { BuiltInModel, ModelId } from '@shared/available-models';
 import type { KartonContract } from '@shared/karton-contracts/ui';
-import { IconChevronDownFill18 } from 'nucleo-ui-fill-18';
 import {
   getAvailableModel,
   getModelAlias,

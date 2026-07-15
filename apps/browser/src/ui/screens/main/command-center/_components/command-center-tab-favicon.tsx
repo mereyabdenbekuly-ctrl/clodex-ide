@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Logo } from '@ui/components/ui/logo';
-import { IconGlobe2Fill18 } from 'nucleo-ui-fill-18';
+import { IconGlobe2Fill18 } from '@clodex/icons';
 
 export function CommandCenterTabFavicon({
   faviconUrls,

@@ -3,7 +3,7 @@ import {
   IconFolder5Outline18,
   IconGear3Outline18,
   IconMsgWritingOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import { CommandIcon } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { ShortcutKey } from '@clodex/stage-ui/components/shortcut-key';

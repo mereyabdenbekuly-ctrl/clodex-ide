@@ -8,7 +8,7 @@ import {
 import {
   IconSidebarRightHideOutline18,
   IconSidebarRightShowOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
 import { HotkeyCombo } from '@ui/components/hotkey-combo';
 import { useSwarmSidebarCollapsed } from './swarm-sidebar-collapsed-context';
 

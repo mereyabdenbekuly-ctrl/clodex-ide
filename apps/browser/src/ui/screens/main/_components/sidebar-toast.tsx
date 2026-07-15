@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Button } from '@clodex/stage-ui/components/button';
 import { cn } from '@clodex/stage-ui/lib/utils';
-import { IconXmarkOutline18 } from 'nucleo-ui-outline-18';
+import { IconXmarkOutline18 } from '@clodex/icons';
 
 /**
  * Shared container for sidebar toast/badge components.

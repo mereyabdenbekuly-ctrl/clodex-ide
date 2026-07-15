@@ -3,7 +3,7 @@ import { ContextMenu } from '@base-ui/react/context-menu';
 import { Menu as MenuBase } from '@base-ui/react/menu';
 import { cn } from '@clodex/stage-ui/lib/utils';
 import { nativeFileManagerLabel } from '@shared/ide-url';
-import { IconArrowUpRightOutline18 } from 'nucleo-ui-outline-18';
+import { IconArrowUpRightOutline18 } from '@clodex/icons';
 
 const itemClassName = cn(
   'flex w-full cursor-default flex-row items-center justify-start gap-2',

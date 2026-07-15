@@ -19,7 +19,7 @@ import {
   SquareDashedMousePointerIcon,
   SwordsIcon,
 } from 'lucide-react';
-import { IconPaperclip2Outline18 } from 'nucleo-ui-outline-18';
+import { IconPaperclip2Outline18 } from '@clodex/icons';
 import {
   useCallback,
   useMemo,

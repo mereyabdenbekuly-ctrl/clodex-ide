@@ -5,13 +5,13 @@ import {
   TooltipTrigger,
 } from '@clodex/stage-ui/components/tooltip';
 import { cn } from '@clodex/stage-ui/lib/utils';
-import { IconXmarkFill18 } from 'nucleo-ui-fill-18';
 import {
   IconBookOpenOutline18,
   IconBugOutline18,
   IconFileSearchOutline18,
   IconFolder5Outline18,
-} from 'nucleo-ui-outline-18';
+  IconXmarkFill18,
+} from '@clodex/icons';
 
 import { useKartonProcedure, useKartonState } from '@ui/hooks/use-karton';
 import { useTrack } from '@ui/hooks/use-track';

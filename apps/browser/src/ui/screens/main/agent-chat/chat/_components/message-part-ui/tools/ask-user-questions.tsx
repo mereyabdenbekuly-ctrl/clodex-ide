@@ -1,8 +1,5 @@
 import { useMemo } from 'react';
-import {
-  IconHelpChatOutline18,
-  IconPenWriting3Outline18,
-} from 'nucleo-ui-outline-18';
+import { IconHelpChatOutline18, IconPenWriting3Outline18 } from '@clodex/icons';
 import type { AgentToolUIPart } from '@shared/karton-contracts/ui/agent';
 import type {
   AskUserQuestionsToolInput,

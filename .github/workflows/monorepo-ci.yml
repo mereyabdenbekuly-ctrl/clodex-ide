@@ -36,8 +36,6 @@ jobs:
   lint:
     name: Lint (Biome)
     runs-on: ubuntu-latest
-    env:
-      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -101,8 +99,6 @@ jobs:
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest
-    env:
-      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -131,8 +127,6 @@ jobs:
   build:
     name: Build Packages
     runs-on: ubuntu-latest
-    env:
-      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -171,8 +165,6 @@ jobs:
     name: Unit Tests
     needs: build
     runs-on: ubuntu-latest
-    env:
-      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -207,12 +199,13 @@ jobs:
       - name: Run Tests
         run: pnpm test
 
+      - name: Run release attribution gate tests
+        run: pnpm release:attribution:test
+
   visual-regression:
     name: Visual Regression
     runs-on: macos-26
     timeout-minutes: 15
-    env:
-      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -259,8 +252,6 @@ jobs:
     name: Unit Tests (Windows)
     if: github.event_name == 'pull_request'
     runs-on: windows-latest
-    env:
-      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
     steps:
       - name: Disable Windows Defender real-time monitoring
         run: Set-MpPreference -DisableRealtimeMonitoring $true
@@ -320,7 +311,6 @@ jobs:
 
     env:
       NODE_OPTIONS: "--max-old-space-size=8192"
-      NUCLEO_LICENSE_KEY: ${{ secrets.NUCLEO_LICENSE_KEY }}
       POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
       VITE_POSTHOG_API_KEY: ${{ secrets.VITE_POSTHOG_API_KEY }}
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}

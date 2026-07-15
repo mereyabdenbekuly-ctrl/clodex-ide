@@ -22,22 +22,20 @@ import {
   getWorktreeSelectItemsFromGit,
 } from './worktree-utils';
 import {
+  IconArrowUpRightOutline18,
+  IconBranchOutOutline18,
   IconCheckFill18,
   IconChevronDownFill18,
-  IconPlusFill18,
-  IconXmarkFill18,
-} from 'nucleo-ui-fill-18';
-import {
-  IconBranchOutOutline18,
   IconChevronRightOutline18,
   IconCodeBranchOutline18,
   IconCopyOutline18,
-  IconArrowUpRightOutline18,
   IconFolder5Outline18,
   IconFolderOpenOutline18,
   IconPenDrawSparkleOutline18,
+  IconPlusFill18,
   IconSquareTerminalOutline18,
-} from 'nucleo-ui-outline-18';
+  IconXmarkFill18,
+} from '@clodex/icons';
 import {
   Tooltip,
   TooltipTrigger,

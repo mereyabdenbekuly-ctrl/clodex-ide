@@ -25,8 +25,7 @@ import {
   LoaderCircleIcon,
   ScrollTextIcon,
 } from 'lucide-react';
-import { IconGithub } from 'nucleo-social-media';
-import { IconRefreshAnticlockwiseOutline18 } from 'nucleo-ui-outline-18';
+import { IconGithub, IconRefreshAnticlockwiseOutline18 } from '@clodex/icons';
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import agplLicenseText from '@assets/agpl-3.0-license.txt?raw';
 import {

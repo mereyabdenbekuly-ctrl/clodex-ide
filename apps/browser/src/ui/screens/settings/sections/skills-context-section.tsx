@@ -1,5 +1,5 @@
 import { Switch } from '@clodex/stage-ui/components/switch';
-import { IconPenDrawSparkleFillDuo18 } from 'nucleo-ui-fill-duo-18';
+import { IconPenDrawSparkleFillDuo18 } from '@clodex/icons';
 import {
   useComparingSelector,
   useKartonProcedure,

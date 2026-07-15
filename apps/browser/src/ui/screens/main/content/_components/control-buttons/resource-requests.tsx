@@ -7,23 +7,23 @@ import {
 import { Button } from '@clodex/stage-ui/components/button';
 import { OverlayScrollbar } from '@clodex/stage-ui/components/overlay-scrollbar';
 import {
+  IconBanOutline18,
+  IconBellDotOutline18,
+  IconBluetoothOutline24,
   IconCameraOutline18,
-  IconMicrophone3Outline18,
+  IconCheckOutline18,
+  IconClipboardContentOutline18,
+  IconConnection2Outline18,
+  IconDatabaseSearchOutline18,
   IconHardDriveOutline18,
   IconLocation2Outline18,
-  IconBellDotOutline18,
-  IconPresentationScreenVideoOutline18,
-  IconClipboardContentOutline18,
-  IconMusicOutline18,
+  IconMicrophone3Outline18,
   IconMsgSleepOutline18,
-  IconDatabaseSearchOutline18,
+  IconMusicOutline18,
+  IconPresentationScreenVideoOutline18,
   IconSpeakerOutline18,
-  IconConnection2Outline18,
-  IconCheckOutline18,
-  IconBanOutline18,
-} from 'nucleo-ui-outline-18';
-import { IconBluetoothOutline24 } from 'nucleo-core-outline-24';
-import { IconUsbOutline24 } from 'nucleo-core-outline-24';
+  IconUsbOutline24,
+} from '@clodex/icons';
 import {
   Popover,
   PopoverTrigger,

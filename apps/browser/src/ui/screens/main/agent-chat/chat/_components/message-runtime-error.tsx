@@ -1,7 +1,6 @@
 import { useState, useMemo } from 'react';
 import { cn } from '@ui/utils';
-import { IconTriangleWarning } from 'nucleo-micro-bold';
-import { IconLockKeyOutline18 } from 'nucleo-ui-outline-18';
+import { IconLockKeyOutline18, IconTriangleWarning } from '@clodex/icons';
 import { Button } from '@clodex/stage-ui/components/button';
 import {
   RefreshCcwIcon,

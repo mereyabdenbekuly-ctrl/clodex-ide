@@ -37,7 +37,7 @@ import { OpenManusToolPart } from './message-part-ui/tools/openmanus';
 import { MemoryToolPart } from './message-part-ui/tools/memory';
 import { isToolOrReasoningPart } from './message-utils';
 import { MessageBetweenSteps } from './message-between-steps';
-import { IconDotsOutline18 } from 'nucleo-ui-outline-18';
+import { IconDotsOutline18 } from '@clodex/icons';
 import {
   Menu,
   MenuTrigger,

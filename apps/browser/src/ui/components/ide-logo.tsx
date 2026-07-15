@@ -1,6 +1,8 @@
 import { IDE_LOGOS } from '@ui/assets/ide-logos';
-import { IconFolderContent2FillDuo18 } from 'nucleo-ui-fill-duo-18';
-import { IconFinderFillDuo18 } from 'nucleo-ui-fill-duo-18';
+import {
+  IconFinderFillDuo18,
+  IconFolderContent2FillDuo18,
+} from '@clodex/icons';
 import { cn } from '@clodex/stage-ui/lib/utils';
 import type { OpenFilesInIde } from '@shared/karton-contracts/ui/shared-types';
 import { getCurrentPlatform } from '@shared/hotkeys';

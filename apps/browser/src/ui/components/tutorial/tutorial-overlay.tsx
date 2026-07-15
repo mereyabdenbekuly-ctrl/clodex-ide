@@ -9,7 +9,7 @@ import {
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import { Button } from '@clodex/stage-ui/components/button';
-import { IconXmarkFill18 } from 'nucleo-ui-fill-18';
+import { IconXmarkFill18 } from '@clodex/icons';
 import { useTutorial } from '@ui/contexts/tutorial';
 import { getTutorialStatusTextColorClass } from '@ui/lib/agent-status-colors';
 import { cn } from '@ui/utils';

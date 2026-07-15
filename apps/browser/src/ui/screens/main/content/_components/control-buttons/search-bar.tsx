@@ -1,9 +1,10 @@
 import { useKartonProcedure, useKartonState } from '@ui/hooks/use-karton';
 import {
-  IconXmark,
   IconChevronLeft,
   IconChevronRight,
-} from 'nucleo-micro-bold';
+  IconSearchContentOutline18,
+  IconXmark,
+} from '@clodex/icons';
 import {
   useCallback,
   useEffect,
@@ -13,7 +14,6 @@ import {
   type Ref,
 } from 'react';
 import { Button } from '@clodex/stage-ui/components/button';
-import { IconSearchContentOutline18 } from 'nucleo-ui-outline-18';
 import { useHotKeyListener } from '@ui/hooks/use-hotkey-listener';
 import { HotkeyActions } from '@shared/hotkeys';
 import { ShortcutCombo } from '@clodex/stage-ui/components/shortcut-key';

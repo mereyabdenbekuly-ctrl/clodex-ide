@@ -56,7 +56,6 @@ jobs:
       # Candidate-controlled code runs only in this secretless job.
       OPENAI_API_KEY: ""
       CLODEX_API_KEY: ""
-      NUCLEO_LICENSE_KEY: ""
       SOURCE_COMMIT: ${{ inputs.source_commit }}
       EVALUATION_DIRECTORY: /tmp/clodex-evidence-memory-evaluation
 
@@ -219,7 +218,6 @@ jobs:
       CI: "true"
       OPENAI_API_KEY: ""
       CLODEX_API_KEY: ""
-      NUCLEO_LICENSE_KEY: ""
       OUTPUT_DIRECTORY: /tmp/clodex-evidence-memory-promotion
       EVALUATION_DIRECTORY: /tmp/clodex-evidence-memory-evaluation
       SOURCE_COMMIT: ${{ inputs.source_commit }}

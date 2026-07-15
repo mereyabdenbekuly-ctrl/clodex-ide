@@ -74,7 +74,7 @@ callers only until a future GREEN Protocol v0 SDK replaces it.
 ### UI and support packages
 
 - `packages/stage-ui` — shared React primitives;
-- `packages/nucleo-*` — local icon packages;
+- `packages/clodex-icons` — AGPL compatibility aliases backed by Lucide;
 - `packages/typescript-config` — TypeScript configuration;
 - `packages/tailwindcss-color-modifiers` — design-token utilities.
 

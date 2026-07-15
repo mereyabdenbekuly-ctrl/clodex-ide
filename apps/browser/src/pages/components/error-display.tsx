@@ -1,5 +1,5 @@
 import { Button, buttonVariants } from '@clodex/stage-ui/components/button';
-import { IconTriangleWarningFillDuo18 } from 'nucleo-ui-fill-duo-18';
+import { IconTriangleWarningFillDuo18 } from '@clodex/icons';
 import { cn } from '@pages/utils';
 
 export interface ErrorDisplayProps {

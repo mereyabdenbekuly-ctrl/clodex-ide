@@ -1,16 +1,14 @@
 import { useMemo } from 'react';
 import {
   IconBrainNodesFillDuo18,
+  IconBranchOutOutline18,
   IconGear3FillDuo18,
   IconHistoryFillDuo18,
-  IconNoteFillDuo18,
-  IconSpace3dFillDuo18,
-} from 'nucleo-ui-fill-duo-18';
-import {
-  IconBranchOutOutline18,
   IconKey2Outline18,
+  IconNoteFillDuo18,
   IconServerOutline18,
-} from 'nucleo-ui-outline-18';
+  IconSpace3dFillDuo18,
+} from '@clodex/icons';
 import {
   CloudCogIcon,
   CalendarClockIcon,

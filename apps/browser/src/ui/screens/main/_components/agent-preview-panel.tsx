@@ -12,10 +12,7 @@ import { FileIcon } from '@ui/components/file-icon';
 import { getWorkspaceDisplayInfo } from '@ui/utils/workspace-display';
 import { OverlayScrollbar } from '@clodex/stage-ui/components/overlay-scrollbar';
 import { useScrollFadeMask } from '@ui/hooks/use-scroll-fade-mask';
-import {
-  IconCodeBranchOutline18,
-  IconFolder5Outline18,
-} from 'nucleo-ui-outline-18';
+import { IconCodeBranchOutline18, IconFolder5Outline18 } from '@clodex/icons';
 
 /** Resolved preview data displayed in the side panel. */
 export type PreviewData = {

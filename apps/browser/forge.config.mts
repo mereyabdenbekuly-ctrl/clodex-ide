@@ -19,6 +19,10 @@ import {
   assertBundledAssetsSafe,
   formatBytes,
 } from './src/backend/utils/bundled-assets';
+import {
+  prepareReleaseAttributionBundle,
+  resolveElectronRuntimeNoticePaths,
+} from './scripts/release-attribution.mjs';
 
 // Get Windows signing configuration (returns undefined if not configured)
 const windowsSignConfig = getWindowsSignConfig();
@@ -42,8 +46,24 @@ const visualAssetChannel =
     ? 'nightly'
     : buildConstants.__APP_RELEASE_CHANNEL__;
 const bundledAssetsPath = path.resolve(__dirname, 'bundled');
+const repositoryPath = path.resolve(__dirname, '../..');
+const releaseAttributionPath = path.resolve(
+  __dirname,
+  '.generated',
+  'release-attribution',
+);
+const electronRuntimeNoticePaths = resolveElectronRuntimeNoticePaths({
+  appDirectory: __dirname,
+});
 const allowUnsignedLocalBuild =
   process.env.CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD === 'true';
+
+prepareReleaseAttributionBundle({
+  appDirectory: __dirname,
+  outputDirectory: releaseAttributionPath,
+  releaseChannel: buildConstants.__APP_RELEASE_CHANNEL__,
+  repositoryDirectory: repositoryPath,
+});
 
 const resolvePackagerIconPath = (): string => {
   const iconBasePath = path.resolve(
@@ -492,6 +512,9 @@ const config: ForgeConfig = {
       './bundled',
       './assets/sounds',
       `./assets/icons/${visualAssetChannel}/icon.png`,
+      releaseAttributionPath,
+      electronRuntimeNoticePaths.electron,
+      electronRuntimeNoticePaths.chromium,
     ],
     prune: true,
     beforeCopyExtraResources: [validateBundledAssets],

@@ -11,7 +11,7 @@ import {
   TooltipTrigger,
 } from '@clodex/stage-ui/components/tooltip';
 import { Button } from '@clodex/stage-ui/components/button';
-import { IconLinkFill18 } from 'nucleo-ui-fill-18';
+import { IconLinkFill18 } from '@clodex/icons';
 
 export function WithTabPreviewCard({
   tabState,

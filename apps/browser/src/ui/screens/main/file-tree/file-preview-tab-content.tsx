@@ -28,21 +28,13 @@ import {
   useState,
   type ReactElement,
 } from 'react';
-import { IconDatabaseFillDuo18 } from 'nucleo-ui-fill-duo-18';
-import type { FileDiffContent } from '@shared/karton-contracts/ui';
 import {
-  Loader2Icon,
-  MinusIcon,
-  PlusIcon,
-  TriangleAlertIcon,
-  XIcon,
-} from 'lucide-react';
-import {
-  IconFloppyDiskOutline18,
-  IconLockKeyOutline18,
   IconArrowsToCenterOutline18,
   IconColorPaletteOutline18,
+  IconDatabaseFillDuo18,
   IconEye2Outline18,
+  IconFloppyDiskOutline18,
+  IconLockKeyOutline18,
   IconOpenExternalOutline18,
   IconRedoOutline18,
   IconSplitViewOutline18,
@@ -51,7 +43,15 @@ import {
   IconTextBgColorOutline18,
   IconTextColorOutline18,
   IconUndoOutline18,
-} from 'nucleo-ui-outline-18';
+} from '@clodex/icons';
+import type { FileDiffContent } from '@shared/karton-contracts/ui';
+import {
+  Loader2Icon,
+  MinusIcon,
+  PlusIcon,
+  TriangleAlertIcon,
+  XIcon,
+} from 'lucide-react';
 import { Menu as MenuBase } from '@base-ui/react/menu';
 import MonacoEditor, { DiffEditor } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';

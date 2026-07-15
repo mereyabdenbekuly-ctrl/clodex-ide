@@ -5,7 +5,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '@clodex/stage-ui/components/tooltip';
-import { IconGlobe2Fill18 } from 'nucleo-ui-fill-18';
+import { IconChevronRightOutline18, IconGlobe2Fill18 } from '@clodex/icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CircleAlertIcon,
@@ -14,7 +14,6 @@ import {
   Loader2Icon,
   Trash2Icon,
 } from 'lucide-react';
-import { IconChevronRightOutline18 } from 'nucleo-ui-outline-18';
 import { useKartonProcedure } from '@ui/hooks/use-karton';
 import { createRafResizeObserver } from '@ui/utils/resize-observer';
 import type {
