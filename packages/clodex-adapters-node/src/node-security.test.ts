@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { constants } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
 import {
@@ -235,7 +236,7 @@ describe('pinned executable launcher boundary', () => {
     const result = await invocation;
 
     expect(platformMocks.open).toHaveBeenCalledWith(
-      '/trusted/clodex-openat2-helper',
+      resolve('/trusted/clodex-openat2-helper'),
       constants.O_RDONLY | constants.O_NOFOLLOW,
     );
     expect(file.stat).toHaveBeenCalledTimes(2);
@@ -364,12 +365,12 @@ describe('pinned workspace root identity boundary', () => {
     });
 
     expect(platformMocks.open).toHaveBeenCalledWith(
-      '/trusted/workspace',
+      resolve('/trusted/workspace'),
       constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
     );
     expect(lease).toEqual({
       handle: directory.handle,
-      path: '/trusted/workspace',
+      path: resolve('/trusted/workspace'),
       device: '7',
       inode: '11',
     });
