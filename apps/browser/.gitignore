@@ -93,6 +93,7 @@ out/
 
 # Generated ESLint server bundle
 bundled/eslint-server/
+.eslint-server-work/
 .eslint-build-temp/
 
 # Generated license data

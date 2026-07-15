@@ -86,6 +86,27 @@ describe('bundled asset validation', () => {
     );
   });
 
+  it.each([
+    '.eslint-server-stage-stale',
+    '.eslint-server-backup-stale',
+  ])('rejects reserved root work directory %s', async (directoryName) => {
+    const reservedPath = path.join(root, directoryName);
+    await fs.mkdir(reservedPath);
+    await fs.writeFile(path.join(reservedPath, 'artifact'), 'data');
+
+    expect(() => assertBundledAssetsSafe(root)).toThrow(
+      'Reserved ESLint build work state',
+    );
+  });
+
+  it('rejects a reserved root build-lock file', async () => {
+    await fs.writeFile(path.join(root, '.eslint-server-build.lock'), 'stale');
+
+    expect(() => assertBundledAssetsSafe(root)).toThrow(
+      'Reserved ESLint build work state',
+    );
+  });
+
   it.skipIf(process.platform === 'win32')(
     'rejects symbolic links',
     async () => {

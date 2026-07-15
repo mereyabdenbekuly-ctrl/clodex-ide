@@ -64,9 +64,62 @@ and the corresponding texts are retained under
 The final application embeds each applicable text in its dependency inventory
 and retains a CycloneDX SBOM.
 
+Non-npm build inputs and binary bundles are recorded separately in the
+SHA-256-pinned
+[`docs/provenance/BUNDLED_COMPONENTS.json`](./docs/provenance/BUNDLED_COMPONENTS.json)
+registry. Final-artifact validation verifies the applicable registry entries,
+the bytes shipped with the application, and the corresponding CycloneDX
+components. These records are engineering provenance evidence, not a grant of
+rights or a legal conclusion.
+
 These records do not relicense dependencies and are not a legal conclusion.
 They may supplement only an exact package whose text or metadata is missing;
 an upstream declaration conflict or evidence hash drift blocks release.
+
+## vscode-eslint language server
+
+The desktop application builds and bundles the server portion of
+[`microsoft/vscode-eslint`](https://github.com/microsoft/vscode-eslint) version
+`3.0.10`, licensed under the MIT License.
+
+Copyright (c) Microsoft Corporation
+
+The build downloads the archive for immutable Git revision
+`790646388696511b2665a4d119bf0fb713dd990d` and requires SHA-256
+`24ebbef9ee5c716d4653c193bca00192b19787cc7152c3d61a474a10920d6239`
+before extraction. The exact upstream `License.txt` is retained in the bundled
+server directory and in the packaged attribution evidence. A generated
+provenance manifest records the SHA-256 and byte count of every emitted server
+bundle file; final validation rejects missing, additional, or modified files.
+The single Node 22 compatibility transform to the archived webpack config is
+also recorded with exact before/after SHA-256 values. The exact archived server
+lock and all nine production-lock packages are separately integrity-bound with
+exact license text in the bundled-component registry. Source-map inspection
+currently proves that seven of those packages are emitted by webpack; the final
+CycloneDX document records those seven as dependencies of the server bundle and
+does not overstate the two lock-only packages as shipped content.
+
+## VCRuntime.CefSharp.140
+
+Windows x64 packages copy five runtime DLLs from exact NuGet package
+[`VCRuntime.CefSharp.140` version `1.0.5`](https://www.nuget.org/packages/VCRuntime.CefSharp.140/1.0.5).
+The package is owned on NuGet by `havendv`; its metadata names Microsoft as the
+author and copyright holder and declares the package license expression `MIT`.
+The source `.nupkg` is pinned to SHA-256
+`063bbdc41bab3911677feac7a6373ba9d60e0b497b994cfc947bc3735359d2c0`
+and the NuGet catalog SHA-512. Each copied `vcruntime140*.dll` and
+`msvcp140*.dll` is independently byte-counted and SHA-256-pinned in the bundled
+component registry and final SBOM.
+
+The exact package metadata and the MIT text from the package project's source
+revision `3db205447bf52b66b61f7881a9294cf495d92eeb` are retained as provenance
+evidence. This repository **does not assert** that the NuGet package's MIT
+expression alone grants redistribution rights to Microsoft runtime binaries.
+Before distribution, the release owner and specialist counsel must verify the
+applicable
+[Microsoft Visual C++ 2022 runtime terms](https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/)
+and the organization's entitlement. The registry records this state as
+`CONDITIONAL_UPSTREAM_TERMS`, not as legal approval.
 
 ## GSAP
 

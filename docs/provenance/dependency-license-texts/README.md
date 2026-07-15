@@ -22,3 +22,10 @@ These records are attribution engineering evidence, not a legal opinion or a
 relicensing action. Custom terms (notably GSAP), LGPL obligations, source-offer
 requirements, and commercial use require release-owner and specialist counsel
 review.
+
+Non-npm generated/binary inputs are intentionally not represented as npm
+overrides. Their immutable source pins, license/notice evidence, packaged file
+hashes, and platform applicability are recorded in
+[`../BUNDLED_COMPONENTS.json`](../BUNDLED_COMPONENTS.json) with exact evidence
+under `../bundled-component-license-texts/` and
+`../bundled-component-evidence/`.

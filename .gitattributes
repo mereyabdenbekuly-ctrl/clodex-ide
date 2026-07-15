@@ -1,0 +1,5 @@
+# Preserve byte-identical reviewed upstream evidence on every checkout,
+# including original CRLF/BOM bytes. Keep text diffs available while disabling
+# line-ending normalization for every hash-pinned evidence file.
+docs/provenance/bundled-component-evidence/** -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
+docs/provenance/bundled-component-license-texts/** -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol

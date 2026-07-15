@@ -6,23 +6,43 @@ or replace legal review.
 
 ## Current position
 
-The P0 zero-trust implementation is on `main` in commit `f331fa97` (PR #15).
-That baseline includes the local Guardian/security path, atomic effect work,
+The P0 zero-trust foundation is on `main` in commit `f331fa97` (PR #15), and
+the durable approval/MCP lifecycle increment is on `main` in commit `30c8db7d`
+(PR #16). Release-plumbing corrections through exact `main`
+`4ef3878b0291597b53a9e88b8ba27c6a706e9840` have passed required CI. Those
+baselines include the local Guardian/security path, atomic effect work,
 durable control-plane/reference components, MCP dispatch hardening, and a
-testing handoff. Bulk audit and regression testing remain a separate release
-gate; source implementation alone is not a release authorization.
+testing handoff. Bulk audit, regression testing, exact packaged attribution,
+signing, acceptance, and observation remain release gates; source
+implementation alone is not a release authorization.
 
-The next correct sequence is:
+The ground-truth OCB-006 review reopened two non-npm gaps: the bundled
+`vscode-eslint` source build and Windows VCRuntime DLLs. The source-tree
+remediation now inventories and hash-binds those inputs, but OCB-006 is not
+final-artifact GREEN until the exact platform artifacts and residual terms
+review are accepted.
+
+The release and protocol/service tracks are deliberately separate:
 
 ```text
-public/private boundary
-        -> provenance and redistribution gate
-        -> Protocol v0
-        -> integrated audit/test/signing evidence
-        -> technical preview
-        -> stable release observation window
-        -> private Gateway, in a separate repository
+local secure IDE 1.16:
+public/private boundary (Gate 0)
+        -> provenance and redistribution evidence (Gate 1)
+        -> integrated audit/test/signing and exact artifact evidence (Gate 3)
+        -> accepted preview.2 rollback baseline
+        -> trusted exactly-five preview.3 canary and observation window
+        -> stable clodex@1.16.0
+
+protocol / managed-service track:
+reviewed provenance boundary (Gate 1)
+        -> Protocol v0 specification and conformance (Gate 2)
+        -> reviewed private-repository boundary
+        -> private Gateway, in a separate repository, toward the 1.17 line
 ```
+
+Protocol v0 and the private Gateway do not block the secure local IDE
+`1.16.0` release. Protocol v0 does block any managed Gateway implementation or
+claim that a permissive protocol/SDK boundary is ready.
 
 ## Gate 0 — repository boundary
 
@@ -51,10 +71,16 @@ Implemented in OCB-006:
 - added a fail-closed dependency-license inventory and packaged notice bundle;
 - added final-artifact attribution checks and CycloneDX SBOM generation;
 - retained Electron and Chromium runtime notices in packaged resources;
-- made future `nucleo-*` use fail closed without exact approved evidence.
+- made obvious future `nucleo-*`/`@nucleo/*` package, import, key, or named-asset
+  signals fail closed without exact approved evidence, while retaining manual
+  final-artifact review for renamed vendor content.
 
-The source-tree strict gate now reports 834 dependency versions and zero
-blockers on macOS arm64. That graph applies 42 reviewed exact-version records;
+The source-tree strict gate now reports 835 macOS arm64 components (834 package
+versions plus the bundled `vscode-eslint` server) and zero blockers on macOS
+arm64. The archived server lock has nine separately pinned production packages;
+source-map inspection proves seven are emitted and only those seven are
+represented as child components in CycloneDX. That graph applies 42 reviewed
+exact-version records;
 the 54-record registry also covers supported release-matrix and exact lockfile
 variants not present in this host inventory. It supplies pinned public evidence
 only where an exact tarball omitted text or metadata. The Linux x64 CI graph
@@ -73,8 +99,9 @@ and residual release/legal decisions are
 - file-level provenance classification is GREEN for any code proposed for a
   future permissive repository.
 
-**Status:** source inventory GREEN; final macOS/Windows/Linux artifact evidence
-pending on the exact release commit.
+**Status:** source inventory engineering-GREEN after the reopened bundled-input
+remediation; final macOS/Windows/Linux artifact evidence and residual terms
+review remain pending on the exact release commit.
 
 ## Gate 2 — Protocol v0
 
@@ -127,15 +154,20 @@ Required before a distributable technical preview:
 ## When a version can be released
 
 The repository currently identifies the application as `1.16.0`, but that
-number does not make an artifact releasable. The next technical preview can be
-tagged only after Gates 0–3 are green on the same commit and the platform
-artifacts are reviewed. Stable `1.16.0` additionally requires the preview
+number does not make an artifact releasable. The local release path requires
+Gates 0, 1, and 3 to be green on the same commit and the platform artifacts to
+be reviewed. Its fixed promotion chain is accepted `v1.16.0-preview.2`, then a
+trusted exactly-five `v1.16.0-preview.3` canary, then newly built stable
+`clodex@1.16.0` artifacts. Stable promotion additionally requires the canary
 observation window, blocker triage, rollback readiness, and explicit human
 sign-off.
 
-No honest date can be assigned while final cross-platform provenance evidence
-and Protocol v0 are not frozen. Progress should be reported as completed gates
-and remaining blockers, not as percentage guesses.
+Gate 2 (Protocol v0) is not a prerequisite for local `1.16.0`; it is a
+prerequisite for the private Gateway and later protocol/client line. No honest
+local-release date can be assigned while final cross-platform provenance,
+signing, acceptance, and trusted canary evidence remain incomplete. Progress
+should be reported as completed gates and remaining blockers, not as percentage
+guesses.
 
 ## Gate 4 — private managed Gateway (later)
 

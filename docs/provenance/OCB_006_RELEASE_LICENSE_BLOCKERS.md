@@ -4,11 +4,17 @@
 
 **Strict gate:** GREEN
 
-**Inventory:** 834 unique dependency versions; 0 blockers
+**Inventory:** 835 unique inventoried components on macOS arm64 (834 package
+versions plus the bundled `vscode-eslint` server); 0 blockers
 
 **Reviewed exact-version overrides:** 42 applied on macOS arm64 and 43 on Linux x64 from a 54-record release-matrix registry
 
 **Nucleo:** `NOT_REQUIRED`; no `nucleo-*` package is present
+
+**Reviewed non-npm bundled components:** 2 records; one cross-platform
+`vscode-eslint` source build (9 exact production-lock dependencies reviewed;
+7 proven emitted by webpack)
+and one Windows x64 VCRuntime binary archive
 
 This is an engineering attribution result, not a legal conclusion. Specialist
 open-source counsel and the release owner still must review custom/commercial
@@ -24,7 +30,7 @@ pnpm --dir apps/browser release:attribution:check -- --channel=release
 Expected result:
 
 ```text
-[release-attribution] 834 dependencies; 0 blocker(s); Nucleo=NOT_REQUIRED
+[release-attribution] 835 dependencies; 0 blocker(s); Nucleo=NOT_REQUIRED
 ```
 
 ## Closed baseline blockers
@@ -68,6 +74,35 @@ An override may fill only missing text or missing/`Unknown` metadata. A conflict
 hash drift, path traversal, duplicate identity, unreviewed record, or changed
 package file fails closed.
 
+## Closed non-npm attribution blockers
+
+The previous gate did not inventory or hash-verify two shipped inputs that are
+outside the npm dependency traversal:
+
+1. `vscode-eslint` `3.0.10` was downloaded through a mutable tag URL, the
+   archive hash was not checked, and the emitted server bundle had no packaged
+   license/provenance record or SBOM component. It is now bound to immutable
+   revision `790646388696511b2665a4d119bf0fb713dd990d`, source archive SHA-256
+   `24ebbef9ee5c716d4653c193bca00192b19787cc7152c3d61a474a10920d6239`,
+   and the exact upstream MIT text. The generated provenance manifest hashes
+   every emitted bundle file and final validation rejects hash or file-set
+   drift. All nine packages in the exact server production lock now carry npm
+   integrity, tarball SHA-256, and exact license evidence. Source-map inspection
+   proves seven are emitted by webpack and includes only those seven in the
+   generated provenance module set and parent/child CycloneDX records;
+   `lru-cache` and `yallist` are retained as production-lock-only evidence.
+2. `VCRuntime.CefSharp.140` `1.0.5` was downloaded without verifying the
+   `.nupkg` or copied DLL bytes and was absent from notices, the attribution
+   inventory, and the SBOM. The exact NuGet URL, archive SHA-256, catalog
+   SHA-512, nuspec, signature-entry hash, source revision, and five Windows x64
+   DLL byte counts/SHA-256 values are now reviewed and fail closed.
+
+The public
+[`BUNDLED_COMPONENTS.json`](./BUNDLED_COMPONENTS.json) registry and exact
+license/metadata evidence are copied into the packaged attribution bundle.
+Platform validators require the applicable component set and emit both logical
+components and exact file hashes in CycloneDX.
+
 ## Important residual release decisions
 
 A green source-tree inventory does not by itself close final distribution:
@@ -81,6 +116,12 @@ A green source-tree inventory does not by itself close final distribution:
   obligations.
 - Platform-specific Windows/Linux dependency graphs may add packages and must
   pass the same strict gate on the exact final lockfile.
+- The NuGet package metadata for `VCRuntime.CefSharp.140` declares MIT for the
+  package and Microsoft copyright for its DLLs. This engineering record does
+  not claim that MIT alone authorizes Microsoft runtime redistribution. The
+  release owner and specialist counsel must verify the applicable Microsoft
+  Visual C++ runtime terms and organizational entitlement; the registry status
+  remains `CONDITIONAL_UPSTREAM_TERMS`.
 - OCB-006 is release-closed only after the exact final app/installer passes the
   packaged attribution validator and the retained CycloneDX SBOM/manifest is
   reviewed.

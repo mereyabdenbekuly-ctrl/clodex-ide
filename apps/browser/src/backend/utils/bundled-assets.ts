@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const MAX_REPORTED_ISSUES = 25;
+const RESERVED_ROOT_ENTRY_PREFIXES = ['.eslint-server-'];
 
 export interface BundledAssetsPolicy {
   maxFileBytes: number;
@@ -101,6 +102,17 @@ export function inspectBundledAssets(
 
     for (const entry of entries) {
       const absolutePath = path.join(directory, entry.name);
+      const isReservedRootEntry =
+        directory === absoluteRoot &&
+        RESERVED_ROOT_ENTRY_PREFIXES.some((prefix) =>
+          entry.name.startsWith(prefix),
+        );
+      if (reportNestedIssues && isReservedRootEntry) {
+        addIssue(
+          absolutePath,
+          'Reserved ESLint build work state is forbidden in packaged bundled assets',
+        );
+      }
 
       if (entry.isSymbolicLink()) {
         if (reportNestedIssues) {
@@ -123,7 +135,10 @@ export function inspectBundledAssets(
         // A forbidden directory is already actionable. Continue counting its
         // contents for the global budgets, but avoid flooding the report with
         // every cache or dependency directory nested inside it.
-        walk(absolutePath, reportNestedIssues && !isForbidden);
+        walk(
+          absolutePath,
+          reportNestedIssues && !isForbidden && !isReservedRootEntry,
+        );
         continue;
       }
 

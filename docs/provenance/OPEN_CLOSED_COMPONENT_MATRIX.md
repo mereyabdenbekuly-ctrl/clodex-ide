@@ -55,19 +55,19 @@ requires counsel; this policy is the stricter engineering floor.
 | Component or path | Observed provenance/license state | Intended disposition | Current open use | Permissive protocol/SDK extraction | Private Gateway import | Required gate |
 | --- | --- | --- | --- | --- | --- | --- |
 | Repository root | Root distribution is AGPL-3.0 and records Stagewise lineage at upstream base `ef9d249f29f2a98dfeac80b2f1013315333994d6` | Public source and historical record | **GREEN** under current terms and preserved notices | **RED** as a blanket source corpus | **RED** | Never treat the repository license or DCO as a relicensing grant; audit each candidate file and contributor history |
-| `apps/browser/**` | AGPL package; registry status `legacy`; repository documentation says Stagewise-derived and mixed code remains | Open-source IDE and distribution wedge | **YELLOW**; source can remain public, but packaged attribution is not release-ready | **RED** | **RED** | Preserve lineage; package root notices in every desktop artifact; fail release on missing or unknown license text; complete the desktop attribution gate below |
+| `apps/browser/**` | AGPL package; registry status `legacy`; repository documentation says Stagewise-derived and mixed code remains; the source-tree OCB-006 attribution inventory is strict-green | Open-source IDE and distribution wedge | **YELLOW** until exact final installers pass packaged notice/SBOM validation and residual release-owner reviews | **RED** | **RED** | Preserve lineage; retain the reviewed notice, npm override, bundled-component, Nucleo-absence, and final-artifact gates below |
 | `packages/clodex-contracts/**`, `clodex-kernel/**`, `clodex-approval/**`, `clodex-guardian/**`, `clodex-ledger*/**`, `clodex-evidence/**`, `clodex-runtime/**`, `clodex-adapters*/**` | Registry status `independent`; package metadata declares AGPL-3.0-only | Open security core, local reference implementation, and public standards work | **GREEN** under AGPL and the existing provenance policy | **RED** for direct code extraction or permissive relicensing; **YELLOW** as semantic input to a separately written specification | **RED** | File-level history and rights review; approved specification-only inputs; independent schema implementation with its own provenance record |
 | `packages/clodex-control-plane*/**`, `clodex-registry*/**`, `clodex-production/**`, `clodex-promotion/**` | Registry status `independent`; package metadata declares AGPL-3.0-only | Public single-node/reference coordination, registry, promotion, and production semantics | **GREEN** under AGPL | **RED** for source reuse; **YELLOW** for documented wire semantics only | **RED** | Keep managed multi-tenant implementations separate; publish only stable schemas and conformance behavior after protocol gates |
-| `packages/mcp-runtime/**` | Package metadata says MIT and names CLODEx authors, but the package is absent from `components.yml` and has no package-level license/notice file | Candidate public MCP reference runtime; possible input to Protocol v0 | **YELLOW** | **YELLOW**, not yet an approved extraction source | **RED** | Register the component; audit creation history and supplied AI/source context; add license/notice evidence; separate schemas from local runtime and policy code |
+| `packages/mcp-runtime/**` | Package metadata says MIT and names CLODEx authors; a package-level MIT file now exists, but the package remains absent from `components.yml` | Candidate public MCP reference runtime; possible input to Protocol v0 | **YELLOW** | **YELLOW**, not yet an approved extraction source | **RED** | Register the component; audit creation history and supplied AI/source context; preserve license/notice evidence; separate schemas from local runtime and policy code |
 | `packages/runner-sdk/**` | Package metadata says MIT, but its only runtime dependency is Stagewise-attributed `@clodex/agent-shell`; it imports and re-exports runner types, constants, hashing, signing, and verification from that package | Future public ecosystem SDK | **RED** as a claimed clean SDK | **RED** | **RED** | Replace every `agent-shell` type and function edge with a GREEN Protocol v0 dependency; independently author conformance behavior; add registry, license, notice, and history evidence |
 | `packages/agent-core/**`, `packages/agent-shell/**`, `agent/runtime-node/**` | Registry status `legacy`; MIT metadata preserves Stagewise authorship; repository notice says a complete package-level audit is still required before independent publication | Legacy runtime retained during strangler migration | **YELLOW** inside the current public product | **RED** | **RED** | Preserve Stagewise attribution; finish package-level provenance and notice audit; use an independent replacement or obtain reviewed permission before any different distribution model |
 | `packages/karton/**` | Registry status `legacy`; Stagewise-attributed MIT package with a package-level `LICENSE.md` | Legacy public compatibility transport | **GREEN** under its recorded MIT terms and notices; still legacy | **RED** as a clean CLODEx protocol seed | **RED** by project policy pending review | Do not relabel or structurally rewrite it; keep its notice; replace through a specification-first migration if a new transport is needed |
-| `packages/stage-ui/**` | Registry status `legacy`; package metadata has no license or author; the repository records Stagewise-derived UI areas | Legacy public UI only | **YELLOW** | **RED** | **RED** | Establish exact upstream lineage and applicable notices; add package metadata; do not use layouts, components, themes, or assets as a private/permissive blueprint |
-| `packages/api-client/**` | Package metadata has no license or author and the package is not registered; it contains product API shapes rather than a Gateway contract | Existing public-repository helper only | **YELLOW** | **RED** | **RED** | Register and audit it; explicitly exclude legacy product endpoints from Protocol v0; create a new protocol client only from approved schemas |
+| `packages/stage-ui/**` | Registry status `legacy`; package metadata now declares AGPL-3.0-only but has no author, and the repository records Stagewise-derived UI areas | Legacy public UI only | **YELLOW** | **RED** | **RED** | Establish exact upstream lineage and applicable notices; complete package metadata; do not use layouts, components, themes, or assets as a private/permissive blueprint |
+| `packages/api-client/**` | Package metadata now declares AGPL-3.0-only but has no author and the package is not registered; it contains product API shapes rather than a Gateway contract | Existing public-repository helper only | **YELLOW** | **RED** | **RED** | Register and audit it; explicitly exclude legacy product endpoints from Protocol v0; create a new protocol client only from approved schemas |
 | `apps/clodex-cli/**` | Package metadata has no license or author and directly depends on Stagewise-attributed `agent-core` and `agent-shell` | Public CLI after runtime migration | **YELLOW** inside the monorepo | **RED** | **RED** | Add registry and metadata evidence; cut legacy runtime dependencies before claiming a clean protocol client or publishing independently |
 | `apps/deprecated-cli/**` | AGPL package; legacy/deprecated application | Retain only for supported migration or removal | **YELLOW** | **RED** | **RED** | Record status in the registry and remove when migration criteria are met |
-| `apps/update-server/**`, `apps/website/**` | Package metadata omits license and author; website depends on `stage-ui` and local Nucleo packages | Public operational/marketing surfaces, not Gateway foundations | **YELLOW** | **RED** | **RED** | Register intended status; add explicit metadata and notices; prevent accidental reuse as a private service seed |
-| `packages/nucleo-*/**` | Ten private workspace packages omit license and author metadata; release workflows require a `NUCLEO_LICENSE_KEY`; no package-level notices were found | Licensed desktop/website assets only if redistribution rights are documented | **RED** for distributable release until verified | **RED** | **RED** | Record vendor source, entitlement, permitted redistribution, generated modifications, and required attribution; exclude or replace any asset without distributable evidence |
+| `apps/update-server/**`, `apps/website/**` | Package metadata omits license and author; website retains legacy `stage-ui` use, while former local Nucleo dependencies/assets have been removed | Public operational/marketing surfaces, not Gateway foundations | **YELLOW** | **RED** | **RED** | Register intended status; add explicit metadata and notices; keep Nucleo absent unless exact redistribution evidence is independently approved; prevent reuse as a private service seed |
+| Former `packages/nucleo-*/**` | The ten local compatibility packages and referenced vendor/placeholder assets are absent from the current repository and distributable dependency graph; `NUCLEO_REDISTRIBUTION_EVIDENCE.json` is `NOT_REQUIRED`, not `APPROVED` | Removed; no Nucleo redistribution right is claimed | **GREEN / NOT APPLICABLE** only while absence is proven | **RED** | **RED** | CI fails closed on obvious future `nucleo-*`/`@nucleo/*` packages, imports, license-key paths, and Nucleo-named assets; renamed/obfuscated vendor content still requires final-artifact review; reintroduction requires exact package coverage, desktop redistribution scope, accountable approval, validity dates, license name, and non-secret external evidence references |
 | `packages/tailwindcss-color-modifiers/**`, `packages/typescript-config/**` | MIT metadata, not registered, no package-level license files observed | Build/support packages only | **YELLOW** | **RED** unless independently audited and actually needed | **RED** | Register, audit history, add notice/license evidence, and keep Protocol v0 free of build-system coupling |
 | `docs/INTENT_CONTRACT_SPEC.md`, ADRs, threat models, security manifests | Public AGPL repository documentation with detailed semantics; provenance policy allows approved specifications as independent inputs | Candidate specification inputs; public security documentation | **GREEN** in the public repository | **YELLOW** as documented inputs, never automatic code-relicensing evidence | Not executable/importable | Approve an exact source list and revisions; record authorship and AI/source context; write Protocol v0 from requirements rather than current module structure |
 | `docs/protocol/agent-gateway-v0/**` | Newly authored schema/documentation draft in this AGPL repository; input manifest and reconstructed requirements are unapproved and the authoring context is not yet clean-room evidence | **PUBLIC SPEC/REFERENCE incubator**, non-publishable | **YELLOW** for review in this repository only | **RED** for extraction, relicensing, package publication, SDK generation, or private implementation input | **RED** | Approve `PROTOCOL_V0_INPUT_MANIFEST.json` and `REQUIREMENTS.md`; independently verify/re-derive schema mappings; close `PV0-G01`–`PV0-G10` before boundary use |
@@ -83,13 +83,16 @@ The current package inventory is mixed:
   the desktop application.
 - MIT metadata with Stagewise attribution is present on `agent-core`,
   `agent-shell`, the Node agent runtime, and Karton.
-- MIT metadata without complete component-registry or package-level notice
-  evidence is present on `mcp-runtime`, `runner-sdk`, and build support
-  packages.
-- License metadata is missing from `api-client`, `clodex-cli`, `stage-ui`, the
-  update server, website, and all local Nucleo packages.
-- Only `packages/karton/LICENSE.md` was found as a package-level license file in
-  the audited application/package roots.
+- MIT metadata without complete component-registry evidence is present on
+  `mcp-runtime`, `runner-sdk`, and build support packages; `mcp-runtime` now
+  carries a package-level MIT file.
+- License metadata is missing from `clodex-cli`, the update server, and website.
+  `api-client` and `stage-ui` now declare AGPL-3.0-only. The former local Nucleo
+  packages are removed, so their redistribution evidence status is
+  `NOT_REQUIRED`, not approved.
+- Package-level license files are now present for Karton, `agent-core`,
+  `agent-shell`, the Node agent runtime, and `mcp-runtime`; this does not by
+  itself close their component-history or independent-publication audits.
 
 Package metadata is evidence, not proof of origin or relicensing authority.
 Missing metadata does not prove infringement, but it is a hard engineering
@@ -97,21 +100,28 @@ blocker for independent publication and private-boundary claims.
 
 ## Desktop attribution release gate
 
-The desktop build currently has a material attribution gap:
+The source-tree OCB-006 gaps are now engineering-closed:
 
-1. `THIRD-PARTY-NOTICES.md` records Stagewise lineage, but
-   `apps/browser/forge.config.mts` does not explicitly copy it,
-   `CLODEX_VS_UPSTREAM.md`, or the Karton license into packaged resources.
-2. The generated license UI intentionally excludes all `@clodex/*` packages
-   as build-only. That also excludes Stagewise-attributed `agent-core`,
-   `agent-shell`, Karton, and legacy `stage-ui` from the generated list.
-3. The generator accepts `Unknown` and empty license text instead of failing
-   the release.
-4. Local Nucleo packages have no license fields or package-level notices even
-   though they are referenced by desktop and website workspaces.
+1. Forge copies the root AGPL license, Stagewise lineage, Karton license,
+   contributors, reviewed npm overrides, Nucleo evidence, and reviewed
+   non-npm bundled-component evidence into packaged resources.
+2. Unknown/missing license declarations or text, evidence/hash drift, mutable
+   bundled-source pins, platform mismatch, unreviewed native/binary files, and
+   attribution-manifest laundering fail closed.
+3. `vscode-eslint` and all nine packages in its exact production lock are bound
+   to an immutable source revision, npm integrities, tarball/license SHA-256
+   values, and generated-file provenance. Source-map inspection proves seven
+   are emitted and gives only those seven CycloneDX parent/child records; two
+   remain explicitly production-lock-only. The Windows VCRuntime NuGet archive
+   and five copied DLLs are independently pinned and inventoried.
+4. Nucleo packages/imports/assets are absent. No right is invented; obvious
+   future package/import/key/name signals reactivate the `APPROVED` evidence
+   requirement, while renamed vendor content remains a manual artifact-review
+   obligation.
 
-Therefore a distributable desktop release remains **RED** for provenance until
-all of the following are demonstrated from the final installer/app bundle:
+A distributable desktop release still remains **YELLOW / NOT PROMOTABLE** until
+all of the following are demonstrated from the exact final installer/app
+bundle:
 
 - the root AGPL license and all required upstream/package notices are present
   and user-accessible;
@@ -122,7 +132,9 @@ all of the following are demonstrated from the final installer/app bundle:
 - the generated inventory is based on the actual packaged artifact, not only
   declared workspace dependencies; and
 - release evidence archives the notice bundle, SBOM, hashes, and the exact
-  source revision.
+  source revision; and
+- the release owner and specialist counsel close residual terms reviews,
+  including the conditional Microsoft runtime redistribution determination.
 
 ## Gates and ownership
 
