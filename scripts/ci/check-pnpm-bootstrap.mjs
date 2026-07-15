@@ -1,6 +1,17 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const ignoredLockfileScanDirectories = new Set([
+  '.git',
+  '.next',
+  '.turbo',
+  'build',
+  'coverage',
+  'dist',
+  'node_modules',
+  'out',
+]);
 
 function hasEntries(value) {
   return Boolean(
@@ -8,8 +19,47 @@ function hasEntries(value) {
   );
 }
 
+function findNestedPnpmLockfiles(
+  directory,
+  relativeDirectory = '',
+  results = [],
+) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const relativePath = relativeDirectory
+      ? `${relativeDirectory}/${entry.name}`
+      : entry.name;
+    const absolutePath = join(directory, entry.name);
+
+    if (entry.isDirectory()) {
+      if (ignoredLockfileScanDirectories.has(entry.name)) continue;
+      findNestedPnpmLockfiles(absolutePath, relativePath, results);
+      continue;
+    }
+
+    if (
+      entry.isFile() &&
+      entry.name === 'pnpm-lock.yaml' &&
+      relativePath !== 'pnpm-lock.yaml'
+    ) {
+      results.push(relativePath);
+    }
+  }
+  return results;
+}
+
 export function checkPnpmBootstrap(rootDirectory) {
   const errors = [];
+
+  // This repository is a single pnpm workspace and the root lockfile is the
+  // only dependency graph CI and release tooling install. A nested workspace
+  // lockfile can silently retain vulnerable versions that `pnpm audit` at the
+  // root never sees, so reject those stale alternate graphs before setup.
+  for (const nestedLockfile of findNestedPnpmLockfiles(rootDirectory)) {
+    errors.push(
+      `${nestedLockfile}: nested workspace lockfiles are not allowed; use the root pnpm-lock.yaml`,
+    );
+  }
+
   for (const filename of ['.pnpmfile.cjs', '.pnpmfile.js']) {
     if (existsSync(join(rootDirectory, filename))) {
       errors.push(`${filename}: pnpm manifest-rewrite hooks are not allowed`);
