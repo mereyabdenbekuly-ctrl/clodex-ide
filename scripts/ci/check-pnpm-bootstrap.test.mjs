@@ -134,6 +134,33 @@ test('rejects tracked lockfiles even inside ignored generated and dependency tre
   ]);
 });
 
+test('rejects root and nested npm lockfiles', () => {
+  const root = fixture();
+  writeFileSync(join(root, 'package-lock.json'), '{}\n');
+  const nested = join(root, 'apps', 'update-server', 'package-lock.json');
+  mkdirSync(dirname(nested), { recursive: true });
+  writeFileSync(nested, '{}\n');
+
+  assert.deepEqual(checkPnpmBootstrap(root), [
+    'apps/update-server/package-lock.json: npm lockfiles are not allowed; use the root pnpm-lock.yaml',
+    'package-lock.json: npm lockfiles are not allowed; use the root pnpm-lock.yaml',
+  ]);
+});
+
+test('rejects tracked npm lockfiles inside ignored generated trees', () => {
+  const root = fixture();
+  const lockfile = 'apps/update-server/dist/package-lock.json';
+  const absolutePath = join(root, lockfile);
+  mkdirSync(dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, '{}\n');
+  execFileSync('git', ['init', '--quiet'], { cwd: root });
+  execFileSync('git', ['add', '--', lockfile], { cwd: root });
+
+  assert.deepEqual(checkPnpmBootstrap(root), [
+    'apps/update-server/dist/package-lock.json: npm lockfiles are not allowed; use the root pnpm-lock.yaml',
+  ]);
+});
+
 test('rejects root and workspace config dependencies', () => {
   const root = fixture();
   writeFileSync(

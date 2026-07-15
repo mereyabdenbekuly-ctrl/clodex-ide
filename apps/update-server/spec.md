@@ -125,3 +125,10 @@ HASH FILE_URL SIZE
 - `HASH`: The hash of the nupkg update file. This hash is included in the GitHub releases provided "RELEASE*" file for the given arch. Keep it as is.
 - `FILE_URL`: The URL to the update file. The GitHub releases povided "RELEASE*" files will only include the filename. Replace with full path to the nupkg artifact asset of the given release.
 - `SIZE`: Size of the update file. Keep it as is from the "RELEAES*" file.
+
+## Deployment integrity
+
+The production image build, immutable toolchain inputs, canonical pnpm graph,
+and runtime-image SBOM contract are defined in
+[`DEPLOYMENT.md`](./DEPLOYMENT.md). The only supported Docker build context is
+the repository root.
