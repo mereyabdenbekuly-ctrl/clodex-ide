@@ -1639,7 +1639,7 @@ test('final Windows SBOM verifies every pinned VCRuntime DLL', async () => {
 
     const unexpectedDllPath = path.join(
       applicationDirectory,
-      'msvcp140_atomic_wait.dll',
+      'MSVCP140_ATOMIC_WAIT.DLL',
     );
     writeText(unexpectedDllPath, 'unreviewed extra runtime\n');
     await assert.rejects(

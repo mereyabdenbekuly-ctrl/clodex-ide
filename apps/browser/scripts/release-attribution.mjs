@@ -784,7 +784,7 @@ export function loadBundledComponentRegistry({
         } else {
           try {
             safeRelativePath(exclusiveMatch.path);
-            new RegExp(exclusiveMatch.fileNamePattern);
+            new RegExp(exclusiveMatch.fileNamePattern, 'iu');
           } catch (error) {
             componentBlockers.push({
               code: 'BUNDLED_COMPONENT_EXCLUSIVE_MATCH_UNSAFE',
@@ -2656,7 +2656,10 @@ export function inspectBundledComponentArtifacts({
         ),
       ),
     );
-    const pattern = new RegExp(policy.exclusiveFileMatch.fileNamePattern);
+    // Windows artifact names are case-insensitive. Apply the exclusive policy
+    // portably so an upper-case unreviewed runtime DLL cannot bypass a review
+    // performed on a case-sensitive validation host.
+    const pattern = new RegExp(policy.exclusiveFileMatch.fileNamePattern, 'iu');
     const unexpected = readdirSync(exclusiveDirectory, {
       withFileTypes: true,
     })
