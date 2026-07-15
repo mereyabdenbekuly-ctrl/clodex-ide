@@ -117,5 +117,8 @@ jobs:
       - name: Test boundary checker
         run: pnpm test:boundaries
 
+      - name: Validate update-server deploy graph
+        run: pnpm check:update-server-deploy
+
       - name: Enforce Clodex package boundaries
         run: pnpm check:boundaries

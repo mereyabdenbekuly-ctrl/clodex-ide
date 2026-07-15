@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "node": {
+    "version": "22.23.1",
+    "image": "node:22.23.1-alpine3.23",
+    "manifestDigest": "sha256:8516dce0483394d5708d4b2ee6cacb79fb1d617ea4e2787c2120bcca92ce372e"
+  },
+  "pnpm": {
+    "version": "10.30.3",
+    "lockfile": "pnpm-lock.yaml"
+  },
+  "githubCli": {
+    "version": "2.96.0",
+    "sourceBaseUrl": "https://github.com/cli/cli/releases/download/v2.96.0",
+    "archives": {
+      "amd64": {
+        "file": "gh_2.96.0_linux_amd64.tar.gz",
+        "sha256": "83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60"
+      },
+      "arm64": {
+        "file": "gh_2.96.0_linux_arm64.tar.gz",
+        "sha256": "06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909"
+      }
+    },
+    "requiredAttestationFlags": [
+      "--deny-self-hosted-runners",
+      "--signer-digest",
+      "--signer-workflow",
+      "--source-digest",
+      "--source-ref"
+    ]
+  },
+  "syft": {
+    "version": "1.46.0",
+    "sourceBaseUrl": "https://github.com/anchore/syft/releases/download/v1.46.0",
+    "archives": {
+      "darwin-amd64": {
+        "file": "syft_1.46.0_darwin_amd64.tar.gz",
+        "sha256": "5c983db13533de02e5331aae88091116f25365840741f86234084a30166672a7"
+      },
+      "darwin-arm64": {
+        "file": "syft_1.46.0_darwin_arm64.tar.gz",
+        "sha256": "cd4e2c40e075684a5746d8959f76b6572bb2d2dda8cf6877dbfff1cc0baeea01"
+      },
+      "linux-amd64": {
+        "file": "syft_1.46.0_linux_amd64.tar.gz",
+        "sha256": "d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca"
+      },
+      "linux-arm64": {
+        "file": "syft_1.46.0_linux_arm64.tar.gz",
+        "sha256": "9fafef4db4f032ce81008d3a1529985d41ceb6ccdf2b388c9ce2f1ed7d32082e"
+      }
+    }
+  },
+  "runtime": {
+    "application": {
+      "name": "@clodex/update-server",
+      "version": "1.0.0"
+    },
+    "requiredNodePackages": {
+      "express": "5.2.1",
+      "semver": "7.7.3"
+    },
+    "forbiddenNodePackages": [
+      "@types/express",
+      "@types/node",
+      "@types/semver",
+      "tsx",
+      "typescript",
+      "vitest"
+    ]
+  }
+}

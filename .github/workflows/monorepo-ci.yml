@@ -113,6 +113,9 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
+      - name: Validate update-server deploy graph
+        run: pnpm check:update-server-deploy
+
       - name: Run Biome Check
         run: pnpm check
 
@@ -172,6 +175,20 @@ jobs:
 
       - name: Build All Packages
         run: pnpm build
+
+      - name: Build update-server runtime image and SBOM
+        run: scripts/ci/build-update-server-image.sh
+
+      - name: Upload update-server image inspection
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: update-server-image-inspection-${{ github.sha }}
+          path: |
+            security-reports/update-server-image/update-server.cyclonedx.json
+            security-reports/update-server-image/update-server-image-inspection.json
+          retention-days: 30
+          if-no-files-found: error
 
       - name: Cache Build Artifacts
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4

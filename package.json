@@ -25,7 +25,7 @@
     "typecheck": "turbo run typecheck",
     "typecheck:scripts": "tsc --project scripts/release/tsconfig.json --noEmit",
     "test": "turbo run test",
-    "test:boundaries": "node --test scripts/ci/check-clodex-boundaries.test.mjs scripts/ci/check-pnpm-bootstrap.test.mjs",
+    "test:boundaries": "node --test scripts/ci/check-clodex-boundaries.test.mjs scripts/ci/check-pnpm-bootstrap.test.mjs scripts/ci/check-update-server-deploy.test.mjs scripts/ci/validate-update-server-sbom.test.mjs",
     "copy-readme": "ts-node --esm scripts/copy-readme.ts",
     "version:clodex": "tsx scripts/release/index.ts --package clodex",
     "version:clodex:alpha": "tsx scripts/release/index.ts --package clodex --channel alpha",
@@ -45,7 +45,8 @@
     "security:secrets:history": "scripts/security/scan-secrets.sh history",
     "security:dependencies": "node scripts/security/audit-production-dependencies.mjs",
     "security:dependencies:test": "node --test scripts/security/audit-production-dependencies.test.mjs",
-    "postinstall": "node -e \"const{chmodSync,existsSync}=require('fs');const p='node_modules/node-pty/prebuilds/'+process.platform+'-'+process.arch+'/spawn-helper';try{if(existsSync(p)){chmodSync(p,0o755);console.log('node-pty: fixed spawn-helper permissions')}}catch(e){console.warn('node-pty: spawn-helper chmod failed:',e.message)}\""
+    "postinstall": "node -e \"const{chmodSync,existsSync}=require('fs');const p='node_modules/node-pty/prebuilds/'+process.platform+'-'+process.arch+'/spawn-helper';try{if(existsSync(p)){chmodSync(p,0o755);console.log('node-pty: fixed spawn-helper permissions')}}catch(e){console.warn('node-pty: spawn-helper chmod failed:',e.message)}\"",
+    "check:update-server-deploy": "node scripts/ci/check-update-server-deploy.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.15",

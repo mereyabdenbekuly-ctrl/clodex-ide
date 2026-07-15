@@ -1,0 +1,12 @@
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!.npmrc
+!apps/
+!apps/update-server/
+!apps/update-server/package.json
+!apps/update-server/tsconfig.json
+!apps/update-server/deploy-toolchain.json
+!apps/update-server/src/
+!apps/update-server/src/**
