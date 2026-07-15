@@ -1,8 +1,9 @@
 # OCB-006 desktop attribution and SBOM gate
 
 **Status:** source-tree strict gate GREEN (835 macOS arm64 components: 834
-package versions plus the bundled `vscode-eslint` server, whose 9 embedded
-production dependencies are separately license/integrity bound; 0 blockers);
+package versions plus the bundled `vscode-eslint` server; its 9 exact
+production-lock packages are license/integrity bound and 7 are proven emitted;
+0 blockers);
 final artifact evidence must still pass before a distributable build can be
 promoted
 
@@ -46,7 +47,8 @@ compatibility package backed exclusively by the separately inventoried
 `lucide-react` dependency. Unused placeholder SVGs and the local custom GitHub
 SVG were not moved; the GitHub icon now uses Lucide.
 
-If a future change adds any `nucleo-*` dependency, the gate becomes applicable
+If a future change adds an obvious `nucleo-*` or `@nucleo/*` dependency/import,
+license-key path, or Nucleo-named asset, the automated gate becomes applicable
 again and can become green only through one of these reviewed changes:
 
 - replace/remove every Nucleo package and prove the final artifact contains none;
@@ -58,6 +60,10 @@ again and can become green only through one of these reviewed changes:
 
 Changing the JSON status without the underlying evidence is a release-policy
 violation.
+
+The source scan is defense in depth, not a claim that renamed or obfuscated
+vendor assets can always be identified automatically. Final-artifact inspection
+and accountable release review remain mandatory for that class of evidence.
 
 ## Exact-version license supplements
 
@@ -108,9 +114,20 @@ runtime material that package-manifest traversal cannot discover:
   and the exact upstream MIT text. The build emits `provenance.json` with the
   byte count and SHA-256 of every generated file and the exact before/after
   hashes for its reviewed Node 22 webpack transform. Final validation rejects
-  missing, extra, or changed bundle files. Its exact archived server lock and
-  nine production packages are also integrity/license bound and emitted as
-  child CycloneDX components;
+  missing, extra, or changed bundle files. Every invocation downloads and
+  verifies the immutable archive again; local bundle/provenance files never
+  authorize a skip. Extraction runs from the verified in-memory bytes in a
+  per-run private directory, rejects traversal, filesystem aliases, path/type
+  collisions, unreviewed symlinks, special entries, and resource-limit drift,
+  and materializes only the two exact reviewed upstream symlinks.
+  Same-filesystem staging, lock, and rollback state lives outside the packaged
+  `bundled/` tree; stale work fails closed, and the bundled-assets validator
+  independently rejects reserved work-state siblings before packaging. The
+  exact archived server lock and
+  nine production packages are integrity/license bound. Source-map inspection
+  currently proves seven are emitted by webpack; only those seven become child
+  CycloneDX components, while `lru-cache` and `yallist` remain explicitly
+  classified as production-lock-only evidence;
 - Windows x64 `VCRuntime.CefSharp.140` `1.0.5` is bound to the exact NuGet URL,
   archive SHA-256, NuGet catalog SHA-512, exact nuspec, signature-entry hash,
   and five independently pinned DLLs. The package metadata and project MIT text

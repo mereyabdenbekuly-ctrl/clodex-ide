@@ -71,12 +71,16 @@ Implemented in OCB-006:
 - added a fail-closed dependency-license inventory and packaged notice bundle;
 - added final-artifact attribution checks and CycloneDX SBOM generation;
 - retained Electron and Chromium runtime notices in packaged resources;
-- made future `nucleo-*` use fail closed without exact approved evidence.
+- made obvious future `nucleo-*`/`@nucleo/*` package, import, key, or named-asset
+  signals fail closed without exact approved evidence, while retaining manual
+  final-artifact review for renamed vendor content.
 
 The source-tree strict gate now reports 835 macOS arm64 components (834 package
-versions plus the bundled `vscode-eslint` server, with its 9 embedded production
-dependencies separately pinned and represented in CycloneDX) and zero
-blockers on macOS arm64. That graph applies 42 reviewed exact-version records;
+versions plus the bundled `vscode-eslint` server) and zero blockers on macOS
+arm64. The archived server lock has nine separately pinned production packages;
+source-map inspection proves seven are emitted and only those seven are
+represented as child components in CycloneDX. That graph applies 42 reviewed
+exact-version records;
 the 54-record registry also covers supported release-matrix and exact lockfile
 variants not present in this host inventory. It supplies pinned public evidence
 only where an exact tarball omitted text or metadata. The Linux x64 CI graph

@@ -26,6 +26,16 @@
         "sourceReferences": [
           "https://github.com/microsoft/vscode-eslint/tree/790646388696511b2665a4d119bf0fb713dd990d",
           "https://github.com/microsoft/vscode-eslint/releases/tag/release%2F3.0.10"
+        ],
+        "materializedSymlinks": [
+          {
+            "path": "client/src/shared",
+            "target": "../../$shared/"
+          },
+          {
+            "path": "server/src/shared",
+            "target": "../../$shared/"
+          }
         ]
       },
       "licenseEvidence": {
@@ -119,7 +129,8 @@
               "https://registry.npmjs.org/lru-cache/-/lru-cache-6.0.0.tgz",
               "https://www.npmjs.com/package/lru-cache/v/6.0.0"
             ]
-          }
+          },
+          "bundleScope": "production-lock-only"
         },
         {
           "name": "semver",
@@ -142,7 +153,8 @@
               "https://registry.npmjs.org/semver/-/semver-7.6.0.tgz",
               "https://www.npmjs.com/package/semver/v/7.6.0"
             ]
-          }
+          },
+          "bundleScope": "embedded"
         },
         {
           "name": "vscode-jsonrpc",
@@ -165,7 +177,8 @@
               "https://registry.npmjs.org/vscode-jsonrpc/-/vscode-jsonrpc-9.0.0-next.4.tgz",
               "https://www.npmjs.com/package/vscode-jsonrpc/v/9.0.0-next.4"
             ]
-          }
+          },
+          "bundleScope": "embedded"
         },
         {
           "name": "vscode-languageserver",
@@ -188,7 +201,8 @@
               "https://registry.npmjs.org/vscode-languageserver/-/vscode-languageserver-10.0.0-next.6.tgz",
               "https://www.npmjs.com/package/vscode-languageserver/v/10.0.0-next.6"
             ]
-          }
+          },
+          "bundleScope": "embedded"
         },
         {
           "name": "vscode-languageserver-protocol",
@@ -211,7 +225,8 @@
               "https://registry.npmjs.org/vscode-languageserver-protocol/-/vscode-languageserver-protocol-3.17.6-next.6.tgz",
               "https://www.npmjs.com/package/vscode-languageserver-protocol/v/3.17.6-next.6"
             ]
-          }
+          },
+          "bundleScope": "embedded"
         },
         {
           "name": "vscode-languageserver-textdocument",
@@ -234,7 +249,8 @@
               "https://registry.npmjs.org/vscode-languageserver-textdocument/-/vscode-languageserver-textdocument-1.0.11.tgz",
               "https://www.npmjs.com/package/vscode-languageserver-textdocument/v/1.0.11"
             ]
-          }
+          },
+          "bundleScope": "embedded"
         },
         {
           "name": "vscode-languageserver-types",
@@ -257,7 +273,8 @@
               "https://registry.npmjs.org/vscode-languageserver-types/-/vscode-languageserver-types-3.17.6-next.4.tgz",
               "https://www.npmjs.com/package/vscode-languageserver-types/v/3.17.6-next.4"
             ]
-          }
+          },
+          "bundleScope": "embedded"
         },
         {
           "name": "vscode-uri",
@@ -280,7 +297,8 @@
               "https://registry.npmjs.org/vscode-uri/-/vscode-uri-3.0.8.tgz",
               "https://www.npmjs.com/package/vscode-uri/v/3.0.8"
             ]
-          }
+          },
+          "bundleScope": "embedded"
         },
         {
           "name": "yallist",
@@ -303,7 +321,8 @@
               "https://registry.npmjs.org/yallist/-/yallist-4.0.0.tgz",
               "https://www.npmjs.com/package/yallist/v/4.0.0"
             ]
-          }
+          },
+          "bundleScope": "production-lock-only"
         }
       ]
     },

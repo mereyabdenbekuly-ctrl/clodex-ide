@@ -23,7 +23,7 @@
     "release:notarize:dmg": "node scripts/notarize-macos-dmg.mjs",
     "release:attribution:check": "node scripts/release-attribution.mjs check",
     "release:attribution:prepare": "node scripts/release-attribution.mjs prepare",
-    "release:attribution:test": "node --test scripts/release-attribution.test.mjs scripts/release-publication.test.mjs",
+    "release:attribution:test": "node --test scripts/release-attribution.test.mjs scripts/release-publication.test.mjs scripts/safe-zip-extractor.test.mjs",
     "release:publication:test": "node --test scripts/release-publication.test.mjs",
     "release:validate:artifacts": "node scripts/validate-release-artifacts.mjs",
     "release:validate:macos": "node scripts/validate-macos-release.mjs",

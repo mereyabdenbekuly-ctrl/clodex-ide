@@ -5,7 +5,7 @@
  * archive and emits a provenance manifest for final-artifact verification.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -17,6 +17,7 @@ import {
   verifyBundledComponentSourceBytes,
   verifyBundledEmbeddedDependencySourceBytes,
 } from './release-attribution.mjs';
+import { extractVerifiedZipArchive } from './safe-zip-extractor.mjs';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const browserDirectory = path.resolve(scriptDirectory, '..');
@@ -43,6 +44,13 @@ const component = (() => {
 if (component.source.type !== 'git-archive') {
   throw new Error('vscode-eslint-server must use an immutable Git archive.');
 }
+const immutableRevision = (() => {
+  const revision = component.source.immutableRevision;
+  if (!revision) {
+    throw new Error('vscode-eslint-server has no immutable Git revision.');
+  }
+  return revision;
+})();
 const webpackTransform = (() => {
   const reviewedTransform = component.buildTransforms?.find(
     (entry) => entry.id === 'node22-ts-loader-transpile-only',
@@ -56,11 +64,12 @@ const webpackTransform = (() => {
 })();
 
 const bundleDirectory = path.join(browserDirectory, 'bundled', 'eslint-server');
-const tempDirectory = path.join(
-  os.tmpdir(),
-  `clodex-eslint-build-${component.source.immutableRevision}`,
-);
+const bundleParentDirectory = path.dirname(bundleDirectory);
+const bundleWorkDirectory = path.join(browserDirectory, '.eslint-server-work');
+const buildLockPath = path.join(bundleWorkDirectory, 'build.lock');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const maximumSourceArchiveBytes = 64 * 1024 * 1024;
+const maximumDependencyArchiveBytes = 25 * 1024 * 1024;
 
 const colors = {
   reset: '\x1b[0m',
@@ -85,6 +94,49 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function readBoundedResponseBytes(
+  response: Response,
+  maximumBytes: number,
+  label: string,
+): Promise<Uint8Array> {
+  const contentLength = response.headers.get('content-length');
+  if (contentLength && /^\d+$/u.test(contentLength)) {
+    const declaredBytes = Number(contentLength);
+    if (!Number.isSafeInteger(declaredBytes) || declaredBytes > maximumBytes) {
+      throw new Error(`${label} declares more than ${maximumBytes} bytes.`);
+    }
+  }
+  if (!response.body) {
+    throw new Error(`${label} response has no body.`);
+  }
+  const chunks: Uint8Array[] = [];
+  const reader = response.body.getReader();
+  let byteCount = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteCount += value.byteLength;
+      if (byteCount > maximumBytes) {
+        await reader
+          .cancel(`${label} exceeds ${maximumBytes} bytes.`)
+          .catch(() => undefined);
+        throw new Error(`${label} exceeds ${maximumBytes} bytes.`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(byteCount);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 async function copyDirectory(source: string, destination: string) {
@@ -187,12 +239,11 @@ async function verifyEmbeddedDependencies(serverDirectory: string) {
         `Failed to download embedded dependency ${dependency.name}@${dependency.version}: ${packageResponse.status} ${packageResponse.statusText}`,
       );
     }
-    const packageBytes = new Uint8Array(await packageResponse.arrayBuffer());
-    if (packageBytes.byteLength > 25 * 1024 * 1024) {
-      throw new Error(
-        `Embedded dependency archive exceeds 25 MiB: ${dependency.name}@${dependency.version}`,
-      );
-    }
+    const packageBytes = await readBoundedResponseBytes(
+      packageResponse,
+      maximumDependencyArchiveBytes,
+      `Embedded dependency archive ${dependency.name}@${dependency.version}`,
+    );
     verifyBundledEmbeddedDependencySourceBytes({
       bytes: packageBytes,
       componentId: component.id,
@@ -243,26 +294,106 @@ async function verifyEmbeddedDependencies(serverDirectory: string) {
   return embeddedDependencyProvenance();
 }
 
-async function assertExistingBundleIsReviewed(): Promise<boolean> {
-  const serverPath = path.join(bundleDirectory, 'eslintServer.cjs');
-  const provenancePath = path.join(bundleDirectory, 'provenance.json');
-  const licensePath = path.join(bundleDirectory, 'License.txt');
-  const anyExists = await Promise.all(
-    [serverPath, provenancePath, licensePath].map(fileExists),
+async function verifyBundledModuleCoverage(sourceMapPath: string) {
+  const sourceMap = JSON.parse(await fs.readFile(sourceMapPath, 'utf8')) as {
+    sources?: unknown;
+  };
+  if (!Array.isArray(sourceMap.sources)) {
+    throw new Error('Generated ESLint source map has no sources array.');
+  }
+  const actualNames = new Set<string>();
+  for (const value of sourceMap.sources) {
+    if (typeof value !== 'string') {
+      throw new Error(
+        'Generated ESLint source map contains a non-string source.',
+      );
+    }
+    const normalized = value.replaceAll('\\', '/');
+    const marker = '/node_modules/';
+    const markerIndex = normalized.lastIndexOf(marker);
+    if (markerIndex < 0) continue;
+    const packagePath = normalized.slice(markerIndex + marker.length);
+    const segments = packagePath.split('/');
+    const packageName = packagePath.startsWith('@')
+      ? `${segments[0]}/${segments[1]}`
+      : segments[0];
+    if (!packageName || packageName.endsWith('/undefined')) {
+      throw new Error(`Unable to identify bundled package from ${value}`);
+    }
+    actualNames.add(packageName);
+  }
+  const expectedNames = (component.embeddedDependencies ?? [])
+    .filter((dependency) => dependency.bundleScope === 'embedded')
+    .map((dependency) => dependency.name)
+    .sort();
+  const observedNames = [...actualNames].sort();
+  if (JSON.stringify(observedNames) !== JSON.stringify(expectedNames)) {
+    throw new Error(
+      `Generated ESLint bundle dependency set changed: expected ${expectedNames.join(', ')}; got ${observedNames.join(', ')}`,
+    );
+  }
+  return observedNames;
+}
+
+async function installVerifiedBundleDirectory(
+  stagedBundleDirectory: string,
+  stagedReport: ReturnType<typeof inspectBundledComponentArtifacts>,
+) {
+  const backupDirectory = path.join(
+    bundleWorkDirectory,
+    `backup-${randomUUID()}`,
   );
-  if (!anyExists.some(Boolean)) return false;
+  const hadExistingBundle = await fileExists(bundleDirectory);
+  let installedStagedBundle = false;
+  let movedExistingBundle = false;
+  let installedReport: ReturnType<typeof inspectBundledComponentArtifacts>;
   try {
-    inspectBundledComponentArtifacts({
+    if (hadExistingBundle) {
+      await fs.rename(bundleDirectory, backupDirectory);
+      movedExistingBundle = true;
+    }
+    await fs.rename(stagedBundleDirectory, bundleDirectory);
+    installedStagedBundle = true;
+    installedReport = inspectBundledComponentArtifacts({
       applicationDirectory: browserDirectory,
       component,
       resourcesDirectory: browserDirectory,
     });
+    if (JSON.stringify(installedReport) !== JSON.stringify(stagedReport)) {
+      throw new Error(
+        'Installed ESLint bundle report differs from the verified staged report.',
+      );
+    }
   } catch (error) {
-    throw new Error(
-      `Existing vscode-eslint bundle is incomplete or stale; remove ${bundleDirectory} before rebuilding: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const rollbackErrors: unknown[] = [];
+    if (installedStagedBundle) {
+      await fs
+        .rm(bundleDirectory, { force: true, recursive: true })
+        .catch((rollbackError) => rollbackErrors.push(rollbackError));
+    }
+    if (movedExistingBundle) {
+      await fs
+        .rename(backupDirectory, bundleDirectory)
+        .catch((rollbackError) => rollbackErrors.push(rollbackError));
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        'Failed to install and fully roll back the verified ESLint bundle.',
+      );
+    }
+    throw error;
   }
-  return true;
+  if (movedExistingBundle) {
+    try {
+      await fs.rm(backupDirectory, { recursive: true });
+    } catch (error) {
+      throw new Error(
+        `Verified ESLint bundle is installed, but the old backup could not be removed from ${backupDirectory}; refusing to continue until it is inspected and removed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return installedReport;
 }
 
 async function main() {
@@ -270,17 +401,32 @@ async function main() {
   log('  Bundling pinned ESLint LSP Server', colors.cyan);
   log('===========================================\n', colors.cyan);
 
-  if (await assertExistingBundleIsReviewed()) {
-    log(
-      'Reviewed ESLint server bundle already exists; skipping.\n',
-      colors.green,
+  await fs.mkdir(bundleParentDirectory, { recursive: true });
+  await fs.mkdir(bundleWorkDirectory, { mode: 0o700, recursive: true });
+  const buildLock = await fs.open(buildLockPath, 'wx', 0o600).catch((error) => {
+    throw new Error(
+      `Another ESLint bundle build is active or left a stale lock at ${buildLockPath}: ${error instanceof Error ? error.message : String(error)}`,
     );
-    return;
-  }
-
-  await fs.rm(tempDirectory, { recursive: true, force: true });
-  await fs.mkdir(tempDirectory, { recursive: true });
+  });
+  let operationError: unknown;
+  let stagingRoot: string | undefined;
+  let tempDirectory: string | undefined;
   try {
+    const staleWorkEntries = (await fs.readdir(bundleWorkDirectory)).filter(
+      (entry) => entry !== path.basename(buildLockPath),
+    );
+    if (staleWorkEntries.length > 0) {
+      throw new Error(
+        `Stale ESLint bundle work state must be inspected and removed before building: ${staleWorkEntries.join(', ')}`,
+      );
+    }
+    tempDirectory = await fs.mkdtemp(
+      path.join(
+        os.tmpdir(),
+        `clodex-eslint-build-${immutableRevision.slice(0, 12)}-`,
+      ),
+    );
+    stagingRoot = await fs.mkdtemp(path.join(bundleWorkDirectory, 'stage-'));
     log('Downloading immutable vscode-eslint source archive...', colors.blue);
     const response = await fetch(component.source.url);
     if (!response.ok) {
@@ -288,23 +434,25 @@ async function main() {
         `Failed to download vscode-eslint: ${response.status} ${response.statusText}`,
       );
     }
-    const archiveBytes = new Uint8Array(await response.arrayBuffer());
+    const archiveBytes = await readBoundedResponseBytes(
+      response,
+      maximumSourceArchiveBytes,
+      'vscode-eslint source archive',
+    );
     const archiveVerification = verifyBundledComponentSourceBytes({
       bytes: archiveBytes,
       component,
     });
-    const archivePath = path.join(tempDirectory, 'vscode-eslint.zip');
-    await fs.writeFile(archivePath, archiveBytes);
     log(`  Verified SHA-256 ${archiveVerification.sha256}\n`, colors.green);
 
-    log('Extracting verified archive...', colors.blue);
-    execFileSync('unzip', ['-q', archivePath, '-d', tempDirectory], {
-      stdio: 'inherit',
+    log('Safely extracting verified archive bytes...', colors.blue);
+    const extractedDirectory = path.join(tempDirectory, 'source');
+    await extractVerifiedZipArchive({
+      allowedSymlinks: component.source.materializedSymlinks ?? [],
+      archiveBytes,
+      archiveRoot: `vscode-eslint-${immutableRevision}`,
+      destination: extractedDirectory,
     });
-    const extractedDirectory = path.join(
-      tempDirectory,
-      `vscode-eslint-${component.source.immutableRevision}`,
-    );
     const serverDirectory = path.join(extractedDirectory, 'server');
     const upstreamManifest = JSON.parse(
       await fs.readFile(path.join(extractedDirectory, 'package.json'), 'utf8'),
@@ -392,10 +540,15 @@ async function main() {
       { cwd: serverDirectory, stdio: 'inherit' },
     );
 
-    await fs.rm(bundleDirectory, { recursive: true, force: true });
-    await copyDirectory(outputDirectory, bundleDirectory);
-    const javascriptPath = path.join(bundleDirectory, 'eslintServer.js');
-    const commonJsPath = path.join(bundleDirectory, 'eslintServer.cjs');
+    const stagedResourcesDirectory = path.join(stagingRoot, 'resources');
+    const stagedBundleDirectory = path.join(
+      stagedResourcesDirectory,
+      'bundled',
+      'eslint-server',
+    );
+    await copyDirectory(outputDirectory, stagedBundleDirectory);
+    const javascriptPath = path.join(stagedBundleDirectory, 'eslintServer.js');
+    const commonJsPath = path.join(stagedBundleDirectory, 'eslintServer.cjs');
     if (!(await fileExists(javascriptPath))) {
       throw new Error(
         'Pinned vscode-eslint build produced no eslintServer.js.',
@@ -404,18 +557,21 @@ async function main() {
     await fs.rename(javascriptPath, commonJsPath);
     await fs.copyFile(
       upstreamLicensePath,
-      path.join(bundleDirectory, 'License.txt'),
+      path.join(stagedBundleDirectory, 'License.txt'),
     );
 
-    const artifacts = await collectGeneratedArtifacts(bundleDirectory);
+    const embeddedModuleNames = await verifyBundledModuleCoverage(
+      path.join(stagedBundleDirectory, 'eslintServer.js.map'),
+    );
+    const artifacts = await collectGeneratedArtifacts(stagedBundleDirectory);
     if (!artifacts.some((artifact) => artifact.path === 'eslintServer.cjs')) {
       throw new Error('Generated ESLint provenance has no eslintServer.cjs.');
     }
     await fs.writeFile(
-      path.join(bundleDirectory, 'provenance.json'),
+      path.join(stagedBundleDirectory, 'provenance.json'),
       `${JSON.stringify(
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           componentId: component.id,
           name: component.name,
           version: component.version,
@@ -424,6 +580,7 @@ async function main() {
           buildTransforms: component.buildTransforms,
           embeddedDependencyLock: component.embeddedDependencyLock,
           embeddedDependencies,
+          embeddedModuleNames,
           licenseEvidence: component.licenseEvidence,
           artifacts,
         },
@@ -432,17 +589,53 @@ async function main() {
       )}\n`,
     );
 
-    const report = inspectBundledComponentArtifacts({
-      applicationDirectory: browserDirectory,
+    const stagedReport = inspectBundledComponentArtifacts({
+      applicationDirectory: stagedResourcesDirectory,
       component,
-      resourcesDirectory: browserDirectory,
+      resourcesDirectory: stagedResourcesDirectory,
     });
+    const report = await installVerifiedBundleDirectory(
+      stagedBundleDirectory,
+      stagedReport,
+    );
     log(
       `  Verified ${report.files.length} packaged provenance artifact(s).\n`,
       colors.green,
     );
-  } finally {
-    await fs.rm(tempDirectory, { recursive: true, force: true });
+  } catch (error) {
+    operationError = error;
+  }
+  const cleanupResults = await Promise.allSettled([
+    tempDirectory
+      ? fs.rm(tempDirectory, { recursive: true, force: true })
+      : Promise.resolve(),
+    stagingRoot
+      ? fs.rm(stagingRoot, { recursive: true, force: true })
+      : Promise.resolve(),
+    buildLock.close(),
+  ]);
+  const cleanupErrors = cleanupResults.flatMap((result) =>
+    result.status === 'rejected' ? [result.reason] : [],
+  );
+  try {
+    await fs.rm(buildLockPath, { force: true });
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  if (operationError) {
+    if (cleanupErrors.length > 0) {
+      log(
+        `Cleanup after failed ESLint bundle build also failed: ${cleanupErrors.map(String).join('; ')}`,
+        colors.red,
+      );
+    }
+    throw operationError;
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(
+      cleanupErrors,
+      'Verified ESLint bundle installed, but temporary build state could not be cleaned up.',
+    );
   }
 
   log('===========================================', colors.cyan);
@@ -451,7 +644,12 @@ async function main() {
   log(`Location: ${bundleDirectory}`, colors.blue);
 }
 
-main().catch((error) => {
-  log(`\nFailed to bundle ESLint server: ${error}`, colors.red);
-  process.exit(1);
-});
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
+) {
+  main().catch((error) => {
+    log(`\nFailed to bundle ESLint server: ${error}`, colors.red);
+    process.exit(1);
+  });
+}

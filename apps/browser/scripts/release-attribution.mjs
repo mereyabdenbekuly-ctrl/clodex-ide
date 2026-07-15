@@ -14,6 +14,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from 'yaml';
+import { validateReviewedMaterializedSymlinks } from './safe-zip-extractor.mjs';
 
 export const ATTRIBUTION_DIRECTORY_NAME = 'release-attribution';
 export const NUCLEO_EVIDENCE_RELATIVE_PATH =
@@ -351,6 +352,21 @@ function bundledComponentSourceBlockers(componentId, component) {
         message: `${componentId} Git archive must bind its version ref to an immutable 40-character revision in the download URL.`,
       });
     }
+    if (!Array.isArray(source.materializedSymlinks)) {
+      blockers.push({
+        code: 'BUNDLED_COMPONENT_SYMLINK_POLICY_MISSING',
+        message: `${componentId} Git archive must declare its exact materialized symlink set.`,
+      });
+    } else {
+      try {
+        validateReviewedMaterializedSymlinks(source.materializedSymlinks);
+      } catch (error) {
+        blockers.push({
+          code: 'BUNDLED_COMPONENT_SYMLINK_POLICY_INVALID',
+          message: `${componentId} materialized symlink policy is invalid: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+    }
   } else {
     const packageId = String(source.packageId ?? '');
     const version = String(source.version ?? '');
@@ -451,7 +467,8 @@ function loadEmbeddedBundledDependencies({
       typeof dependency?.repository !== 'string' ||
       !dependency.repository.startsWith('https://') ||
       typeof dependency?.purl !== 'string' ||
-      !dependency.purl.startsWith('pkg:npm/')
+      !dependency.purl.startsWith('pkg:npm/') ||
+      !['embedded', 'production-lock-only'].includes(dependency?.bundleScope)
     ) {
       recordBlockers.push({
         code: 'BUNDLED_COMPONENT_EMBEDDED_DEPENDENCY_INVALID',
@@ -917,12 +934,28 @@ export function loadBundledComponentRegistry({
     applicableComponents,
     applicableEmbeddedDependencyCount: applicableComponents.reduce(
       (count, component) =>
+        count +
+        (component.embeddedDependencies ?? []).filter(
+          (dependency) => dependency.bundleScope === 'embedded',
+        ).length,
+      0,
+    ),
+    applicableProductionLockDependencyCount: applicableComponents.reduce(
+      (count, component) =>
         count + (component.embeddedDependencies?.length ?? 0),
       0,
     ),
     blockers: deduplicatedBlockers,
     components,
     embeddedDependencyCount: components.reduce(
+      (count, component) =>
+        count +
+        (component.embeddedDependencies ?? []).filter(
+          (dependency) => dependency.bundleScope === 'embedded',
+        ).length,
+      0,
+    ),
+    productionLockDependencyCount: components.reduce(
       (count, component) =>
         count + (component.embeddedDependencies?.length ?? 0),
       0,
@@ -1018,7 +1051,9 @@ function isBuildOnly(packageName) {
 }
 
 function isNucleoPackage(packageName) {
-  return packageName.startsWith('nucleo-');
+  return (
+    packageName.startsWith('nucleo-') || packageName.startsWith('@nucleo/')
+  );
 }
 
 function canonicalNpmTarballUrl(packageName, version) {
@@ -2059,7 +2094,11 @@ export function collectReleaseDependencyInventory({
       applicableCount: bundledComponents.applicableComponents.length,
       applicableEmbeddedDependencyCount:
         bundledComponents.applicableEmbeddedDependencyCount,
+      applicableProductionLockDependencyCount:
+        bundledComponents.applicableProductionLockDependencyCount,
       embeddedDependencyCount: bundledComponents.embeddedDependencyCount,
+      productionLockDependencyCount:
+        bundledComponents.productionLockDependencyCount,
       entryCount: bundledComponents.entryCount,
       registryPath: BUNDLED_COMPONENT_REGISTRY_RELATIVE_PATH,
       status: bundledComponents.status,
@@ -2165,8 +2204,12 @@ export function prepareReleaseAttributionBundle({
       inventory.bundledComponents.applicableCount,
     bundledComponentApplicableEmbeddedDependencyCount:
       inventory.bundledComponents.applicableEmbeddedDependencyCount,
+    bundledComponentApplicableProductionLockDependencyCount:
+      inventory.bundledComponents.applicableProductionLockDependencyCount,
     bundledComponentEmbeddedDependencyCount:
       inventory.bundledComponents.embeddedDependencyCount,
+    bundledComponentProductionLockDependencyCount:
+      inventory.bundledComponents.productionLockDependencyCount,
     bundledComponentEntryCount: inventory.bundledComponents.entryCount,
     bundledComponentStatus: inventory.bundledComponents.status,
     licenseOverrideAppliedCount: inventory.licenseOverrides.appliedCount,
@@ -2290,6 +2333,8 @@ export function inspectPackagedAttribution({
       inventory.bundledComponents.entryCount ||
     packagedBundledComponents.embeddedDependencyCount !==
       inventory.bundledComponents.embeddedDependencyCount ||
+    packagedBundledComponents.productionLockDependencyCount !==
+      inventory.bundledComponents.productionLockDependencyCount ||
     packagedBundledComponents.status !== inventory.bundledComponents.status
   ) {
     throw new Error(
@@ -2423,8 +2468,12 @@ export function inspectPackagedAttribution({
       inventory.bundledComponents.applicableCount ||
     manifest.bundledComponentApplicableEmbeddedDependencyCount !==
       inventory.bundledComponents.applicableEmbeddedDependencyCount ||
+    manifest.bundledComponentApplicableProductionLockDependencyCount !==
+      inventory.bundledComponents.applicableProductionLockDependencyCount ||
     manifest.bundledComponentEmbeddedDependencyCount !==
       inventory.bundledComponents.embeddedDependencyCount ||
+    manifest.bundledComponentProductionLockDependencyCount !==
+      inventory.bundledComponents.productionLockDependencyCount ||
     manifest.bundledComponentEntryCount !==
       inventory.bundledComponents.entryCount ||
     manifest.bundledComponentStatus !== inventory.bundledComponents.status ||
@@ -2617,6 +2666,13 @@ function embeddedDependencyProvenance(component) {
   );
 }
 
+function embeddedBundleDependencyNames(component) {
+  return (component.embeddedDependencies ?? [])
+    .filter((dependency) => dependency.bundleScope === 'embedded')
+    .map((dependency) => dependency.name)
+    .sort();
+}
+
 export function inspectBundledComponentArtifacts({
   applicationDirectory,
   component,
@@ -2710,7 +2766,7 @@ export function inspectBundledComponentArtifacts({
     `${component.id} generated provenance manifest`,
   );
   if (
-    manifest.schemaVersion !== 1 ||
+    manifest.schemaVersion !== 2 ||
     manifest.componentId !== component.id ||
     manifest.name !== component.name ||
     manifest.version !== component.version ||
@@ -2722,6 +2778,8 @@ export function inspectBundledComponentArtifacts({
       JSON.stringify(component.embeddedDependencyLock) ||
     JSON.stringify(manifest.embeddedDependencies) !==
       JSON.stringify(embeddedDependencyProvenance(component)) ||
+    JSON.stringify(manifest.embeddedModuleNames) !==
+      JSON.stringify(embeddedBundleDependencyNames(component)) ||
     manifest.licenseEvidence?.sha256 !== component.licenseEvidence.sha256 ||
     !Array.isArray(manifest.artifacts) ||
     manifest.artifacts.length === 0
@@ -3016,7 +3074,9 @@ export async function writeFinalArtifactSbom({
       );
     }
     const childReferences = [];
-    for (const dependency of component.embeddedDependencies ?? []) {
+    for (const dependency of (component.embeddedDependencies ?? []).filter(
+      (entry) => entry.bundleScope === 'embedded',
+    )) {
       const childReference = `urn:clodex:bundled-dependency:${sha256Bytes(
         `${component.id}\0${dependency.name}\0${dependency.version}`,
       ).slice(0, 32)}`;
@@ -3194,7 +3254,10 @@ export async function writeFinalArtifactSbom({
     bundledComponentCount: bundledArtifactReports.length,
     bundledEmbeddedDependencyCount: bundledRegistry.applicableComponents.reduce(
       (count, component) =>
-        count + (component.embeddedDependencies?.length ?? 0),
+        count +
+        (component.embeddedDependencies ?? []).filter(
+          (dependency) => dependency.bundleScope === 'embedded',
+        ).length,
       0,
     ),
     bundledArtifactCount: bundledArtifactReports.reduce(

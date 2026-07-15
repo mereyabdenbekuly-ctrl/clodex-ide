@@ -12,7 +12,8 @@ versions plus the bundled `vscode-eslint` server); 0 blockers
 **Nucleo:** `NOT_REQUIRED`; no `nucleo-*` package is present
 
 **Reviewed non-npm bundled components:** 2 records; one cross-platform
-`vscode-eslint` source build (plus 9 exact embedded production dependencies)
+`vscode-eslint` source build (9 exact production-lock dependencies reviewed;
+7 proven emitted by webpack)
 and one Windows x64 VCRuntime binary archive
 
 This is an engineering attribution result, not a legal conclusion. Specialist
@@ -85,9 +86,11 @@ outside the npm dependency traversal:
    `24ebbef9ee5c716d4653c193bca00192b19787cc7152c3d61a474a10920d6239`,
    and the exact upstream MIT text. The generated provenance manifest hashes
    every emitted bundle file and final validation rejects hash or file-set
-   drift. The exact server lock plus all nine webpack-embedded production
-   packages now carry npm integrity, tarball SHA-256, exact license evidence,
-   provenance-manifest entries, and parent/child CycloneDX records.
+   drift. All nine packages in the exact server production lock now carry npm
+   integrity, tarball SHA-256, and exact license evidence. Source-map inspection
+   proves seven are emitted by webpack and includes only those seven in the
+   generated provenance module set and parent/child CycloneDX records;
+   `lru-cache` and `yallist` are retained as production-lock-only evidence.
 2. `VCRuntime.CefSharp.140` `1.0.5` was downloaded without verifying the
    `.nupkg` or copied DLL bytes and was absent from notices, the attribution
    inventory, and the SBOM. The exact NuGet URL, archive SHA-256, catalog

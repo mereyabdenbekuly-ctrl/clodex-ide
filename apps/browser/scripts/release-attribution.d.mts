@@ -24,6 +24,7 @@ export interface BundledComponentSource {
   nugetSha512?: string;
   sourceRevision?: string;
   signatureEntrySha256?: string;
+  materializedSymlinks?: Array<{ path: string; target: string }>;
 }
 
 export interface BundledComponentEvidenceFile {
@@ -47,6 +48,7 @@ export interface BundledEmbeddedDependency {
   };
   licenseEvidence: BundledComponentEvidenceFile & { packagePath: string };
   licenseText: string;
+  bundleScope: 'embedded' | 'production-lock-only';
 }
 
 export interface BundledComponentEvidence {
@@ -157,7 +159,9 @@ export interface DependencyInventory {
   bundledComponents: {
     applicableCount: number;
     applicableEmbeddedDependencyCount: number;
+    applicableProductionLockDependencyCount: number;
     embeddedDependencyCount: number;
+    productionLockDependencyCount: number;
     entryCount: number;
     registryPath: string;
     status: string;
@@ -209,7 +213,9 @@ export function prepareReleaseAttributionBundle(options: {
     blockerCount: number;
     bundledComponentApplicableCount: number;
     bundledComponentApplicableEmbeddedDependencyCount: number;
+    bundledComponentApplicableProductionLockDependencyCount: number;
     bundledComponentEmbeddedDependencyCount: number;
+    bundledComponentProductionLockDependencyCount: number;
     bundledComponentEntryCount: number;
     bundledComponentStatus: string;
     dependencyCount: number;
@@ -229,9 +235,11 @@ export function loadBundledComponentRegistry(options: {
 }): {
   applicableComponents: BundledComponent[];
   applicableEmbeddedDependencyCount: number;
+  applicableProductionLockDependencyCount: number;
   blockers: AttributionBlocker[];
   components: BundledComponent[];
   embeddedDependencyCount: number;
+  productionLockDependencyCount: number;
   entryCount: number;
   registryPath: string;
   status: string;

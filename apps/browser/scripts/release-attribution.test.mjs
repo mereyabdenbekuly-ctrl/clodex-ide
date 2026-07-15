@@ -258,6 +258,7 @@ function generatedBundleComponent(fixture) {
         name: 'fixture-bundle-dep',
         version: '1.2.3',
         license: 'ISC',
+        bundleScope: 'embedded',
         publisher: 'Fixture Publisher',
         repository: 'https://example.test/fixture-bundle-dep',
         purl: 'pkg:npm/fixture-bundle-dep@1.2.3',
@@ -284,6 +285,7 @@ function generatedBundleComponent(fixture) {
       immutableRevision: '2'.repeat(40),
       url: `https://example.test/fixture-eslint/archive/${'2'.repeat(40)}.zip`,
       sha256: sourceSha256,
+      materializedSymlinks: [],
       sourceReferences: [
         `https://example.test/fixture-eslint/source/${'2'.repeat(40)}`,
       ],
@@ -432,7 +434,7 @@ function writeGeneratedBundle(resourcesDirectory, component) {
     };
   });
   writeJson(path.join(bundleDirectory, 'provenance.json'), {
-    schemaVersion: 1,
+    schemaVersion: 2,
     componentId: component.id,
     name: component.name,
     version: component.version,
@@ -443,6 +445,10 @@ function writeGeneratedBundle(resourcesDirectory, component) {
     embeddedDependencies: component.embeddedDependencies.map(
       ({ licenseText: _licenseText, ...dependency }) => dependency,
     ),
+    embeddedModuleNames: component.embeddedDependencies
+      .filter((dependency) => dependency.bundleScope === 'embedded')
+      .map((dependency) => dependency.name)
+      .sort(),
     licenseEvidence: component.licenseEvidence,
     artifacts,
   });
@@ -1731,6 +1737,18 @@ test('release workflow and Forge packaging wire the attribution gate before publ
 });
 
 test('repository bundled-component registry pins exact upstream archives and DLLs', () => {
+  const attributes = readFileSync(
+    path.join(repositoryDirectory, '.gitattributes'),
+    'utf8',
+  );
+  assert.match(
+    attributes,
+    /^docs\/provenance\/bundled-component-evidence\/\*\* -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol$/mu,
+  );
+  assert.match(
+    attributes,
+    /^docs\/provenance\/bundled-component-license-texts\/\*\* -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol$/mu,
+  );
   const registry = loadBundledComponentRegistry({
     registryPath: path.join(
       repositoryDirectory,
@@ -1752,6 +1770,19 @@ test('repository bundled-component registry pins exact upstream archives and DLL
     '24ebbef9ee5c716d4653c193bca00192b19787cc7152c3d61a474a10920d6239',
   );
   assert.equal(eslint.embeddedDependencies.length, 9);
+  assert.equal(
+    eslint.embeddedDependencies.filter(
+      (dependency) => dependency.bundleScope === 'embedded',
+    ).length,
+    7,
+  );
+  assert.deepEqual(
+    eslint.embeddedDependencies
+      .filter((dependency) => dependency.bundleScope === 'production-lock-only')
+      .map((dependency) => dependency.name)
+      .sort(),
+    ['lru-cache', 'yallist'],
+  );
   assert.equal(
     eslint.embeddedDependencyLock.sha256,
     '7b242318057e0d9d55df95fce3c8679ca2506cf363b19c3c2f7ea7dd2455eb66',
@@ -1799,6 +1830,33 @@ test('repository bundled-component registry pins exact upstream archives and DLL
   );
 });
 
+test('vscode-eslint bundling rebuilds from verified bytes instead of trusting local provenance', () => {
+  const bundleSource = readFileSync(
+    path.join(browserDirectory, 'scripts/bundle-eslint-server.ts'),
+    'utf8',
+  );
+  const extractorSource = readFileSync(
+    path.join(browserDirectory, 'scripts/safe-zip-extractor.mjs'),
+    'utf8',
+  );
+  const browserIgnore = readFileSync(
+    path.join(browserDirectory, '.gitignore'),
+    'utf8',
+  );
+  assert.match(bundleSource, /fs\.mkdtemp/u);
+  assert.match(bundleSource, /extractVerifiedZipArchive\(\{/u);
+  assert.match(bundleSource, /verifyBundledModuleCoverage/u);
+  assert.doesNotMatch(
+    bundleSource,
+    /Reviewed ESLint server bundle already exists/u,
+  );
+  assert.doesNotMatch(bundleSource, /assertExistingBundleIsReviewed/u);
+  assert.match(extractorSource, /yauzl\.fromBuffer/u);
+  assert.match(extractorSource, /strictFileNames:\s*true/u);
+  assert.match(extractorSource, /validateEntrySizes:\s*true/u);
+  assert.match(browserIgnore, /^\.eslint-server-work\/$/mu);
+});
+
 test('the exact installed repository dependency graph is strict-green', () => {
   const overrideRegistry = JSON.parse(
     readFileSync(
@@ -1820,6 +1878,10 @@ test('the exact installed repository dependency graph is strict-green', () => {
   assert.ok(inventory.bundledComponents.applicableCount >= 1);
   assert.equal(
     inventory.bundledComponents.applicableEmbeddedDependencyCount,
+    7,
+  );
+  assert.equal(
+    inventory.bundledComponents.applicableProductionLockDependencyCount,
     9,
   );
   assert.equal(inventory.licenseOverrides.status, 'ENGINEERING_REVIEWED');
@@ -1837,26 +1899,61 @@ test('the exact installed repository dependency graph is strict-green', () => {
   assert.equal(inventory.nucleo.status, 'NOT_REQUIRED');
 });
 
-test('the repository has no Nucleo package, import, or license-key release path', () => {
+test('the repository has no obvious Nucleo package, import, asset, or license-key release path', () => {
   const forbidden = [];
+  const containsNucleoReleaseSignal = (source) =>
+    /NUCLEO_LICENSE_KEY/iu.test(source) ||
+    /(?:from\s*|import\s+|import\s*\(|require(?:\.resolve)?\s*\()\s*(?:['"](?:@nucleo(?:\/[^'"]*)?|nucleo-[^'"]*)['"]|`(?:@nucleo(?:\/[^`]*)?|nucleo-[^`]*)`)/iu.test(
+      source,
+    ) ||
+    /['"](?:@nucleo\/|nucleo-)[^'"]*['"]\s*:/iu.test(source) ||
+    /['"`][^'"`\r\n]*nucleo[^'"`\r\n]*\.(?:avif|gif|ico|jpeg|jpg|png|svg|webp)(?:\?[^'"`\r\n]*)?['"`]/iu.test(
+      source,
+    );
+  for (const signal of [
+    "import '@nucleo/icons';",
+    'await import(`nucleo-icons`);',
+    "require.resolve('@nucleo/icons');",
+    'process.env.nucleo_license_key',
+    'const assets = { "nucleo-icons": "1.0.0" };',
+    "const icon = 'assets/nucleo/branch.svg';",
+  ]) {
+    assert.equal(containsNucleoReleaseSignal(signal), true, signal);
+  }
+  assert.equal(containsNucleoReleaseSignal("import '@clodex/icons';"), false);
   const roots = ['apps', 'packages', 'agent'].map((entry) =>
     path.join(repositoryDirectory, entry),
   );
   const visit = (directory) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const entryPath = path.join(directory, entry.name);
+      if (entry.name.toLowerCase().includes('nucleo'))
+        forbidden.push(entryPath);
       if (entry.isDirectory()) {
         if (entry.name === 'node_modules') continue;
-        if (entry.name.startsWith('nucleo-')) forbidden.push(entryPath);
         visit(entryPath);
       } else if (
         entry.isFile() &&
-        ['.json', '.js', '.jsx', '.ts', '.tsx'].includes(
-          path.extname(entry.name),
-        )
+        !entry.name.includes('.test.') &&
+        [
+          '.cjs',
+          '.css',
+          '.html',
+          '.js',
+          '.json',
+          '.jsx',
+          '.mjs',
+          '.mts',
+          '.scss',
+          '.svg',
+          '.ts',
+          '.tsx',
+          '.yaml',
+          '.yml',
+        ].includes(path.extname(entry.name))
       ) {
         const source = readFileSync(entryPath, 'utf8');
-        if (/from ['"]nucleo-|"nucleo-[^"]+"\s*:/.test(source)) {
+        if (containsNucleoReleaseSignal(source)) {
           forbidden.push(entryPath);
         }
       }
@@ -1870,8 +1967,8 @@ test('the repository has no Nucleo package, import, or license-key release path'
   ]) {
     const source = readFileSync(policyPath, 'utf8');
     if (
-      /NUCLEO_LICENSE_KEY/.test(source) ||
-      /(?:^|\n)\s*(?:['"]?nucleo-[^:\s'"]+['"]?\s*:|nucleo-[^:\s]+:)/.test(
+      containsNucleoReleaseSignal(source) ||
+      /(?:^|\n)\s*(?:['"]?(?:@nucleo\/|nucleo-)[^:\s'"]+['"]?\s*:|(?:@nucleo\/|nucleo-)[^:\s]+:)/u.test(
         source,
       )
     ) {
@@ -1882,7 +1979,7 @@ test('the repository has no Nucleo package, import, or license-key release path'
   for (const entry of readdirSync(workflowDirectory, { withFileTypes: true })) {
     if (!entry.isFile() || !/\.ya?ml$/.test(entry.name)) continue;
     const workflowPath = path.join(workflowDirectory, entry.name);
-    if (/NUCLEO_LICENSE_KEY/.test(readFileSync(workflowPath, 'utf8'))) {
+    if (containsNucleoReleaseSignal(readFileSync(workflowPath, 'utf8'))) {
       forbidden.push(workflowPath);
     }
   }

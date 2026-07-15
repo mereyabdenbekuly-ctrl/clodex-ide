@@ -1,4 +1,5 @@
-# Preserve byte-identical reviewed upstream evidence, including original CRLF.
-docs/provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec binary
-docs/provenance/bundled-component-evidence/vscode-eslint-3.0.10-server-package-lock.json binary
-docs/provenance/bundled-component-license-texts/vscode-eslint-3.0.10-MIT.txt binary
+# Preserve byte-identical reviewed upstream evidence on every checkout,
+# including original CRLF/BOM bytes. Keep text diffs available while disabling
+# line-ending normalization for every hash-pinned evidence file.
+docs/provenance/bundled-component-evidence/** -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
+docs/provenance/bundled-component-license-texts/** -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol

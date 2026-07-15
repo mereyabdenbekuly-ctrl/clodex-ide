@@ -93,9 +93,11 @@ provenance manifest records the SHA-256 and byte count of every emitted server
 bundle file; final validation rejects missing, additional, or modified files.
 The single Node 22 compatibility transform to the archived webpack config is
 also recorded with exact before/after SHA-256 values. The exact archived server
-lock and all nine production packages embedded by webpack are separately
-integrity-bound with exact license text in the bundled-component registry; the
-final CycloneDX document records them as dependencies of the server bundle.
+lock and all nine production-lock packages are separately integrity-bound with
+exact license text in the bundled-component registry. Source-map inspection
+currently proves that seven of those packages are emitted by webpack; the final
+CycloneDX document records those seven as dependencies of the server bundle and
+does not overstate the two lock-only packages as shipped content.
 
 ## VCRuntime.CefSharp.140
 

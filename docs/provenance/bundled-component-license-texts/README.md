@@ -12,6 +12,9 @@ Rules:
 - every dependency embedded in a generated webpack bundle is bound to the
   exact archived production lock, npm integrity, tarball SHA-256, package-root
   license path, and license-text SHA-256;
+- production-lock packages that are not observed in the emitted source map stay
+  explicitly classified as lock-only evidence and are not emitted as SBOM
+  children;
 - final artifact validation verifies generated manifests or fixed binary hashes
   before emitting the CycloneDX SBOM;
 - hash drift, missing evidence, a mutable Git download URL, an unreviewed record,

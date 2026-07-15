@@ -9,5 +9,5 @@
   "approvedBy": null,
   "approvedAt": null,
   "expiresAt": null,
-  "decision": "No Nucleo redistribution right is asserted. The local nucleo-* compatibility packages and custom placeholder/SVG sources were removed from the distributable dependency graph. The replacement @clodex/icons package contains only AGPL compatibility aliases backed by the separately inventoried lucide-react dependency. Any future nucleo-* dependency makes this gate applicable and fail-closed again until independently reviewed evidence is APPROVED."
+  "decision": "No Nucleo redistribution right is asserted. The local nucleo-* compatibility packages and custom placeholder/SVG sources were removed from the distributable dependency graph. The replacement @clodex/icons package contains only AGPL compatibility aliases backed by the separately inventoried lucide-react dependency. Any future nucleo-* or @nucleo/* dependency makes this gate applicable and fail-closed again until independently reviewed evidence is APPROVED. Automated name/import/key checks are defense in depth and do not replace final-artifact review for renamed or obfuscated vendor content."
 }

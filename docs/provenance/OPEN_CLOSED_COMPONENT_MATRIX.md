@@ -67,7 +67,7 @@ requires counsel; this policy is the stricter engineering floor.
 | `apps/clodex-cli/**` | Package metadata has no license or author and directly depends on Stagewise-attributed `agent-core` and `agent-shell` | Public CLI after runtime migration | **YELLOW** inside the monorepo | **RED** | **RED** | Add registry and metadata evidence; cut legacy runtime dependencies before claiming a clean protocol client or publishing independently |
 | `apps/deprecated-cli/**` | AGPL package; legacy/deprecated application | Retain only for supported migration or removal | **YELLOW** | **RED** | **RED** | Record status in the registry and remove when migration criteria are met |
 | `apps/update-server/**`, `apps/website/**` | Package metadata omits license and author; website retains legacy `stage-ui` use, while former local Nucleo dependencies/assets have been removed | Public operational/marketing surfaces, not Gateway foundations | **YELLOW** | **RED** | **RED** | Register intended status; add explicit metadata and notices; keep Nucleo absent unless exact redistribution evidence is independently approved; prevent reuse as a private service seed |
-| Former `packages/nucleo-*/**` | The ten local compatibility packages and referenced vendor/placeholder assets are absent from the current repository and distributable dependency graph; `NUCLEO_REDISTRIBUTION_EVIDENCE.json` is `NOT_REQUIRED`, not `APPROVED` | Removed; no Nucleo redistribution right is claimed | **GREEN / NOT APPLICABLE** only while absence is proven | **RED** | **RED** | CI fails closed on any future `nucleo-*` package/import; reintroduction requires exact package coverage, desktop redistribution scope, accountable approval, validity dates, license name, and non-secret external evidence references |
+| Former `packages/nucleo-*/**` | The ten local compatibility packages and referenced vendor/placeholder assets are absent from the current repository and distributable dependency graph; `NUCLEO_REDISTRIBUTION_EVIDENCE.json` is `NOT_REQUIRED`, not `APPROVED` | Removed; no Nucleo redistribution right is claimed | **GREEN / NOT APPLICABLE** only while absence is proven | **RED** | **RED** | CI fails closed on obvious future `nucleo-*`/`@nucleo/*` packages, imports, license-key paths, and Nucleo-named assets; renamed/obfuscated vendor content still requires final-artifact review; reintroduction requires exact package coverage, desktop redistribution scope, accountable approval, validity dates, license name, and non-secret external evidence references |
 | `packages/tailwindcss-color-modifiers/**`, `packages/typescript-config/**` | MIT metadata, not registered, no package-level license files observed | Build/support packages only | **YELLOW** | **RED** unless independently audited and actually needed | **RED** | Register, audit history, add notice/license evidence, and keep Protocol v0 free of build-system coupling |
 | `docs/INTENT_CONTRACT_SPEC.md`, ADRs, threat models, security manifests | Public AGPL repository documentation with detailed semantics; provenance policy allows approved specifications as independent inputs | Candidate specification inputs; public security documentation | **GREEN** in the public repository | **YELLOW** as documented inputs, never automatic code-relicensing evidence | Not executable/importable | Approve an exact source list and revisions; record authorship and AI/source context; write Protocol v0 from requirements rather than current module structure |
 | `docs/protocol/agent-gateway-v0/**` | Newly authored schema/documentation draft in this AGPL repository; input manifest and reconstructed requirements are unapproved and the authoring context is not yet clean-room evidence | **PUBLIC SPEC/REFERENCE incubator**, non-publishable | **YELLOW** for review in this repository only | **RED** for extraction, relicensing, package publication, SDK generation, or private implementation input | **RED** | Approve `PROTOCOL_V0_INPUT_MANIFEST.json` and `REQUIREMENTS.md`; independently verify/re-derive schema mappings; close `PV0-G01`–`PV0-G10` before boundary use |
@@ -108,13 +108,16 @@ The source-tree OCB-006 gaps are now engineering-closed:
 2. Unknown/missing license declarations or text, evidence/hash drift, mutable
    bundled-source pins, platform mismatch, unreviewed native/binary files, and
    attribution-manifest laundering fail closed.
-3. `vscode-eslint` and its nine webpack-embedded production packages are bound
-   to an immutable source revision, exact archived lock, npm integrities,
-   tarball/license SHA-256 values, generated-file provenance, and CycloneDX
-   parent/child records. The Windows VCRuntime NuGet archive and five copied
-   DLLs are independently pinned and inventoried.
-4. Nucleo packages/imports/assets are absent. No right is invented; future use
-   immediately reactivates the `APPROVED` evidence requirement.
+3. `vscode-eslint` and all nine packages in its exact production lock are bound
+   to an immutable source revision, npm integrities, tarball/license SHA-256
+   values, and generated-file provenance. Source-map inspection proves seven
+   are emitted and gives only those seven CycloneDX parent/child records; two
+   remain explicitly production-lock-only. The Windows VCRuntime NuGet archive
+   and five copied DLLs are independently pinned and inventoried.
+4. Nucleo packages/imports/assets are absent. No right is invented; obvious
+   future package/import/key/name signals reactivate the `APPROVED` evidence
+   requirement, while renamed vendor content remains a manual artifact-review
+   obligation.
 
 A distributable desktop release still remains **YELLOW / NOT PROMOTABLE** until
 all of the following are demonstrated from the exact final installer/app
