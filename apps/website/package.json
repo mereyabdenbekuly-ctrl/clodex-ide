@@ -23,7 +23,7 @@
     "@radix-ui/react-dialog": "^1.1.13",
     "@radix-ui/react-navigation-menu": "^1.2.12",
     "@tailwindcss/typography": "^0.5.19",
-    "better-auth": "1.6.13",
+    "better-auth": "1.6.23",
     "framer-motion": "^12.38.0",
     "geist": "1.7.2",
     "gray-matter": "^4.0.3",
