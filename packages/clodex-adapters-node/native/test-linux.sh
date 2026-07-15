@@ -163,6 +163,12 @@ cc -std=c17 -O2 -fPIC -shared -Wall -Wextra -Wconversion -Werror \
   "$script_directory/tests/child-metadata-drift-preload.c" -ldl \
   -o "$metadata_preload"
 
+mkdir_preopen_preload="$temporary_directory/mkdir-preopen-exchange-preload.so"
+cc -std=c17 -O2 -fPIC -shared -Wall -Wextra -Wconversion -Werror \
+  -Wformat=2 -Wshadow -Wstrict-prototypes \
+  "$script_directory/tests/mkdir-preopen-exchange-preload.c" -ldl \
+  -o "$mkdir_preopen_preload"
+
 swap_left="$root/swap-left"
 swap_right="$root/swap-right"
 mkdir -m 700 "$swap_left" "$swap_right"
@@ -284,155 +290,83 @@ grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
 [[ "$(stat -c '%a' "$metadata_create_parent/created")" == "777" ]] || \
   fail 'create child metadata drift hook did not mutate the created file'
 
+mkdir_window_parent="$root/mkdir-window-parent"
+mkdir_window_decoy="$root/mkdir-window-decoy"
+mkdir_window_target="$mkdir_window_parent/created"
+mkdir_window_hook_marker="$temporary_directory/mkdir-window-hooked"
+mkdir -m 700 "$mkdir_window_parent" "$mkdir_window_decoy"
+printf 'pre-existing decoy inode\n' >"$mkdir_window_decoy/marker"
+mkdir_window_decoy_inode="$(stat -c '%i' "$mkdir_window_decoy")"
+mkdir_window_pre="$(
+  parse_one_digest "$(
+    invoke inspect-mkdir mkdir-window-parent/created - - - 0
+  )"
+)"
+set +e
+CLODEX_TEST_MKDIR_TRIGGER='created' \
+  CLODEX_TEST_MKDIR_TARGET="$mkdir_window_target" \
+  CLODEX_TEST_MKDIR_DECOY="$mkdir_window_decoy" \
+  CLODEX_TEST_MKDIR_EXCHANGE_MARKER="$mkdir_window_hook_marker" \
+  LD_PRELOAD="$mkdir_preopen_preload" \
+  "$helper" --protocol-v1 execute-mkdir "$device" "$inode" \
+    mkdir-window-parent/created "$mkdir_window_pre" - - 0 \
+    >"$failure_stdout" 2>"$failure_stderr"
+exit_code=$?
+set -e
+if [[ "$exit_code" -eq 0 ]]; then
+  [[ -e "$mkdir_window_hook_marker" ]] || \
+    fail 'mkdir pre-open exchange hook did not run in the false-success case'
+  [[ -f "$mkdir_window_target/marker" ]] || \
+    fail 'mkdir false success did not adopt the pre-existing decoy inode'
+  fail 'mkdir pre-open exchange returned false success for the decoy inode'
+fi
+[[ "$exit_code" -eq 10 ]] || \
+  fail 'mkdir pre-open exchange schedule was not rejected pre-effect'
+grep -qx $'ERR\tUNSUPPORTED\tmkdir-exact-inode' "$failure_stderr" || \
+  fail 'mkdir pre-open exchange returned an invalid error record'
+[[ ! -s "$failure_stdout" ]] || \
+  fail 'mkdir pre-open exchange emitted unexpected stdout'
+[[ ! -e "$mkdir_window_hook_marker" ]] || \
+  fail 'disabled mkdir entered the vulnerable mkdirat-to-first-open window'
+[[ ! -e "$mkdir_window_target" ]] || \
+  fail 'disabled mkdir installed or adopted a target inode'
+[[ "$(stat -c '%i' "$mkdir_window_decoy")" == \
+  "$mkdir_window_decoy_inode" ]] || \
+  fail 'disabled mkdir exchanged the pre-existing decoy inode'
+[[ -f "$mkdir_window_decoy/marker" ]] || \
+  fail 'disabled mkdir mutated the nonempty decoy directory'
+
 mkdir_pre="$(parse_one_digest "$(invoke inspect-mkdir build - - - 0)")"
-mkdir_output="$(invoke execute-mkdir build "$mkdir_pre" - - 0)"
-IFS=$'\t' read -r mkdir_status returned_mkdir_pre mkdir_post mkdir_extra \
-  <<<"$mkdir_output"
-[[ "$mkdir_status" == "OK" && "$returned_mkdir_pre" == "$mkdir_pre" && \
-  -z "${mkdir_extra:-}" ]] || fail 'mkdir returned an invalid protocol record'
-require_digest "$mkdir_post"
-[[ -d "$root/build" && "$(stat -c '%a' "$root/build")" == "700" ]] || \
-  fail 'mkdir did not install a mode 0700 directory'
+set +e
+invoke execute-mkdir build "$mkdir_pre" - - 0 \
+  >"$failure_stdout" 2>"$failure_stderr"
+exit_code=$?
+set -e
+[[ "$exit_code" -eq 10 ]] || \
+  fail 'mkdir without a private staging boundary was not rejected pre-effect'
+grep -qx $'ERR\tUNSUPPORTED\tmkdir-exact-inode' "$failure_stderr" || \
+  fail 'disabled mkdir returned an invalid error record'
+[[ ! -s "$failure_stdout" ]] || fail 'disabled mkdir returned false success'
+[[ ! -e "$root/build" ]] || fail 'disabled mkdir mutated the workspace'
 
 umask_mkdir_pre="$(
   parse_one_digest "$(invoke inspect-mkdir umask-build - - - 0)"
 )"
-umask_mkdir_output="$(
-  (
-    umask 0200
-    invoke execute-mkdir umask-build "$umask_mkdir_pre" - - 0
-  )
-)"
-IFS=$'\t' read -r umask_mkdir_status returned_umask_mkdir_pre \
-  umask_mkdir_post umask_mkdir_extra <<<"$umask_mkdir_output"
-[[ "$umask_mkdir_status" == "OK" && \
-  "$returned_umask_mkdir_pre" == "$umask_mkdir_pre" && \
-  -z "${umask_mkdir_extra:-}" ]] || \
-  fail 'umask mkdir returned an invalid protocol record'
-require_digest "$umask_mkdir_post"
-[[ -d "$root/umask-build" && \
-  "$(stat -c '%a' "$root/umask-build")" == "700" ]] || \
-  fail 'mkdir did not correct inherited umask to mode 0700'
-
-mkdir_swap_left="$root/mkdir-swap-left"
-mkdir_swap_right="$root/mkdir-swap-right"
-mkdir -m 700 "$mkdir_swap_left" "$mkdir_swap_right"
-mkdir -m 700 "$mkdir_swap_right/created"
-decoy_inode="$(stat -c '%i' "$mkdir_swap_right/created")"
-mkdir_swap_pre="$(
-  parse_one_digest "$(invoke inspect-mkdir mkdir-swap-left/created - - - 0)"
-)"
 set +e
-CLODEX_TEST_SWAP_LEFT="$mkdir_swap_left" \
-  CLODEX_TEST_SWAP_RIGHT="$mkdir_swap_right" \
-  CLODEX_TEST_SWAP_ACTION='exchange-after-create' \
-  CLODEX_TEST_SWAP_ENTRY='created' \
-  LD_PRELOAD="$swap_preload" \
-  "$helper" --protocol-v1 execute-mkdir "$device" "$inode" \
-    mkdir-swap-left/created "$mkdir_swap_pre" - - 0 \
-    >"$failure_stdout" 2>"$failure_stderr"
+(
+  umask 0777
+  invoke execute-mkdir umask-build "$umask_mkdir_pre" - - 0
+) >"$failure_stdout" 2>"$failure_stderr"
 exit_code=$?
 set -e
-[[ "$exit_code" -eq 20 ]] || \
-  fail 'mkdir parent exchange was not classified as uncertain'
-grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
-  fail 'mkdir parent exchange returned an invalid uncertainty record'
-[[ ! -s "$failure_stdout" ]] || fail 'mkdir parent exchange returned false success'
-[[ "$(stat -c '%i' "$mkdir_swap_left/created")" == "$decoy_inode" ]] || \
-  fail 'mkdir post-state did not expose the replacement-parent decoy'
-[[ -d "$mkdir_swap_right/created" ]] || \
-  fail 'mkdir effect was not retained by the originally captured parent'
-
-move_mkdir_left="$root/move-mkdir-left"
-move_mkdir_right="$root/move-mkdir-right"
-mkdir -m 700 "$move_mkdir_left" "$move_mkdir_right"
-move_mkdir_pre="$(
-  parse_one_digest "$(invoke inspect-mkdir move-mkdir-left/created - - - 0)"
-)"
-set +e
-CLODEX_TEST_SWAP_LEFT="$move_mkdir_left" \
-  CLODEX_TEST_SWAP_RIGHT="$move_mkdir_right" \
-  CLODEX_TEST_SWAP_ACTION='move-created-then-exchange' \
-  CLODEX_TEST_SWAP_ENTRY='created' \
-  LD_PRELOAD="$swap_preload" \
-  "$helper" --protocol-v1 execute-mkdir "$device" "$inode" \
-    move-mkdir-left/created "$move_mkdir_pre" - - 0 \
-    >"$failure_stdout" 2>"$failure_stderr"
-exit_code=$?
-set -e
-[[ "$exit_code" -eq 20 ]] || \
-  fail 'move-then-exchange mkdir did not fail uncertain'
-grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
-  fail 'move-then-exchange mkdir returned an invalid uncertainty record'
+[[ "$exit_code" -eq 10 ]] || \
+  fail 'umask 0777 mkdir was not rejected safely before mutation'
+grep -qx $'ERR\tUNSUPPORTED\tmkdir-exact-inode' "$failure_stderr" || \
+  fail 'umask 0777 mkdir returned an invalid error record'
 [[ ! -s "$failure_stdout" ]] || \
-  fail 'move-then-exchange mkdir returned false success'
-[[ -d "$move_mkdir_left/created" ]] || \
-  fail 'move-then-exchange mkdir did not expose the moved inode'
-[[ ! -e "$move_mkdir_right/created" ]] || \
-  fail 'move-then-exchange mkdir left the inode in the captured parent'
-
-final_mkdir_left="$root/final-mkdir-left"
-final_mkdir_right="$root/final-mkdir-right"
-mkdir -m 700 "$final_mkdir_left" "$final_mkdir_right"
-final_mkdir_left_inode="$(stat -c '%i' "$final_mkdir_left")"
-final_mkdir_right_inode="$(stat -c '%i' "$final_mkdir_right")"
-final_mkdir_pre="$(
-  parse_one_digest "$(invoke inspect-mkdir final-mkdir-left/created - - - 0)"
-)"
-set +e
-CLODEX_TEST_SWAP_LEFT="$final_mkdir_left" \
-  CLODEX_TEST_SWAP_RIGHT="$final_mkdir_right" \
-  CLODEX_TEST_SWAP_ACTION='exchange-on-match' \
-  CLODEX_TEST_SWAP_TRIGGER='created' \
-  CLODEX_TEST_SWAP_MATCH='1' \
-  LD_PRELOAD="$swap_preload" \
-  "$helper" --protocol-v1 execute-mkdir "$device" "$inode" \
-    final-mkdir-left/created "$final_mkdir_pre" - - 0 \
-    >"$failure_stdout" 2>"$failure_stderr"
-exit_code=$?
-set -e
-[[ "$exit_code" -eq 20 ]] || \
-  fail 'final-child mkdir parent exchange did not fail uncertain'
-grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
-  fail 'final-child mkdir exchange returned an invalid uncertainty record'
-[[ ! -s "$failure_stdout" ]] || \
-  fail 'final-child mkdir exchange returned false success'
-[[ "$(stat -c '%i' "$final_mkdir_left")" == \
-  "$final_mkdir_right_inode" ]] || \
-  fail 'final-child mkdir exchange did not replace the visible parent'
-[[ "$(stat -c '%i' "$final_mkdir_right")" == \
-  "$final_mkdir_left_inode" ]] || \
-  fail 'final-child mkdir exchange lost the authorized parent'
-[[ ! -e "$final_mkdir_left/created" ]] || \
-  fail 'final-child mkdir unexpectedly remained at the visible path'
-[[ -d "$final_mkdir_right/created" ]] || \
-  fail 'final-child mkdir was not retained by the authorized parent'
-
-metadata_mkdir_parent="$root/metadata-mkdir-parent"
-mkdir -m 700 "$metadata_mkdir_parent"
-metadata_mkdir_pre="$(
-  parse_one_digest "$(
-    invoke inspect-mkdir metadata-mkdir-parent/created - - - 0
-  )"
-)"
-set +e
-CLODEX_TEST_METADATA_TARGET="$metadata_mkdir_parent/created" \
-  CLODEX_TEST_METADATA_TRIGGER='created' \
-  CLODEX_TEST_METADATA_MATCH='1' \
-  LD_PRELOAD="$metadata_preload" \
-  "$helper" --protocol-v1 execute-mkdir "$device" "$inode" \
-    metadata-mkdir-parent/created "$metadata_mkdir_pre" - - 0 \
-    >"$failure_stdout" 2>"$failure_stderr"
-exit_code=$?
-set -e
-[[ "$exit_code" -eq 20 ]] || \
-  fail 'mkdir child metadata drift did not fail uncertain'
-grep -Eq $'^ERR\tUNCERTAIN\t[^[:space:]]+$' "$failure_stderr" || \
-  fail 'mkdir child metadata drift returned an invalid uncertainty record'
-[[ ! -s "$failure_stdout" ]] || \
-  fail 'mkdir child metadata drift returned false success'
-[[ "$(stat -c '%a' "$metadata_mkdir_parent/created")" == "777" ]] || \
-  fail 'mkdir child metadata drift hook did not mutate the created directory'
+  fail 'umask 0777 mkdir returned false success'
+[[ ! -e "$root/umask-build" ]] || \
+  fail 'umask 0777 mkdir left a mode-000 effect'
 
 replace_inspect="$(invoke inspect-replace created.txt - "$create_digest" - 0)"
 IFS=$'\t' read -r replace_status replace_pre returned_before replace_extra \
@@ -458,6 +392,45 @@ IFS=$'\t' read -r replace_execute_status returned_replace_pre replace_post \
   fail 'replace execution returned an invalid record'
 require_digest "$replace_post"
 cmp -s "$replace_input" "$root/created.txt" || fail 'replace wrote unexpected bytes'
+[[ "$(stat -c '%a' "$root/created.txt")" == "600" ]] || \
+  fail 'replace did not install mode 0600'
+
+metadata_replace_path="$root/metadata-replace.txt"
+printf 'replace metadata drift before\n' >"$metadata_replace_path"
+chmod 0600 "$metadata_replace_path"
+metadata_replace_before="$(sha256_file "$metadata_replace_path")"
+metadata_replace_inspect="$(
+  invoke inspect-replace metadata-replace.txt - "$metadata_replace_before" - 0
+)"
+IFS=$'\t' read -r metadata_replace_status metadata_replace_pre \
+  metadata_replace_returned_before metadata_replace_extra \
+  <<<"$metadata_replace_inspect"
+[[ "$metadata_replace_status" == "OK" && \
+  "$metadata_replace_returned_before" == "$metadata_replace_before" && \
+  -z "${metadata_replace_extra:-}" ]] || \
+  fail 'metadata-drift replace inspection returned an invalid record'
+require_digest "$metadata_replace_pre"
+set +e
+CLODEX_TEST_METADATA_TARGET="$metadata_replace_path" \
+  CLODEX_TEST_METADATA_TRIGGER='metadata-replace.txt' \
+  CLODEX_TEST_METADATA_MATCH='2' \
+  LD_PRELOAD="$metadata_preload" \
+  "$helper" --protocol-v1 execute-replace "$device" "$inode" \
+    metadata-replace.txt "$metadata_replace_pre" "$metadata_replace_before" \
+    "$replace_digest" "$replace_bytes" \
+    <"$replace_input" >"$failure_stdout" 2>"$failure_stderr"
+exit_code=$?
+set -e
+[[ "$exit_code" -eq 20 ]] || \
+  fail 'replace post-effect chmod drift did not fail uncertain'
+grep -qx $'ERR\tUNCERTAIN\tpost-state' "$failure_stderr" || \
+  fail 'replace post-effect chmod drift returned an invalid uncertainty record'
+[[ ! -s "$failure_stdout" ]] || \
+  fail 'replace post-effect chmod drift returned false success'
+cmp -s "$replace_input" "$metadata_replace_path" || \
+  fail 'replace chmod drift hook did not run after replacement installation'
+[[ "$(stat -c '%a' "$metadata_replace_path")" == "777" ]] || \
+  fail 'replace chmod drift hook did not mutate final permissions'
 
 ln "$root/created.txt" "$root/created.alias"
 set +e

@@ -80,7 +80,9 @@ interface HelperInvocation {
  * The provisioned workspace descriptor is opened O_NOFOLLOW, device/inode
  * checked, held for the whole helper call, and transferred as fd 4. The pinned
  * helper is hashed and executed from the same fd 3. All descendant resolution
- * and mutation is performed by the native openat2 helper.
+ * and mutation is performed by the native openat2 helper. The v1 helper keeps
+ * mkdir execution disabled until a separately provisioned, same-filesystem
+ * staging boundary can bind installation to the exact created directory inode.
  */
 export class LinuxOpenat2FilesystemCapability
   implements

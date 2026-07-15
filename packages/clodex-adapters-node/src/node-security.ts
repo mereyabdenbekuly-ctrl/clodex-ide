@@ -12,7 +12,9 @@ export const LINUX_CONFINED_ADAPTER_PROFILE = Object.freeze({
   filesystemResolution:
     'descriptor-relative-openat2-beneath-no-symlinks-no-magiclinks-no-xdev',
   filesystemMutation:
-    'fixed-create-mkdir-and-rename-exchange-replace-with-file-and-directory-fsync',
+    'fixed-create-and-rename-exchange-replace-with-file-and-directory-fsync',
+  filesystemMkdirExecution:
+    'disabled-without-pinned-private-same-filesystem-staging',
   filesystemNamespaceFreeze: false,
   filesystemReplaceAtomicInodeCas: false,
   filesystemReplaceRaceDisposition:

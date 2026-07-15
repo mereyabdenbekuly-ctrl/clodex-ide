@@ -3,8 +3,10 @@
 Linux production-side capabilities for the fixed operations defined by
 `@clodex/adapters`:
 
-- descriptor-relative `filesystem.create`, `filesystem.replace`, and
-  `filesystem.mkdir` through a pinned native `openat2(2)` helper;
+- descriptor-relative `filesystem.create` and `filesystem.replace` through a
+  pinned native `openat2(2)` helper;
+- descriptor-relative `filesystem.mkdir` inspection, with execution explicitly
+  disabled until a private same-filesystem staging boundary is provisioned;
 - fixed Git status/diff observation in a digest-pinned, read-only,
   networkless container;
 - registry-selected tests in a digest-pinned, read-only, networkless
@@ -32,8 +34,13 @@ held for the entire operation, and transferred as fd 4. The helper refuses to
 run without Linux `openat2`, `RENAME_EXCHANGE`, `RESOLVE_BENEATH`,
 `RESOLVE_NO_SYMLINKS`, `RESOLVE_NO_MAGICLINKS`, and `RESOLVE_NO_XDEV`.
 
-Create/mkdir use an absent-state commitment and exclusive creation. Replace
-uses a same-directory durable staging file and atomic `RENAME_EXCHANGE`, then
+Create uses an absent-state commitment and exclusive creation. Linux
+`mkdirat(2)` returns no descriptor, so a first lookup can adopt a decoy inode in
+an attacker-writable parent. Protocol v1 therefore rejects `execute-mkdir`
+pre-effect; it must not be enabled until a distinct Guardian principal supplies
+a pinned, private same-filesystem staging directory and retained-fd install
+validation. Replace uses a same-directory durable staging file and atomic
+`RENAME_EXCHANGE`, then
 validates the captured old inode/content and stable pre-exchange semantics
 before deleting it. File and parent-directory `fsync` complete before success.
 Any failure after the first host mutation (including creation of a hidden

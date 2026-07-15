@@ -573,7 +573,9 @@ Filesystem cases:
 
 - traversal, absolute paths, symlinks, magic links, mount crossing, hard-link
   aliases, root replacement, parent replacement, and rename races;
-- atomic create/mkdir absent-state CAS;
+- atomic create absent-state CAS; `execute-mkdir` must remain pre-effect
+  disabled unless a pinned private same-filesystem staging boundary binds the
+  installed name to a retained exact directory inode;
 - replace refuses state/content/inode drift between inspect and commit;
 - file and parent-directory `fsync` occurs before success;
 - revoke before the helper's final syscall prevents mutation;
@@ -607,7 +609,8 @@ Implementation-specific work for `@clodex/adapters-node`:
   in-place mutation, link-count, owner/mode, set-id, ACL/file-capability,
   dynamic-loader/shared-library closure, truncated stdio, timeout, signal, and
   output-overflow cases;
-- fault every create/mkdir/replace point before and after the first mutation,
+- fault every create/replace point before and after the first mutation (and
+  every mkdir point if a sound private-staging implementation is introduced),
   file `fsync`, rename/exchange, unlink, parent `fsync`, post-state capture, and
   stdout flush. Anything after the mutation boundary must be terminal
   `UNCERTAIN`, never a retryable pre-effect failure;

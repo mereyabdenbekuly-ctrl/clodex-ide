@@ -35,7 +35,6 @@
 #define MAX_TREE_DEPTH 128U
 #define MAX_SELECTOR_BYTES (16U * 1024U)
 #define CREATE_PERMISSIONS ((mode_t)0600U)
-#define MKDIR_PERMISSIONS ((mode_t)0700U)
 #define PERMISSION_BITS ((mode_t)07777U)
 
 static bool effect_started = false;
@@ -326,23 +325,6 @@ static void build_file_commitment(
   hash_string_field(&hash, "file");
   hash_stat_fields(&hash, file_metadata);
   hash_string_field(&hash, content_sha256);
-  finish_hex(&hash, output);
-}
-
-static void build_directory_commitment(
-  const struct stat *root_metadata,
-  const char *path,
-  const struct stat *directory_metadata,
-  char output[65]
-) {
-  struct clodex_sha256 hash;
-  clodex_sha256_init(&hash);
-  hash_string_field(&hash, "clodex.openat2-directory-state.v1");
-  hash_u64_field(&hash, (uint64_t)root_metadata->st_dev);
-  hash_u64_field(&hash, (uint64_t)root_metadata->st_ino);
-  hash_string_field(&hash, path);
-  hash_string_field(&hash, "directory");
-  hash_stat_fields(&hash, directory_metadata);
   finish_hex(&hash, output);
 }
 
@@ -805,168 +787,20 @@ static void execute_mkdir(
   const char *path,
   const char *expected_commitment
 ) {
-  struct parent_reference parent = { .fd = -1 };
-  char pre_commitment[65];
-  capture_absent_state(
-    root_fd,
-    root_metadata,
-    path,
-    &parent,
-    pre_commitment
-  );
-  if (strcmp(pre_commitment, expected_commitment) != 0) {
-    close_quietly(parent.fd);
-    fail_with("STATE", "commitment");
-  }
-
-  effect_started = true;
-  if (mkdirat(parent.fd, parent.basename, MKDIR_PERMISSIONS) < 0) {
-    close_quietly(parent.fd);
-    fail_errno("IO");
-  }
-  const int created_directory = openat(
-    parent.fd,
-    parent.basename,
-    O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
-  );
-  struct stat created_metadata;
-  if (
-    created_directory < 0 ||
-    fchmod(created_directory, MKDIR_PERMISSIONS) < 0 ||
-    fsync(created_directory) < 0 ||
-    fstat(created_directory, &created_metadata) < 0 ||
-    !S_ISDIR(created_metadata.st_mode) ||
-    !has_exact_permissions(&created_metadata, MKDIR_PERMISSIONS)
-  ) {
-    close_quietly(created_directory);
-    close_quietly(parent.fd);
-    fail_errno("IO");
-  }
-  sync_parent(&parent);
-
-  struct stat parent_post_effect_metadata;
-  capture_post_effect_parent_metadata(
-    &parent,
-    &parent_post_effect_metadata,
-    "mkdir-parent-post-state"
-  );
-
-  const int visible_parent = reopen_verified_parent(
-    root_fd,
-    &parent,
-    &parent_post_effect_metadata,
-    "mkdir-final-parent-drift"
-  );
-  const int visible_directory = confined_openat2(
-    visible_parent,
-    parent.basename,
-    (uint64_t)(O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW),
-    0U
-  );
-  if (visible_directory < 0) {
-    close_quietly(visible_parent);
-    close_quietly(created_directory);
-    close_quietly(parent.fd);
-    fail_with("UNCERTAIN", "mkdir-final-child-resolution");
-  }
-  char post_commitment[65];
-  struct stat held_created_metadata;
-  struct stat post_metadata;
-  if (
-    fstat(created_directory, &held_created_metadata) < 0 ||
-    fstat(visible_directory, &post_metadata) < 0 ||
-    !S_ISDIR(held_created_metadata.st_mode) ||
-    !S_ISDIR(post_metadata.st_mode) ||
-    !has_exact_permissions(&held_created_metadata, MKDIR_PERMISSIONS) ||
-    !has_exact_permissions(&post_metadata, MKDIR_PERMISSIONS) ||
-    !stable_metadata(&created_metadata, &held_created_metadata) ||
-    !stable_metadata(&created_metadata, &post_metadata)
-  ) {
-    close_quietly(visible_directory);
-    close_quietly(visible_parent);
-    close_quietly(created_directory);
-    close_quietly(parent.fd);
-    fail_with("UNCERTAIN", "mkdir-final-child-drift");
-  }
-
-  if (
-    !stable_directory_descriptor(
-      parent.fd,
-      &parent_post_effect_metadata
-    ) ||
-    !stable_directory_descriptor(
-      visible_parent,
-      &parent_post_effect_metadata
-    )
-  ) {
-    close_quietly(visible_directory);
-    close_quietly(visible_parent);
-    close_quietly(created_directory);
-    close_quietly(parent.fd);
-    fail_with("UNCERTAIN", "mkdir-final-parent-drift");
-  }
-
-  const int final_visible_parent = reopen_verified_parent(
-    root_fd,
-    &parent,
-    &parent_post_effect_metadata,
-    "mkdir-final-parent-drift"
-  );
-  const int final_directory = confined_openat2(
-    final_visible_parent,
-    parent.basename,
-    (uint64_t)(O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW),
-    0U
-  );
-  if (final_directory < 0) {
-    close_quietly(final_visible_parent);
-    close_quietly(visible_directory);
-    close_quietly(visible_parent);
-    close_quietly(created_directory);
-    close_quietly(parent.fd);
-    fail_with("UNCERTAIN", "mkdir-final-child-resolution");
-  }
-  struct stat final_directory_metadata;
-  if (
-    fstat(final_directory, &final_directory_metadata) < 0 ||
-    !S_ISDIR(final_directory_metadata.st_mode) ||
-    !has_exact_permissions(&final_directory_metadata, MKDIR_PERMISSIONS) ||
-    !stable_metadata(&created_metadata, &final_directory_metadata) ||
-    !stable_metadata(&post_metadata, &final_directory_metadata) ||
-    !stable_directory_descriptor(
-      parent.fd,
-      &parent_post_effect_metadata
-    ) ||
-    !stable_directory_descriptor(
-      visible_parent,
-      &parent_post_effect_metadata
-    ) ||
-    !stable_directory_descriptor(
-      final_visible_parent,
-      &parent_post_effect_metadata
-    )
-  ) {
-    close_quietly(final_directory);
-    close_quietly(final_visible_parent);
-    close_quietly(visible_directory);
-    close_quietly(visible_parent);
-    close_quietly(created_directory);
-    close_quietly(parent.fd);
-    fail_with("UNCERTAIN", "mkdir-final-binding-drift");
-  }
-  build_directory_commitment(
-    root_metadata,
-    path,
-    &post_metadata,
-    post_commitment
-  );
-  close_quietly(final_directory);
-  close_quietly(final_visible_parent);
-  close_quietly(visible_directory);
-  close_quietly(visible_parent);
-  close_quietly(created_directory);
-  close_quietly(parent.fd);
-  (void)printf("OK\t%s\t%s\n", pre_commitment, post_commitment);
+  (void)root_fd;
+  (void)root_metadata;
+  (void)path;
+  (void)expected_commitment;
+  /*
+   * mkdirat(2) returns no descriptor.  In an attacker-writable parent, any
+   * lookup after mkdirat can therefore adopt a decoy inode installed between
+   * the syscall return and the first open.  The v1 helper has no separately
+   * provisioned, same-filesystem staging directory owned by a distinct
+   * Guardian principal, so it cannot make the exact-created-inode guarantee.
+   * Keep execution fail-closed and pre-effect until that trust boundary is an
+   * explicit pinned input; inspection remains available for policy planning.
+   */
+  fail_with("UNSUPPORTED", "mkdir-exact-inode");
 }
 
 static void random_temporary_name(char output[NAME_MAX + 1U]) {
@@ -1161,16 +995,21 @@ static void execute_replace(
   }
 
   char installed_content_sha256[65] = { 0 };
+  struct stat installed_baseline = { 0 };
   if (valid_exchange) {
     hash_fd_contents(
       replacement,
       MAX_CONTENT_BYTES,
       installed_content_sha256
     );
-    struct stat installed_after_hash;
     if (
-      fstat(replacement, &installed_after_hash) < 0 ||
-      !stable_exchange_file_semantics(&installed_fd, &installed_after_hash) ||
+      fstat(replacement, &installed_baseline) < 0 ||
+      !S_ISREG(installed_baseline.st_mode) ||
+      installed_baseline.st_nlink != 1U ||
+      !has_exact_permissions(&installed_baseline, CREATE_PERMISSIONS) ||
+      installed_baseline.st_size < 0 ||
+      (uint64_t)installed_baseline.st_size != content_bytes ||
+      !stable_metadata(&installed_fd, &installed_baseline) ||
       strcmp(installed_content_sha256, content_sha256) != 0
     ) {
       valid_exchange = false;
@@ -1226,21 +1065,35 @@ static void execute_replace(
     close_quietly(before.fd);
     fail_errno("IO");
   }
-  close_quietly(replacement);
-  close_quietly(parent.fd);
-  close_quietly(before.fd);
 
   struct file_snapshot post = { .fd = -1 };
   capture_file_state(root_fd, root_metadata, path, &post);
+  struct stat retained_final_metadata;
   if (
-    post.metadata.st_dev != replacement_metadata.st_dev ||
-    post.metadata.st_ino != replacement_metadata.st_ino ||
+    fstat(replacement, &retained_final_metadata) < 0 ||
+    !S_ISREG(post.metadata.st_mode) ||
+    !S_ISREG(retained_final_metadata.st_mode) ||
+    post.metadata.st_nlink != 1U ||
+    retained_final_metadata.st_nlink != 1U ||
+    !has_exact_permissions(&post.metadata, CREATE_PERMISSIONS) ||
+    !has_exact_permissions(
+      &retained_final_metadata,
+      CREATE_PERMISSIONS
+    ) ||
+    !stable_metadata(&installed_baseline, &post.metadata) ||
+    !stable_metadata(&installed_baseline, &retained_final_metadata) ||
     strcmp(post.content_sha256, content_sha256) != 0
   ) {
     close_quietly(post.fd);
+    close_quietly(replacement);
+    close_quietly(parent.fd);
+    close_quietly(before.fd);
     fail_with("UNCERTAIN", "post-state");
   }
   close_quietly(post.fd);
+  close_quietly(replacement);
+  close_quietly(parent.fd);
+  close_quietly(before.fd);
   (void)printf(
     "OK\t%s\t%s\t%s\n",
     expected_commitment,
