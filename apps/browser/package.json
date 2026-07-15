@@ -156,7 +156,7 @@
     "@smithy/shared-ini-file-loader": "4.5.6",
     "@storybook/addon-docs": "^10.3.6",
     "@storybook/addon-onboarding": "10.3.6",
-    "@storybook/react": "^10.3.6",
+    "@storybook/react": "^10.5.0",
     "@storybook/react-dom-shim": "^10.3.6",
     "@storybook/react-vite": "^10.3.6",
     "@tailwindcss/postcss": "^4.3.0",
