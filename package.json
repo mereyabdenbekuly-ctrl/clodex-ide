@@ -101,6 +101,7 @@
       "@babel/core@>=7.0.0 <7.29.6": "7.29.6",
       "@better-auth/electron@1.6.13>@better-auth/core": "1.6.13",
       "@conventional-changelog/git-client@1.0.1": "2.0.0",
+      "@esbuild-kit/core-utils@3.3.2>esbuild": "0.25.9",
       "@opentelemetry/core@2.2.0": "2.8.0",
       "@tootallnate/once@2.0.0": "2.0.1",
       "@xmldom/xmldom@0.8.11": "0.8.13",
