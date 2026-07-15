@@ -14,7 +14,11 @@ immutable and is never a retry target.
 
 Stable manifests also stage a protected draft with no public download links.
 Attestation verifies that draft before any separately reviewed publication
-effect; the current stable publisher remains `NOT_READY`.
+effect. The public
+[`STABLE_LEASE_PUBLICATION.md`](./STABLE_LEASE_PUBLICATION.md) slice defines a
+lease-bound, single-PATCH effect contract, but no workflow invokes it and the
+current stable publisher remains `NOT_READY`. It does not change the no-update,
+no-delete recovery behavior of the protected draft stager described above.
 
 ## Read-only triage
 
