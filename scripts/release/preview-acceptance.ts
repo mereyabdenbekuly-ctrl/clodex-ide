@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -400,6 +401,7 @@ export interface AutomatedCollectionOptions {
   publication: PreviewAcceptanceInput['publication'];
   repositoryDirectory: string;
   runSourceChecks: boolean;
+  verifiedPublicationSnapshotPath?: string;
 }
 
 export const CANARY_5_POLICY = {
@@ -439,9 +441,15 @@ function receipt(
   };
 }
 
-function sanitizeChildEnvironment(): NodeJS.ProcessEnv {
+export function sanitizeChildEnvironment(): NodeJS.ProcessEnv {
   const environment = { ...process.env };
   const blockedNames = [
+    'ACTIONS_CACHE_URL',
+    'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+    'ACTIONS_ID_TOKEN_REQUEST_URL',
+    'ACTIONS_RESULTS_URL',
+    'ACTIONS_RUNTIME_TOKEN',
+    'ACTIONS_RUNTIME_URL',
     'ANTHROPIC_API_KEY',
     'APPLE_ID',
     'APPLE_PASSWORD',
@@ -449,6 +457,11 @@ function sanitizeChildEnvironment(): NodeJS.ProcessEnv {
     'CLODEX_API_KEY',
     'DEEPSEEK_API_KEY',
     'GEMINI_API_KEY',
+    'GH_TOKEN',
+    'GITHUB_ENV',
+    'GITHUB_OUTPUT',
+    'GITHUB_PATH',
+    'GITHUB_STEP_SUMMARY',
     'GITHUB_TOKEN',
     'GOOGLE_GENERATIVE_AI_API_KEY',
     'OPENAI_API_KEY',
@@ -456,6 +469,104 @@ function sanitizeChildEnvironment(): NodeJS.ProcessEnv {
   ];
   for (const name of blockedNames) delete environment[name];
   return environment;
+}
+
+function collectVerifiedPublicationSnapshotCheck(
+  options: Pick<
+    AutomatedCollectionOptions,
+    | 'context'
+    | 'githubRepository'
+    | 'publication'
+    | 'repositoryDirectory'
+    | 'verifiedPublicationSnapshotPath'
+  >,
+): AcceptanceCheckReceipt {
+  if (options.githubRepository !== CANONICAL_RELEASE_REPOSITORY) {
+    return receipt(
+      'publication.github-release',
+      'blocked',
+      'github-repository-not-provided',
+    );
+  }
+  if (
+    options.publication.githubReleaseId === null ||
+    options.publication.githubReleaseState !== 'draft' ||
+    !options.verifiedPublicationSnapshotPath
+  ) {
+    return receipt(
+      'publication.github-release',
+      'blocked',
+      'verified-publication-snapshot-missing',
+    );
+  }
+
+  let tagCommit: string;
+  try {
+    tagCommit = runGit(options.repositoryDirectory, [
+      'rev-parse',
+      '--verify',
+      `refs/tags/${options.context.plan.tag}^{commit}`,
+    ]);
+  } catch {
+    return receipt(
+      'publication.github-release',
+      'blocked',
+      'release-tag-unavailable',
+    );
+  }
+  if (tagCommit !== options.context.releaseRef) {
+    return receipt(
+      'publication.github-release',
+      'fail',
+      'release-tag-source-mismatch',
+    );
+  }
+
+  let snapshot: unknown;
+  try {
+    const stats = lstatSync(options.verifiedPublicationSnapshotPath);
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= 0) {
+      throw new Error('invalid snapshot file');
+    }
+    snapshot = readJsonFile(options.verifiedPublicationSnapshotPath);
+  } catch {
+    return receipt(
+      'publication.github-release',
+      'fail',
+      'verified-publication-snapshot-invalid',
+    );
+  }
+  const reportAsset =
+    isObject(snapshot) && isObject(snapshot.reportAsset)
+      ? snapshot.reportAsset
+      : null;
+  const valid =
+    isObject(snapshot) &&
+    snapshot.releaseId === options.publication.githubReleaseId &&
+    snapshot.repository === options.githubRepository &&
+    snapshot.sourceCommit === options.context.releaseRef &&
+    snapshot.tag === options.context.plan.tag &&
+    typeof snapshot.createdAt === 'string' &&
+    Number.isFinite(Date.parse(snapshot.createdAt)) &&
+    isSha256(snapshot.reportSha256) &&
+    Array.isArray(snapshot.assets) &&
+    snapshot.assets.length > 0 &&
+    reportAsset !== null &&
+    typeof reportAsset.fileName === 'string' &&
+    snapshot.assets.some(
+      (asset) =>
+        isObject(asset) &&
+        asset.fileName === reportAsset.fileName &&
+        asset.releaseAssetId === reportAsset.releaseAssetId &&
+        asset.sha256 === reportAsset.sha256,
+    );
+  return receipt(
+    'publication.github-release',
+    valid ? 'pass' : 'fail',
+    valid
+      ? 'verified-publication-snapshot-matched'
+      : 'verified-publication-snapshot-mismatch',
+  );
 }
 
 function runContentFreeCommand(
@@ -991,7 +1102,11 @@ export function collectAutomatedAcceptance(
     );
   }
 
-  receipts.push(collectGitHubPublicationCheck(options));
+  receipts.push(
+    options.verifiedPublicationSnapshotPath
+      ? collectVerifiedPublicationSnapshotCheck(options)
+      : collectGitHubPublicationCheck(options),
+  );
 
   const nodeVersion = process.version.replace(/^v/u, '');
   receipts.push(

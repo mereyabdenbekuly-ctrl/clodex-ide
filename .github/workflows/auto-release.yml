@@ -114,9 +114,17 @@ jobs:
                 return 1
               fi
               case "$release_state" in
-                exists)
-                  echo "  ✅ Tag and GitHub Release exist — already released"
+                published)
+                  echo "  ✅ Tag and published GitHub Release exist — already released and immutable"
                   echo "${name}_needs_release=false" >> "$GITHUB_OUTPUT"
+                  ;;
+                draft)
+                  if [ "$name" != "clodex" ] || [ "$channel" != "release" ]; then
+                    echo "::error::Protected draft retry is unsupported for ${name} channel ${channel}; manual recovery is required"
+                    return 1
+                  fi
+                  echo "  🚀 Tag and protected draft exist — retrying exact identity verification and safe resume"
+                  echo "${name}_needs_release=true" >> "$GITHUB_OUTPUT"
                   ;;
                 absent)
                   echo "  🚀 Tag exists without a GitHub Release — retrying immutable release"
@@ -163,7 +171,7 @@ jobs:
       channel: ${{ needs.detect.outputs.clodex-channel }}
       ref: ${{ needs.detect.outputs.release-ref }}
       manifest: ${{ needs.detect.outputs.clodex-channel == 'release' && '.release-notes/clodex-stable.json' || '' }}
-      draft: false
+      draft: ${{ needs.detect.outputs.clodex-channel == 'release' }}
     secrets: inherit
 
   # ---------------------------------------------------------------------------

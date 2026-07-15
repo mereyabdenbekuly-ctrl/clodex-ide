@@ -18,31 +18,29 @@ on:
     outputs:
       snapshot_artifact_id:
         description: "Exact upload-artifact ID containing the attested live publication snapshot"
-        value: ${{ jobs.attest-publication.outputs.snapshot_artifact_id }}
+        value: ${{ jobs.attest.outputs.snapshot_artifact_id }}
       snapshot_sha256:
         description: "SHA-256 of the attested live publication snapshot"
-        value: ${{ jobs.attest-publication.outputs.snapshot_sha256 }}
+        value: ${{ jobs.attest.outputs.snapshot_sha256 }}
 
 permissions:
   contents: read
 
 jobs:
-  attest-publication:
-    name: Verify and attest live publication
+  collect:
+    name: Collect unprivileged live publication candidate
     runs-on: ubuntu-latest
-    environment: Release
     permissions:
-      attestations: write
       contents: read
-      id-token: write
     outputs:
-      snapshot_artifact_id: ${{ steps.snapshot-upload.outputs.artifact-id }}
-      snapshot_sha256: ${{ steps.snapshot.outputs.snapshot_sha256 }}
+      candidate_artifact_id: ${{ steps.candidate-upload.outputs.artifact-id }}
+      report_sha256: ${{ steps.subjects.outputs.report_sha256 }}
+      snapshot_sha256: ${{ steps.subjects.outputs.snapshot_sha256 }}
     steps:
-      - name: Checkout trusted default branch
+      - name: Checkout exact publication source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: main
+          ref: ${{ inputs.source_commit }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -54,6 +52,7 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main"
           test "$GITHUB_SHA" = "$RELEASE_SOURCE_COMMIT"
           test "$GITHUB_WORKFLOW_SHA" = "$RELEASE_SOURCE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_COMMIT"
           remote_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
           test "$remote_main" = "$RELEASE_SOURCE_COMMIT"
 
@@ -78,47 +77,503 @@ jobs:
           RELEASE_SOURCE_COMMIT: ${{ inputs.source_commit }}
           RELEASE_TAG: ${{ inputs.tag }}
           REPORT_NAME: ${{ inputs.report_name }}
-        run: >-
-          node scripts/release/verify-release-publication.mjs
-          --assets="${RUNNER_TEMP}/release-assets"
-          --expected-release-state=draft
-          --expected-run-attempt="${GITHUB_RUN_ATTEMPT}"
-          --expected-source-commit="${RELEASE_SOURCE_COMMIT}"
-          --expected-tag="${RELEASE_TAG}"
-          --expected-workflow-run-id="${GITHUB_RUN_ID}"
-          --release-id="${RELEASE_ID}"
-          --release-json="${RUNNER_TEMP}/release.json"
-          --report="${RUNNER_TEMP}/release-assets/${REPORT_NAME}"
-          --report-name="${REPORT_NAME}"
-          --repository="${GITHUB_REPOSITORY}"
-          --snapshot="${RUNNER_TEMP}/publication-snapshot.json"
+        run: |
+          env \
+            -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            -u ACTIONS_ID_TOKEN_REQUEST_URL \
+            -u ACTIONS_RUNTIME_TOKEN \
+            -u GH_TOKEN \
+            -u GITHUB_ENV \
+            -u GITHUB_OUTPUT \
+            -u GITHUB_PATH \
+            -u GITHUB_STEP_SUMMARY \
+            -u GITHUB_TOKEN \
+            node scripts/release/verify-release-publication.mjs \
+            --assets="${RUNNER_TEMP}/release-assets" \
+            --expected-release-state=draft \
+            --expected-run-attempt="${GITHUB_RUN_ATTEMPT}" \
+            --expected-source-commit="${RELEASE_SOURCE_COMMIT}" \
+            --expected-tag="${RELEASE_TAG}" \
+            --expected-workflow-run-id="${GITHUB_RUN_ID}" \
+            --release-id="${RELEASE_ID}" \
+            --release-json="${RUNNER_TEMP}/release.json" \
+            --report="${RUNNER_TEMP}/release-assets/${REPORT_NAME}" \
+            --report-name="${REPORT_NAME}" \
+            --repository="${GITHUB_REPOSITORY}" \
+            --snapshot="${RUNNER_TEMP}/publication-snapshot.json"
+
+      - name: Bind exact candidate bytes for the privileged handoff
+        id: subjects
+        env:
+          REPORT_NAME: ${{ inputs.report_name }}
+        run: |
+          candidate_dir="${RUNNER_TEMP}/publication-candidate"
+          mkdir -m 0700 "$candidate_dir"
+          cp --no-preserve=mode,ownership \
+            "${RUNNER_TEMP}/release-assets/${REPORT_NAME}" \
+            "${candidate_dir}/${REPORT_NAME}"
+          cp --no-preserve=mode,ownership \
+            "${RUNNER_TEMP}/publication-snapshot.json" \
+            "${candidate_dir}/publication-snapshot.json"
+          test "$(find "$candidate_dir" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = "2"
+          test "$(find "$candidate_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = "2"
+          test ! -L "${candidate_dir}/${REPORT_NAME}"
+          test ! -L "${candidate_dir}/publication-snapshot.json"
+          chmod 0444 "${candidate_dir}/${REPORT_NAME}" "${candidate_dir}/publication-snapshot.json"
+          report_sha256=$(sha256sum "${candidate_dir}/${REPORT_NAME}" | awk '{print $1}')
+          snapshot_sha256=$(sha256sum "${candidate_dir}/publication-snapshot.json" | awk '{print $1}')
+          test -n "$report_sha256"
+          test -n "$snapshot_sha256"
+          echo "report_sha256=$report_sha256" >> "$GITHUB_OUTPUT"
+          echo "snapshot_sha256=$snapshot_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable unprivileged publication candidate
+        id: candidate-upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clodex-publication-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publication-candidate/
+          if-no-files-found: error
+          retention-days: 7
+
+  attest:
+    name: Verify handoff and attest exact publication bytes
+    needs: collect
+    runs-on: ubuntu-latest
+    environment: Release
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    outputs:
+      snapshot_artifact_id: ${{ steps.snapshot-upload.outputs.artifact-id }}
+      snapshot_sha256: ${{ steps.verify-subjects.outputs.snapshot_sha256 }}
+    steps:
+      - name: Require exact canonical main signer source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$RELEASE_SOURCE_COMMIT"
+          test "$GITHUB_WORKFLOW_SHA" = "$RELEASE_SOURCE_COMMIT"
+          remote_main=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')
+          test -n "$remote_main"
+          test "$remote_main" = "$RELEASE_SOURCE_COMMIT"
+
+      - name: Download exact unprivileged publication candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.collect.outputs.candidate_artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/publication-candidate
+
+      - name: Verify exact candidate digests and terminal schema
+        id: verify-subjects
+        env:
+          EXPECTED_RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_REPORT_SHA256: ${{ needs.collect.outputs.report_sha256 }}
+          EXPECTED_SNAPSHOT_SHA256: ${{ needs.collect.outputs.snapshot_sha256 }}
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
+          EXPECTED_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          REPORT_NAME: ${{ inputs.report_name }}
+        run: |
+          candidate_dir="${RUNNER_TEMP}/publication-candidate"
+          entry_count=$(find "$candidate_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+          regular_count=$(find "$candidate_dir" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')
+          test "$entry_count" = "2"
+          test "$regular_count" = "2"
+          report="${candidate_dir}/${REPORT_NAME}"
+          snapshot="${candidate_dir}/publication-snapshot.json"
+          test -f "$report"
+          test ! -L "$report"
+          test -s "$report"
+          test "$(wc -c < "$report" | tr -d ' ')" -le 1048576
+          test -f "$snapshot"
+          test ! -L "$snapshot"
+          test -s "$snapshot"
+          test "$(wc -c < "$snapshot" | tr -d ' ')" -le 1048576
+          report_sha256=$(sha256sum "$report" | awk '{print $1}')
+          snapshot_sha256=$(sha256sum "$snapshot" | awk '{print $1}')
+          test "$report_sha256" = "$EXPECTED_REPORT_SHA256"
+          test "$snapshot_sha256" = "$EXPECTED_SNAPSHOT_SHA256"
+          node - "$report" "$snapshot" <<'NODE'
+          const { createHash } = require('node:crypto');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const [reportPath, snapshotPath] = process.argv.slice(2);
+          const reportBytes = fs.readFileSync(reportPath);
+          const report = JSON.parse(reportBytes.toString('utf8'));
+          const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+          const apiOrigin = 'https://api.github.com';
+          const repository = process.env.GITHUB_REPOSITORY;
+          const token = process.env.GH_TOKEN;
+          const now = Date.now();
+          const expectedBuilds = [
+            'linux:x64',
+            'macos:arm64',
+            'macos:x64',
+            'windows:x64',
+          ];
+          const expectedChecks = [
+            'artifact.app-icon',
+            'artifact.clean-profile-launch',
+            'artifact.packaged-smoke',
+            'artifact.validation-manifest',
+            'security.distribution-trust',
+          ];
+          const assert = (condition, message) => {
+            if (!condition) throw new Error(message);
+          };
+          const isObject = (value) =>
+            typeof value === 'object' && value !== null && !Array.isArray(value);
+          const isCommit = (value) => /^[a-f0-9]{40}$/.test(String(value ?? ''));
+          const isSha256 = (value) => /^[a-f0-9]{64}$/.test(String(value ?? ''));
+          const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+          const sameStrings = (actual, expected) =>
+            Array.isArray(actual) &&
+            JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
+          const safeFileName = (value) =>
+            typeof value === 'string' &&
+            value.length > 0 &&
+            value === path.basename(value) &&
+            !value.includes('/') &&
+            !value.includes('\\');
+          const validDate = (value) => {
+            const time = typeof value === 'string' ? Date.parse(value) : Number.NaN;
+            return Number.isFinite(time) && time <= now + 5 * 60 * 1000;
+          };
+          const canonicalize = (value) => {
+            if (Array.isArray(value)) return value.map(canonicalize);
+            if (isObject(value)) {
+              return Object.fromEntries(
+                Object.keys(value)
+                  .sort()
+                  .map((key) => [key, canonicalize(value[key])]),
+              );
+            }
+            return value;
+          };
+          const sameJson = (left, right) =>
+            JSON.stringify(canonicalize(left)) === JSON.stringify(canonicalize(right));
+          const github = async (endpoint, accept = 'application/vnd.github+json') => {
+            const response = await fetch(endpoint, {
+              cache: 'no-store',
+              headers: {
+                accept,
+                authorization: `Bearer ${token}`,
+                'x-github-api-version': '2022-11-28',
+              },
+              redirect: 'follow',
+            });
+            assert(response.ok, `GitHub API request failed: ${response.status}`);
+            return response;
+          };
+          const validateAsset = (asset, requireId = false) => {
+            assert(isObject(asset), 'publication asset is invalid');
+            assert(safeFileName(asset.fileName), 'publication asset filename is invalid');
+            assert(Number.isSafeInteger(asset.bytes) && asset.bytes > 0, 'publication asset size is invalid');
+            assert(isSha256(asset.sha256), 'publication asset digest is invalid');
+            if (requireId) {
+              assert(
+                Number.isSafeInteger(asset.releaseAssetId) && asset.releaseAssetId > 0,
+                'publication asset ID is invalid',
+              );
+            }
+          };
+          const expectedReleaseId = Number.parseInt(process.env.EXPECTED_RELEASE_ID, 10);
+          const expectedSource = process.env.EXPECTED_SOURCE_COMMIT;
+          const expectedTag = process.env.EXPECTED_TAG;
+          const reportName = process.env.REPORT_NAME;
+          const reportSha256 = sha256(reportBytes);
+
+          assert(token, 'GitHub read token is missing');
+          assert(repository === 'mereyabdenbekuly-ctrl/clodex-ide', 'repository is not canonical');
+          assert(Number.isSafeInteger(expectedReleaseId) && expectedReleaseId > 0, 'release ID is invalid');
+          assert(isCommit(expectedSource), 'source commit is invalid');
+          assert(typeof expectedTag === 'string' && expectedTag.length > 0, 'release tag is invalid');
+          assert(safeFileName(reportName), 'report name is invalid');
+          assert(reportSha256 === process.env.EXPECTED_REPORT_SHA256, 'report digest changed');
+
+          assert(isObject(report), 'publication report is invalid');
+          assert(
+            report.schemaVersion === 2 &&
+              report.reportKind === 'release-publication' &&
+              report.status === 'validated',
+            'publication report schema/status is invalid',
+          );
+          assert(validDate(report.generatedAt), 'publication report timestamp is invalid');
+          assert(report.repository === repository, 'publication report repository is invalid');
+          assert(report.sourceCommit === expectedSource, 'publication report source is invalid');
+          assert(report.tag === expectedTag, 'publication report tag is invalid');
+          const stablePublication = report.channel === 'release';
+          assert(
+            (stablePublication &&
+              /^\d+\.\d+\.\d+$/.test(String(report.version ?? '')) &&
+              report.tag === `clodex@${report.version}`) ||
+              (report.channel === 'prerelease' &&
+                /^\d+\.\d+\.\d+-preview\.\d+$/.test(String(report.version ?? '')) &&
+                report.tag === `v${report.version}`),
+            'publication report version/channel binding is invalid',
+          );
+          assert(
+            isObject(report.releasePlan) &&
+              typeof report.releasePlan.path === 'string' &&
+              !report.releasePlan.path.includes('\\') &&
+              path.posix.normalize(report.releasePlan.path) === report.releasePlan.path &&
+              report.releasePlan.path.startsWith('.release-notes/') &&
+              report.releasePlan.path.endsWith('.json') &&
+              isSha256(report.releasePlan.sha256),
+            'publication release plan binding is invalid',
+          );
+          assert(
+            isObject(report.workflow) &&
+              report.workflow.runId === Number(process.env.GITHUB_RUN_ID) &&
+              report.workflow.runAttempt === Number(process.env.GITHUB_RUN_ATTEMPT) &&
+              report.workflow.commit === expectedSource &&
+              report.workflow.sourceRef === 'refs/heads/main',
+            'publication workflow binding is invalid',
+          );
+
+          assert(Array.isArray(report.assets) && report.assets.length > 0, 'report assets are missing');
+          const reportAssetNames = new Set();
+          const reportBuilds = new Set();
+          const expectedReportAssets = new Map();
+          for (const asset of report.assets) {
+            validateAsset(asset);
+            assert(expectedBuilds.includes(asset.identity), 'publication asset build is invalid');
+            assert(!reportAssetNames.has(asset.fileName), 'publication assets are duplicated');
+            assert(asset.fileName !== reportName, 'report name collides with a build asset');
+            reportAssetNames.add(asset.fileName);
+            reportBuilds.add(asset.identity);
+            expectedReportAssets.set(asset.fileName, asset);
+          }
+          assert(sameStrings([...reportBuilds], expectedBuilds), 'publication build coverage is invalid');
+          assert(sameStrings(report.builds, expectedBuilds), 'publication build matrix is invalid');
+
+          assert(Array.isArray(report.validations) && report.validations.length === 4, 'validation receipts are invalid');
+          const validationNames = new Set();
+          const validationBuilds = [];
+          for (const validation of report.validations) {
+            assert(
+              isObject(validation) &&
+                ['macos', 'windows', 'linux'].includes(validation.platform) &&
+                ['arm64', 'x64'].includes(validation.arch) &&
+                validation.status === 'passed' &&
+                safeFileName(validation.manifestFileName) &&
+                isSha256(validation.manifestSha256) &&
+                isSha256(validation.checksSha256) &&
+                (validation.signatureSha256 === null || isSha256(validation.signatureSha256)) &&
+                (validation.trustSha256 === null || isSha256(validation.trustSha256)),
+              'validation receipt is invalid',
+            );
+            assert(!validationNames.has(validation.manifestFileName), 'validation receipts are duplicated');
+            validationNames.add(validation.manifestFileName);
+            validationBuilds.push(`${validation.platform}:${validation.arch}`);
+          }
+          assert(sameStrings(validationBuilds, expectedBuilds), 'validation build matrix is invalid');
+          assert(
+            Array.isArray(report.acceptanceChecks) &&
+              sameStrings(
+                report.acceptanceChecks.map((check) => check?.id),
+                expectedChecks,
+              ) &&
+              report.acceptanceChecks.every(
+                (check) =>
+                  check?.status === 'pass' &&
+                  check?.reasonCode === 'attested-publication-validation',
+              ),
+            'publication acceptance receipts are invalid',
+          );
+
+          const manifestPath = report.releasePlan.path
+            .split('/')
+            .map(encodeURIComponent)
+            .join('/');
+          const manifestResponse = await github(
+            `${apiOrigin}/repos/${repository}/contents/${manifestPath}?ref=${expectedSource}`,
+          );
+          const manifestRecord = await manifestResponse.json();
+          assert(
+            isObject(manifestRecord) &&
+              manifestRecord.type === 'file' &&
+              manifestRecord.encoding === 'base64' &&
+              typeof manifestRecord.content === 'string',
+            'committed release plan response is invalid',
+          );
+          const manifestBytes = Buffer.from(manifestRecord.content.replace(/\s/g, ''), 'base64');
+          assert(sha256(manifestBytes) === report.releasePlan.sha256, 'committed release plan digest is invalid');
+          const plan = JSON.parse(manifestBytes.toString('utf8'));
+          assert(
+            plan.schemaVersion === 2 &&
+              plan.version === report.version &&
+              plan.tag === report.tag &&
+              plan.sourceRef === 'main' &&
+              plan.buildChannel === report.channel &&
+              plan.distribution?.githubReleaseState === 'draft' &&
+              plan.distribution?.protectedEnvironment === 'Release' &&
+              ((stablePublication && plan.releaseKind === 'stable') ||
+                (!stablePublication && plan.releaseKind === 'technical-preview')),
+            'committed release plan identity is invalid',
+          );
+
+          const mainResponse = await github(`${apiOrigin}/repos/${repository}/git/ref/heads/main`);
+          const main = await mainResponse.json();
+          assert(main?.object?.sha === expectedSource, 'canonical main moved before attestation');
+          const tagResponse = await github(
+            `${apiOrigin}/repos/${repository}/git/ref/tags/${encodeURIComponent(expectedTag)}`,
+          );
+          const tag = await tagResponse.json();
+          assert(
+            tag?.object?.type === 'commit' && tag.object.sha === expectedSource,
+            'release tag no longer resolves to the publication source',
+          );
+
+          const releaseResponse = await github(
+            `${apiOrigin}/repos/${repository}/releases/${expectedReleaseId}`,
+          );
+          const release = await releaseResponse.json();
+          assert(
+            release?.id === expectedReleaseId &&
+              release.tag_name === expectedTag &&
+              release.target_commitish === expectedSource &&
+              release.draft === true &&
+              release.prerelease === !stablePublication &&
+              release.published_at === null &&
+              validDate(release.created_at),
+            'live GitHub Release identity/state is invalid',
+          );
+          assert(Array.isArray(release.assets), 'live GitHub Release assets are missing');
+          const expectedLiveNames = [...reportAssetNames, reportName].sort();
+          assert(
+            sameStrings(
+              release.assets.map((asset) => asset?.name),
+              expectedLiveNames,
+            ),
+            'live GitHub Release asset set is invalid',
+          );
+
+          const derivedAssets = [];
+          for (const asset of release.assets) {
+            assert(
+              isObject(asset) &&
+                Number.isSafeInteger(asset.id) &&
+                asset.id > 0 &&
+                safeFileName(asset.name) &&
+                asset.state === 'uploaded' &&
+                Number.isSafeInteger(asset.size) &&
+                asset.size > 0 &&
+                typeof asset.digest === 'string' &&
+                asset.digest.startsWith('sha256:'),
+              'live release asset metadata is invalid',
+            );
+            const assetResponse = await github(
+              `${apiOrigin}/repos/${repository}/releases/assets/${asset.id}`,
+              'application/octet-stream',
+            );
+            const hash = createHash('sha256');
+            let byteCount = 0;
+            for await (const chunk of assetResponse.body) {
+              const bytes = Buffer.from(chunk);
+              byteCount += bytes.length;
+              assert(byteCount <= asset.size, 'live release asset exceeds API size');
+              hash.update(bytes);
+            }
+            const digest = hash.digest('hex');
+            assert(byteCount === asset.size, 'live release asset size is invalid');
+            assert(asset.digest === `sha256:${digest}`, 'live release asset API digest is invalid');
+            const expectedAsset = expectedReportAssets.get(asset.name);
+            if (expectedAsset) {
+              assert(
+                expectedAsset.bytes === byteCount && expectedAsset.sha256 === digest,
+                'live release asset differs from the publication report',
+              );
+            } else {
+              assert(
+                asset.name === reportName &&
+                  byteCount === reportBytes.length &&
+                  digest === reportSha256,
+                'live publication report asset differs from the handoff',
+              );
+            }
+            derivedAssets.push({
+              bytes: byteCount,
+              fileName: asset.name,
+              releaseAssetId: asset.id,
+              sha256: digest,
+            });
+          }
+          derivedAssets.sort((left, right) => left.fileName.localeCompare(right.fileName));
+          const derivedReportAsset = derivedAssets.find((asset) => asset.fileName === reportName);
+          assert(derivedReportAsset, 'live publication report asset is missing');
+
+          assert(isObject(snapshot), 'publication snapshot is invalid');
+          const assets = Array.isArray(snapshot.assets) ? snapshot.assets : [];
+          const names = new Set();
+          const ids = new Set();
+          const assetsValid = assets.length > 1 && assets.every((asset) => {
+            try {
+              validateAsset(asset, true);
+            } catch {
+              return false;
+            }
+            const valid = !names.has(asset.fileName) && !ids.has(asset.releaseAssetId);
+            names.add(asset.fileName);
+            ids.add(asset.releaseAssetId);
+            return valid;
+          });
+          const reportAsset = assets.find((asset) => asset?.fileName === reportName);
+          assert(assetsValid, 'publication snapshot assets are invalid');
+          assert(
+            snapshot.repository === repository &&
+              snapshot.releaseId === expectedReleaseId &&
+              snapshot.sourceCommit === expectedSource &&
+              snapshot.tag === expectedTag &&
+              snapshot.reportSha256 === reportSha256 &&
+              snapshot.createdAt === new Date(Date.parse(release.created_at)).toISOString() &&
+              reportAsset &&
+              snapshot.reportAsset?.fileName === reportName &&
+              snapshot.reportAsset?.releaseAssetId === reportAsset.releaseAssetId &&
+              snapshot.reportAsset?.sha256 === reportAsset.sha256 &&
+              reportAsset.sha256 === reportSha256,
+            'publication snapshot identity is invalid',
+          );
+          const derivedSnapshot = {
+            assets: derivedAssets,
+            createdAt: new Date(Date.parse(release.created_at)).toISOString(),
+            releaseId: expectedReleaseId,
+            reportAsset: derivedReportAsset,
+            reportSha256,
+            repository,
+            sourceCommit: expectedSource,
+            tag: expectedTag,
+          };
+          assert(sameJson(snapshot, derivedSnapshot), 'publication snapshot differs from live exact-ID state');
+
+          const finalMainResponse = await github(`${apiOrigin}/repos/${repository}/git/ref/heads/main`);
+          const finalMain = await finalMainResponse.json();
+          assert(finalMain?.object?.sha === expectedSource, 'canonical main moved during attestation');
+          NODE
+          echo "snapshot_sha256=$snapshot_sha256" >> "$GITHUB_OUTPUT"
 
       - name: Attest exact publication report bytes
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: ${{ runner.temp }}/release-assets/${{ inputs.report_name }}
-
-      - name: Bind exact live publication snapshot bytes
-        id: snapshot
-        run: |
-          snapshot="${RUNNER_TEMP}/publication-snapshot.json"
-          test -f "$snapshot"
-          test ! -L "$snapshot"
-          test -s "$snapshot"
-          snapshot_sha256=$(sha256sum "$snapshot" | awk '{print $1}')
-          test -n "$snapshot_sha256"
-          echo "snapshot_sha256=$snapshot_sha256" >> "$GITHUB_OUTPUT"
+          subject-path: ${{ runner.temp }}/publication-candidate/${{ inputs.report_name }}
 
       - name: Attest exact live publication snapshot bytes and asset IDs
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: ${{ runner.temp }}/publication-snapshot.json
+          subject-path: ${{ runner.temp }}/publication-candidate/publication-snapshot.json
 
       - name: Upload verified publication snapshot
         id: snapshot-upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: clodex-publication-attestation-${{ inputs.tag }}
-          path: ${{ runner.temp }}/publication-snapshot.json
+          path: ${{ runner.temp }}/publication-candidate/publication-snapshot.json
           if-no-files-found: error
           retention-days: 90

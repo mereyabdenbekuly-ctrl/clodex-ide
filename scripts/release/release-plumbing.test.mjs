@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import {
+  assertProtectedDraftState,
+  exactUploadEndpoint,
+  GitHubReleaseApi,
+  parseProtectedDraftArguments,
+  stageProtectedReleaseDraft,
+} from './create-protected-release-draft.mjs';
 import { queryGitHubReleaseState } from './github-release-state.mjs';
 import {
   assertReleaseTagReusable,
@@ -194,6 +205,19 @@ function acceptedEvidence({ plan, sourceCommit, status, canary }) {
 test('schema-v2 preview.2 is a draft rollback baseline without a target tag', () => {
   const plan = baselinePlan();
   assert.doesNotThrow(() => validateReleasePlan(plan));
+  for (const previewNumber of [1, 4, 99]) {
+    const version = `1.16.0-preview.${previewNumber}`;
+    assert.throws(
+      () =>
+        validateReleasePlan({
+          ...plan,
+          tag: `v${version}`,
+          validationArtifacts: expectedValidation(version),
+          version,
+        }),
+      /requires preview\.2 as rollback baseline/,
+    );
+  }
   assert.throws(
     () =>
       validateReleasePlan({
@@ -385,8 +409,9 @@ test('stable release requires real preview.3 canary-5 evidence', () => {
     buildChannel: 'release',
     channel: 'release',
     distribution: {
-      githubReleaseState: 'published',
-      publicDownloadLinks: true,
+      githubReleaseState: 'draft',
+      protectedEnvironment: 'Release',
+      publicDownloadLinks: false,
     },
     promotionEvidence: '.release-evidence/v1.16.0-preview.3.json',
     releaseKind: 'stable',
@@ -405,6 +430,20 @@ test('stable release requires real preview.3 canary-5 evidence', () => {
     verifyEvidenceTrust: () => true,
   };
   assert.doesNotThrow(() => validateReleasePlan(stablePlan, evidenceContext));
+  assert.throws(
+    () =>
+      validateReleasePlan(
+        {
+          ...stablePlan,
+          distribution: {
+            githubReleaseState: 'published',
+            publicDownloadLinks: true,
+          },
+        },
+        evidenceContext,
+      ),
+    /protected draft without public links/,
+  );
   assert.throws(
     () =>
       validateReleasePlan(stablePlan, {
@@ -430,21 +469,25 @@ test('stable release requires real preview.3 canary-5 evidence', () => {
   );
 });
 
-function mockedGhResult({ error, httpStatus, status }) {
+function mockedGhResult({ body = [], error, httpStatus, status }) {
   return {
     error,
     status,
     stderr:
       httpStatus === undefined ? '' : `gh: mocked failure (HTTP ${httpStatus})`,
-    stdout:
-      httpStatus === undefined
-        ? ''
-        : `HTTP/2.0 ${httpStatus} Mocked\nContent-Type: application/json\n\n{}`,
+    stdout: status === 0 ? JSON.stringify(body) : '',
   };
 }
 
-test('GitHub release lookup treats only a real HTTP 404 as absent', () => {
-  const runGh = () => mockedGhResult({ httpStatus: 404, status: 1 });
+test('GitHub release lookup paginates all records and reports no exact tag as absent', () => {
+  const calls = [];
+  const runGh = (...args) => {
+    calls.push(args);
+    return mockedGhResult({
+      body: [[{ draft: false, published_at: 'now', tag_name: 'other' }]],
+      status: 0,
+    });
+  };
   assert.equal(
     queryGitHubReleaseState({
       repository: 'owner/repository',
@@ -453,22 +496,95 @@ test('GitHub release lookup treats only a real HTTP 404 as absent', () => {
     }),
     'absent',
   );
+  assert.deepEqual(calls[0][1], [
+    'api',
+    '--paginate',
+    '--slurp',
+    '--method',
+    'GET',
+    'repos/owner/repository/releases?per_page=100',
+  ]);
 });
 
-test('GitHub release lookup accepts an HTTP 200 as existing', () => {
-  const runGh = () => mockedGhResult({ httpStatus: 200, status: 0 });
+test('GitHub release lookup distinguishes exact drafts from published releases', () => {
+  const tag = 'v1.16.0-preview.2';
+  const draftGh = () =>
+    mockedGhResult({
+      body: [[{ draft: true, published_at: null, tag_name: tag }]],
+      status: 0,
+    });
   assert.equal(
     queryGitHubReleaseState({
       repository: 'owner/repository',
-      runGh,
-      tag: 'v1.16.0-preview.2',
+      runGh: draftGh,
+      tag,
     }),
-    'exists',
+    'draft',
+  );
+
+  const publishedGh = () =>
+    mockedGhResult({
+      body: [
+        [
+          {
+            draft: false,
+            published_at: '2026-07-15T12:00:00Z',
+            tag_name: tag,
+          },
+        ],
+      ],
+      status: 0,
+    });
+  assert.equal(
+    queryGitHubReleaseState({
+      repository: 'owner/repository',
+      runGh: publishedGh,
+      tag,
+    }),
+    'published',
   );
 });
 
+test('GitHub release lookup rejects duplicate, malformed, or inconsistent state', () => {
+  const tag = 'v1.16.0-preview.2';
+  for (const [body, expectedError] of [
+    [
+      [[{ draft: true, published_at: '2026-07-15T12:00:00Z', tag_name: tag }]],
+      /inconsistent publication state/,
+    ],
+    [
+      [[{ draft: false, published_at: null, tag_name: tag }]],
+      /inconsistent publication state/,
+    ],
+    [
+      [
+        [
+          { draft: true, published_at: null, tag_name: tag },
+          { draft: true, published_at: null, tag_name: tag },
+        ],
+      ],
+      /found 2 records/,
+    ],
+    [
+      [{ draft: true, published_at: null, tag_name: tag }],
+      /paginated response/,
+    ],
+    [[[null]], /invalid release metadata/],
+  ]) {
+    assert.throws(
+      () =>
+        queryGitHubReleaseState({
+          repository: 'owner/repository',
+          runGh: () => mockedGhResult({ body, status: 0 }),
+          tag,
+        }),
+      expectedError,
+    );
+  }
+});
+
 test('GitHub release lookup aborts on auth, rate-limit, and server failures', () => {
-  for (const httpStatus of [401, 403, 429, 500, 503]) {
+  for (const httpStatus of [401, 403, 404, 429, 500, 503]) {
     const runGh = () => mockedGhResult({ httpStatus, status: 1 });
     assert.throws(
       () =>
@@ -507,14 +623,616 @@ test('GitHub release lookup aborts on network and status-less failures', () => {
   );
 });
 
-test('release workflows fail closed when checking completed releases', () => {
+const protectedTag = 'v1.16.0-preview.2';
+const protectedRef = 'a'.repeat(40);
+const protectedRepository = 'owner/repository';
+const protectedBody = 'Release notes';
+const protectedName = 'Clodex Agentic IDE 1.16.0-preview.2';
+const protectedFixtureContents = {
+  'clodex-preview.zip': 'preview-bytes',
+  'clodex-release-publication.json': '{"schemaVersion":3}\n',
+};
+
+function protectedReleaseAssets() {
+  return Object.entries(protectedFixtureContents).map(
+    ([name, contents], index) => ({
+      digest: `sha256:${createHash('sha256').update(contents).digest('hex')}`,
+      id: 901 + index,
+      name,
+      size: Buffer.byteLength(contents),
+      state: 'uploaded',
+    }),
+  );
+}
+
+function protectedRelease({
+  assets = [],
+  body = protectedBody,
+  draft = true,
+  id = 734,
+  name = protectedName,
+  prerelease = true,
+  tag = protectedTag,
+  targetCommitish = protectedRef,
+} = {}) {
+  return {
+    assets,
+    body,
+    draft,
+    id,
+    name,
+    prerelease,
+    published_at: draft ? null : '2026-07-15T12:00:00Z',
+    tag_name: tag,
+    target_commitish: targetCommitish,
+    upload_url: `https://uploads.github.com/repos/${protectedRepository}/releases/${id}/assets{?name,label}`,
+  };
+}
+
+async function protectedAssetsFixture(t) {
+  const directory = await mkdtemp(join(tmpdir(), 'clodex-protected-draft-'));
+  t.after(() => rm(directory, { force: true, recursive: true }));
+  for (const [name, contents] of Object.entries(protectedFixtureContents)) {
+    await writeFile(join(directory, name), contents);
+  }
+  return directory;
+}
+
+test('protected draft parser rejects duplicate CLI arguments', () => {
+  assert.throws(
+    () =>
+      parseProtectedDraftArguments([
+        '--tag=v1.16.0-preview.2',
+        '--tag=v1.16.0-preview.3',
+      ]),
+    /Duplicate argument: --tag/,
+  );
+});
+
+test('protected draft state requires exact non-empty uploaded asset metadata', () => {
+  const release = protectedRelease({
+    assets: [
+      {
+        digest: `sha256:${'0'.repeat(64)}`,
+        id: 901,
+        name: 'clodex-preview.zip',
+        size: 13,
+        state: 'uploaded',
+      },
+    ],
+  });
+  assert.throws(
+    () =>
+      assertProtectedDraftState({
+        assets: release.assets,
+        body: protectedBody,
+        expectedAssets: [
+          {
+            bytes: 13,
+            name: 'clodex-preview.zip',
+            sha256: '1'.repeat(64),
+          },
+        ],
+        name: protectedName,
+        prerelease: true,
+        release,
+        releaseId: 734,
+        tag: protectedTag,
+        targetCommitish: protectedRef,
+      }),
+    /digest does not match/,
+  );
+  assert.throws(
+    () =>
+      assertProtectedDraftState({
+        assets: [{ ...release.assets[0], digest: null, state: 'new' }],
+        body: protectedBody,
+        expectedAssets: [
+          {
+            bytes: 13,
+            name: 'clodex-preview.zip',
+            sha256: '1'.repeat(64),
+          },
+        ],
+        name: protectedName,
+        prerelease: true,
+        release,
+        releaseId: 734,
+        tag: protectedTag,
+        targetCommitish: protectedRef,
+      }),
+    /not a complete non-empty upload/,
+  );
+});
+
+test('protected draft staging rejects zero-byte assets before API access', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'clodex-empty-draft-'));
+  t.after(() => rm(directory, { force: true, recursive: true }));
+  await writeFile(join(directory, 'empty.zip'), '');
+  await assert.rejects(
+    stageProtectedReleaseDraft({
+      api: {
+        listReleases: async () => {
+          throw new Error('API must not be called');
+        },
+      },
+      assetsDirectory: directory,
+      body: 'Release notes',
+      name: 'Clodex Agentic IDE 1.16.0-preview.2',
+      prerelease: true,
+      repository: protectedRepository,
+      tag: protectedTag,
+      targetCommitish: protectedRef,
+    }),
+    /must not be empty/,
+  );
+});
+
+test('protected draft staging refuses a pre-existing public release without mutation', async (t) => {
+  const assetsDirectory = await protectedAssetsFixture(t);
+  const calls = [];
+  const api = {
+    createDraft: async () => {
+      calls.push('create');
+      throw new Error('must not create');
+    },
+    deleteRelease: async () => calls.push('delete'),
+    getRelease: async () => calls.push('get'),
+    listReleases: async () => {
+      calls.push('list');
+      return [protectedRelease({ draft: false, id: 100 })];
+    },
+    uploadAsset: async () => calls.push('upload'),
+  };
+
+  await assert.rejects(
+    stageProtectedReleaseDraft({
+      api,
+      assetsDirectory,
+      body: 'Release notes',
+      name: 'Clodex Agentic IDE 1.16.0-preview.2',
+      prerelease: true,
+      repository: protectedRepository,
+      tag: protectedTag,
+      targetCommitish: protectedRef,
+    }),
+    /does not match the exact protected draft identity.*existing GitHub Release ID 100.*left untouched/,
+  );
+  assert.deepEqual(calls, ['list']);
+});
+
+test('protected draft retry verifies an exact draft and uploads only missing assets', async (t) => {
+  const assetsDirectory = await protectedAssetsFixture(t);
+  const expectedAssets = protectedReleaseAssets();
+  const partialRelease = protectedRelease({ assets: [expectedAssets[0]] });
+  const completeRelease = protectedRelease({ assets: expectedAssets });
+  const calls = [];
+  let getCount = 0;
+  let listCount = 0;
+  const api = {
+    createDraft: async () => {
+      calls.push({ type: 'create' });
+      throw new Error('must not create while an exact draft exists');
+    },
+    getRelease: async (repository, releaseId) => {
+      calls.push({ releaseId, repository, type: 'get' });
+      getCount += 1;
+      return getCount === 1 ? partialRelease : completeRelease;
+    },
+    listReleases: async () => {
+      calls.push({ type: 'list' });
+      listCount += 1;
+      return listCount === 1 ? [partialRelease] : [completeRelease];
+    },
+    uploadAsset: async ({ asset, uploadEndpoint }) => {
+      calls.push({
+        endpoint: uploadEndpoint.href,
+        name: asset.name,
+        type: 'upload',
+      });
+      return {
+        digest: `sha256:${asset.sha256}`,
+        id: 999,
+        name: asset.name,
+        size: asset.bytes,
+        state: 'uploaded',
+      };
+    },
+  };
+
+  const result = await stageProtectedReleaseDraft({
+    api,
+    assetsDirectory,
+    body: protectedBody,
+    name: protectedName,
+    prerelease: true,
+    repository: protectedRepository,
+    tag: protectedTag,
+    targetCommitish: protectedRef,
+  });
+
+  assert.deepEqual(result, {
+    assetNames: Object.keys(protectedFixtureContents).sort(),
+    releaseId: 734,
+    resumed: true,
+  });
+  assert.deepEqual(
+    calls.filter((call) => call.type === 'upload'),
+    [
+      {
+        endpoint: `https://uploads.github.com/repos/${protectedRepository}/releases/734/assets`,
+        name: expectedAssets[1].name,
+        type: 'upload',
+      },
+    ],
+  );
+  assert.equal(
+    calls.some((call) => call.type === 'create'),
+    false,
+  );
+});
+
+test('protected draft retry is idempotent when the exact asset set is complete', async (t) => {
+  const assetsDirectory = await protectedAssetsFixture(t);
+  const release = protectedRelease({ assets: protectedReleaseAssets() });
+  let getCount = 0;
+  let listCount = 0;
+  const result = await stageProtectedReleaseDraft({
+    api: {
+      createDraft: async () => {
+        throw new Error('must not create');
+      },
+      getRelease: async () => {
+        getCount += 1;
+        return release;
+      },
+      listReleases: async () => {
+        listCount += 1;
+        return [release];
+      },
+      uploadAsset: async () => {
+        throw new Error('must not upload');
+      },
+    },
+    assetsDirectory,
+    body: protectedBody,
+    name: protectedName,
+    prerelease: true,
+    repository: protectedRepository,
+    tag: protectedTag,
+    targetCommitish: protectedRef,
+  });
+
+  assert.equal(result.releaseId, 734);
+  assert.equal(result.resumed, true);
+  assert.equal(getCount, 2);
+  assert.equal(listCount, 2);
+});
+
+test('protected draft retry rejects duplicate exact-tag records before mutation', async (t) => {
+  const assetsDirectory = await protectedAssetsFixture(t);
+  const calls = [];
+  await assert.rejects(
+    stageProtectedReleaseDraft({
+      api: {
+        createDraft: async () => calls.push('create'),
+        getRelease: async () => calls.push('get'),
+        listReleases: async () => [
+          protectedRelease(),
+          protectedRelease({ id: 735 }),
+        ],
+        uploadAsset: async () => calls.push('upload'),
+      },
+      assetsDirectory,
+      body: protectedBody,
+      name: protectedName,
+      prerelease: true,
+      repository: protectedRepository,
+      tag: protectedTag,
+      targetCommitish: protectedRef,
+    }),
+    /2 GitHub Release record\(s\) already use this tag/,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test('protected draft retry rejects identity and asset drift without mutation', async (t) => {
+  const assetsDirectory = await protectedAssetsFixture(t);
+  const exactAssets = protectedReleaseAssets();
+  const driftCases = [
+    {
+      error: /exact protected draft identity/,
+      release: protectedRelease({ body: 'different notes' }),
+    },
+    {
+      error: /exact protected draft identity/,
+      release: protectedRelease({ name: 'Different release' }),
+    },
+    {
+      error: /exact protected draft identity/,
+      release: protectedRelease({ targetCommitish: 'b'.repeat(40) }),
+    },
+    {
+      error: /exact protected draft identity/,
+      release: protectedRelease({ prerelease: false }),
+    },
+    {
+      error: /unexpected asset/,
+      release: protectedRelease({
+        assets: [
+          ...exactAssets,
+          {
+            digest: `sha256:${'f'.repeat(64)}`,
+            id: 990,
+            name: 'unmanifested.bin',
+            size: 12,
+            state: 'uploaded',
+          },
+        ],
+      }),
+    },
+    {
+      error: /does not match the staged file/,
+      release: protectedRelease({
+        assets: [{ ...exactAssets[0], size: exactAssets[0].size + 1 }],
+      }),
+    },
+    {
+      error: /digest does not match/,
+      release: protectedRelease({
+        assets: [{ ...exactAssets[0], digest: `sha256:${'f'.repeat(64)}` }],
+      }),
+    },
+    {
+      error: /missing its SHA-256 digest/,
+      release: protectedRelease({
+        assets: [{ ...exactAssets[0], digest: null }],
+      }),
+    },
+    {
+      error: /not a complete non-empty upload/,
+      release: protectedRelease({
+        assets: [{ ...exactAssets[0], state: 'new' }],
+      }),
+    },
+    {
+      error: /duplicate asset names/,
+      release: protectedRelease({
+        assets: [exactAssets[0], { ...exactAssets[0], id: 991 }],
+      }),
+    },
+  ];
+
+  for (const { error, release } of driftCases) {
+    const mutations = [];
+    await assert.rejects(
+      stageProtectedReleaseDraft({
+        api: {
+          createDraft: async () => mutations.push('create'),
+          getRelease: async () => mutations.push('get'),
+          listReleases: async () => [release],
+          uploadAsset: async () => mutations.push('upload'),
+        },
+        assetsDirectory,
+        body: protectedBody,
+        name: protectedName,
+        prerelease: true,
+        repository: protectedRepository,
+        tag: protectedTag,
+        targetCommitish: protectedRef,
+      }),
+      error,
+    );
+    assert.deepEqual(mutations, []);
+  }
+});
+
+test('protected draft uploads only through the returned exact release ID and never mutates', async (t) => {
+  const assetsDirectory = await protectedAssetsFixture(t);
+  const expectedAssets = protectedReleaseAssets();
+  const exactRelease = protectedRelease({ assets: expectedAssets });
+  const calls = [];
+  let listCount = 0;
+  let nextAssetId = 900;
+  const api = {
+    createDraft: async (input) => {
+      calls.push({ input, type: 'create' });
+      return protectedRelease();
+    },
+    deleteRelease: async (...args) => calls.push({ args, type: 'delete' }),
+    getRelease: async (...args) => {
+      calls.push({ args, type: 'get' });
+      return exactRelease;
+    },
+    listReleases: async (...args) => {
+      calls.push({ args, type: 'list' });
+      listCount += 1;
+      return listCount === 1 ? [] : [exactRelease];
+    },
+    uploadAsset: async ({ asset, uploadEndpoint }) => {
+      calls.push({
+        endpoint: uploadEndpoint.href,
+        name: asset.name,
+        type: 'upload',
+      });
+      nextAssetId += 1;
+      return {
+        digest: `sha256:${asset.sha256}`,
+        id: nextAssetId,
+        name: asset.name,
+        size: asset.bytes,
+        state: 'uploaded',
+      };
+    },
+  };
+
+  const result = await stageProtectedReleaseDraft({
+    api,
+    assetsDirectory,
+    body: 'Release notes',
+    name: 'Clodex Agentic IDE 1.16.0-preview.2',
+    prerelease: true,
+    repository: protectedRepository,
+    tag: protectedTag,
+    targetCommitish: protectedRef,
+  });
+
+  assert.equal(result.releaseId, 734);
+  const createCall = calls.find((call) => call.type === 'create');
+  assert.equal(createCall.input.targetCommitish, protectedRef);
+  assert.equal(createCall.input.tag, protectedTag);
+  const uploads = calls.filter((call) => call.type === 'upload');
+  assert.equal(uploads.length, 2);
+  assert.deepEqual(
+    new Set(uploads.map((call) => call.endpoint)),
+    new Set([
+      `https://uploads.github.com/repos/${protectedRepository}/releases/734/assets`,
+    ]),
+  );
+  assert.equal(
+    calls.some((call) => call.type === 'delete'),
+    false,
+  );
+  assert.equal(
+    calls.some((call) => call.type === 'update'),
+    false,
+  );
+  assert.throws(
+    () =>
+      exactUploadEndpoint({
+        releaseId: 734,
+        repository: protectedRepository,
+        uploadUrl: `https://uploads.github.com/repos/${protectedRepository}/releases/735/assets{?name,label}`,
+      }),
+    /not bound to the exact release ID/,
+  );
+});
+
+test('GitHub asset transport posts binary data only to the exact-ID upload URL', async (t) => {
+  const assetsDirectory = await protectedAssetsFixture(t);
+  const filePath = join(assetsDirectory, 'clodex-preview.zip');
+  const calls = [];
+  const api = new GitHubReleaseApi({
+    fetchImpl: async (url, request) => {
+      calls.push({
+        contentLength: request.headers['Content-Length'],
+        method: request.method,
+        url: String(url),
+      });
+      request.body.destroy();
+      return new Response(
+        JSON.stringify({
+          id: 901,
+          name: 'clodex-preview.zip',
+          size: 13,
+          state: 'uploaded',
+        }),
+        { status: 201 },
+      );
+    },
+    token: 'test-token',
+  });
+  await api.uploadAsset({
+    asset: {
+      bytes: 13,
+      filePath,
+      name: 'clodex-preview.zip',
+    },
+    uploadEndpoint: new URL(
+      `https://uploads.github.com/repos/${protectedRepository}/releases/734/assets`,
+    ),
+  });
+  assert.deepEqual(calls, [
+    {
+      contentLength: '13',
+      method: 'POST',
+      url: `https://uploads.github.com/repos/${protectedRepository}/releases/734/assets?name=clodex-preview.zip`,
+    },
+  ]);
+});
+
+test('protected draft leaves its exact ID untouched after a concurrent duplicate', async (t) => {
+  const assetsDirectory = await protectedAssetsFixture(t);
+  const expectedAssets = protectedReleaseAssets();
+  const exactRelease = protectedRelease({ assets: expectedAssets });
+  let listCount = 0;
+  const cleanupMutations = [];
+  const api = {
+    createDraft: async () => protectedRelease(),
+    deleteRelease: async (repository, releaseId) => {
+      cleanupMutations.push({ releaseId, repository, type: 'delete' });
+    },
+    getRelease: async () => exactRelease,
+    listReleases: async () => {
+      listCount += 1;
+      return listCount === 1
+        ? []
+        : [exactRelease, protectedRelease({ draft: false, id: 999 })];
+    },
+    uploadAsset: async ({ asset }) => ({
+      id: 900,
+      name: asset.name,
+      size: asset.bytes,
+      state: 'uploaded',
+    }),
+    updateRelease: async (repository, releaseId) => {
+      cleanupMutations.push({ releaseId, repository, type: 'update' });
+    },
+  };
+
+  await assert.rejects(
+    stageProtectedReleaseDraft({
+      api,
+      assetsDirectory,
+      body: 'Release notes',
+      name: 'Clodex Agentic IDE 1.16.0-preview.2',
+      prerelease: true,
+      repository: protectedRepository,
+      tag: protectedTag,
+      targetCommitish: protectedRef,
+    }),
+    /concurrent duplicate or public.*GitHub Release ID 734.*left untouched.*protected orphan.*manual protected inspection/,
+  );
+  assert.deepEqual(cleanupMutations, []);
+});
+
+test('protected publisher structurally forbids automatic release deletion', () => {
+  const protectedPublisher = readFileSync(
+    new URL(
+      'scripts/release/create-protected-release-draft.mjs',
+      repositoryRoot,
+    ),
+    'utf8',
+  );
+  const workflow = readFileSync(
+    new URL('.github/workflows/_release-browser.yml', repositoryRoot),
+    'utf8',
+  );
+  const protectedReleaseSection = workflow
+    .split('Create a new isolated protected draft by exact release ID')[1]
+    .split('Publish explicitly non-draft, non-trusted GitHub Release')[0];
+
+  assert.doesNotMatch(
+    protectedPublisher,
+    /\bdeleteRelease\b|method\s*:\s*['"]DELETE['"]|--method\s+DELETE/i,
+  );
+  assert.doesNotMatch(
+    protectedReleaseSection,
+    /\bdeleteRelease\b|method\s*:\s*['"]DELETE['"]|--method\s+DELETE/i,
+  );
+});
+
+test('release workflows distinguish resumable drafts from immutable publication', () => {
   const previewWorkflow = readFileSync(
     new URL('.github/workflows/technical-preview-release.yml', repositoryRoot),
     'utf8',
   );
-  assert.match(previewWorkflow, /Refuse a completed preview release retry/);
+  assert.match(previewWorkflow, /Classify exact preview release retry state/);
   assert.match(previewWorkflow, /github-release-state\.mjs/);
   assert.match(previewWorkflow, /if ! release_state=/);
+  assert.match(previewWorkflow, /published\)/);
+  assert.match(previewWorkflow, /draft\)/);
+  assert.match(previewWorkflow, /verify and resume its exact identity/);
   assert.match(previewWorkflow, /exact-SHA tag retry is allowed/);
   assert.doesNotMatch(previewWorkflow, /gh release view/);
 
@@ -525,6 +1243,12 @@ test('release workflows fail closed when checking completed releases', () => {
   assert.match(autoReleaseWorkflow, /Tag exists without a GitHub Release/);
   assert.match(autoReleaseWorkflow, /github-release-state\.mjs/);
   assert.match(autoReleaseWorkflow, /if ! release_state=/);
+  assert.match(autoReleaseWorkflow, /published\)/);
+  assert.match(autoReleaseWorkflow, /draft\)/);
+  assert.match(
+    autoReleaseWorkflow,
+    /exact identity verification and safe resume/,
+  );
   assert.doesNotMatch(autoReleaseWorkflow, /gh release view/);
 });
 
@@ -533,19 +1257,40 @@ test('browser release builds and publishes only the immutable input SHA', () => 
     new URL('.github/workflows/_release-browser.yml', repositoryRoot),
     'utf8',
   );
-  const buildSection = workflow.split('\n  build:')[1].split('\n  release:')[0];
+  const buildSection = workflow
+    .split('\n  build:')[1]
+    .split('\n  release-authorization:')[0];
   const releaseSection = workflow
     .split('\n  release:')[1]
     .split('\n  attest-publication:')[0];
-  const stablePublicationSection = workflow
-    .split('\n  publish-stable:')[1]
+  const stableDraftSection = workflow
+    .split('\n  verify-stable-draft:')[1]
     .split('\n  trigger-nightly-after-stable:')[0];
+  const postStableSection = workflow.split(
+    '\n  trigger-nightly-after-stable:',
+  )[1];
   const sourceGate = workflow
     .split('\n  source-gate:')[1]
     .split('\n  promotion-gate:')[0];
   const promotionGate = workflow
     .split('\n  promotion-gate:')[1]
+    .split('\n  tag-authorization:')[0];
+  const tagAuthorization = workflow
+    .split('\n  tag-authorization:')[1]
     .split('\n  tag:')[0];
+  const tagSection = workflow.split('\n  tag:')[1].split('\n  build:')[0];
+  const releaseAuthorization = workflow
+    .split('\n  release-authorization:')[1]
+    .split('\n  release-candidate:')[0];
+  const releaseCandidate = workflow
+    .split('\n  release-candidate:')[1]
+    .split('\n  release:')[0];
+  const tagEffectSection = tagSection.split(
+    'Create exact lightweight tag through GitHub API',
+  )[1];
+  const protectedDraftEffectSection = releaseSection
+    .split('Create a new isolated protected draft by exact release ID')[1]
+    .split('Publish explicitly non-draft, non-trusted GitHub Release')[0];
 
   assert.match(workflow, /Immutable 40-character commit SHA/);
   assert.match(workflow, /Validate immutable canonical-main inputs/);
@@ -560,40 +1305,167 @@ test('browser release builds and publishes only the immutable input SHA', () => 
     promotionGate,
     /Audit the exact production lockfile before release effects/,
   );
+  assert.match(
+    promotionGate,
+    /Reverify live promotion authorization after protected approval/,
+  );
+  assert.match(
+    promotionGate,
+    /EXPECTED_RELEASE_PLAN_SHA256[\s\S]*verify-release-promotion\.mjs/,
+  );
   assert.match(promotionGate, /pnpm security:dependencies/);
+  assert.match(buildSection, /needs: \[source-gate, promotion-gate\]/);
   assert.match(buildSection, /permissions:\n\s+contents: read/);
   assert.match(buildSection, /ref: \$\{\{ inputs\.ref \}\}/);
   assert.match(buildSection, /persist-credentials: false/);
   assert.doesNotMatch(buildSection, /ref: \$\{\{ inputs\.tag \}\}/);
   assert.match(buildSection, /Assert immutable release candidate checkout/);
   assert.match(
-    releaseSection,
+    tagAuthorization,
+    /needs: \[source-gate, promotion-gate, build\]/,
+  );
+  assert.match(
+    tagAuthorization,
+    /permissions:\n\s+attestations: read\n\s+contents: read/,
+  );
+  assert.match(tagAuthorization, /verify-release-promotion\.mjs/);
+  assert.match(tagAuthorization, /-u GITHUB_OUTPUT/);
+  assert.match(tagAuthorization, /environment: Release/);
+  assert.match(tagAuthorization, /run_attempt=\$GITHUB_RUN_ATTEMPT/);
+  assert.match(tagAuthorization, /run_id=\$GITHUB_RUN_ID/);
+  assert.match(tagSection, /needs: \[source-gate, build, tag-authorization\]/);
+  assert.match(tagSection, /Create exact lightweight tag through GitHub API/);
+  assert.match(tagSection, /AUTHORIZED_RELEASE_PLAN_SHA256/);
+  assert.doesNotMatch(tagSection, /environment: Release/);
+  assert.doesNotMatch(tagSection, /verify-release-promotion\.mjs/);
+  assert.doesNotMatch(tagEffectSection, /verify-release-promotion\.mjs/);
+  assert.match(tagEffectSection, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(tagEffectSection, /AUTHORIZED_RUN_ATTEMPT/);
+  assert.match(tagEffectSection, /AUTHORIZED_RUN_ID/);
+  assert.match(releaseAuthorization, /needs: \[source-gate, tag, build\]/);
+  assert.match(
+    releaseAuthorization,
+    /permissions:\n\s+attestations: read\n\s+contents: read/,
+  );
+  assert.match(releaseAuthorization, /verify-release-promotion\.mjs/);
+  assert.match(releaseAuthorization, /-u GITHUB_OUTPUT/);
+  assert.match(releaseAuthorization, /environment: Release/);
+  assert.match(releaseAuthorization, /run_attempt=\$GITHUB_RUN_ATTEMPT/);
+  assert.match(releaseAuthorization, /run_id=\$GITHUB_RUN_ID/);
+  assert.match(
+    releaseCandidate,
+    /needs: \[source-gate, tag, build, release-authorization\]/,
+  );
+  assert.match(
+    releaseCandidate,
     /Re-assert immutable tag target before publication/,
   );
-  assert.match(releaseSection, /Canonical main moved before publication/);
-  assert.match(releaseSection, /actual_ref.*RELEASE_REF/s);
+  assert.match(releaseCandidate, /Canonical main moved before publication/);
+  assert.match(releaseCandidate, /release-publication\.mjs/);
+  assert.match(releaseCandidate, /Build exact release candidate handoff/);
+  assert.match(releaseCandidate, /Upload exact release candidate handoff/);
+  assert.match(releaseCandidate, /workflowRunAttempt/);
+  assert.match(releaseCandidate, /workflowRunId/);
+  assert.match(
+    releaseCandidate,
+    /permissions:\n\s+actions: read\n\s+contents: read/,
+  );
+  assert.doesNotMatch(releaseCandidate, /contents: write/);
   assert.match(
     releaseSection,
-    /draft: \$\{\{ needs\.source-gate\.outputs\.trusted_promotion == 'true'.*inputs\.channel == 'release'.*inputs\.draft \}\}/,
+    /needs: \[source-gate, tag, release-authorization, release-candidate\]/,
+  );
+  assert.match(releaseSection, /actions: read\n\s+contents: write/);
+  assert.doesNotMatch(releaseSection, /environment: Release/);
+  assert.doesNotMatch(releaseSection, /verify-release-promotion\.mjs/);
+  assert.doesNotMatch(releaseSection, /release-publication\.mjs/);
+  assert.match(
+    releaseSection,
+    /Verify exact release candidate handoff without repository code/,
   );
   assert.match(
-    stablePublicationSection,
+    releaseSection,
+    /Reject stale authorization or candidate attempts/,
+  );
+  assert.match(releaseSection, /manifest\.workflowRunAttempt/);
+  assert.match(releaseSection, /manifest\.workflowRunId/);
+  assert.match(
+    releaseSection,
+    /Reauthorize exact write target before publication/,
+  );
+  assert.match(releaseSection, /AUTHORIZED_REF/);
+  assert.match(releaseSection, /remote_main=.*refs\/heads\/main/);
+  assert.match(releaseSection, /refs\/tags\/\$\{RELEASE_TAG\}\^\{commit\}/);
+  assert.ok(
+    releaseSection.indexOf(
+      'Reauthorize exact write target before publication',
+    ) < releaseSection.indexOf('softprops/action-gh-release'),
+  );
+  assert.match(releaseSection, /artifact-ids:/);
+  assert.match(releaseSection, /terminal_tag_commit/);
+  assert.match(releaseSection, /create-protected-release-draft\.mjs/);
+  assert.match(
+    releaseSection,
+    /git show "\$\{RELEASE_REF\}:scripts\/release\/create-protected-release-draft\.mjs"/,
+  );
+  assert.match(releaseSection, /--github-output="\$publisher_output"/);
+  assert.match(releaseSection, /-u GITHUB_OUTPUT/);
+  assert.doesNotMatch(
+    protectedDraftEffectSection,
+    /verify-release-promotion\.mjs/,
+  );
+  assert.match(
+    protectedDraftEffectSection,
+    /GH_TOKEN: \$\{\{ github\.token \}\}/,
+  );
+  assert.match(protectedDraftEffectSection, /RELEASE_ASSETS_DIRECTORY/);
+  assert.match(
+    releaseSection,
+    /if: needs\.source-gate\.outputs\.trusted_promotion == 'true' \|\| inputs\.draft/,
+  );
+  const publicReleaseSection = releaseSection
+    .split('Publish explicitly non-draft, non-trusted GitHub Release')[1]
+    .split('Query and assert exact live release state')[0];
+  assert.match(publicReleaseSection, /softprops\/action-gh-release@/);
+  assert.match(
+    publicReleaseSection,
+    /if: needs\.source-gate\.outputs\.trusted_promotion != 'true' && inputs\.draft == false/,
+  );
+  assert.match(publicReleaseSection, /draft: false/);
+  assert.match(
+    releaseSection,
+    /RELEASE_ID: \$\{\{ steps\.protected-draft\.outputs\.release_id \|\| steps\.public-release\.outputs\.id \}\}/,
+  );
+  assert.doesNotMatch(
+    releaseSection
+      .split('Create a new isolated protected draft')[1]
+      .split('Publish explicitly non-draft, non-trusted GitHub Release')[0],
+    /softprops\/action-gh-release/,
+  );
+  assert.match(releaseSection, /releases\/\$\{RELEASE_ID\}/);
+  assert.doesNotMatch(releaseSection, /releases\/tags\/\$\{RELEASE_TAG\}/);
+  assert.match(
+    stableDraftSection,
     /needs: \[source-gate, release, attest-publication\]/,
   );
-  assert.match(stablePublicationSection, /--expected-release-state=draft/);
-  assert.match(stablePublicationSection, /gh attestation verify/);
-  assert.match(stablePublicationSection, /artifact-ids:/);
-  assert.match(stablePublicationSection, /publication-snapshot\.json/);
-  assert.match(stablePublicationSection, /actual_sha256.*EXPECTED_SHA256/s);
-  assert.match(stablePublicationSection, /cmp[\s\S]*attested-publication/);
-  assert.match(stablePublicationSection, /--expected-release-state=published/);
+  assert.match(stableDraftSection, /--expected-release-state=draft/);
+  assert.match(stableDraftSection, /gh attestation verify/);
+  assert.match(stableDraftSection, /artifact-ids:/);
+  assert.match(stableDraftSection, /publication-snapshot\.json/);
+  assert.match(stableDraftSection, /actual_sha256.*EXPECTED_SHA256/s);
+  assert.match(stableDraftSection, /cmp[\s\S]*attested-publication/);
+  assert.match(stableDraftSection, /contents: read/);
+  assert.doesNotMatch(stableDraftSection, /contents: write/);
+  assert.doesNotMatch(stableDraftSection, /gh api --method PATCH/);
+  assert.doesNotMatch(workflow, /draft=false/);
+  assert.doesNotMatch(workflow, /--expected-release-state=published/);
+  assert.doesNotMatch(workflow, /\n {2}publish-stable:/);
+  assert.match(stableDraftSection, /Stable publication is NOT_READY/);
+  assert.match(stableDraftSection, /exit 1/);
+  assert.match(postStableSection, /needs: verify-stable-draft/);
   assert.ok(
-    stablePublicationSection.indexOf('--expected-release-state=draft') <
-      stablePublicationSection.indexOf('gh api --method PATCH'),
-  );
-  assert.ok(
-    stablePublicationSection.indexOf('gh api --method PATCH') <
-      stablePublicationSection.indexOf('--expected-release-state=published'),
+    stableDraftSection.indexOf('--expected-release-state=draft') <
+      stableDraftSection.indexOf('Stable publication is NOT_READY'),
   );
 
   const nightlyWorkflow = readFileSync(
@@ -626,11 +1498,17 @@ test('technical preview workflow stages protected drafts from schema-v2 plans', 
     /Release draft input differs from the committed manifest/,
   );
   assert.match(workflow, /clodex-release-publication\.json/);
-  assert.match(workflow, /release-publication-attestation\.yml@main/);
   assert.match(
     workflow,
-    /draft: \$\{\{ needs\.source-gate\.outputs\.trusted_promotion == 'true'.*inputs\.draft \}\}/,
+    /uses: \.\/\.github\/workflows\/release-publication-attestation\.yml/,
   );
+  assert.doesNotMatch(workflow, /release-publication-attestation\.yml@main/);
+  assert.match(workflow, /create-protected-release-draft\.mjs/);
+  assert.match(
+    workflow,
+    /if: needs\.source-gate\.outputs\.trusted_promotion == 'true' \|\| inputs\.draft/,
+  );
+  assert.match(workflow, /--target-commitish="\$RELEASE_REF"/);
   assert.match(workflow, /environment: Release/);
   assert.match(previewWorkflow, /--require-new-tag=true/);
   assert.match(previewWorkflow, /test "\$GITHUB_REF" = "refs\/heads\/main"/);
@@ -680,6 +1558,34 @@ test('trusted release evidence is attested and verified with exact workflow dige
   assert.ok(
     (publication.match(/actions\/attest-build-provenance@/g) ?? []).length >= 2,
   );
+  const publicationCollect = publication
+    .split('\n  collect:')[1]
+    .split('\n  attest:')[0];
+  const publicationAttest = publication.split('\n  attest:')[1];
+  assert.match(publicationCollect, /permissions:\n\s+contents: read/);
+  assert.doesNotMatch(
+    publicationCollect,
+    /attestations: write|id-token: write|actions\/attest-build-provenance/,
+  );
+  assert.match(publicationCollect, /verify-release-publication\.mjs/);
+  assert.match(publicationCollect, /-u ACTIONS_ID_TOKEN_REQUEST_TOKEN/);
+  assert.match(publicationCollect, /-u GITHUB_OUTPUT/);
+  assert.match(publicationAttest, /actions: read/);
+  assert.match(publicationAttest, /attestations: write/);
+  assert.match(publicationAttest, /id-token: write/);
+  assert.match(publicationAttest, /artifact-ids:/);
+  assert.match(publicationAttest, /actual_sha256|snapshot_sha256/);
+  assert.match(publicationAttest, /expectedBuilds/);
+  assert.match(publicationAttest, /expectedChecks/);
+  assert.match(publicationAttest, /report\.releasePlan/);
+  assert.match(publicationAttest, /releases\/\$\{expectedReleaseId\}/);
+  assert.match(publicationAttest, /application\/octet-stream/);
+  assert.match(publicationAttest, /derivedSnapshot/);
+  assert.match(publicationAttest, /canonical main moved during attestation/);
+  assert.doesNotMatch(
+    publicationAttest,
+    /actions\/checkout|verify-release-publication\.mjs|scripts\/release\//,
+  );
   assert.match(acceptance, /--source-digest "\$source_commit"/);
   assert.match(acceptance, /--signer-digest "\$workflow_commit"/);
   assert.match(acceptance, /--deny-self-hosted-runners/);
@@ -698,6 +1604,11 @@ test('trusted release evidence is attested and verified with exact workflow dige
   );
   assert.match(collectJob, /pnpm install --frozen-lockfile/);
   assert.match(collectJob, /collect-trusted-source-checks\.ts/);
+  const productCheckStep = collectJob
+    .split('Run real source and product acceptance checks')[1]
+    .split('Generate canonical rollback-baseline evidence candidate')[0];
+  assert.doesNotMatch(productCheckStep, /GH_TOKEN|GITHUB_TOKEN/);
+  assert.match(productCheckStep, /--publication-snapshot=/);
   assert.doesNotMatch(
     collectJob,
     /git checkout --detach "\$\{\{ steps\.publication\.outputs|--source-commit="\$\{\{ steps\.publication\.outputs/,

@@ -54,7 +54,7 @@ jobs:
       - name: Checkout trusted main
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -62,6 +62,7 @@ jobs:
         run: |
           remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
           test -n "$remote_main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$remote_main" = "$GITHUB_SHA"
           test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
 
@@ -155,7 +156,9 @@ jobs:
       - name: Checkout exact released source for automated checks
         env:
           RELEASE_SOURCE_COMMIT: ${{ steps.publication.outputs.source_commit }}
-        run: git checkout --detach "$RELEASE_SOURCE_COMMIT"
+        run: |
+          git checkout --detach "$RELEASE_SOURCE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_COMMIT"
 
       - name: Install exact released workspace
         run: pnpm install --frozen-lockfile
@@ -168,7 +171,6 @@ jobs:
 
       - name: Run real source and product acceptance checks
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.publication.outputs.release_id }}
           RELEASE_MANIFEST: ${{ inputs.manifest }}
           RELEASE_SOURCE_COMMIT: ${{ steps.publication.outputs.source_commit }}
@@ -176,6 +178,7 @@ jobs:
           node --import tsx scripts/release/collect-trusted-source-checks.ts
           --manifest="${RELEASE_MANIFEST}"
           --output="${RUNNER_TEMP}/automated-checks.json"
+          --publication-snapshot="${RUNNER_TEMP}/publication-snapshot.json"
           --release-id="${RELEASE_ID}"
           --repository="${GITHUB_REPOSITORY}"
           --source-commit="${RELEASE_SOURCE_COMMIT}"

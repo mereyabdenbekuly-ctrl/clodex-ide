@@ -438,6 +438,11 @@ function validateTechnicalPreviewPlan(plan, context) {
   );
 
   if (plan.promotionRole === 'rollback-baseline') {
+    const previewNumber = Number.parseInt(versionMatch[2], 10);
+    assert(
+      previewNumber === 2,
+      'the v1.16.0 release chain requires preview.2 as rollback baseline',
+    );
     assertDraftDistribution(plan, {
       access: 'release-operators-only',
       canaryInstallations: 0,
@@ -519,9 +524,10 @@ function validateStablePlan(plan, context) {
     'stable plans must not claim a technical-preview promotionRole',
   );
   assert(
-    plan.distribution?.githubReleaseState === 'published' &&
-      plan.distribution?.publicDownloadLinks === true,
-    'stable distribution must be a published release with public links',
+    plan.distribution?.githubReleaseState === 'draft' &&
+      plan.distribution?.protectedEnvironment === 'Release' &&
+      plan.distribution?.publicDownloadLinks === false,
+    'stable distribution must remain a protected draft without public links until attested publication',
   );
   assert(
     plan.acceptance?.requiredStatus === 'ready-for-stable',
