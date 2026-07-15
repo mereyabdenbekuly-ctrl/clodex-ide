@@ -14,8 +14,9 @@ export interface GitHubAsset {
 
 interface GitHubRelease {
   tag_name: string;
-  name: string;
-  body: string;
+  name: string | null;
+  body: string | null;
+  draft: boolean;
   prerelease: boolean;
   published_at: string;
   assets: GitHubAsset[];
@@ -33,6 +34,48 @@ export interface Release {
 
 let cachedReleases: Release[] = [];
 let lastFetch = 0;
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isCanonicalPublishedAt(value: unknown): value is string {
+  if (
+    typeof value !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value)
+  ) {
+    return false;
+  }
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) return false;
+  const canonical = instant.toISOString();
+  return value === canonical || value === canonical.replace('.000Z', 'Z');
+}
+
+function parsePublishedRelease(value: unknown): GitHubRelease | null {
+  if (!isObject(value)) return null;
+  if (typeof value.draft !== 'boolean' || value.draft) return null;
+  if (typeof value.prerelease !== 'boolean') return null;
+  if (!isCanonicalPublishedAt(value.published_at)) return null;
+  if (
+    typeof value.tag_name !== 'string' ||
+    !Array.isArray(value.assets) ||
+    !value.assets.every(
+      (asset) =>
+        isObject(asset) &&
+        typeof asset.name === 'string' &&
+        typeof asset.browser_download_url === 'string' &&
+        Number.isSafeInteger(asset.size) &&
+        Number(asset.size) >= 0,
+    )
+  ) {
+    return null;
+  }
+  if (value.name !== null && typeof value.name !== 'string') return null;
+  if (value.body !== null && typeof value.body !== 'string') return null;
+
+  return value as unknown as GitHubRelease;
+}
 
 export async function fetchReleases(): Promise<Release[]> {
   const url = `https://api.github.com/repos/${config.githubOrg}/${config.githubRepo}/releases?per_page=100`;
@@ -54,10 +97,15 @@ export async function fetchReleases(): Promise<Release[]> {
     );
   }
 
-  const data: GitHubRelease[] = await response.json();
+  const data: unknown = await response.json();
+  if (!Array.isArray(data)) {
+    throw new Error('GitHub API returned an invalid release list');
+  }
   const releases: Release[] = [];
 
-  for (const release of data) {
+  for (const value of data) {
+    const release = parsePublishedRelease(value);
+    if (!release) continue;
     const version = extractVersionFromTag(release.tag_name, config.appName);
     if (!version) continue;
 
