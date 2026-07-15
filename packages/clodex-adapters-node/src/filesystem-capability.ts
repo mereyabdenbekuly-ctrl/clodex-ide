@@ -81,8 +81,9 @@ interface HelperInvocation {
  * checked, held for the whole helper call, and transferred as fd 4. The pinned
  * helper is hashed and executed from the same fd 3. All descendant resolution
  * and mutation is performed by the native openat2 helper. The v1 helper keeps
- * mkdir execution disabled until a separately provisioned, same-filesystem
- * staging boundary can bind installation to the exact created directory inode.
+ * mkdir and replace execution disabled until a separately provisioned, private
+ * same-filesystem staging boundary can bind installation and disposal to exact
+ * inodes rather than attacker-mutable names.
  */
 export class LinuxOpenat2FilesystemCapability
   implements
@@ -220,55 +221,12 @@ export class LinuxOpenat2FilesystemCapability
     input: FilesystemReplaceExecuteInput,
   ): Promise<unknown> {
     this.#assertScope(input.capabilityScope, 'execute');
-    const path = requireRelativeSelectorPath(input.selector, 'file');
-    const beforeSha256 = requireDigest(
-      input.beforeSha256,
-      'Expected current content digest',
+    throw new NodeAdapterSecurityError(
+      'operation-unsupported',
+      'execute',
+      'Filesystem replace execution requires pinned private same-filesystem staging',
+      false,
     );
-    const content = snapshotExactContent(
-      input.content,
-      input.contentSha256,
-      input.contentBytes,
-      this.#maxContentBytes,
-    );
-    const resolvedObjectId = this.#resolvedObjectId('file', path);
-    assertExactIdentifier(
-      input.resolvedObjectId,
-      resolvedObjectId,
-      'Resolved filesystem object',
-    );
-    const expectedStateCommitmentHash = requireDigest(
-      input.expectedStateCommitmentHash,
-      'Expected filesystem state commitment',
-    );
-    const [preStateHash, postStateHash, capturedBeforeSha256] =
-      await this.#invoke({
-        operation: 'execute-replace',
-        path,
-        expectedStateCommitmentHash,
-        beforeSha256,
-        contentSha256: input.contentSha256,
-        content,
-        stage: 'execute',
-      });
-    if (capturedBeforeSha256 !== beforeSha256) {
-      throw new NodeAdapterSecurityError(
-        'helper-output-invalid',
-        'execute',
-        'Native helper did not bind the captured before-content digest',
-        true,
-      );
-    }
-    return Object.freeze({
-      operation: 'filesystem.replace',
-      ticketId: requireIdentifier(input.ticketId, 'Ticket ID'),
-      resolvedObjectId,
-      preStateHash,
-      postStateHash,
-      beforeSha256,
-      contentSha256: input.contentSha256,
-      contentBytes: input.contentBytes,
-    });
   }
 
   public async inspectMkdir(
@@ -293,30 +251,12 @@ export class LinuxOpenat2FilesystemCapability
     input: FilesystemMkdirExecuteInput,
   ): Promise<unknown> {
     this.#assertScope(input.capabilityScope, 'execute');
-    const path = requireRelativeSelectorPath(input.selector, 'tree');
-    const resolvedObjectId = this.#resolvedObjectId('tree', path);
-    assertExactIdentifier(
-      input.resolvedObjectId,
-      resolvedObjectId,
-      'Resolved filesystem object',
+    throw new NodeAdapterSecurityError(
+      'operation-unsupported',
+      'execute',
+      'Filesystem mkdir execution requires pinned private same-filesystem staging',
+      false,
     );
-    const expectedStateCommitmentHash = requireDigest(
-      input.expectedStateCommitmentHash,
-      'Expected filesystem state commitment',
-    );
-    const [preStateHash, postStateHash] = await this.#invoke({
-      operation: 'execute-mkdir',
-      path,
-      expectedStateCommitmentHash,
-      stage: 'execute',
-    });
-    return Object.freeze({
-      operation: 'filesystem.mkdir',
-      ticketId: requireIdentifier(input.ticketId, 'Ticket ID'),
-      resolvedObjectId,
-      preStateHash,
-      postStateHash,
-    });
   }
 
   public async inspectTreeCommitment(): Promise<WorkspaceTreeCommitment> {

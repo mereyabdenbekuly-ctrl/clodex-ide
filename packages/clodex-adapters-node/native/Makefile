@@ -14,7 +14,7 @@ all: clodex-openat2-helper
 check-linux:
 	@if [ "$(UNAME_S)" != "Linux" ]; then \
 		printf '%s\n' \
-			'clodex-openat2-helper is Linux-only (openat2, renameat2, and procfs are required)' >&2; \
+			'clodex-openat2-helper is Linux-only (openat2 and procfs are required)' >&2; \
 		exit 2; \
 	fi
 

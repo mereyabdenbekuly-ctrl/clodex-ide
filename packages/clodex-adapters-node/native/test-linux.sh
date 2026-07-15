@@ -169,6 +169,12 @@ cc -std=c17 -O2 -fPIC -shared -Wall -Wextra -Wconversion -Werror \
   "$script_directory/tests/mkdir-preopen-exchange-preload.c" -ldl \
   -o "$mkdir_preopen_preload"
 
+replace_unlink_preload="$temporary_directory/replace-unlink-exchange-preload.so"
+cc -std=c17 -O2 -fPIC -shared -Wall -Wextra -Wconversion -Werror \
+  -Wformat=2 -Wshadow -Wstrict-prototypes \
+  "$script_directory/tests/replace-unlink-exchange-preload.c" -ldl \
+  -o "$replace_unlink_preload"
+
 swap_left="$root/swap-left"
 swap_right="$root/swap-right"
 mkdir -m 700 "$swap_left" "$swap_right"
@@ -379,62 +385,69 @@ replace_input="$temporary_directory/replace.input"
 printf 'clodex-native-replace-v1\n' >"$replace_input"
 replace_digest="$(sha256_file "$replace_input")"
 replace_bytes="$(byte_count "$replace_input")"
-replace_output="$(
-  invoke execute-replace created.txt "$replace_pre" "$create_digest" \
-    "$replace_digest" "$replace_bytes" <"$replace_input"
-)"
-IFS=$'\t' read -r replace_execute_status returned_replace_pre replace_post \
-  captured_before replace_execute_extra <<<"$replace_output"
-[[ "$replace_execute_status" == "OK" && \
-  "$returned_replace_pre" == "$replace_pre" && \
-  "$captured_before" == "$create_digest" && \
-  -z "${replace_execute_extra:-}" ]] || \
-  fail 'replace execution returned an invalid record'
-require_digest "$replace_post"
-cmp -s "$replace_input" "$root/created.txt" || fail 'replace wrote unexpected bytes'
-[[ "$(stat -c '%a' "$root/created.txt")" == "600" ]] || \
-  fail 'replace did not install mode 0600'
 
-metadata_replace_path="$root/metadata-replace.txt"
-printf 'replace metadata drift before\n' >"$metadata_replace_path"
-chmod 0600 "$metadata_replace_path"
-metadata_replace_before="$(sha256_file "$metadata_replace_path")"
-metadata_replace_inspect="$(
-  invoke inspect-replace metadata-replace.txt - "$metadata_replace_before" - 0
+replace_target="$root/unlink-replace-target.txt"
+replace_victim="$root/unlink-replace-victim.txt"
+replace_unlink_marker="$temporary_directory/replace-unlink-hooked"
+printf 'authorized old target\n' >"$replace_target"
+printf 'unrelated sibling victim\n' >"$replace_victim"
+chmod 0600 "$replace_target" "$replace_victim"
+replace_target_before="$(sha256_file "$replace_target")"
+replace_target_inode="$(stat -c '%i' "$replace_target")"
+replace_victim_before="$(sha256_file "$replace_victim")"
+replace_victim_inode="$(stat -c '%i' "$replace_victim")"
+replace_unlink_inspect="$(
+  invoke inspect-replace unlink-replace-target.txt - \
+    "$replace_target_before" - 0
 )"
-IFS=$'\t' read -r metadata_replace_status metadata_replace_pre \
-  metadata_replace_returned_before metadata_replace_extra \
-  <<<"$metadata_replace_inspect"
-[[ "$metadata_replace_status" == "OK" && \
-  "$metadata_replace_returned_before" == "$metadata_replace_before" && \
-  -z "${metadata_replace_extra:-}" ]] || \
-  fail 'metadata-drift replace inspection returned an invalid record'
-require_digest "$metadata_replace_pre"
+IFS=$'\t' read -r replace_unlink_status replace_unlink_pre \
+  replace_unlink_returned_before replace_unlink_extra \
+  <<<"$replace_unlink_inspect"
+[[ "$replace_unlink_status" == "OK" && \
+  "$replace_unlink_returned_before" == "$replace_target_before" && \
+  -z "${replace_unlink_extra:-}" ]] || \
+  fail 'unlink-race replace inspection returned an invalid record'
+require_digest "$replace_unlink_pre"
 set +e
-CLODEX_TEST_METADATA_TARGET="$metadata_replace_path" \
-  CLODEX_TEST_METADATA_TRIGGER='metadata-replace.txt' \
-  CLODEX_TEST_METADATA_MATCH='2' \
-  LD_PRELOAD="$metadata_preload" \
+CLODEX_TEST_REPLACE_UNLINK_VICTIM="$replace_victim" \
+  CLODEX_TEST_REPLACE_UNLINK_MARKER="$replace_unlink_marker" \
+  LD_PRELOAD="$replace_unlink_preload" \
   "$helper" --protocol-v1 execute-replace "$device" "$inode" \
-    metadata-replace.txt "$metadata_replace_pre" "$metadata_replace_before" \
+    unlink-replace-target.txt "$replace_unlink_pre" "$replace_target_before" \
     "$replace_digest" "$replace_bytes" \
     <"$replace_input" >"$failure_stdout" 2>"$failure_stderr"
 exit_code=$?
 set -e
-[[ "$exit_code" -eq 20 ]] || \
-  fail 'replace post-effect chmod drift did not fail uncertain'
-grep -qx $'ERR\tUNCERTAIN\tpost-state' "$failure_stderr" || \
-  fail 'replace post-effect chmod drift returned an invalid uncertainty record'
+if [[ "$exit_code" -eq 0 ]]; then
+  [[ -e "$replace_unlink_marker" ]] || \
+    fail 'replace unlink false success did not enter the vulnerable window'
+  [[ "$(stat -c '%i' "$replace_victim")" == "$replace_target_inode" ]] || \
+    fail 'replace unlink false success did not relocate the old target inode'
+  fail 'replace unlink race deleted a sibling inode and returned false success'
+fi
+[[ "$exit_code" -eq 10 ]] || \
+  fail 'replace without a private staging boundary was not rejected pre-effect'
+grep -qx $'ERR\tUNSUPPORTED\treplace-private-staging' "$failure_stderr" || \
+  fail 'disabled replace returned an invalid error record'
 [[ ! -s "$failure_stdout" ]] || \
-  fail 'replace post-effect chmod drift returned false success'
-cmp -s "$replace_input" "$metadata_replace_path" || \
-  fail 'replace chmod drift hook did not run after replacement installation'
-[[ "$(stat -c '%a' "$metadata_replace_path")" == "777" ]] || \
-  fail 'replace chmod drift hook did not mutate final permissions'
+  fail 'disabled replace emitted unexpected stdout'
+[[ ! -e "$replace_unlink_marker" ]] || \
+  fail 'disabled replace entered the vulnerable unlinkat window'
+[[ "$(stat -c '%i' "$replace_target")" == "$replace_target_inode" ]] || \
+  fail 'disabled replace changed the authorized target inode'
+[[ "$(sha256_file "$replace_target")" == "$replace_target_before" ]] || \
+  fail 'disabled replace changed the authorized target bytes'
+[[ "$(stat -c '%i' "$replace_victim")" == "$replace_victim_inode" ]] || \
+  fail 'disabled replace changed the sibling victim inode'
+[[ "$(sha256_file "$replace_victim")" == "$replace_victim_before" ]] || \
+  fail 'disabled replace changed the sibling victim bytes'
+if compgen -G "$root/.clodex-replace-v1-*" >/dev/null; then
+  fail 'disabled replace created a staging artifact'
+fi
 
 ln "$root/created.txt" "$root/created.alias"
 set +e
-invoke inspect-replace created.txt - "$replace_digest" - 0 \
+invoke inspect-replace created.txt - "$create_digest" - 0 \
   >"$failure_stdout" 2>"$failure_stderr"
 exit_code=$?
 set -e

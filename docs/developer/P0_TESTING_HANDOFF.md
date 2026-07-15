@@ -573,11 +573,13 @@ Filesystem cases:
 
 - traversal, absolute paths, symlinks, magic links, mount crossing, hard-link
   aliases, root replacement, parent replacement, and rename races;
-- atomic create absent-state CAS; `execute-mkdir` must remain pre-effect
-  disabled unless a pinned private same-filesystem staging boundary binds the
-  installed name to a retained exact directory inode;
-- replace refuses state/content/inode drift between inspect and commit;
-- file and parent-directory `fsync` occurs before success;
+- atomic create absent-state CAS; `execute-mkdir` and `execute-replace` must
+  remain pre-effect disabled unless a pinned private same-filesystem staging
+  boundary binds directory installation and old-file disposal to retained exact
+  inodes instead of attacker-mutable names;
+- replace inspection refuses state/content/inode drift and remains
+  non-authorizing while execution is disabled;
+- create file and parent-directory `fsync` occurs before success;
 - revoke before the helper's final syscall prevents mutation;
 - helper death after mutation produces durable uncertainty and no retry.
 
@@ -609,11 +611,15 @@ Implementation-specific work for `@clodex/adapters-node`:
   in-place mutation, link-count, owner/mode, set-id, ACL/file-capability,
   dynamic-loader/shared-library closure, truncated stdio, timeout, signal, and
   output-overflow cases;
-- fault every create/replace point before and after the first mutation (and
-  every mkdir point if a sound private-staging implementation is introduced),
-  file `fsync`, rename/exchange, unlink, parent `fsync`, post-state capture, and
-  stdout flush. Anything after the mutation boundary must be terminal
-  `UNCERTAIN`, never a retryable pre-effect failure;
+- fault every create point before and after the first mutation, including file
+  `fsync`, parent `fsync`, post-state capture, and stdout flush. If sound private
+  staging later enables replace or mkdir, fault every staging/install/disposal
+  point and prove post-mutation failures are terminal `UNCERTAIN`, never a
+  retryable pre-effect failure;
+- retain the deterministic replace disposal negative control: exchange a
+  sibling victim into the mutable staging name at `unlinkat(2)`. A supported
+  replacement design must keep that hook unreachable or make the schedule
+  impossible rather than merely re-stat the name;
 - stress directory rename/replacement and same-inode concurrent-write races.
   Do not claim strict atomic expected-state CAS if any namespace schedule can
   return success for a different parent/inode or can mutate outside the exact
@@ -648,10 +654,11 @@ Implementation-specific work for `@clodex/adapters-node`:
   drift.
 
 Preserve the implementation's explicit non-claims: Git/test use pre/post tree
-commitments rather than a frozen snapshot; filesystem replace has no kernel
-expected-inode/namespace-freeze CAS primitive; the Docker daemon endpoint is
-path-selected rather than independently pinned; and loaded AppArmor enforcement
-mode/profile bytes are external deployment evidence.
+commitments rather than a frozen snapshot; filesystem replace and mkdir
+execution are disabled without pinned private same-filesystem staging; the
+Docker daemon endpoint is path-selected rather than independently pinned; and
+loaded AppArmor enforcement mode/profile bytes are external deployment
+evidence.
 
 Deferred commands (Linux runner only):
 

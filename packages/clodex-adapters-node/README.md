@@ -3,10 +3,11 @@
 Linux production-side capabilities for the fixed operations defined by
 `@clodex/adapters`:
 
-- descriptor-relative `filesystem.create` and `filesystem.replace` through a
-  pinned native `openat2(2)` helper;
-- descriptor-relative `filesystem.mkdir` inspection, with execution explicitly
-  disabled until a private same-filesystem staging boundary is provisioned;
+- descriptor-relative `filesystem.create` execution through a pinned native
+  `openat2(2)` helper;
+- descriptor-relative `filesystem.replace` and `filesystem.mkdir` inspection,
+  with both execution paths explicitly disabled until a private
+  same-filesystem staging boundary is provisioned;
 - fixed Git status/diff observation in a digest-pinned, read-only,
   networkless container;
 - registry-selected tests in a digest-pinned, read-only, networkless
@@ -31,24 +32,25 @@ The Node launcher opens and hashes the helper, rechecks its file identity, and
 executes that same descriptor via `/proc/self/fd/3`. The workspace root is
 opened `O_DIRECTORY|O_NOFOLLOW`, checked against its provisioned device/inode,
 held for the entire operation, and transferred as fd 4. The helper refuses to
-run without Linux `openat2`, `RENAME_EXCHANGE`, `RESOLVE_BENEATH`,
-`RESOLVE_NO_SYMLINKS`, `RESOLVE_NO_MAGICLINKS`, and `RESOLVE_NO_XDEV`.
+run without Linux `openat2`, `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS`,
+`RESOLVE_NO_MAGICLINKS`, and `RESOLVE_NO_XDEV`.
 
 Create uses an absent-state commitment and exclusive creation. Linux
 `mkdirat(2)` returns no descriptor, so a first lookup can adopt a decoy inode in
 an attacker-writable parent. Protocol v1 therefore rejects `execute-mkdir`
 pre-effect; it must not be enabled until a distinct Guardian principal supplies
 a pinned, private same-filesystem staging directory and retained-fd install
-validation. Replace uses a same-directory durable staging file and atomic
-`RENAME_EXCHANGE`, then
-validates the captured old inode/content and stable pre-exchange semantics
-before deleting it. File and parent-directory `fsync` complete before success.
-Any failure after the first host mutation (including creation of a hidden
-staging file) is classified as potentially effected/`UNCERTAIN`; callers must
-burn the one-shot ticket and must not retry. Linux does not provide a single
-kernel compare-and-swap primitive for replacement by expected inode; namespace
-races therefore fail/post-validate as `UNCERTAIN` rather than being claimed as
-strict atomic inode CAS.
+validation. Replacement has an additional disposal problem: after an exchange,
+`unlinkat(2)` acts on a mutable name rather than the previously validated old
+inode. A competing writer can exchange an unrelated sibling into that name in
+the final lookup-to-unlink window. Protocol v1 therefore also rejects
+`execute-replace` pre-effect until the distinct Guardian principal supplies the
+same private staging boundary. `inspect-mkdir` and `inspect-replace` remain
+available only for non-authorizing policy planning; their commitments are not
+replacement or directory-creation authority. Create file and parent-directory
+`fsync` complete before success. Any create failure after the first host
+mutation is classified as potentially effected/`UNCERTAIN`; callers must burn
+the one-shot ticket and must not retry.
 
 ## Container provisioning
 
