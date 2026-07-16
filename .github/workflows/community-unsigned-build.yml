@@ -209,6 +209,27 @@ jobs:
       - name: Install frozen dependencies without repository hooks
         run: pnpm install --frozen-lockfile --ignore-pnpmfile
 
+      - name: Apply non-tagged community version to package metadata
+        shell: bash
+        env:
+          COMMUNITY_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const packagePath = 'apps/browser/package.json';
+          const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+          const expectedVersion = `${pkg.version}-community${process.env.GITHUB_RUN_NUMBER}`;
+          if (process.env.COMMUNITY_VERSION !== expectedVersion) {
+            throw new Error(
+              `Community metadata version mismatch: expected ${expectedVersion}, got ${String(process.env.COMMUNITY_VERSION)}`,
+            );
+          }
+          pkg.version = expectedVersion;
+          fs.writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+          NODE
+          git diff --exit-code -- . ':(exclude)apps/browser/package.json'
+
       - name: Install Linux package validation dependencies
         if: runner.os == 'Linux'
         run: |
