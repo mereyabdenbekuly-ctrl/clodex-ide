@@ -10,14 +10,13 @@ import {
   ClodexRequestError,
   type ClodexIdeKey,
   type ClodexUserModel,
-  openClodexLoginInSystemBrowser,
   openClodexTelegramInSystemApp,
 } from './clodex';
 import type {
   ModelProvider,
   SocialAuthProvider,
 } from '@shared/karton-contracts/ui/shared-types';
-import { ALL_CALLBACK_PROTOCOLS } from './callback-scheme';
+import { AUTH_CALLBACK_PROTOCOL } from './callback-scheme';
 import type { DevLoopbackAuthServer } from './dev-loopback-auth';
 import type { NotificationService } from '../notification';
 import type { IdentifierService } from '../identifier';
@@ -75,6 +74,8 @@ const TELEGRAM_AUTH_POLL_INTERVAL_MS = 2 * 1000;
 const TELEGRAM_AUTH_TIMEOUT_MS = SOCIAL_AUTH_TIMEOUT_MS;
 const ACCOUNT_AUTH_DISABLED_ERROR =
   'Account sign-in is disabled in this distribution.';
+const LEGACY_BROWSER_HANDOFF_DISABLED_ERROR =
+  'CLODEx browser sign-in is temporarily disabled until a state-bound PKCE flow is available. Use BYOK or a local model.';
 const isAccountAuthEnabled = __APP_AUTH_ENABLED__;
 const IDE_MODEL_TOKEN_REFRESH_SKEW_MS = 60_000;
 const isClodexAuthEnabled =
@@ -395,12 +396,29 @@ export class AuthService extends DisposableService {
       return;
     }
 
-    const persisted = await readPersistedData(
+    let persisted = await readPersistedData(
       CREDENTIALS_KEY,
       credentialsSchema,
       null,
       CREDENTIALS_STORAGE_OPTIONS,
     );
+
+    // Sessions issued by the legacy browser handoff have no state/PKCE
+    // provenance. Do not carry one across the emergency fail-closed upgrade:
+    // an authlocal3 session may have been delivered through a callback claimed
+    // by another application or swapped by an unbound login response.
+    if (persisted?.token) {
+      persisted = null;
+      await writePersistedData(
+        CREDENTIALS_KEY,
+        credentialsSchema,
+        null,
+        CREDENTIALS_STORAGE_OPTIONS,
+      );
+      this.logger.warn(
+        '[AuthService] Purged persisted account session issued before state-bound PKCE handoff',
+      );
+    }
 
     if (persisted?.token) {
       this._credentials = persisted;
@@ -1198,25 +1216,9 @@ export class AuthService extends DisposableService {
       return false;
     }
 
-    let activeLoopbackCallback: URL | null = null;
-    if (this.activeLoopbackAuthServer) {
-      try {
-        activeLoopbackCallback = new URL(
-          this.activeLoopbackAuthServer.callbackUrl,
-        );
-      } catch {
-        activeLoopbackCallback = null;
-      }
-    }
-    const isLoopbackCallback =
-      !!activeLoopbackCallback &&
-      parsed.protocol === activeLoopbackCallback.protocol &&
-      parsed.host === activeLoopbackCallback.host &&
-      parsed.pathname === activeLoopbackCallback.pathname;
-
-    if (!ALL_CALLBACK_PROTOCOLS.has(parsed.protocol) && !isLoopbackCallback) {
+    if (parsed.protocol !== AUTH_CALLBACK_PROTOCOL) {
       this.logger.warn(
-        `[AuthService] Auth callback protocol mismatch: got ${parsed.protocol}, expected one of ${[...ALL_CALLBACK_PROTOCOLS].join(', ')}`,
+        `[AuthService] Auth callback protocol mismatch: got ${parsed.protocol}, expected ${AUTH_CALLBACK_PROTOCOL}`,
       );
       return false;
     }
@@ -1224,167 +1226,31 @@ export class AuthService extends DisposableService {
     const callbackPath = parsed.hostname
       ? `/${parsed.hostname}${parsed.pathname}`
       : parsed.pathname;
-    const isAuthCallback =
-      callbackPath === '/auth/callback' ||
-      callbackPath.includes('/auth') ||
-      parsed.searchParams.has('error') ||
-      parsed.hash.startsWith('#token=');
-
-    if (!isAuthCallback) {
+    if (callbackPath !== '/auth/callback') {
       return false;
     }
-    if (!this.pendingHandoffAuth) {
-      return false;
-    }
-    const currentPending = this.pendingHandoffAuth;
 
-    const fragmentParams = new URLSearchParams(parsed.hash.slice(1));
-    const callbackError =
-      parsed.searchParams.get('error_description') ??
-      parsed.searchParams.get('error') ??
-      fragmentParams.get('error_description') ??
-      fragmentParams.get('error');
-
-    if (callbackError) {
-      this.logger.error(
-        `[AuthService] Social sign-in failed: ${callbackError}`,
-      );
-      this.completePendingHandoffAuth({ error: callbackError });
-      return true;
-    }
-
-    const code = parsed.searchParams.get('code') ?? fragmentParams.get('code');
-    const token =
-      fragmentParams.get('token') ?? parsed.searchParams.get('token');
-
-    if (!code && !token) {
-      const message = 'Sign-in callback did not include a code or token.';
-      this.logger.error(`[AuthService] ${message}`);
-      this.completePendingHandoffAuth({ error: message });
-      return true;
-    }
-
-    try {
-      if (code) {
-        const session = await this.clodexInterop.exchangeCode(code);
-        if (this.pendingHandoffAuth !== currentPending) {
-          this.logger.debug(
-            '[AuthService] Ignoring stale Clodex sign-in callback',
-          );
-          return true;
-        }
-
-        const result = await this.completeClodexSession(session);
-        if (result.error) {
-          this.completePendingHandoffAuth(result);
-          return true;
-        }
-
-        this.logger.debug('[AuthService] Completed Clodex sign-in callback');
-        this.completePendingHandoffAuth({});
-        return true;
-      }
-
-      if (!token) {
-        const message = 'Sign-in callback did not include a token.';
-        this.logger.error(`[AuthService] ${message}`);
-        this.completePendingHandoffAuth({ error: message });
-        return true;
-      }
-
-      const { data, error } = await this.authClient.authenticate({ token });
-      if (this.pendingHandoffAuth !== currentPending) {
-        this.logger.debug(
-          '[AuthService] Ignoring stale sign-in callback after authentication',
-        );
-        return true;
-      }
-      if (error || !data?.token) {
-        const message = error?.message ?? 'Sign-in failed.';
-        this.logger.error(`[AuthService] Sign-in failed: ${message}`);
-        if (this.pendingHandoffAuth !== currentPending) {
-          this.logger.debug(
-            '[AuthService] Ignoring stale sign-in failure after authentication',
-          );
-          return true;
-        }
-        this.completePendingHandoffAuth({ error: message });
-        return true;
-      }
-
-      this.persistAuthenticatedSession({
-        token: data.token,
-        user: {
-          id: data.user.id,
-          email: data.user.email ?? undefined,
-          name: data.user.name ?? undefined,
-        },
-      });
-
-      this.logger.debug('[AuthService] Completed sign-in callback');
-      this.completePendingHandoffAuth({});
-      void this.refreshSession().catch((refreshError) => {
-        this.logger.warn(
-          `[AuthService] Session refresh after sign-in failed: ${refreshError}`,
-        );
-      });
-      return true;
-    } catch (err) {
-      this.logger.error(
-        `[AuthService] Unexpected error handling auth callback: ${err}`,
-      );
-      if (this.pendingHandoffAuth !== currentPending) {
-        this.logger.debug(
-          '[AuthService] Ignoring stale sign-in error after callback failure',
-        );
-        return true;
-      }
-      this.completePendingHandoffAuth({
-        error: 'Failed to complete sign-in.',
-      });
-      return true;
-    }
+    // Fail closed. The retired callback accepted an authorization code or
+    // bearer token without binding it to a per-attempt state value and PKCE
+    // verifier. Consume the URL so it is never opened as content, but never
+    // exchange or authenticate anything from it.
+    this.logger.warn(
+      '[AuthService] Rejected legacy browser auth callback without state-bound PKCE',
+    );
+    this.completePendingHandoffAuth({
+      error: LEGACY_BROWSER_HANDOFF_DISABLED_ERROR,
+    });
+    return true;
   }
 
   public async signInSocial(
     provider: SocialAuthProvider,
   ): Promise<{ error?: string }> {
     if (!isAccountAuthEnabled) return { error: ACCOUNT_AUTH_DISABLED_ERROR };
-    if (this.pendingHandoffAuth) {
-      this.logger.debug(
-        '[AuthService] Cancelling previous sign-in before starting a new one',
-      );
-      await this.cancelPendingHandoffAuth({
-        error: 'Sign-in was cancelled.',
-      });
-    }
-
-    const completion = new Promise<{ error?: string }>((resolve) => {
-      const timeout = setTimeout(() => {
-        this.pendingHandoffAuth = null;
-        void this.disposeActiveLoopbackAuthServer();
-        resolve({ error: 'Social sign-in timed out.' });
-      }, SOCIAL_AUTH_TIMEOUT_MS);
-
-      this.pendingHandoffAuth = { resolve, timeout };
-    });
-
-    try {
-      this.logger.debug(
-        `[AuthService] Starting Clodex sign-in via ${provider}`,
-      );
-      await openClodexLoginInSystemBrowser();
-      return await completion;
-    } catch (err) {
-      await this.disposeActiveLoopbackAuthServer();
-      this.logger.error(
-        `[AuthService] Unexpected error during social sign-in: ${err}`,
-      );
-      this.completePendingHandoffAuth({
-        error: 'Failed to complete social sign-in.',
-      });
-      return await completion;
-    }
+    this.logger.warn(
+      `[AuthService] Blocked legacy browser sign-in via ${provider}`,
+    );
+    return { error: LEGACY_BROWSER_HANDOFF_DISABLED_ERROR };
   }
 
   // ---------------------------------------------------------------------------
@@ -1393,38 +1259,8 @@ export class AuthService extends DisposableService {
 
   public async signInEmail(): Promise<{ error?: string }> {
     if (!isAccountAuthEnabled) return { error: ACCOUNT_AUTH_DISABLED_ERROR };
-    if (this.pendingHandoffAuth) {
-      this.logger.debug(
-        '[AuthService] Cancelling previous sign-in before starting email sign-in',
-      );
-      await this.cancelPendingHandoffAuth({
-        error: 'Sign-in was cancelled.',
-      });
-    }
-
-    const completion = new Promise<{ error?: string }>((resolve) => {
-      const timeout = setTimeout(() => {
-        this.pendingHandoffAuth = null;
-        resolve({ error: 'Email sign-in timed out.' });
-      }, SOCIAL_AUTH_TIMEOUT_MS);
-
-      this.pendingHandoffAuth = { resolve, timeout };
-    });
-
-    try {
-      this.logger.debug('[AuthService] Starting Clodex sign-in via browser');
-      await openClodexLoginInSystemBrowser();
-      const result = await completion;
-      return result;
-    } catch (err) {
-      this.logger.error(
-        `[AuthService] Unexpected error during email sign-in: ${err}`,
-      );
-      this.completePendingHandoffAuth({
-        error: 'Failed to open email sign-in.',
-      });
-      return await completion;
-    }
+    this.logger.warn('[AuthService] Blocked legacy browser email sign-in');
+    return { error: LEGACY_BROWSER_HANDOFF_DISABLED_ERROR };
   }
 
   public async signInTelegram(): Promise<{ error?: string }> {
