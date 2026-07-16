@@ -19,6 +19,8 @@ vi.hoisted(() => {
   vi.stubGlobal('__APP_VERSION__', '0.0.0-test');
   vi.stubGlobal('__APP_PLATFORM__', 'darwin');
   vi.stubGlobal('__APP_RELEASE_CHANNEL__', 'dev');
+  vi.stubGlobal('__APP_DISTRIBUTION_MODE__', 'official');
+  vi.stubGlobal('__APP_AUTH_ENABLED__', true);
   vi.stubGlobal('__APP_AUTHOR__', 'Clodex Labs');
   vi.stubGlobal('__APP_COPYRIGHT__', 'Copyright © 2025 Clodex Labs');
   vi.stubGlobal('__APP_HOMEPAGE__', 'https://clodex.xyz');

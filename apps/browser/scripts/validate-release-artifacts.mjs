@@ -36,6 +36,16 @@ const channelConfig = {
   release: { baseName: 'clodex' },
 };
 
+const distributionConfig = {
+  official: {
+    outputDirectoryName: null,
+  },
+  'community-unsigned': {
+    baseName: 'clodex-community-unsigned',
+    outputDirectoryName: 'community-unsigned',
+  },
+};
+
 const help = `
 Validate Windows or Linux Clodex release artifacts.
 
@@ -44,20 +54,26 @@ Usage:
 
 Options:
   --platform=<windows|linux>                  Target platform
-  --channel=<dev|nightly|prerelease|release> Build channel (default: release)
-  --arch=<arm64|x64>                         Target architecture
-  --version=<semver>                         Package version
-  --allow-unsigned                           Accept unsigned Windows binaries
-  --output=<path>                            JSON manifest output path
-  --require-trusted-binding                  Require source/tag/plan binding
-  --help                                     Show this message
+  --channel=<dev|nightly|prerelease|release>             Build channel (default: release)
+  --distribution-mode=<official|community-unsigned>      Distribution trust mode (default: official)
+  --arch=<arm64|x64>                                    Target architecture
+  --version=<semver>                                    Package version
+  --allow-unsigned                                      Accept unsigned Windows binaries (legacy dev-only escape hatch)
+  --output=<path>                                       JSON manifest output path
+  --require-trusted-binding                             Require source/tag/plan binding
+  --source-commit=<sha>                                 Exact source commit (required for community-unsigned)
+  --help                                                Show this message
 `;
 
-function parseArguments(values) {
+export function parseReleaseArtifactArguments(
+  values,
+  environment = process.env,
+) {
   const options = {
     allowUnsigned: false,
     arch: process.arch,
-    channel: process.env.RELEASE_CHANNEL ?? 'release',
+    channel: environment.RELEASE_CHANNEL ?? 'release',
+    distributionMode: environment.CLODEX_DISTRIBUTION_MODE ?? 'official',
     output: undefined,
     platform: process.platform === 'win32' ? 'windows' : 'linux',
     releasePlanPath: undefined,
@@ -79,6 +95,8 @@ function parseArguments(values) {
       options.arch = value.slice('--arch='.length);
     } else if (value.startsWith('--channel=')) {
       options.channel = value.slice('--channel='.length);
+    } else if (value.startsWith('--distribution-mode=')) {
+      options.distributionMode = value.slice('--distribution-mode='.length);
     } else if (value.startsWith('--output=')) {
       options.output = value.slice('--output='.length);
     } else if (value.startsWith('--platform=')) {
@@ -103,6 +121,11 @@ function parseArguments(values) {
   if (!(options.channel in channelConfig)) {
     throw new Error(`Unsupported release channel: ${options.channel}`);
   }
+  if (!(options.distributionMode in distributionConfig)) {
+    throw new Error(
+      `Unsupported distribution mode: ${options.distributionMode}`,
+    );
+  }
   if (!['arm64', 'x64'].includes(options.arch)) {
     throw new Error(`Unsupported architecture: ${options.arch}`);
   }
@@ -121,6 +144,29 @@ function parseArguments(values) {
     throw new Error(
       'Release validation requires exact source/tag/plan binding',
     );
+  }
+  if (options.distributionMode === 'community-unsigned') {
+    if (options.channel !== 'release') {
+      throw new Error(
+        'community-unsigned distribution must use the release feature channel',
+      );
+    }
+    if (!/^[a-f0-9]{40}$/.test(String(options.sourceCommit ?? ''))) {
+      throw new Error(
+        'community-unsigned distribution requires an exact 40-character source commit',
+      );
+    }
+    if (options.requireTrustedBinding) {
+      throw new Error(
+        'community-unsigned distribution cannot claim trusted release-plan binding',
+      );
+    }
+    if (options.releasePlanPath || options.releasePlanSha256 || options.tag) {
+      throw new Error(
+        'community-unsigned distribution must not carry an official tag or release plan',
+      );
+    }
+    options.allowUnsigned = true;
   }
   return options;
 }
@@ -538,6 +584,7 @@ async function validateWindows({
   arch,
   baseName,
   channel,
+  distributionMode,
   electronRuntime,
   expectedPayload,
   makeDirectory,
@@ -609,6 +656,27 @@ async function validateWindows({
     `${baseName}.exe`,
   );
   assertFile(packagedExecutable, 'NUPKG Windows executable');
+  const packagedExecutableAuthenticode = verifyAuthenticode(
+    packagedExecutable,
+    allowUnsigned,
+  );
+  const setupAuthenticode = verifyAuthenticode(setupPath, allowUnsigned);
+  if (distributionMode === 'community-unsigned') {
+    for (const [label, signature] of [
+      ['packaged executable', packagedExecutableAuthenticode],
+      ['setup executable', setupAuthenticode],
+    ]) {
+      if (
+        signature.checked !== true ||
+        signature.passed !== false ||
+        signature.status !== 'NotSigned'
+      ) {
+        throw new Error(
+          `community-unsigned ${label} must be explicitly NotSigned; received ${signature.status || 'unknown'}`,
+        );
+      }
+    }
+  }
   return {
     artifacts: [setupPath, nupkgPath, releasesPath, payload.sbom.path],
     checks: {
@@ -625,17 +693,14 @@ async function validateWindows({
           sbom: payload.sbom,
         },
       },
-      packagedExecutableAuthenticode: verifyAuthenticode(
-        packagedExecutable,
-        allowUnsigned,
-      ),
+      packagedExecutableAuthenticode,
       releasesEntry: {
         fileName: expectedName,
         sha1: actualSha1,
         size: nupkgStats.size,
       },
       squirrelInternalVersion: internalVersion,
-      setupAuthenticode: verifyAuthenticode(setupPath, allowUnsigned),
+      setupAuthenticode,
       setupBytes: setupStats.size,
     },
   };
@@ -846,7 +911,7 @@ async function validateLinux({
 }
 
 async function main() {
-  const options = parseArguments(process.argv.slice(2));
+  const options = parseReleaseArtifactArguments(process.argv.slice(2));
   const pinnedNodeVersion = readFileSync(
     path.join(repositoryDirectory, '.node-version'),
     'utf8',
@@ -862,8 +927,14 @@ async function main() {
     readFileSync(path.join(browserDirectory, 'package.json'), 'utf8'),
   );
   const version = options.version ?? packageJson.version;
-  const { baseName } = channelConfig[options.channel];
-  const outputRoot = path.join(browserDirectory, 'out', options.channel);
+  const distribution = distributionConfig[options.distributionMode];
+  const baseName =
+    distribution.baseName ?? channelConfig[options.channel].baseName;
+  const outputRoot = path.join(
+    browserDirectory,
+    'out',
+    distribution.outputDirectoryName ?? options.channel,
+  );
   const makeDirectory = path.join(outputRoot, 'make');
   const validationDirectory = path.join(outputRoot, 'validation');
   mkdirSync(validationDirectory, { recursive: true });
@@ -899,7 +970,9 @@ async function main() {
       packagedResourcesDirectory,
       ATTRIBUTION_DIRECTORY_NAME,
     ),
-    requireReady: options.channel !== 'dev',
+    requireReady:
+      options.distributionMode === 'community-unsigned' ||
+      options.channel !== 'dev',
   });
   const expectedPayload = {
     appAsarSha256: await hashFile(
@@ -917,6 +990,7 @@ async function main() {
         ? await validateWindows({
             ...options,
             baseName,
+            distributionMode: options.distributionMode,
             electronRuntime,
             expectedPayload,
             makeDirectory,
@@ -955,6 +1029,38 @@ async function main() {
     ) {
       throw new Error('Validated publication asset filenames are not unique');
     }
+    const distributionTrust =
+      options.distributionMode === 'community-unsigned'
+        ? options.platform === 'windows'
+          ? {
+              codeSigning: {
+                packagedExecutable:
+                  validation.checks.packagedExecutableAuthenticode,
+                setupExecutable: validation.checks.setupAuthenticode,
+              },
+              mode: 'community-unsigned',
+              notarization: 'not-applicable',
+              osTrust: 'absent',
+              updater: 'excluded',
+              warningCode: 'CLODEX_COMMUNITY_UNSIGNED_NO_OS_TRUST',
+            }
+          : {
+              codeSigning: 'not-applicable',
+              mode: 'community-unsigned',
+              notarization: 'not-applicable',
+              osTrust: 'platform-package-unsigned',
+              updater: 'excluded',
+              warningCode: 'CLODEX_COMMUNITY_UNSIGNED_NO_OS_TRUST',
+            }
+        : {
+            mode: 'official',
+            osTrust:
+              options.platform === 'windows'
+                ? options.allowUnsigned
+                  ? 'unsigned-allowed-local'
+                  : 'authenticode-required'
+                : 'platform-package-default',
+          };
     const manifest = {
       schemaVersion: 2,
       status: 'passed',
@@ -962,6 +1068,7 @@ async function main() {
       build: {
         arch: options.arch,
         channel: options.channel,
+        distributionMode: options.distributionMode,
         nodeVersion: actualNodeVersion,
         platform: options.platform,
         releasePlanPath: options.releasePlanPath,
@@ -971,6 +1078,7 @@ async function main() {
         version,
       },
       checks: validation.checks,
+      distributionTrust,
       artifacts,
       publication: {
         assets: publicationAssets,
@@ -995,9 +1103,16 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(
-    `[release-artifacts] ${error instanceof Error ? error.message : error}`,
-  );
-  process.exit(1);
-});
+const isEntryPoint =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) ===
+    path.resolve(fileURLToPath(import.meta.url));
+
+if (isEntryPoint) {
+  main().catch((error) => {
+    console.error(
+      `[release-artifacts] ${error instanceof Error ? error.message : error}`,
+    );
+    process.exit(1);
+  });
+}

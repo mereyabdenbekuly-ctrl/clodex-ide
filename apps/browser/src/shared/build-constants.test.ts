@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { resolveAppIdentity } from './local-build-identity';
+import {
+  resolveAppDistributionMode,
+  resolveAppDistributionPolicy,
+  resolveAppIdentity,
+} from './local-build-identity';
 
 describe('build constants local package identity', () => {
   it.each([
@@ -48,6 +52,69 @@ describe('build constants local package identity', () => {
     expect(identity.appName).toBe('Clodex Agentic IDE [Local canonical-smoke]');
     expect(identity.bundleId).toBe(
       'xyz.clodex.agentic-ide.local.canonical-smoke',
+    );
+  });
+
+  it('derives an isolated, non-promotable identity for community artifacts', () => {
+    expect(
+      resolveAppIdentity({
+        distributionMode: 'community-unsigned',
+        releaseChannel: 'release',
+        allowUnsignedLocalBuild: false,
+      }),
+    ).toEqual({
+      localBuildId: '',
+      baseName: 'clodex-community-unsigned',
+      appName: 'Clodex Agentic IDE (Community Unsigned)',
+      bundleId: 'xyz.clodex.agentic-ide.community-unsigned',
+    });
+  });
+
+  it('keeps community distribution orthogonal to release-channel policy', () => {
+    expect(
+      resolveAppDistributionPolicy({
+        distributionMode: 'community-unsigned',
+        releaseChannel: 'release',
+      }),
+    ).toEqual({
+      authEnabled: false,
+      autoUpdateEnabled: false,
+      buildIdentifier: 'community-unsigned',
+      registerDefaultProtocols: false,
+      telemetryEnabled: false,
+    });
+    expect(() =>
+      resolveAppDistributionPolicy({
+        distributionMode: 'community-unsigned',
+        releaseChannel: 'prerelease',
+      }),
+    ).toThrow(
+      'community-unsigned distribution requires RELEASE_CHANNEL=release',
+    );
+  });
+
+  it('parses only canonical distribution modes', () => {
+    expect(resolveAppDistributionMode(undefined)).toBe('official');
+    expect(resolveAppDistributionMode('')).toBe('official');
+    expect(resolveAppDistributionMode(' official ')).toBe('official');
+    expect(resolveAppDistributionMode('community-unsigned')).toBe(
+      'community-unsigned',
+    );
+    expect(() => resolveAppDistributionMode('community')).toThrow(
+      'Unsupported CLODEX_DISTRIBUTION_MODE: community',
+    );
+  });
+
+  it('rejects mixing community and local unsigned identities', () => {
+    expect(() =>
+      resolveAppIdentity({
+        distributionMode: 'community-unsigned',
+        releaseChannel: 'release',
+        localBuildId: 'smoke',
+        allowUnsignedLocalBuild: true,
+      }),
+    ).toThrow(
+      'community-unsigned distribution cannot use unsigned local-build overrides',
     );
   });
 

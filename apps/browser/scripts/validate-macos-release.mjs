@@ -86,6 +86,18 @@ const channelConfig = {
   },
 };
 
+const distributionConfig = {
+  official: {
+    outputDirectoryName: null,
+  },
+  'community-unsigned': {
+    baseName: 'clodex-community-unsigned',
+    bundleIdentifier: 'xyz.clodex.agentic-ide.community-unsigned',
+    displayName: 'Clodex Agentic IDE (Community Unsigned)',
+    outputDirectoryName: 'community-unsigned',
+  },
+};
+
 const help = `
 Validate a packaged macOS Clodex release and its DMG/ZIP artifacts.
 
@@ -93,26 +105,28 @@ Usage:
   node scripts/validate-macos-release.mjs [options]
 
 Options:
-  --channel=<dev|nightly|prerelease|release>  Build channel (default: release)
-  --arch=<arm64|x64>                          Target architecture
-  --version=<semver>                          Package version override
-  --source-commit=<sha>                       Exact release source commit
-  --tag=<tag>                                 Exact release tag
-  --release-plan=<path>                       Committed release-plan path
-  --release-plan-sha256=<sha256>              Exact release-plan digest
-  --require-trusted-binding                   Require source/tag/plan binding
-  --skip-make                                 Validate existing artifacts
-  --allow-adhoc                               Accept an ad-hoc local signature
-  --ui-launch                                 Launch the full copied application
-  --output=<path>                             JSON manifest output path
-  --help                                      Show this message
+  --channel=<dev|nightly|prerelease|release>             Build channel (default: release)
+  --distribution-mode=<official|community-unsigned>      Distribution trust mode (default: official)
+  --arch=<arm64|x64>                                    Target architecture
+  --version=<semver>                                    Package version override
+  --source-commit=<sha>                                 Exact source commit (required for community-unsigned)
+  --tag=<tag>                                           Exact release tag
+  --release-plan=<path>                                 Committed release-plan path
+  --release-plan-sha256=<sha256>                        Exact release-plan digest
+  --require-trusted-binding                             Require source/tag/plan binding
+  --skip-make                                           Validate existing artifacts
+  --allow-adhoc                                         Accept an ad-hoc local signature (legacy dev-only escape hatch)
+  --ui-launch                                           Launch the full copied application
+  --output=<path>                                       JSON manifest output path
+  --help                                                Show this message
 `;
 
-function parseArguments(values) {
+export function parseMacosReleaseArguments(values, environment = process.env) {
   const options = {
     allowAdhoc: false,
     arch: process.arch,
-    channel: process.env.RELEASE_CHANNEL ?? 'release',
+    channel: environment.RELEASE_CHANNEL ?? 'release',
+    distributionMode: environment.CLODEX_DISTRIBUTION_MODE ?? 'official',
     output: undefined,
     releasePlanPath: undefined,
     releasePlanSha256: undefined,
@@ -140,6 +154,8 @@ function parseArguments(values) {
       options.arch = value.slice('--arch='.length);
     } else if (value.startsWith('--channel=')) {
       options.channel = value.slice('--channel='.length);
+    } else if (value.startsWith('--distribution-mode=')) {
+      options.distributionMode = value.slice('--distribution-mode='.length);
     } else if (value.startsWith('--output=')) {
       options.output = value.slice('--output='.length);
     } else if (value.startsWith('--release-plan=')) {
@@ -162,6 +178,11 @@ function parseArguments(values) {
   if (!(options.channel in channelConfig)) {
     throw new Error(`Unsupported release channel: ${options.channel}`);
   }
+  if (!(options.distributionMode in distributionConfig)) {
+    throw new Error(
+      `Unsupported distribution mode: ${options.distributionMode}`,
+    );
+  }
   if (!['arm64', 'x64'].includes(options.arch)) {
     throw new Error(`Unsupported macOS architecture: ${options.arch}`);
   }
@@ -177,6 +198,30 @@ function parseArguments(values) {
     throw new Error(
       'Release validation requires exact source/tag/plan binding',
     );
+  }
+
+  if (options.distributionMode === 'community-unsigned') {
+    if (options.channel !== 'release') {
+      throw new Error(
+        'community-unsigned distribution must use the release feature channel',
+      );
+    }
+    if (!/^[a-f0-9]{40}$/.test(String(options.sourceCommit ?? ''))) {
+      throw new Error(
+        'community-unsigned distribution requires an exact 40-character source commit',
+      );
+    }
+    if (options.requireTrustedBinding) {
+      throw new Error(
+        'community-unsigned distribution cannot claim trusted release-plan binding',
+      );
+    }
+    if (options.releasePlanPath || options.releasePlanSha256 || options.tag) {
+      throw new Error(
+        'community-unsigned distribution must not carry an official tag or release plan',
+      );
+    }
+    options.allowAdhoc = true;
   }
 
   return options;
@@ -312,6 +357,23 @@ function assertSignatureSecurity(signature, allowAdhoc, label) {
   if (!developerId.ok) {
     throw new Error(
       `${label} is not a valid Developer ID Application signature [${developerId.code}]`,
+    );
+  }
+}
+
+function assertCommunityAdhocSignature(signature, distributionMode, label) {
+  if (distributionMode !== 'community-unsigned') return;
+  if (!signature.isAdhoc) {
+    throw new Error(
+      `community-unsigned ${label} must have an ad-hoc signature and no Developer ID identity`,
+    );
+  }
+  if (
+    signature.authorities.length > 0 ||
+    (signature.teamIdentifier && signature.teamIdentifier !== 'not set')
+  ) {
+    throw new Error(
+      `community-unsigned ${label} unexpectedly carries a signing authority`,
     );
   }
 }
@@ -701,7 +763,7 @@ async function main() {
     throw new Error('macOS release validation must run on macOS');
   }
 
-  const options = parseArguments(process.argv.slice(2));
+  const options = parseMacosReleaseArguments(process.argv.slice(2));
   const pinnedNodeVersion = readFileSync(
     path.join(repositoryDirectory, '.node-version'),
     'utf8',
@@ -744,8 +806,16 @@ async function main() {
     version: electronPackage.version,
   };
   const version = options.version ?? packageJson.version;
-  const config = channelConfig[options.channel];
-  const outputRoot = path.join(browserDirectory, 'out', options.channel);
+  const distribution = distributionConfig[options.distributionMode];
+  const config =
+    options.distributionMode === 'community-unsigned'
+      ? distribution
+      : channelConfig[options.channel];
+  const outputRoot = path.join(
+    browserDirectory,
+    'out',
+    distribution.outputDirectoryName ?? options.channel,
+  );
   const validationDirectory = path.join(outputRoot, 'validation');
   mkdirSync(validationDirectory, { recursive: true });
 
@@ -761,10 +831,13 @@ async function main() {
   const buildEnvironment = {
     ...process.env,
     APP_VERSION_OVERRIDE: version,
+    CLODEX_DISTRIBUTION_MODE: options.distributionMode,
     RELEASE_CHANNEL: options.channel,
   };
-  if (options.allowAdhoc) {
+  if (options.allowAdhoc && options.distributionMode !== 'community-unsigned') {
     buildEnvironment.CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD = 'true';
+  } else if (options.distributionMode === 'community-unsigned') {
+    delete buildEnvironment.CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD;
   }
 
   const updateServer = inspectUpdateServerOrigin(
@@ -772,6 +845,7 @@ async function main() {
   );
   const updateServerConfigured = updateServer.ok;
   if (
+    options.distributionMode !== 'community-unsigned' &&
     !options.allowAdhoc &&
     options.channel !== 'dev' &&
     !updateServerConfigured
@@ -897,6 +971,11 @@ async function main() {
       options.allowAdhoc,
       'Packaged application',
     );
+    assertCommunityAdhocSignature(
+      packageSignature,
+      options.distributionMode,
+      'packaged application',
+    );
 
     printStep('Verifying ASAR integrity, Electron fuses, and entitlements');
     const asarIntegrity = await inspectAsarIntegrity(appPath, infoPlistPath);
@@ -907,12 +986,19 @@ async function main() {
         'Resources',
         ATTRIBUTION_DIRECTORY_NAME,
       ),
-      requireReady: options.channel !== 'dev',
+      requireReady:
+        options.distributionMode === 'community-unsigned' ||
+        options.channel !== 'dev',
     });
     const fuses = inspectElectronFuses(appPath);
     const entitlements =
       options.allowAdhoc && packageSignature.isAdhoc
-        ? { skipped: 'ad-hoc-local-build' }
+        ? {
+            skipped:
+              options.distributionMode === 'community-unsigned'
+                ? 'community-unsigned-ad-hoc-build'
+                : 'ad-hoc-local-build',
+          }
         : inspectSignedEntitlements(appPath, temporaryRoot);
 
     printStep('Verifying DMG checksum and final ZIP application payload');
@@ -934,7 +1020,9 @@ async function main() {
         'Resources',
         ATTRIBUTION_DIRECTORY_NAME,
       ),
-      requireReady: options.channel !== 'dev',
+      requireReady:
+        options.distributionMode === 'community-unsigned' ||
+        options.channel !== 'dev',
     });
     if (zipAttribution.manifestSha256 !== packagedAttribution.manifestSha256) {
       throw new Error(
@@ -946,6 +1034,11 @@ async function main() {
       zipSignature,
       options.allowAdhoc,
       'Final ZIP application',
+    );
+    assertCommunityAdhocSignature(
+      zipSignature,
+      options.distributionMode,
+      'ZIP application',
     );
     const zipAsarIntegrity = await inspectAsarIntegrity(
       zipAppPath,
@@ -1014,7 +1107,9 @@ async function main() {
           'Resources',
           ATTRIBUTION_DIRECTORY_NAME,
         ),
-        requireReady: options.channel !== 'dev',
+        requireReady:
+          options.distributionMode === 'community-unsigned' ||
+          options.channel !== 'dev',
       });
       if (
         mountedAttribution.manifestSha256 !== packagedAttribution.manifestSha256
@@ -1028,6 +1123,11 @@ async function main() {
         mountedSignature,
         options.allowAdhoc,
         'Mounted application',
+      );
+      assertCommunityAdhocSignature(
+        mountedSignature,
+        options.distributionMode,
+        'mounted application',
       );
       gatekeeper = assessGatekeeper(mountedAppPath);
       mountedStapler = validateStapler(mountedAppPath);
@@ -1060,7 +1160,9 @@ async function main() {
         'Resources',
         ATTRIBUTION_DIRECTORY_NAME,
       ),
-      requireReady: options.channel !== 'dev',
+      requireReady:
+        options.distributionMode === 'community-unsigned' ||
+        options.channel !== 'dev',
     });
     if (
       copiedAttribution.manifestSha256 !== packagedAttribution.manifestSha256
@@ -1074,6 +1176,11 @@ async function main() {
       options.allowAdhoc,
       'Copied application',
     );
+    assertCommunityAdhocSignature(
+      copiedSignature,
+      options.distributionMode,
+      'copied application',
+    );
     const copiedGatekeeper = assessGatekeeper(copiedAppPath);
     const copiedStapler = validateStapler(copiedAppPath);
     if (!options.allowAdhoc && !copiedGatekeeper.passed) {
@@ -1084,6 +1191,16 @@ async function main() {
     if (!options.allowAdhoc && !copiedStapler.passed) {
       throw new Error(
         `Copied application lost its notarization ticket: ${copiedStapler.output}`,
+      );
+    }
+    if (
+      options.distributionMode === 'community-unsigned' &&
+      [dmgStapler, mountedStapler, copiedStapler].some(
+        (assessment) => assessment?.passed === true,
+      )
+    ) {
+      throw new Error(
+        'community-unsigned artifacts must not carry an Apple notarization ticket',
       );
     }
     const executablePath = path.join(
@@ -1180,6 +1297,7 @@ async function main() {
       build: {
         arch: options.arch,
         channel: options.channel,
+        distributionMode: options.distributionMode,
         nodeVersion: actualNodeVersion,
         platform: 'macos',
         pnpmVersion: actualPnpmVersion,
@@ -1196,8 +1314,31 @@ async function main() {
         mounted: mountedSignature,
         packaged: packageSignature,
         zip: zipSignature,
-        requiredMode: options.allowAdhoc ? 'adhoc-allowed' : 'developer-id',
+        requiredMode:
+          options.distributionMode === 'community-unsigned'
+            ? 'community-ad-hoc'
+            : options.allowAdhoc
+              ? 'adhoc-allowed'
+              : 'developer-id',
       },
+      distributionTrust:
+        options.distributionMode === 'community-unsigned'
+          ? {
+              codeSigning: 'ad-hoc',
+              mode: 'community-unsigned',
+              notarization: 'absent',
+              osTrust: 'absent',
+              updater: 'excluded',
+              warningCode: 'CLODEX_COMMUNITY_UNSIGNED_NO_OS_TRUST',
+            }
+          : {
+              codeSigning: options.allowAdhoc ? 'ad-hoc-local' : 'developer-id',
+              mode: 'official',
+              notarization: options.allowAdhoc
+                ? 'not-required-local'
+                : 'required',
+              osTrust: options.allowAdhoc ? 'local-only' : 'gatekeeper',
+            },
       trust: {
         applicationGatekeeper: gatekeeper,
         applicationStapler: mountedStapler,
@@ -1233,7 +1374,9 @@ async function main() {
         asarIntegrity,
         entitlements,
         fuses,
-        hardenedRuntimeRequired: !options.allowAdhoc,
+        hardenedRuntimeRequired:
+          options.distributionMode !== 'community-unsigned' &&
+          !options.allowAdhoc,
       },
       artifacts,
       publication: {
@@ -1262,11 +1405,18 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(
-    `[release-validation] FAILED: ${
-      error instanceof Error ? error.message : String(error)
-    }`,
-  );
-  process.exitCode = 1;
-});
+const isEntryPoint =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) ===
+    path.resolve(fileURLToPath(import.meta.url));
+
+if (isEntryPoint) {
+  main().catch((error) => {
+    console.error(
+      `[release-validation] FAILED: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    process.exitCode = 1;
+  });
+}

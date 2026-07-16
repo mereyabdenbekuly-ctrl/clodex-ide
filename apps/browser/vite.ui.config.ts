@@ -12,6 +12,12 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   define: {
     'process.env': 'import.meta.env',
+    ...(buildConstants.__APP_TELEMETRY_ENABLED__
+      ? {}
+      : {
+          'import.meta.env.VITE_DISABLE_TELEMETRY': JSON.stringify('true'),
+          'import.meta.env.VITE_POSTHOG_API_KEY': 'undefined',
+        }),
     // Inject build-time constants (access via __APP_VERSION__ and __APP_RELEASE_CHANNEL__)
     ...Object.fromEntries(
       Object.entries(buildConstants).map(([key, value]) => [

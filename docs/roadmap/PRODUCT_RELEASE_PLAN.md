@@ -52,6 +52,13 @@ The fixed `1.16.0` promotion chain is:
 3. `clodex@1.16.0` — newly built stable artifacts after accepted preview.3
    evidence.
 
+An unsigned community-build lane may run in parallel for open-source testing.
+It produces only short-retention GitHub Actions artifacts from exact canonical
+`main`, creates no tag or GitHub Release, has no updater/feed, and contributes
+no preview, canary, rollback, stable, or feature-promotion evidence. It never
+changes or shortens the fixed chain above. See
+[`docs/community-unsigned-builds.md`](../community-unsigned-builds.md).
+
 `v1.16.0-preview.1` is historical, untrusted release state. It is never a
 rollback target or an allowed public download.
 

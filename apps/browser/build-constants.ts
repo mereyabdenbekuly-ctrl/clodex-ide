@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import semver from 'semver';
 import {
+  resolveAppDistributionMode,
+  resolveAppDistributionPolicy,
   resolveAppIdentity,
   type AppReleaseChannel,
 } from './src/shared/local-build-identity';
@@ -29,7 +31,17 @@ const packageJson = JSON.parse(
   readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'),
 );
 
+export const __APP_DISTRIBUTION_MODE__ = resolveAppDistributionMode(
+  process.env.CLODEX_DISTRIBUTION_MODE,
+);
+
+const distributionPolicy = resolveAppDistributionPolicy({
+  distributionMode: __APP_DISTRIBUTION_MODE__,
+  releaseChannel: __APP_RELEASE_CHANNEL__,
+});
+
 const appIdentity = resolveAppIdentity({
+  distributionMode: __APP_DISTRIBUTION_MODE__,
   releaseChannel: __APP_RELEASE_CHANNEL__,
   localBuildId: process.env.CLODEX_LOCAL_BUILD_ID,
   allowUnsignedLocalBuild:
@@ -40,6 +52,12 @@ export const __APP_LOCAL_BUILD_ID__ = appIdentity.localBuildId;
 export const __APP_BASE_NAME__ = appIdentity.baseName;
 export const __APP_NAME__ = appIdentity.appName;
 export const __APP_BUNDLE_ID__ = appIdentity.bundleId;
+export const __APP_BUILD_IDENTIFIER__ = distributionPolicy.buildIdentifier;
+export const __APP_AUTH_ENABLED__ = distributionPolicy.authEnabled;
+export const __APP_AUTO_UPDATE_ENABLED__ = distributionPolicy.autoUpdateEnabled;
+export const __APP_REGISTER_DEFAULT_PROTOCOLS__ =
+  distributionPolicy.registerDefaultProtocols;
+export const __APP_TELEMETRY_ENABLED__ = distributionPolicy.telemetryEnabled;
 
 export const __APP_VERSION__ = (() => {
   const override = process.env.APP_VERSION_OVERRIDE;

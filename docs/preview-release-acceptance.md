@@ -7,6 +7,12 @@ Release chain:
    preview.2 as its rollback baseline;
 3. `clodex@1.16.0` — newly built stable artifacts after accepted preview.3.
 
+Community unsigned GitHub Actions artifacts are outside this chain. They have
+no release tag or GitHub Release, cannot be a rollback target, and cannot
+produce preview, canary, stable, or feature-promotion evidence. Their separate
+contract is defined in
+[`community-unsigned-builds.md`](./community-unsigned-builds.md).
+
 Both previews remain draft GitHub Releases behind the protected `Release`
 environment. Public preview download links are forbidden. Public website download surfaces remain disabled until an eligible stable release exists.
 Historical preview.1 is not trusted and the product or website must not link

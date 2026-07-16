@@ -1,0 +1,288 @@
+name: "Community Unsigned Build"
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type BUILD_COMMUNITY_UNSIGNED to build non-promotional Actions artifacts"
+        required: true
+        type: string
+
+run-name: "Community unsigned build: main @ ${{ github.sha }}"
+
+concurrency:
+  group: community-unsigned-build-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NPM_CONFIG_IGNORE_PNPMFILE: "true"
+
+jobs:
+  preflight:
+    name: Pin exact canonical main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      short_sha: ${{ steps.identity.outputs.short_sha }}
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      version: ${{ steps.identity.outputs.version }}
+
+    steps:
+      - name: Require canonical main and explicit confirmation
+        env:
+          COMMUNITY_CONFIRMATION: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          if [ "$COMMUNITY_CONFIRMATION" != "BUILD_COMMUNITY_UNSIGNED" ]; then
+            echo "::error::Confirmation must be exactly BUILD_COMMUNITY_UNSIGNED"
+            exit 1
+          fi
+
+      - name: Checkout dispatch commit without credentials or tags
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Require dispatch commit to be exact canonical main
+        run: |
+          set -euo pipefail
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$(git rev-parse HEAD)" = "$remote_main"
+          test "$GITHUB_SHA" = "$remote_main"
+          test "$GITHUB_WORKFLOW_SHA" = "$remote_main"
+
+      - name: Derive non-tagged community build identity
+        id: identity
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('apps/browser/package.json', 'utf8'));
+          const baseVersion = pkg.version;
+          const runNumber = process.env.GITHUB_RUN_NUMBER;
+          const sourceSha = process.env.GITHUB_SHA;
+          if (!/^\d+\.\d+\.\d+$/.test(String(baseVersion ?? ''))) {
+            throw new Error(`Community build requires a plain base SemVer, got ${String(baseVersion)}`);
+          }
+          if (!/^[1-9]\d*$/.test(String(runNumber ?? ''))) {
+            throw new Error('GITHUB_RUN_NUMBER is not a positive integer');
+          }
+          if (!/^[a-f0-9]{40}$/.test(String(sourceSha ?? ''))) {
+            throw new Error('GITHUB_SHA is not an exact lowercase commit SHA');
+          }
+          const version = `${baseVersion}-community${runNumber}`;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `short_sha=${sourceSha.slice(0, 12)}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `source_sha=${sourceSha}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          NODE
+
+  source-validation:
+    name: Validate frozen source and redistribution inputs
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout exact community source without credentials or tags
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Assert exact source checkout
+        env:
+          COMMUNITY_SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$COMMUNITY_SOURCE_SHA"
+          test "$GITHUB_SHA" = "$COMMUNITY_SOURCE_SHA"
+          test "$GITHUB_WORKFLOW_SHA" = "$COMMUNITY_SOURCE_SHA"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$COMMUNITY_SOURCE_SHA"
+
+      - name: Validate pnpm bootstrap policy
+        run: node scripts/ci/check-pnpm-bootstrap.mjs
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: ".node-version"
+          cache: "pnpm"
+
+      - name: Install frozen dependencies without repository hooks
+        run: pnpm install --frozen-lockfile --ignore-pnpmfile
+
+      - name: Audit exact production dependency graph
+        run: pnpm security:dependencies
+
+      - name: Require strict desktop attribution inputs
+        run: pnpm --dir apps/browser release:attribution:check -- --channel=release
+
+  build:
+    name: Build ${{ matrix.platform }} ${{ matrix.arch }} community artifact
+    needs: [preflight, source-validation]
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            platform: macos
+            arch: arm64
+            artifact: macos-arm64
+          - os: macos-26-intel
+            platform: macos
+            arch: x64
+            artifact: macos-x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+            artifact: linux-x64
+          - os: windows-latest
+            platform: windows
+            arch: x64
+            artifact: windows-x64
+
+    runs-on: ${{ matrix.os }}
+    env:
+      APP_VERSION_OVERRIDE: ${{ needs.preflight.outputs.version }}
+      BUILD_MODE: production
+      CLODEX_AUTH_ENABLED: "false"
+      CLODEX_DISTRIBUTION_MODE: community-unsigned
+      NODE_OPTIONS: "--max-old-space-size=8192"
+      RELEASE_CHANNEL: release
+      VITE_DISABLE_TELEMETRY: "true"
+
+    steps:
+      - name: Checkout exact community source without credentials or tags
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Assert exact source checkout
+        env:
+          COMMUNITY_SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$COMMUNITY_SOURCE_SHA"
+          test "$GITHUB_SHA" = "$COMMUNITY_SOURCE_SHA"
+          test "$GITHUB_WORKFLOW_SHA" = "$COMMUNITY_SOURCE_SHA"
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$remote_main" = "$COMMUNITY_SOURCE_SHA"
+
+      - name: Validate pnpm bootstrap policy
+        run: node scripts/ci/check-pnpm-bootstrap.mjs
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: ".node-version"
+          cache: "pnpm"
+
+      - name: Install frozen dependencies without repository hooks
+        run: pnpm install --frozen-lockfile --ignore-pnpmfile
+
+      - name: Install Linux package validation dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cpio rpm xvfb
+
+      - name: Build workspace packages
+        run: pnpm build
+
+      - name: Build unsigned community desktop package
+        working-directory: apps/browser
+        shell: bash
+        env:
+          COMMUNITY_ARCH: ${{ matrix.arch }}
+        run: pnpm make "--arch=$COMMUNITY_ARCH"
+
+      - name: Validate exact community desktop artifacts
+        shell: bash
+        env:
+          COMMUNITY_ARCH: ${{ matrix.arch }}
+          COMMUNITY_PLATFORM: ${{ matrix.platform }}
+          COMMUNITY_SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+          COMMUNITY_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          common=(
+            --channel=release
+            --distribution-mode=community-unsigned
+            "--source-commit=$COMMUNITY_SOURCE_SHA"
+            "--arch=$COMMUNITY_ARCH"
+            "--version=$COMMUNITY_VERSION"
+          )
+          case "$COMMUNITY_PLATFORM" in
+            macos)
+              pnpm --dir apps/browser release:validate:macos -- \
+                --skip-make \
+                --ui-launch \
+                "${common[@]}"
+              ;;
+            windows|linux)
+              pnpm --dir apps/browser release:validate:artifacts -- \
+                "--platform=$COMMUNITY_PLATFORM" \
+                "${common[@]}"
+              ;;
+            *)
+              echo "::error::Unsupported community platform: $COMMUNITY_PLATFORM"
+              exit 1
+              ;;
+          esac
+
+      - name: Assemble bounded community bundle
+        shell: bash
+        env:
+          COMMUNITY_ARCH: ${{ matrix.arch }}
+          COMMUNITY_BUNDLE: ${{ runner.temp }}/clodex-community-unsigned-bundle
+          COMMUNITY_PLATFORM: ${{ matrix.platform }}
+          COMMUNITY_SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+          COMMUNITY_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          validation_manifest="apps/browser/out/community-unsigned/validation/${COMMUNITY_PLATFORM}-${COMMUNITY_ARCH}-${COMMUNITY_VERSION}.json"
+          node apps/browser/scripts/assemble-community-unsigned-bundle.mjs \
+            "--manifest=$validation_manifest" \
+            "--output=$COMMUNITY_BUNDLE" \
+            "--source-commit=$COMMUNITY_SOURCE_SHA" \
+            "--version=$COMMUNITY_VERSION" \
+            "--platform=$COMMUNITY_PLATFORM" \
+            "--arch=$COMMUNITY_ARCH"
+
+      - name: Upload community Actions artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clodex-community-unsigned-${{ matrix.artifact }}-${{ needs.preflight.outputs.short_sha }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/clodex-community-unsigned-bundle/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
