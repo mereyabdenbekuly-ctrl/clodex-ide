@@ -14,6 +14,10 @@ const workflowPath = path.join(
 );
 const workflowSource = readFileSync(workflowPath, 'utf8');
 const workflow = YAML.parse(workflowSource);
+const gitAttributesSource = readFileSync(
+  path.join(repositoryRoot, '.gitattributes'),
+  'utf8',
+);
 
 function visit(value, pathParts = []) {
   if (Array.isArray(value)) {
@@ -244,6 +248,28 @@ test('community unsigned workflow builds and validates exactly four isolated tar
     assert.match(install.run, /--ignore-pnpmfile/u);
   }
 
+  const metadataVersion = step(
+    'build',
+    'Apply non-tagged community version to package metadata',
+  );
+  assert.equal(
+    metadataVersion.env.COMMUNITY_VERSION,
+    githubExpression('needs.preflight.outputs.version'),
+  );
+  assert.match(metadataVersion.run, /apps\/browser\/package\.json/u);
+  assert.match(metadataVersion.run, /GITHUB_RUN_NUMBER/u);
+  assert.match(metadataVersion.run, /pkg\.version = expectedVersion/u);
+  assert.match(
+    metadataVersion.run,
+    /git diff --exit-code -- \. ':\(exclude\)apps\/browser\/package\.json'/u,
+  );
+  assert.ok(
+    workflow.jobs.build.steps.indexOf(metadataVersion) <
+      workflow.jobs.build.steps.indexOf(
+        step('build', 'Build workspace packages'),
+      ),
+  );
+
   const sourceValidation = workflow.jobs['source-validation'];
   assert.ok(
     sourceValidation.steps.some(
@@ -276,6 +302,13 @@ test('community unsigned workflow builds and validates exactly four isolated tar
   assert.match(assembler, /--source-commit=\$COMMUNITY_SOURCE_SHA/u);
   assert.match(assembler, /--platform=\$COMMUNITY_PLATFORM/u);
   assert.match(assembler, /--arch=\$COMMUNITY_ARCH/u);
+});
+
+test('hash-pinned dependency license evidence is byte-preserved on Windows', () => {
+  assert.match(
+    gitAttributesSource,
+    /^docs\/provenance\/dependency-license-texts\/\*\* -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol$/mu,
+  );
 });
 
 test('community outputs are short-lived Actions artifacts only', () => {

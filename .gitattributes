@@ -3,3 +3,4 @@
 # line-ending normalization for every hash-pinned evidence file.
 docs/provenance/bundled-component-evidence/** -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
 docs/provenance/bundled-component-license-texts/** -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
+docs/provenance/dependency-license-texts/** -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
