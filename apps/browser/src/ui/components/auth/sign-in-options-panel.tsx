@@ -1,14 +1,15 @@
-import { Button } from '@clodex/stage-ui/components/button';
 import { cn } from '@clodex/stage-ui/lib/utils';
 import type { SocialAuthProvider } from '@shared/karton-contracts/ui/shared-types';
+import clodexLogoUrl from '@ui/assets/clodex-logo.png';
 import {
-  EyeIcon,
-  EyeOffIcon,
+  ArrowUpRightIcon,
   Loader2Icon,
   LogInIcon,
   SendIcon,
+  ShieldCheckIcon,
 } from 'lucide-react';
 import { useCallback, useState } from 'react';
+import './sign-in-options-panel.css';
 
 export type SignInMethod = SocialAuthProvider | 'email' | 'telegram';
 
@@ -20,8 +21,10 @@ type TrackEvent = (
 
 type AuthAction = 'login' | 'telegram';
 
-const CLODEX_REGISTER_URL = 'https://clodex.xyz/sign-up';
-const CLODEX_FORGOT_PASSWORD_URL = 'https://clodex.xyz/forgot-password';
+const CLODEX_HOME_URL = (
+  import.meta.env.VITE_CLODEX_ORIGIN || 'https://clodex.xyz'
+).replace(/\/+$/, '');
+const CLODEX_REGISTER_URL = `${CLODEX_HOME_URL}/sign-up`;
 
 // This component is shared by both Electron renderer hosts: the main UI
 // preload exposes `window.electron`, while internal pages expose
@@ -49,6 +52,8 @@ export type SignInOptionsPanelProps = {
 };
 
 export function SignInOptionsPanel({
+  title = 'С возвращением',
+  description = 'Войдите в аккаунт CLODEx, чтобы управлять доступом к моделям и API.',
   variant = 'centered',
   signInEmail,
   signInTelegram,
@@ -58,9 +63,6 @@ export function SignInOptionsPanel({
   onAuthenticated,
   className,
 }: SignInOptionsPanelProps) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [activeAction, setActiveAction] = useState<AuthAction | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -88,6 +90,9 @@ export function SignInOptionsPanel({
       void track(`${trackingPrefix}-clodex-login-requested`, { action });
 
       try {
+        // Credentials are intentionally never collected in the renderer.
+        // The injected action opens CLODEx.xyz in the system browser and waits
+        // for the registered desktop callback.
         const result =
           action === 'telegram' ? await signInTelegram() : await signInEmail();
         if (result?.error) {
@@ -108,7 +113,7 @@ export function SignInOptionsPanel({
           provider: action,
           error_kind: 'network-error',
         });
-        setError('Не удалось завершить вход через Clodex.');
+        setError('Не удалось завершить вход через CLODEx. Попробуйте ещё раз.');
       } finally {
         setActiveAction(null);
       }
@@ -123,155 +128,191 @@ export function SignInOptionsPanel({
     ],
   );
 
-  return (
-    <div
-      className={cn(
-        'relative flex w-full flex-col',
-        isCentered
-          ? 'min-h-[min(650px,calc(100vh-7rem))] items-center justify-center px-6 text-left'
-          : 'items-center',
-        className,
-      )}
-    >
-      {isCentered && (
-        <div className="pointer-events-none absolute top-1 left-0 select-none font-semibold text-[11px] text-foreground/80 tracking-[0.22em]">
-          CLODEX<span className="text-[#22e36f]">_</span>
-        </div>
-      )}
+  const loginPanel = (
+    <section className="clodex-login-panel" aria-label="Вход в CLODEx">
+      <span className="clodex-login-panel-accent" aria-hidden="true" />
 
-      <form
-        className="app-no-drag flex w-full max-w-[37.25rem] flex-col gap-7"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void handleClodexHandoff('login');
-        }}
-      >
-        <div className="flex flex-col gap-2">
-          <h2 className="font-semibold text-2xl text-foreground tracking-normal">
-            LOGIN
-          </h2>
-          <p className="text-base text-muted-foreground">
-            У вас нет аккаунта?{' '}
-            <button
-              type="button"
-              className="font-medium underline underline-offset-4 transition-colors hover:text-foreground"
-              onClick={() => openUrl(CLODEX_REGISTER_URL)}
-            >
-              Регистрация
+      <div className="clodex-login-panel-content">
+        <div className="clodex-login-panel-intro">
+          <div className="clodex-login-eyebrow">
+            <span aria-hidden="true" />
+            Доступ к аккаунту
+          </div>
+          <h2>{title}</h2>
+          <p className="clodex-login-description">{description}</p>
+          <p className="clodex-login-switch">
+            Нет аккаунта?{' '}
+            <button type="button" onClick={() => openUrl(CLODEX_REGISTER_URL)}>
+              Зарегистрироваться
             </button>
-            .
           </p>
         </div>
 
-        <div className="flex items-center gap-3 font-medium text-muted-foreground text-sm">
-          <span className="h-px flex-1 bg-border-subtle" />
-          <span className="whitespace-nowrap">ИЛИ ПРОДОЛЖИТЬ С</span>
-          <span className="h-px flex-1 bg-border-subtle" />
+        <div className="clodex-login-browser-handoff">
+          <ShieldCheckIcon aria-hidden="true" />
+          <div>
+            <strong>Вход через системный браузер</strong>
+            <span>
+              Пароль вводится только на CLODEx.xyz и не передаётся Electron
+              renderer.
+            </span>
+          </div>
         </div>
 
-        <Button
-          type="button"
-          variant="secondary"
-          size="md"
-          className="h-12 w-full rounded-[18px] border-white/10! bg-[#252525]! px-4 text-base text-foreground! shadow-none hover:bg-[#2d2d2d]!"
-          disabled={isLoading}
-          onClick={() => void handleClodexHandoff('telegram')}
+        <form
+          className="clodex-login-form"
+          aria-busy={isLoading}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleClodexHandoff('login');
+          }}
         >
-          {activeAction === 'telegram' ? (
-            <Loader2Icon className="size-4 animate-spin" />
-          ) : (
-            <SendIcon className="size-4" />
-          )}
-          Продолжить с Telegram
-        </Button>
+          <div className="clodex-login-divider">
+            <span>Выберите способ входа</span>
+          </div>
 
-        <div className="flex flex-col gap-2">
-          <label
-            htmlFor="clodex-login-username"
-            className="font-semibold text-base text-foreground"
-          >
-            Имя пользователя или Email
-          </label>
-          <input
-            id="clodex-login-username"
-            className="h-11 w-full rounded-[18px] border border-white/10 bg-[#242424] px-4 text-base text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-white/30"
-            placeholder="Введите ваше имя пользователя или адрес электронной почты"
-            autoComplete="username"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
+          <button
+            type="button"
+            className="clodex-login-provider-button"
             disabled={isLoading}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between gap-4">
-            <label
-              htmlFor="clodex-login-password"
-              className="font-semibold text-base text-foreground"
-            >
-              Пароль
-            </label>
-            <button
-              type="button"
-              className="shrink-0 font-medium text-muted-foreground text-sm transition-colors hover:text-foreground"
-              onClick={() => openUrl(CLODEX_FORGOT_PASSWORD_URL)}
-            >
-              Забыли пароль?
-            </button>
-          </div>
-          <div className="relative">
-            <input
-              id="clodex-login-password"
-              className="h-11 w-full rounded-[18px] border border-white/10 bg-[#242424] px-4 pr-12 text-base text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-white/30"
-              placeholder="Введите пароль"
-              type={showPassword ? 'text' : 'password'}
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              disabled={isLoading}
-            />
-            <button
-              type="button"
-              aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
-              className="absolute inset-y-0 right-3 flex items-center text-muted-foreground transition-colors hover:text-foreground"
-              onClick={() => setShowPassword((value) => !value)}
-              disabled={isLoading}
-            >
-              {showPassword ? (
-                <EyeIcon className="size-5" />
-              ) : (
-                <EyeOffIcon className="size-5" />
-              )}
-            </button>
-          </div>
-        </div>
-
-        <Button
-          type="submit"
-          variant="primary"
-          size="md"
-          className="mt-2 h-12 w-full rounded-[18px] border-white/90! bg-white! text-base text-black! shadow-none hover:bg-white/90!"
-          disabled={isLoading}
-        >
-          {activeAction === 'login' ? (
-            <Loader2Icon className="size-4 animate-spin" />
-          ) : (
-            <LogInIcon className="size-4" />
-          )}
-          LOGIN
-        </Button>
-
-        {error && (
-          <p
-            role="alert"
-            aria-live="assertive"
-            aria-atomic="true"
-            className="text-error-foreground text-sm"
+            onClick={() => void handleClodexHandoff('telegram')}
           >
-            {error}
-          </p>
-        )}
-      </form>
+            {activeAction === 'telegram' ? (
+              <Loader2Icon className="clodex-login-spinner" />
+            ) : (
+              <SendIcon aria-hidden="true" />
+            )}
+            Продолжить с Telegram
+          </button>
+
+          <button
+            type="submit"
+            className="clodex-login-submit"
+            disabled={isLoading}
+          >
+            {activeAction === 'login' ? (
+              <Loader2Icon className="clodex-login-spinner" />
+            ) : (
+              <LogInIcon aria-hidden="true" />
+            )}
+            Войти через CLODEx.xyz
+          </button>
+
+          {error && (
+            <p
+              role="alert"
+              aria-live="assertive"
+              aria-atomic="true"
+              className="clodex-login-error"
+            >
+              {error}
+            </p>
+          )}
+        </form>
+
+        <p className="clodex-login-terms">
+          Продолжая, вы соглашаетесь с применимыми условиями использования и
+          политикой конфиденциальности CLODEx.xyz.
+        </p>
+      </div>
+    </section>
+  );
+
+  if (!isCentered) {
+    return (
+      <div
+        lang="ru"
+        className={cn('clodex-login-section app-no-drag', className)}
+      >
+        {loginPanel}
+        <SecurityNote />
+      </div>
+    );
+  }
+
+  return (
+    <div lang="ru" className={cn('clodex-login-shell app-no-drag', className)}>
+      <div className="clodex-login-grid" aria-hidden="true" />
+      <div className="clodex-login-glow" aria-hidden="true" />
+
+      <header className="clodex-login-header">
+        <img
+          className="clodex-login-logo"
+          src={clodexLogoUrl}
+          alt="CLODEx"
+          draggable={false}
+        />
+        <button
+          type="button"
+          className="clodex-login-home-link"
+          onClick={() => openUrl(CLODEX_HOME_URL)}
+        >
+          <span>На CLODEx.xyz</span>
+          <ArrowUpRightIcon aria-hidden="true" />
+        </button>
+      </header>
+
+      <main className="clodex-login-layout">
+        <section className="clodex-login-story" aria-label="О CLODEx">
+          <div className="clodex-login-story-copy">
+            <div className="clodex-login-story-eyebrow">
+              <span aria-hidden="true" />
+              CLODEx для AI-продуктов
+            </div>
+            <h1>
+              <span>Один аккаунт.</span>
+              <span>Лучшие модели.</span>
+              <span>Полный контроль.</span>
+            </h1>
+            <p>
+              Подключайте coding agents и AI-продукты через единый вход CLODEx.
+            </p>
+            <ul className="clodex-login-benefits">
+              <li>
+                <span aria-hidden="true">✓</span>
+                Авторизация в системном браузере
+              </li>
+              <li>
+                <span aria-hidden="true">✓</span>
+                Автоматический возврат в IDE
+              </li>
+              <li>
+                <span aria-hidden="true">✓</span>
+                Пароль не обрабатывается renderer-процессом
+              </li>
+            </ul>
+          </div>
+
+          <div className="clodex-login-status-card">
+            <div className="clodex-login-status-heading">
+              <span>
+                <i aria-hidden="true" />
+                Browser handoff
+              </span>
+              <strong>clodex.xyz/login</strong>
+            </div>
+            <div className="clodex-login-status-tags">
+              <span>System browser</span>
+              <span>IDE callback</span>
+              <span>Account access</span>
+            </div>
+          </div>
+        </section>
+
+        <section className="clodex-login-form-region">
+          {loginPanel}
+          <SecurityNote />
+        </section>
+      </main>
     </div>
+  );
+}
+
+function SecurityNote() {
+  return (
+    <p className="clodex-login-security-note">
+      <ShieldCheckIcon aria-hidden="true" />
+      Вход выполняется на CLODEx.xyz
+    </p>
   );
 }
