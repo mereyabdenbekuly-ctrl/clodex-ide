@@ -92,6 +92,15 @@ const allowUnsignedLocalBuild =
   process.env.CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD === 'true';
 const useAdhocMacSignature =
   allowUnsignedLocalBuild || isCommunityUnsignedDistribution;
+const configuredAuthCallbackScheme =
+  process.env.CLODEX_AUTH_CALLBACK_SCHEME?.trim().replace(/:$/, '');
+const desktopProtocolSchemes = Array.from(
+  new Set([
+    'clodex',
+    'clodex-ide',
+    ...(configuredAuthCallbackScheme ? [configuredAuthCallbackScheme] : []),
+  ]),
+);
 
 prepareReleaseAttributionBundle({
   appDirectory: __dirname,
@@ -624,8 +633,8 @@ const config: ForgeConfig = {
       ? {
           protocols: [
             {
-              name: 'clodex',
-              schemes: ['clodex'],
+              name: 'CLODEx desktop callbacks',
+              schemes: desktopProtocolSchemes,
             },
           ],
         }
