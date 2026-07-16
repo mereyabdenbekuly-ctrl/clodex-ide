@@ -363,7 +363,7 @@
         ]
       },
       "metadataEvidence": {
-        "path": "bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec",
+        "path": "bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec.txt",
         "sha256": "883fafd27215c4874d295484cbcbd10791e2d2294318e42072d051dd8989d642",
         "sourceReferences": [
           "https://api.nuget.org/v3-flatcontainer/vcruntime.cefsharp.140/1.0.5/vcruntime.cefsharp.140.1.0.5.nupkg",

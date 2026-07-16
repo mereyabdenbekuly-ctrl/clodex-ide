@@ -710,6 +710,20 @@ function normalizeLinuxVersion(value) {
   return value.trim().replaceAll('~', '-').replaceAll('.', '-');
 }
 
+export function expectedRpmVersionRelease(version) {
+  return `${String(version).trim().replaceAll('-', '.')}-1`;
+}
+
+export function assertRpmVersionRelease(rpmVersion, version) {
+  const expected = expectedRpmVersionRelease(version);
+  if (rpmVersion !== expected) {
+    throw new Error(
+      `Unexpected RPM version: ${rpmVersion} (expected ${expected})`,
+    );
+  }
+  return expected;
+}
+
 function extractRpm(rpmPath, destinationDirectory) {
   mkdirSync(destinationDirectory, { recursive: true });
   const env = { ...process.env, RPM_PATH: rpmPath };
@@ -806,13 +820,7 @@ async function validateLinux({
   if (rpmPackage !== baseName) {
     throw new Error(`Unexpected RPM package name: ${rpmPackage}`);
   }
-  if (
-    !normalizeLinuxVersion(rpmVersion).startsWith(
-      normalizeLinuxVersion(version),
-    )
-  ) {
-    throw new Error(`Unexpected RPM version: ${rpmVersion}`);
-  }
+  assertRpmVersionRelease(rpmVersion, version);
   const expectedRpmArchitecture = arch === 'x64' ? 'x86_64' : 'aarch64';
   if (rpmArchitecture !== expectedRpmArchitecture) {
     throw new Error(

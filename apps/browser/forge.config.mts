@@ -677,6 +677,7 @@ const config: ForgeConfig = {
         genericName: 'Web Browser',
         icon: `./assets/icons/${visualAssetChannel}/icon.png`,
         homepage: buildConstants.__APP_HOMEPAGE__,
+        revision: '1',
         categories: ['Development', 'Network', 'Utility'],
       },
     }),
