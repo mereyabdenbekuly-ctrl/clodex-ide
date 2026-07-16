@@ -94,12 +94,12 @@ const useAdhocMacSignature =
   allowUnsignedLocalBuild || isCommunityUnsignedDistribution;
 const configuredAuthCallbackScheme =
   process.env.CLODEX_AUTH_CALLBACK_SCHEME?.trim().replace(/:$/, '');
+const authCallbackScheme = configuredAuthCallbackScheme || 'clodex-ide';
 const desktopProtocolSchemes = Array.from(
-  new Set([
-    'clodex',
-    'clodex-ide',
-    ...(configuredAuthCallbackScheme ? [configuredAuthCallbackScheme] : []),
-  ]),
+  // `clodex` remains the non-auth deep-link namespace. Account callbacks use
+  // exactly one configured scheme so isolated local builds do not also claim
+  // the canonical `clodex-ide://` callback from an installed stable build.
+  new Set(['clodex', authCallbackScheme]),
 );
 
 prepareReleaseAttributionBundle({

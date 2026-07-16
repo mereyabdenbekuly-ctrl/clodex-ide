@@ -25,6 +25,13 @@ const CLODEX_HOME_URL = (
   import.meta.env.VITE_CLODEX_ORIGIN || 'https://clodex.xyz'
 ).replace(/\/+$/, '');
 const CLODEX_REGISTER_URL = `${CLODEX_HOME_URL}/sign-up`;
+// Fail closed until the production desktop handoff binds every authorization
+// response to the initiating app instance with state + PKCE S256. Keep this
+// renderer guard in addition to the backend guard so the UI never advertises
+// the legacy callback as secure or opens it accidentally.
+const SECURE_BROWSER_HANDOFF_AVAILABLE = false;
+const BROWSER_HANDOFF_DISABLED_MESSAGE =
+  'Вход через CLODEx.xyz временно отключён: серверный desktop-flow ещё не подтверждает state + PKCE. Используйте Telegram или локальные API-ключи.';
 
 // This component is shared by both Electron renderer hosts: the main UI
 // preload exposes `window.electron`, while internal pages expose
@@ -84,6 +91,11 @@ export function SignInOptionsPanel({
   const handleClodexHandoff = useCallback(
     async (action: AuthAction) => {
       if (isLoading) return;
+
+      if (action === 'login' && !SECURE_BROWSER_HANDOFF_AVAILABLE) {
+        setError(BROWSER_HANDOFF_DISABLED_MESSAGE);
+        return;
+      }
 
       setError(null);
       setActiveAction(action);
@@ -151,10 +163,10 @@ export function SignInOptionsPanel({
         <div className="clodex-login-browser-handoff">
           <ShieldCheckIcon aria-hidden="true" />
           <div>
-            <strong>Вход через системный браузер</strong>
+            <strong>Защищённый desktop-вход готовится</strong>
             <span>
-              Пароль вводится только на CLODEx.xyz и не передаётся Electron
-              renderer.
+              Legacy callback отключён до обязательной проверки state и PKCE
+              S256.
             </span>
           </div>
         </div>
@@ -188,17 +200,28 @@ export function SignInOptionsPanel({
           <button
             type="submit"
             className="clodex-login-submit"
-            disabled={isLoading}
+            disabled={isLoading || !SECURE_BROWSER_HANDOFF_AVAILABLE}
+            aria-describedby="clodex-browser-handoff-status"
           >
             {activeAction === 'login' ? (
               <Loader2Icon className="clodex-login-spinner" />
             ) : (
               <LogInIcon aria-hidden="true" />
             )}
-            Войти через CLODEx.xyz
+            Вход через CLODEx.xyz временно отключён
           </button>
 
-          {error && (
+          {!SECURE_BROWSER_HANDOFF_AVAILABLE && (
+            <p
+              id="clodex-browser-handoff-status"
+              role="status"
+              className="clodex-login-error"
+            >
+              {BROWSER_HANDOFF_DISABLED_MESSAGE}
+            </p>
+          )}
+
+          {error && error !== BROWSER_HANDOFF_DISABLED_MESSAGE && (
             <p
               role="alert"
               aria-live="assertive"
@@ -270,11 +293,11 @@ export function SignInOptionsPanel({
             <ul className="clodex-login-benefits">
               <li>
                 <span aria-hidden="true">✓</span>
-                Авторизация в системном браузере
+                Системный браузер без передачи пароля renderer-процессу
               </li>
               <li>
-                <span aria-hidden="true">✓</span>
-                Автоматический возврат в IDE
+                <span aria-hidden="true">!</span>
+                Desktop callback закрыт до внедрения state + PKCE S256
               </li>
               <li>
                 <span aria-hidden="true">✓</span>
@@ -312,7 +335,7 @@ function SecurityNote() {
   return (
     <p className="clodex-login-security-note">
       <ShieldCheckIcon aria-hidden="true" />
-      Вход выполняется на CLODEx.xyz
+      Небезопасный callback заблокирован fail-closed
     </p>
   );
 }
