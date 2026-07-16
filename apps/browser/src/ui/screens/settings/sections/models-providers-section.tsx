@@ -99,6 +99,7 @@ const CONSOLE_URL =
   import.meta.env.VITE_CLODEX_CONSOLE_URL ||
   import.meta.env.VITE_CLODEX_ORIGIN ||
   'https://clodex.xyz';
+const AUTH_HANDOFF_TIMEOUT_MS = (5 * 60 + 10) * 1000;
 
 // =============================================================================
 // Model Provider Configuration
@@ -394,8 +395,13 @@ function ProviderConfigCard({ provider }: { provider: ModelProvider }) {
 function ClodexProfileKeysSection() {
   const userAccount = useKartonState((s) => s.userAccount);
   const refreshKeys = useKartonProcedure((p) => p.userAccount.refreshKeys);
+  const signInEmail = useKartonProcedure((p) =>
+    p.userAccount.signInEmail.withTimeout(AUTH_HANDOFF_TIMEOUT_MS),
+  );
   const selectKey = useKartonProcedure((p) => p.userAccount.selectKey);
   const openExternalUrl = useKartonProcedure((p) => p.openExternalUrl);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
   const keys = userAccount.keys ?? [];
   const models = userAccount.models ?? [];
   const activeKeyId = userAccount.activeKeyId ?? userAccount.ideToken?.keyId;
@@ -408,6 +414,73 @@ function ClodexProfileKeysSection() {
     userAccount.user?.username ||
     userAccount.user?.email ||
     'Clodex';
+
+  const isAuthenticated =
+    userAccount.status === 'authenticated' ||
+    userAccount.status === 'server_unreachable';
+
+  if (!isAuthenticated) {
+    return (
+      <div className="space-y-4 rounded-lg border border-derived p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="font-medium text-foreground text-sm">
+              CLODEx account
+            </h3>
+            <p className="max-w-2xl text-muted-foreground text-xs">
+              A relay API key connects the active provider, but profile keys and
+              their model access require a CLODEx.xyz account session.
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-1.5">
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={isSigningIn}
+              onClick={() => {
+                if (isSigningIn) return;
+                setSignInError(null);
+                setIsSigningIn(true);
+                void signInEmail()
+                  .then(async (result) => {
+                    if (result?.error) {
+                      setSignInError(result.error);
+                      return;
+                    }
+                    await refreshKeys();
+                  })
+                  .catch(() => {
+                    setSignInError(
+                      'Could not complete sign-in through CLODEx.xyz.',
+                    );
+                  })
+                  .finally(() => setIsSigningIn(false));
+              }}
+            >
+              {isSigningIn ? 'Waiting for browser…' : 'Sign in to CLODEx.xyz'}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void openExternalUrl(CONSOLE_URL)}
+            >
+              Manage
+            </Button>
+          </div>
+        </div>
+        {signInError && (
+          <p
+            role="alert"
+            aria-live="assertive"
+            className="rounded-md border border-error-solid/30 bg-error-solid/10 p-2.5 text-error-foreground text-xs"
+          >
+            {signInError}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4 rounded-lg border border-derived p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1994,7 +2067,11 @@ function ProviderProfilesSection() {
                       <span className="block truncate text-muted-foreground text-xs">
                         {profile.providerType} ·{' '}
                         {profile.baseUrl ?? 'default endpoint'}
-                        {profile.apiKeyReference ? ' · key configured' : ''}
+                        {profile.apiKeyReference
+                          ? profile.id === 'clodex-account'
+                            ? ' · account relay ready'
+                            : ' · key configured'
+                          : ''}
                       </span>
                     </span>
                   </RadioLabel>
@@ -2290,7 +2367,6 @@ export function ModelsProvidersSection() {
   const setSettingsRoute = useKartonProcedure(
     (p) => p.appScreen.setSettingsRoute,
   );
-  const _userAccount = useKartonState((s) => s.userAccount);
   const preferences = useKartonState((s) => s.preferences);
   const activeProfile = preferences.providerProfiles.find(
     (profile) => profile.id === preferences.defaultProviderProfileId,
@@ -2331,9 +2407,7 @@ export function ModelsProvidersSection() {
 
           <ProviderProfilesSection />
 
-          {activeProfile?.providerType === 'clodex' && (
-            <ClodexProfileKeysSection />
-          )}
+          {__APP_AUTH_ENABLED__ && <ClodexProfileKeysSection />}
 
           <details>
             <summary className="cursor-pointer text-muted-foreground text-xs">

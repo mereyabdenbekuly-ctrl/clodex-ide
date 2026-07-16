@@ -490,7 +490,10 @@ export class AuthService extends DisposableService {
     this.uiKarton.registerServerProcedureHandler(
       'userAccount.refreshKeys',
       async (_callingClientId: string) => {
-        await this.refreshClodexKeys();
+        const keys = await this.refreshClodexKeys();
+        const activeKeyId = this.resolveActiveClodexKeyId(keys);
+        await this.refreshIdeModelToken(undefined, activeKeyId);
+        await this.refreshClodexUserModels(activeKeyId);
       },
     );
 
