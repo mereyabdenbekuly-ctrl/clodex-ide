@@ -9,8 +9,8 @@ promoted
 
 ## Release invariant
 
-A preview, nightly, prerelease, or stable desktop artifact is not distributable
-unless all of the following are true:
+A community unsigned, preview, nightly, prerelease, or stable desktop artifact
+is not distributable unless all of the following are true:
 
 1. the packaged application contains the repository AGPL license,
    `THIRD-PARTY-NOTICES.md`, `CLODEX_VS_UPSTREAM.md`, `CONTRIBUTORS.md`, and the
@@ -169,6 +169,21 @@ The `dev` channel may generate a `BLOCKED_DEV_ONLY` attribution bundle so local
 development can continue while gaps are visible. That status is rejected by
 every distributable channel and by final release validation. There is no
 environment-variable bypass for a release-channel build.
+
+## Community unsigned builds
+
+The community path uses `RELEASE_CHANNEL=release` together with the orthogonal
+`CLODEX_DISTRIBUTION_MODE=community-unsigned`. This preserves the strict
+attribution policy while giving the unsigned application a separate identity
+and disabling release publication, external protocol registration, telemetry,
+and updates.
+
+Every assembled community artifact must contain a `READY` packaged attribution
+bundle and the final-artifact CycloneDX SBOM. Community validation output is a
+build diagnostic only: it is not protected preview/canary/stable evidence and
+must not be written under `.release-evidence`. The complete non-promotional
+contract is in
+[`../community-unsigned-builds.md`](../community-unsigned-builds.md).
 
 ## Commands
 

@@ -34,6 +34,8 @@ declare const __APP_RELEASE_CHANNEL__:
 declare const __APP_VERSION__: string;
 declare const __APP_PLATFORM__: string;
 declare const __APP_ARCH__: string;
+declare const __APP_DISTRIBUTION_MODE__: 'official' | 'community-unsigned';
+declare const __APP_AUTO_UPDATE_ENABLED__: boolean;
 
 export class AutoUpdateService extends DisposableService {
   private readonly logger: Logger;
@@ -100,6 +102,14 @@ export class AutoUpdateService extends DisposableService {
   }
 
   private async initialize(): Promise<void> {
+    if (!__APP_AUTO_UPDATE_ENABLED__) {
+      this.logger.debug(
+        `[AutoUpdateService] Auto-updates disabled for ${__APP_DISTRIBUTION_MODE__} distribution`,
+      );
+      this.setAutoUpdateState('unsupported');
+      return;
+    }
+
     // Only run on macOS and Windows
     const platform = this.getPlatform();
     if (platform !== 'macos' && platform !== 'win') {
@@ -252,6 +262,7 @@ export class AutoUpdateService extends DisposableService {
   private getReleaseChannel(): string | null {
     const prefs = this.preferencesService.get();
     return resolveUpdateChannel({
+      distributionMode: __APP_DISTRIBUTION_MODE__,
       releaseChannel: __APP_RELEASE_CHANNEL__,
       version: __APP_VERSION__,
       preference:
@@ -263,6 +274,7 @@ export class AutoUpdateService extends DisposableService {
 
   private buildFeedURL(): string | null {
     const feedURL = buildUpdateFeedURL({
+      distributionMode: __APP_DISTRIBUTION_MODE__,
       origin: process.env.UPDATE_SERVER_ORIGIN,
       releaseChannel: __APP_RELEASE_CHANNEL__,
       version: __APP_VERSION__,
@@ -397,6 +409,13 @@ export class AutoUpdateService extends DisposableService {
    */
   public checkForUpdates(): void {
     this.assertNotDisposed();
+
+    if (!__APP_AUTO_UPDATE_ENABLED__) {
+      this.logger.debug(
+        `[AutoUpdateService] Ignoring update check for ${__APP_DISTRIBUTION_MODE__} distribution`,
+      );
+      return;
+    }
 
     if (this.updateDownloaded) {
       this.logger.debug(

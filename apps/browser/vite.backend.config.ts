@@ -46,7 +46,9 @@ export default defineConfig({
     'process.env': JSON.stringify({
       BUILD_MODE: process.env.BUILD_MODE ?? 'production',
       NODE_ENV: process.env.NODE_ENV ?? 'production',
-      POSTHOG_API_KEY: process.env.POSTHOG_API_KEY,
+      POSTHOG_API_KEY: buildConstants.__APP_TELEMETRY_ENABLED__
+        ? process.env.POSTHOG_API_KEY
+        : undefined,
       POSTHOG_HOST: process.env.POSTHOG_HOST ?? 'https://eu.i.posthog.com',
       CLODEX_CONSOLE_URL:
         process.env.CLODEX_CONSOLE_URL ??
@@ -72,10 +74,14 @@ export default defineConfig({
       CLODEX_AUTH_CALLBACK_SCHEME:
         process.env.CLODEX_AUTH_CALLBACK_SCHEME ?? 'clodex-ide',
       CLODEX_IDE_CLIENT_ID: process.env.CLODEX_IDE_CLIENT_ID ?? 'clodex-ide',
-      CLODEX_AUTH_ENABLED: process.env.CLODEX_AUTH_ENABLED ?? 'true',
+      CLODEX_AUTH_ENABLED: buildConstants.__APP_AUTH_ENABLED__
+        ? (process.env.CLODEX_AUTH_ENABLED ?? 'true')
+        : 'false',
       CLODEX_DISABLE_ISOLATED_AGENT_RUNTIME:
         process.env.CLODEX_DISABLE_ISOLATED_AGENT_RUNTIME,
-      UPDATE_SERVER_ORIGIN: process.env.UPDATE_SERVER_ORIGIN,
+      UPDATE_SERVER_ORIGIN: buildConstants.__APP_AUTO_UPDATE_ENABLED__
+        ? process.env.UPDATE_SERVER_ORIGIN
+        : undefined,
       SUPABASE_URL: process.env.SUPABASE_URL,
       SUPABASE_PUBLISHABLE_KEY: process.env.SUPABASE_PUBLISHABLE_KEY,
     }),

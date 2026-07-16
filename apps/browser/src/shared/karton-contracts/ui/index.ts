@@ -2880,7 +2880,11 @@ export const defaultState: KartonContract['state'] = {
   },
   internalData: {
     posthog: {
-      apiKey: import.meta.env.VITE_POSTHOG_API_KEY,
+      apiKey:
+        typeof __APP_TELEMETRY_ENABLED__ !== 'boolean' ||
+        __APP_TELEMETRY_ENABLED__
+          ? import.meta.env.VITE_POSTHOG_API_KEY
+          : undefined,
       host: import.meta.env.VITE_POSTHOG_HOST ?? 'https://eu.i.posthog.com',
     },
   },

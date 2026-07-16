@@ -968,7 +968,15 @@ export class TelemetryService extends DisposableService {
     this.identifierService = identifierService;
     this.preferencesService = preferencesService;
     this.logger = logger;
-    const apiKey = process.env.POSTHOG_API_KEY ?? '';
+    const telemetryEnabled =
+      typeof __APP_TELEMETRY_ENABLED__ === 'boolean'
+        ? __APP_TELEMETRY_ENABLED__
+        : true;
+    const distributionMode =
+      typeof __APP_DISTRIBUTION_MODE__ === 'string'
+        ? __APP_DISTRIBUTION_MODE__
+        : 'official';
+    const apiKey = telemetryEnabled ? (process.env.POSTHOG_API_KEY ?? '') : '';
     if (apiKey) {
       this.posthogClient = new PostHog(apiKey, {
         host: process.env.POSTHOG_HOST || 'https://eu.i.posthog.com',
@@ -976,7 +984,11 @@ export class TelemetryService extends DisposableService {
         flushInterval: 0,
       });
     } else {
-      this.logger.debug('PostHog API key missing; telemetry is disabled.');
+      this.logger.debug(
+        telemetryEnabled
+          ? 'PostHog API key missing; telemetry is disabled.'
+          : `Telemetry is disabled for ${distributionMode} distribution.`,
+      );
     }
 
     this.identifyUser();

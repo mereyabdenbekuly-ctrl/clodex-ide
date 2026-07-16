@@ -25,6 +25,14 @@ export function PostHogProvider({ children }: PostHogProviderProps) {
   // Add custom logic based on karton state
   useEffect(() => {
     if (!posthog) return;
+    if (!__APP_TELEMETRY_ENABLED__) {
+      try {
+        posthog.stopSessionRecording();
+        posthog.consent.optInOut(false);
+        posthog.opt_out_capturing();
+      } catch (_e) {}
+      return;
+    }
     if (
       telemetryLevel === 'off' ||
       (import.meta.env.NODE_ENV === 'development' &&
@@ -83,6 +91,7 @@ export function PostHogProvider({ children }: PostHogProviderProps) {
 
   useEffect(() => {
     if (
+      __APP_TELEMETRY_ENABLED__ &&
       telemetryLevel === 'full' &&
       userAccount?.user?.id &&
       (!posthog._isIdentified() ||

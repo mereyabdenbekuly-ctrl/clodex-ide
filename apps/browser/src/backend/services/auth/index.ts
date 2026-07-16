@@ -73,8 +73,12 @@ const SESSION_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const SOCIAL_AUTH_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const TELEGRAM_AUTH_POLL_INTERVAL_MS = 2 * 1000;
 const TELEGRAM_AUTH_TIMEOUT_MS = SOCIAL_AUTH_TIMEOUT_MS;
+const ACCOUNT_AUTH_DISABLED_ERROR =
+  'Account sign-in is disabled in this distribution.';
+const isAccountAuthEnabled = __APP_AUTH_ENABLED__;
 const IDE_MODEL_TOKEN_REFRESH_SKEW_MS = 60_000;
 const isClodexAuthEnabled =
+  isAccountAuthEnabled &&
   process.env.CLODEX_AUTH_ENABLED !== 'false' &&
   Boolean(process.env.CLODEX_API_URL || process.env.CLODEX_ORIGIN);
 
@@ -371,6 +375,26 @@ export class AuthService extends DisposableService {
   }
 
   private async initialize(): Promise<void> {
+    if (!isAccountAuthEnabled) {
+      this._credentials = null;
+      this.updateAuthState((draft) => {
+        draft.userAccount = {
+          status: 'unauthenticated',
+          machineId: this.identifierService.getMachineId(),
+          models: [],
+          keys: [],
+          activeKeyId: undefined,
+          isSwitchingKey: false,
+          ideToken: undefined,
+        };
+      });
+      this.registerProcedureHandlers();
+      this.logger.debug(
+        `[AuthService] Account authentication disabled for ${__APP_DISTRIBUTION_MODE__} distribution`,
+      );
+      return;
+    }
+
     const persisted = await readPersistedData(
       CREDENTIALS_KEY,
       credentialsSchema,
@@ -537,6 +561,7 @@ export class AuthService extends DisposableService {
     email: string,
     turnstileToken?: string,
   ): Promise<{ error?: string }> {
+    if (!isAccountAuthEnabled) return { error: ACCOUNT_AUTH_DISABLED_ERROR };
     try {
       const { error } = await this.authClient.emailOtp.sendVerificationOtp({
         email,
@@ -561,6 +586,7 @@ export class AuthService extends DisposableService {
     email: string,
     code: string,
   ): Promise<{ error?: string }> {
+    if (!isAccountAuthEnabled) return { error: ACCOUNT_AUTH_DISABLED_ERROR };
     try {
       const { data, error } = await this.authClient.signIn.emailOtp({
         email,
@@ -760,6 +786,7 @@ export class AuthService extends DisposableService {
 
   public get modelAccessToken(): string | undefined {
     this.assertNotDisposed();
+    if (!isAccountAuthEnabled) return undefined;
     if (isClodexAuthEnabled) {
       return this.isIdeModelTokenFresh()
         ? this.ideModelToken?.token
@@ -770,6 +797,7 @@ export class AuthService extends DisposableService {
 
   public async ensureModelAccessToken(): Promise<string | undefined> {
     this.assertNotDisposed();
+    if (!isAccountAuthEnabled) return undefined;
     if (!isClodexAuthEnabled) {
       return this._credentials?.token ?? undefined;
     }
@@ -787,6 +815,7 @@ export class AuthService extends DisposableService {
     route: ModelAccessRoute,
   ): Promise<string | undefined> {
     this.assertNotDisposed();
+    if (!isAccountAuthEnabled) return undefined;
     if (!isClodexAuthEnabled) {
       return this._credentials?.token ?? undefined;
     }
@@ -1115,6 +1144,7 @@ export class AuthService extends DisposableService {
 
   public async selectClodexKey(keyId: string): Promise<{ error?: string }> {
     this.assertNotDisposed();
+    if (!isAccountAuthEnabled) return { error: ACCOUNT_AUTH_DISABLED_ERROR };
     if (!isClodexAuthEnabled) {
       return {};
     }
@@ -1157,6 +1187,7 @@ export class AuthService extends DisposableService {
   }
 
   public async handleAuthCallbackUrl(url: string): Promise<boolean> {
+    if (!isAccountAuthEnabled) return false;
     let parsed: URL;
     try {
       parsed = new URL(url);
@@ -1315,6 +1346,7 @@ export class AuthService extends DisposableService {
   public async signInSocial(
     provider: SocialAuthProvider,
   ): Promise<{ error?: string }> {
+    if (!isAccountAuthEnabled) return { error: ACCOUNT_AUTH_DISABLED_ERROR };
     if (this.pendingHandoffAuth) {
       this.logger.debug(
         '[AuthService] Cancelling previous sign-in before starting a new one',
@@ -1357,6 +1389,7 @@ export class AuthService extends DisposableService {
   // ---------------------------------------------------------------------------
 
   public async signInEmail(): Promise<{ error?: string }> {
+    if (!isAccountAuthEnabled) return { error: ACCOUNT_AUTH_DISABLED_ERROR };
     if (this.pendingHandoffAuth) {
       this.logger.debug(
         '[AuthService] Cancelling previous sign-in before starting email sign-in',
@@ -1392,6 +1425,7 @@ export class AuthService extends DisposableService {
   }
 
   public async signInTelegram(): Promise<{ error?: string }> {
+    if (!isAccountAuthEnabled) return { error: ACCOUNT_AUTH_DISABLED_ERROR };
     if (this.pendingHandoffAuth) {
       this.logger.debug(
         '[AuthService] Cancelling previous sign-in before starting Telegram sign-in',
@@ -1472,6 +1506,26 @@ export class AuthService extends DisposableService {
   // ---------------------------------------------------------------------------
 
   private async refreshSession(): Promise<void> {
+    if (!isAccountAuthEnabled) {
+      this._credentials = null;
+      this.ideModelToken = null;
+      this.clearModelAccessTokenCache();
+      this.clodexUserModels = [];
+      this.clodexIdeKeys = [];
+      this.updateAuthState((draft) => {
+        draft.userAccount = {
+          status: 'unauthenticated',
+          machineId: this.identifierService.getMachineId(),
+          models: [],
+          keys: [],
+          activeKeyId: undefined,
+          isSwitchingKey: false,
+          ideToken: undefined,
+        };
+      });
+      return;
+    }
+
     if (!this._credentials?.token) {
       this.ideModelToken = null;
       this.clearModelAccessTokenCache();
@@ -1622,10 +1676,12 @@ export class AuthService extends DisposableService {
   // ---------------------------------------------------------------------------
 
   public async logout(): Promise<void> {
-    try {
-      await this.authClient.signOut();
-    } catch {
-      // Sign-out may fail if server is unreachable; we still clear local state.
+    if (isAccountAuthEnabled) {
+      try {
+        await this.authClient.signOut();
+      } catch {
+        // Sign-out may fail if server is unreachable; we still clear local state.
+      }
     }
 
     this.persistCredentials(null);
@@ -1664,6 +1720,7 @@ export class AuthService extends DisposableService {
 
   public get accessToken(): string | undefined {
     this.assertNotDisposed();
+    if (!isAccountAuthEnabled) return undefined;
     return this._credentials?.token ?? undefined;
   }
 

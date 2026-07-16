@@ -7,6 +7,16 @@ import { AUTH_CALLBACK_SCHEME } from './auth/callback-scheme';
 const STABLE_APP_SCHEME = 'clodex';
 const CLODEX_APP_SCHEME = 'clodex-ide';
 
+export function resolveDefaultProtocolSchemes(options: {
+  authCallbackScheme: string;
+  registerDefaultProtocols: boolean;
+}): string[] {
+  if (!options.registerDefaultProtocols) return [];
+  return Array.from(
+    new Set([CLODEX_APP_SCHEME, STABLE_APP_SCHEME, options.authCallbackScheme]),
+  );
+}
+
 /**
  * Service responsible for registering the app as the default protocol client for auth callback URLs.
  * This enables the OS to route configured callback scheme URLs to this app.
@@ -30,9 +40,16 @@ export class URIHandlerService extends DisposableService {
   }
 
   private async initialize(): Promise<void> {
-    const schemes = Array.from(
-      new Set([CLODEX_APP_SCHEME, STABLE_APP_SCHEME, AUTH_CALLBACK_SCHEME]),
-    );
+    const schemes = resolveDefaultProtocolSchemes({
+      authCallbackScheme: AUTH_CALLBACK_SCHEME,
+      registerDefaultProtocols: __APP_REGISTER_DEFAULT_PROTOCOLS__,
+    });
+    if (schemes.length === 0) {
+      this.logger.debug(
+        `[URIHandlerService] Default protocol registration disabled for ${__APP_DISTRIBUTION_MODE__} distribution`,
+      );
+      return;
+    }
 
     for (const scheme of schemes) {
       const registered = app.setAsDefaultProtocolClient(scheme);

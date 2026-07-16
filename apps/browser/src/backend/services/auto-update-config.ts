@@ -1,8 +1,15 @@
 import type { UpdateChannel } from '@shared/karton-contracts/ui/shared-types';
+import type { AppDistributionMode } from '@shared/local-build-identity';
 
 export type AppReleaseChannel = 'dev' | 'prerelease' | 'nightly' | 'release';
 export type UpdatePlatform = 'macos' | 'win' | 'linux';
 export type UpdateArchitecture = 'arm64' | 'x64';
+
+export function isAutoUpdateEnabledForDistribution(
+  distributionMode: AppDistributionMode,
+): boolean {
+  return distributionMode !== 'community-unsigned';
+}
 
 export function resolveUpdatePlatform(platform: string): UpdatePlatform {
   if (platform === 'darwin') return 'macos';
@@ -29,10 +36,16 @@ export function isTechnicalPreviewVersion(version: string): boolean {
 }
 
 export function resolveUpdateChannel(options: {
+  distributionMode?: AppDistributionMode;
   releaseChannel: AppReleaseChannel;
   version: string;
   preference?: UpdateChannel;
 }): 'release' | 'nightly' | UpdateChannel | null {
+  if (
+    !isAutoUpdateEnabledForDistribution(options.distributionMode ?? 'official')
+  ) {
+    return null;
+  }
   switch (options.releaseChannel) {
     case 'release':
       return 'release';
@@ -49,6 +62,7 @@ export function resolveUpdateChannel(options: {
 }
 
 export function buildUpdateFeedURL(options: {
+  distributionMode?: AppDistributionMode;
   origin: string | undefined;
   appName?: string;
   releaseChannel: AppReleaseChannel;
@@ -57,6 +71,12 @@ export function buildUpdateFeedURL(options: {
   architecture: string;
   preference?: UpdateChannel;
 }): string | null {
+  if (
+    !isAutoUpdateEnabledForDistribution(options.distributionMode ?? 'official')
+  ) {
+    return null;
+  }
+
   // Technical previews are distributed as manually installed GitHub
   // prereleases. They must never silently inherit the beta feed: preview.1
   // has no compatible updater artifacts to serve as a rollback target.

@@ -29,8 +29,15 @@ import {
   verifyBundledComponentSourceBytes,
 } from './scripts/release-attribution.mjs';
 
-// Get Windows signing configuration (returns undefined if not configured)
-const windowsSignConfig = getWindowsSignConfig();
+const isCommunityUnsignedDistribution =
+  buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-unsigned';
+
+// Community artifacts must remain unsigned even if a developer happens to have
+// official Azure signing variables in the ambient environment.
+const configuredWindowsSignConfig = getWindowsSignConfig();
+const windowsSignConfig = isCommunityUnsignedDistribution
+  ? undefined
+  : configuredWindowsSignConfig;
 
 /**
  * Release channel for the build.
@@ -45,6 +52,9 @@ const windowsSignConfig = getWindowsSignConfig();
 // Log the release channel for debugging
 console.log(
   `[forge.config] Release channel: ${buildConstants.__APP_RELEASE_CHANNEL__}`,
+);
+console.log(
+  `[forge.config] Distribution mode: ${buildConstants.__APP_DISTRIBUTION_MODE__}`,
 );
 const visualAssetChannel =
   buildConstants.__APP_RELEASE_CHANNEL__ === 'prerelease'
@@ -80,6 +90,8 @@ const electronRuntimeNoticePaths = resolveElectronRuntimeNoticePaths({
 });
 const allowUnsignedLocalBuild =
   process.env.CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD === 'true';
+const useAdhocMacSignature =
+  allowUnsignedLocalBuild || isCommunityUnsignedDistribution;
 
 prepareReleaseAttributionBundle({
   appDirectory: __dirname,
@@ -93,14 +105,14 @@ const resolvePackagerIconPath = (): string => {
     __dirname,
     `assets/icons/${visualAssetChannel}/icon`,
   );
-  if (!allowUnsignedLocalBuild || process.platform !== 'darwin') {
+  if (!useAdhocMacSignature || process.platform !== 'darwin') {
     return `${iconBasePath}.icns`;
   }
 
   /*
    * Electron Packager probes for a sibling `.icon` asset even when its icon
    * option explicitly points at an `.icns` file. On macOS versions before 26,
-   * that makes local packaging fail as soon as both formats share a basename.
+   * that makes ad-hoc packaging fail as soon as both formats share a basename.
    * Copy the legacy icon to an isolated basename so Packager can only discover
    * the `.icns` variant. Other builds keep the existing canonical `.icns`
    * path unchanged.
@@ -129,6 +141,11 @@ if (
 ) {
   throw new Error(
     'CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD is forbidden in CI release builds',
+  );
+}
+if (isCommunityUnsignedDistribution) {
+  console.warn(
+    '[forge.config] Building a community-unsigned package with no official Apple or Windows signing identity',
   );
 }
 if (
@@ -261,14 +278,14 @@ const applyMacApplicationMetadata = (
   }
 };
 
-const signUnsignedLocalMacApplication = (
+const signAdhocMacApplication = (
   buildPath: string,
   _electronVersion: string,
   platform: string,
   _arch: string,
   callback: (error?: Error) => void,
 ) => {
-  if (platform !== 'darwin' || !allowUnsignedLocalBuild) {
+  if (platform !== 'darwin' || !useAdhocMacSignature) {
     callback();
     return;
   }
@@ -299,7 +316,9 @@ const signUnsignedLocalMacApplication = (
       '--strict',
       appPath,
     ]);
-    console.log('[forge.config] Applied ad-hoc signature for local macOS use');
+    console.log(
+      `[forge.config] Applied ad-hoc signature for ${buildConstants.__APP_DISTRIBUTION_MODE__} macOS use`,
+    );
     callback();
   } catch (error) {
     callback(error instanceof Error ? error : new Error(String(error)));
@@ -509,9 +528,13 @@ const uploadSourceMapsAndCleanup = (
   _arch: string,
   callback: (error?: Error) => void,
 ) => {
-  if (!process.env.CI || !process.env.POSTHOG_CLI_API_KEY) {
+  if (
+    !buildConstants.__APP_TELEMETRY_ENABLED__ ||
+    !process.env.CI ||
+    !process.env.POSTHOG_CLI_API_KEY
+  ) {
     console.log(
-      '[forge.config] Skipping source map upload (not in CI or missing POSTHOG_CLI_API_KEY)',
+      '[forge.config] Skipping source map upload (telemetry disabled, not in CI, or missing POSTHOG_CLI_API_KEY)',
     );
     callback();
     return;
@@ -562,7 +585,7 @@ const uploadSourceMapsAndCleanup = (
 };
 
 const config: ForgeConfig = {
-  buildIdentifier: buildConstants.__APP_RELEASE_CHANNEL__,
+  buildIdentifier: buildConstants.__APP_BUILD_IDENTIFIER__,
   packagerConfig: {
     asar: {
       unpack: '**/{sharp,@img,node-pty,web-tree-sitter,@vscode}/**',
@@ -583,7 +606,7 @@ const config: ForgeConfig = {
       pruneNonPlatformPrebuilds,
       uploadSourceMapsAndCleanup,
     ],
-    afterComplete: [copyVcRedist, signUnsignedLocalMacApplication],
+    afterComplete: [copyVcRedist, signAdhocMacApplication],
     icon: packagerIconPath,
     appCopyright: `Copyright © ${new Date().getFullYear()} Clodex Labs`,
     win32metadata: {
@@ -597,15 +620,19 @@ const config: ForgeConfig = {
     appBundleId: buildConstants.__APP_BUNDLE_ID__,
     appVersion: buildConstants.__APP_VERSION__,
     appCategoryType: 'public.app-category.developer-tools',
-    protocols: [
-      {
-        name: 'clodex',
-        schemes: ['clodex'],
-      },
-    ],
+    ...(buildConstants.__APP_REGISTER_DEFAULT_PROTOCOLS__
+      ? {
+          protocols: [
+            {
+              name: 'clodex',
+              schemes: ['clodex'],
+            },
+          ],
+        }
+      : {}),
     // macOS code signing (only for non-dev builds)
     ...(buildConstants.__APP_RELEASE_CHANNEL__ !== 'dev' &&
-    !allowUnsignedLocalBuild
+    !useAdhocMacSignature
       ? {
           osxSign: {
             optionsForFile: (_filePath) => {
@@ -678,7 +705,7 @@ const config: ForgeConfig = {
           x: 192,
           y: 200,
           type: 'file',
-          path: `./out/${buildConstants.__APP_RELEASE_CHANNEL__}/${buildConstants.__APP_BASE_NAME__}-darwin-${buildConstants.__APP_ARCH__}/${buildConstants.__APP_BASE_NAME__}.app`,
+          path: `./out/${buildConstants.__APP_BUILD_IDENTIFIER__}/${buildConstants.__APP_BASE_NAME__}-darwin-${buildConstants.__APP_ARCH__}/${buildConstants.__APP_BASE_NAME__}.app`,
           name: `${buildConstants.__APP_NAME__}.app`,
         },
       ],
