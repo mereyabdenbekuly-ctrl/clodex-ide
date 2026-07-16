@@ -22,6 +22,7 @@ import {
   inspectPackagedAttribution,
   loadBundledComponentRegistry,
   prepareReleaseAttributionBundle,
+  REQUIRED_ATTRIBUTION_PATHS,
   resolveElectronRuntimeNoticePaths,
   sha256FileSync,
   verifyBundledComponentFixedArtifactBytes,
@@ -82,7 +83,7 @@ function makeFixture() {
       'fixture embedded vscode-uri MIT license\n',
     ],
     [
-      'docs/provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec',
+      'docs/provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec.txt',
       '<package>fixture metadata</package>\n',
     ],
   ]) {
@@ -340,7 +341,7 @@ function fixedBinaryComponent(fixture, files) {
   );
   const metadataPath = path.join(
     fixture.root,
-    'docs/provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec',
+    'docs/provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec.txt',
   );
   const sourceSha256 = '3'.repeat(64);
   return {
@@ -375,7 +376,7 @@ function fixedBinaryComponent(fixture, files) {
       sourceReferences: ['https://example.test/fixture-vcruntime/license'],
     },
     metadataEvidence: {
-      path: 'bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec',
+      path: 'bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec.txt',
       sha256: sha256FileSync(metadataPath),
       sourceReferences: ['https://example.test/fixture-vcruntime/metadata'],
     },
@@ -509,7 +510,7 @@ test('builds a deterministic notice and dependency-license bundle', () => {
       'provenance/bundled-component-license-texts/eslint-bundle-ISC.txt',
       'provenance/bundled-component-license-texts/vscode-languageserver-node-MIT.txt',
       'provenance/bundled-component-license-texts/vscode-uri-3.0.8-MIT.txt',
-      'provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec',
+      'provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec.txt',
       'provenance/bundled-component-evidence/vscode-eslint-3.0.10-server-package-lock.json',
       'dependency-licenses.json',
       'manifest.json',
@@ -522,6 +523,20 @@ test('builds a deterministic notice and dependency-license bundle', () => {
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
   }
+});
+
+test('packaged attribution avoids NuGet-reserved nested nuspec names', () => {
+  assert.equal(
+    REQUIRED_ATTRIBUTION_PATHS.some((relativePath) =>
+      relativePath.toLowerCase().endsWith('.nuspec'),
+    ),
+    false,
+  );
+  assert.ok(
+    REQUIRED_ATTRIBUTION_PATHS.includes(
+      'provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec.txt',
+    ),
+  );
 });
 
 test('bundled source records require immutable pins and exact license evidence', () => {

@@ -4,7 +4,11 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseMacosReleaseArguments } from './validate-macos-release.mjs';
-import { parseReleaseArtifactArguments } from './validate-release-artifacts.mjs';
+import {
+  assertRpmVersionRelease,
+  expectedRpmVersionRelease,
+  parseReleaseArtifactArguments,
+} from './validate-release-artifacts.mjs';
 
 const browserDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -118,4 +122,22 @@ test('community validators bind separate output, READY attribution, and explicit
     /community-unsigned .*must be explicitly NotSigned/,
   );
   assert.match(artifactValidatorSource, /osTrust: 'platform-package-unsigned'/);
+});
+
+test('community RPM validation binds the exact normalized version and pinned release', () => {
+  const version = '1.16.0-community42';
+  const expected = '1.16.0.community42-1';
+  assert.equal(expectedRpmVersionRelease(version), expected);
+  assert.equal(assertRpmVersionRelease(expected, version), expected);
+
+  for (const invalid of [
+    '1.16.0.community420-1',
+    '1.16.0.community42-2',
+    '1.16.0-community42-1',
+  ]) {
+    assert.throws(
+      () => assertRpmVersionRelease(invalid, version),
+      /Unexpected RPM version/,
+    );
+  }
 });

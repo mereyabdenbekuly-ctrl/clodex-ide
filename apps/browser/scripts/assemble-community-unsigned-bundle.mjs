@@ -227,14 +227,20 @@ function classifyAsset({ architecture, platform, version }, fileName) {
     }
   } else {
     const debArch = architecture === 'x64' ? 'amd64' : 'arm64';
-    const rpmArch = architecture === 'x64' ? 'x86_64' : 'aarch64';
+    // MakerRPM exposes the internal ARM package architecture as aarch64 but
+    // renames the emitted ARM64 file with the Node architecture label.
+    const rpmFileArch = architecture === 'x64' ? 'x86_64' : 'arm64';
+    // MakerRPM maps the SemVer prerelease separator to an RPM-safe dot while
+    // retaining the exact community identifier (for example,
+    // 1.16.0-community2 -> 1.16.0.community2-1).
+    const rpmPackageVersion = version.replace('-community', '.community');
     if (
       new RegExp(
         `^${escapedBase}_${escapedVersion}_${escapeRegex(debArch)}\\.deb$`,
         'u',
       ).test(fileName) ||
       new RegExp(
-        `^${escapedBase}-${escapedVersion}-[1-9][0-9]*\\.${escapeRegex(rpmArch)}\\.rpm$`,
+        `^${escapedBase}-${escapeRegex(rpmPackageVersion)}-1\\.${escapeRegex(rpmFileArch)}\\.rpm$`,
         'u',
       ).test(fileName)
     ) {

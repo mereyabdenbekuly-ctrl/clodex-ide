@@ -77,9 +77,9 @@ const REQUIRED_NOTICE_SOURCES = [
   },
   {
     source:
-      'docs/provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec',
+      'docs/provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec.txt',
     target:
-      'provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec',
+      'provenance/bundled-component-evidence/VCRuntime.CefSharp.140-1.0.5.nuspec.txt',
   },
   {
     source:

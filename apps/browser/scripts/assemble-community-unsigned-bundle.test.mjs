@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -44,14 +45,15 @@ function writeAsset(sourceRoot, relativePath, content = relativePath) {
   return assetRecord(filePath, bytes);
 }
 
-function makeFixture(platform) {
+function makeFixture(platform, requestedArchitecture) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'clodex-community-bundle-'));
   const sourceRoot = path.join(root, 'source');
   const validationDirectory = path.join(sourceRoot, 'validation');
   const artifactDirectory = path.join(sourceRoot, 'make');
   mkdirSync(validationDirectory, { recursive: true });
   mkdirSync(artifactDirectory, { recursive: true });
-  const architecture = platform === 'macos' ? 'arm64' : 'x64';
+  const architecture =
+    requestedArchitecture ?? (platform === 'macos' ? 'arm64' : 'x64');
   const assets = [];
   let checks;
   let trust;
@@ -127,14 +129,16 @@ function makeFixture(platform) {
       setupAuthenticode: notSigned,
     };
   } else {
+    const debArchitecture = architecture === 'x64' ? 'amd64' : 'arm64';
+    const rpmFileArchitecture = architecture === 'x64' ? 'x86_64' : 'arm64';
     assets.push(
       writeAsset(
         artifactDirectory,
-        `clodex-community-unsigned_${version}_amd64.deb`,
+        `clodex-community-unsigned_${version}_${debArchitecture}.deb`,
       ),
       writeAsset(
         artifactDirectory,
-        `clodex-community-unsigned-${version}-1.x86_64.rpm`,
+        `clodex-community-unsigned-${version.replace('-community', '.community')}-1.${rpmFileArchitecture}.rpm`,
       ),
       writeAsset(
         validationDirectory,
@@ -326,6 +330,20 @@ for (const platform of ['macos', 'windows', 'linux']) {
   });
 }
 
+test('accepts MakerRPM ARM64 output naming', () => {
+  const fixture = makeFixture('linux', 'arm64');
+  try {
+    const result = assemble(fixture);
+    assert.ok(
+      readdirSync(result.outputDirectory).includes(
+        'clodex-community-unsigned-1.16.0.community42-1.arm64.rpm',
+      ),
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
 test('rejects official or non-release validation identity', () => {
   const fixture = makeFixture('windows');
   try {
@@ -433,6 +451,43 @@ test('rejects unexpected non-installer publication files', () => {
     );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('rejects RPM assets with mismatched community version, release, or architecture', () => {
+  for (const invalidFileName of [
+    'clodex-community-unsigned-1.16.0.community420-1.x86_64.rpm',
+    'clodex-community-unsigned-1.16.0.community42-2.x86_64.rpm',
+    'clodex-community-unsigned-1.16.0.community42-1.aarch64.rpm',
+  ]) {
+    const fixture = makeFixture('linux');
+    try {
+      const rpmAsset = fixture.assets.find((asset) =>
+        asset.fileName.endsWith('.rpm'),
+      );
+      assert.ok(rpmAsset);
+      const originalFileName = rpmAsset.fileName;
+      const renamedPath = path.join(
+        path.dirname(rpmAsset.path),
+        invalidFileName,
+      );
+      renameSync(rpmAsset.path, renamedPath);
+      rpmAsset.fileName = invalidFileName;
+      rpmAsset.path = renamedPath;
+      const publicationAsset = fixture.manifest.publication.assets.find(
+        (asset) => asset.fileName === originalFileName,
+      );
+      assert.ok(publicationAsset);
+      publicationAsset.fileName = invalidFileName;
+      rewriteManifest(fixture);
+
+      assert.throws(
+        () => assemble(fixture),
+        /Unexpected community publication asset/,
+      );
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
   }
 });
 
