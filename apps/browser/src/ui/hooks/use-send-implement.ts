@@ -1,9 +1,9 @@
 import { useCallback } from 'react';
-import { useKartonProcedure } from './use-karton';
+import { useKartonProcedure, useKartonState } from './use-karton';
 import { useOpenAgent } from './use-open-chat';
 import { generateId } from '@ui/utils';
 import type { AgentMessage } from '@shared/karton-contracts/ui/agent';
-import { getSwarmModeActive, setSwarmModeActive } from './use-swarm-mode';
+import { getSwarmModeVariant, setSwarmModeActive } from './use-swarm-mode';
 
 /**
  * Returns a stable callback that sends a synthetic `/implement`
@@ -19,13 +19,18 @@ import { getSwarmModeActive, setSwarmModeActive } from './use-swarm-mode';
 export function useSendImplement(): (promptOverride?: string) => void {
   const [openAgentId] = useOpenAgent();
   const sendUserMessage = useKartonProcedure((p) => p.agents.sendUserMessage);
-  const runSwarm = useKartonProcedure((p) => p.swarm.run);
+  const isWorking = useKartonState((state) =>
+    openAgentId
+      ? (state.agents.instances[openAgentId]?.state.isWorking ?? false)
+      : false,
+  );
 
   return useCallback(
     (promptOverride?: string) => {
       if (!openAgentId) return;
 
-      if (getSwarmModeActive()) {
+      const swarmModeVariant = getSwarmModeVariant();
+      if (swarmModeVariant) {
         const prompt =
           promptOverride?.trim() ||
           'Implement the active plan using the Dynamic Swarm workflow. Do not use the default sequential planner.';
@@ -37,20 +42,27 @@ export function useSendImplement(): (promptOverride?: string) => void {
             createdAt: new Date(),
             partsMetadata: [],
             swarmMode: true,
+            swarmModeVariant,
           },
         };
 
-        window.dispatchEvent(
-          new CustomEvent('chat-message-sent', { detail: { message } }),
-        );
-        setSwarmModeActive(false);
-        void runSwarm(openAgentId, prompt).catch(() => {
+        const didDispatchOptimisticMessage = !isWorking;
+        if (didDispatchOptimisticMessage) {
           window.dispatchEvent(
-            new CustomEvent('chat-message-failed', {
-              detail: { clientId: message.id },
-            }),
+            new CustomEvent('chat-message-sent', { detail: { message } }),
           );
-        });
+        }
+        void sendUserMessage(openAgentId, message)
+          .then(() => setSwarmModeActive(false))
+          .catch(() => {
+            if (didDispatchOptimisticMessage) {
+              window.dispatchEvent(
+                new CustomEvent('chat-message-failed', {
+                  detail: { clientId: message.id },
+                }),
+              );
+            }
+          });
         return;
       }
 
@@ -70,13 +82,26 @@ export function useSendImplement(): (promptOverride?: string) => void {
         },
       };
 
-      // Dispatch for optimistic rendering + auto-scroll
-      window.dispatchEvent(
-        new CustomEvent('chat-message-sent', { detail: { message } }),
-      );
+      // Busy agents publish the queued message through AgentStore. Rendering
+      // an optimistic history item here would duplicate it when the queue
+      // flushes and the durable turn is admitted.
+      const didDispatchOptimisticMessage = !isWorking;
+      if (didDispatchOptimisticMessage) {
+        window.dispatchEvent(
+          new CustomEvent('chat-message-sent', { detail: { message } }),
+        );
+      }
 
-      void sendUserMessage(openAgentId, message);
+      void sendUserMessage(openAgentId, message).catch(() => {
+        if (didDispatchOptimisticMessage) {
+          window.dispatchEvent(
+            new CustomEvent('chat-message-failed', {
+              detail: { clientId: message.id },
+            }),
+          );
+        }
+      });
     },
-    [openAgentId, runSwarm, sendUserMessage],
+    [isWorking, openAgentId, sendUserMessage],
   );
 }

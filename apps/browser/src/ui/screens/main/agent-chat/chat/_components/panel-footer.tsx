@@ -70,6 +70,12 @@ import { getAvailableModel } from '@shared/available-models';
 import { useChatDraft } from '@ui/hooks/use-chat-draft';
 import { useGlobalDictation } from '@ui/hooks/use-global-dictation';
 import { useSwarmMode } from '@ui/hooks/use-swarm-mode';
+import {
+  getActiveGptThinkingProviderMode,
+  getModelThinkingOverride,
+  getThinkingOverrideModelId,
+  resolveSubmitSwarmRoute,
+} from '@shared/model-effort-routing';
 import type { Content } from '@tiptap/core';
 import {
   markdownToTipTapContent,
@@ -445,6 +451,36 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
     toggleSwarmMode,
     toggleBattleMode,
   } = useSwarmMode();
+  const activeModelId = useKartonState((s) =>
+    openAgent ? s.agents.instances[openAgent]?.state.activeModelId : null,
+  );
+  const thinkingOverrideModelId = getThinkingOverrideModelId(activeModelId);
+  const activeModelThinkingOverride = useKartonState((s) =>
+    getModelThinkingOverride(
+      s.preferences.agent.modelThinkingOverrides,
+      activeModelId,
+    ),
+  );
+  const activeModelProviderMode = useKartonState((s) =>
+    getActiveGptThinkingProviderMode(activeModelId, s.preferences),
+  );
+  const submitSwarmRoute = useMemo(
+    () =>
+      resolveSubmitSwarmRoute({
+        modelId: thinkingOverrideModelId,
+        override: activeModelThinkingOverride,
+        providerMode: activeModelProviderMode,
+        manualModeActive: swarmModeActive,
+        manualModeVariant: swarmModeVariant,
+      }),
+    [
+      activeModelProviderMode,
+      activeModelThinkingOverride,
+      swarmModeActive,
+      swarmModeVariant,
+      thinkingOverrideModelId,
+    ],
+  );
   // Stable ref so the mention command handler (configured once by TipTap)
   // always sees the latest setFileAttachments without re-creating the context.
   const setFileAttachmentsRef = useRef(setFileAttachments);
@@ -957,8 +993,6 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
     // Snapshot pending question ID — used for the atomic interrupt call below.
     const currentPendingQuestionId = pendingQuestionIdRef.current;
     const markdownText = chatInputRef.current!.getTextContent();
-    const routeToSwarm =
-      !!openAgent && !currentPendingQuestionId && swarmModeActive;
 
     // Collect metadata for mentions.
     const metadata = collectUserMessageMetadata(currentLocalInputState);
@@ -979,8 +1013,10 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
       role: 'user',
       metadata: {
         ...metadata,
-        swarmMode: routeToSwarm,
-        swarmModeVariant: routeToSwarm
+        // Only explicit renderer toggles are hints. Effective Ultra routing is
+        // recomputed after durable admission at the backend step-executor seam.
+        swarmMode: swarmModeActive,
+        swarmModeVariant: swarmModeActive
           ? (swarmModeVariant ?? 'standard')
           : undefined,
         attachments: currentFileAttachments,
@@ -990,81 +1026,6 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
             : undefined,
       },
     };
-
-    if (routeToSwarm) {
-      const previousContent = currentLocalInputState;
-      const previousFileAttachments = currentFileAttachments;
-      let didDispatchSwarmOptimisticMessage = false;
-
-      clearAll();
-      stopContextSelector();
-
-      chatInputRef.current?.clear();
-      const emptyDoc: Content = {
-        type: 'doc',
-        content: [{ type: 'paragraph' }],
-      };
-      localInputStateRef.current = emptyDoc;
-      setLocalInputState(emptyDoc);
-      setCanSendMessage(false);
-      void setChatInputState(openAgent, JSON.stringify(emptyDoc));
-      window.dispatchEvent(
-        new CustomEvent('chat-message-sent', { detail: { message } }),
-      );
-      didDispatchSwarmOptimisticMessage = true;
-
-      try {
-        const workspaceActionResult = await executePendingWorkspaceActions();
-        if (!workspaceActionResult.ok) {
-          localInputStateRef.current = previousContent;
-          setLocalInputState(previousContent);
-          setFileAttachments(previousFileAttachments);
-          setCanSendMessage(true);
-          void setChatInputState(openAgent, JSON.stringify(previousContent));
-          window.dispatchEvent(
-            new CustomEvent('chat-message-failed', {
-              detail: { clientId: message.id },
-            }),
-          );
-          didDispatchSwarmOptimisticMessage = false;
-          setWorkspaceActionError(workspaceActionResult.message);
-          setTimeout(() => {
-            chatInputRef.current?.focus();
-          }, 0);
-          return;
-        }
-
-        setWorkspaceActionError(null);
-        console.info('[SwarmRun] Routing submit through sendUserMessage guard');
-        await sendUserMessage(openAgent, message);
-        return;
-      } catch (error) {
-        localInputStateRef.current = previousContent;
-        setLocalInputState(previousContent);
-        setFileAttachments(previousFileAttachments);
-        setCanSendMessage(markdownText.trim().length > 0);
-        void setChatInputState(openAgent, JSON.stringify(previousContent));
-        console.error('Failed to run swarm:', error);
-        if (didDispatchSwarmOptimisticMessage) {
-          window.dispatchEvent(
-            new CustomEvent('chat-message-failed', {
-              detail: { clientId: message.id },
-            }),
-          );
-        }
-        posthog.captureException(
-          error instanceof Error ? error : new Error(String(error)),
-          { source: 'renderer', operation: 'sendSwarmMessage' },
-        );
-        return;
-      } finally {
-        setSwarmModeActive(false);
-        setCanSendMessage(false);
-        setTimeout(() => {
-          chatInputRef.current?.focus();
-        }, 0);
-      }
-    }
 
     // Save for restore on error
     const previousContent = currentLocalInputState;
@@ -1087,7 +1048,7 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
     // Dispatch event with message data for optimistic rendering
     // Only dispatch when agent is NOT working - if working, the backend
     // will queue the message instead of adding to history immediately
-    const didDispatchOptimisticMessage = !isWorkingRef.current && !routeToSwarm;
+    const didDispatchOptimisticMessage = !isWorkingRef.current;
     if (didDispatchOptimisticMessage)
       window.dispatchEvent(
         new CustomEvent('chat-message-sent', { detail: { message } }),
@@ -1159,6 +1120,7 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
         } else {
           await sendUserMessage(openAgent, message);
         }
+        if (swarmModeActive) setSwarmModeActive(false);
       }
 
       // Keep input focused after sending - refocus in next tick
@@ -1197,6 +1159,7 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
     interruptQuestionWithMessage,
     executePendingWorkspaceActions,
     setFileAttachments,
+    setSwarmModeActive,
     swarmModeActive,
     swarmModeVariant,
   ]);
@@ -1210,9 +1173,6 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
       : 0;
     return Math.round(raw / 1000) * 1000;
   });
-  const activeModelId = useKartonState((s) =>
-    openAgent ? s.agents.instances[openAgent]?.state.activeModelId : null,
-  );
   const customModels = useKartonState((s) => s.preferences.customModels);
   const maxTokens = useMemo(() => {
     if (!activeModelId) return 200000;
@@ -1947,6 +1907,7 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
             showImageUploadButton
             onAddFileAttachment={handleAddFileAttachment}
             swarmModeActive={swarmModeActive}
+            automaticSwarmModeActive={submitSwarmRoute.automaticUltra}
             battleModeActive={swarmModeVariant === 'battle'}
             onToggleSwarmMode={toggleSwarmMode}
             onToggleBattleMode={toggleBattleMode}

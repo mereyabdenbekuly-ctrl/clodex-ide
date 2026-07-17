@@ -15,6 +15,8 @@ import type { AgentHost } from '@clodex/agent-core/host';
 import type {
   AgentTypeRegistry,
   BaseAgentToolboxView,
+  AgentStepExecution,
+  AgentStepExecutionRequest,
   ToolApprovalLifecycleHooks,
 } from '@clodex/agent-core/agents';
 import type { ProcessedImageCacheService } from '@clodex/agent-core/processed-image-cache';
@@ -74,11 +76,36 @@ type SwarmSubmitHandler = (
   message: AgentMessage & { role: 'user' },
 ) => Promise<boolean>;
 
+export type AutomaticSwarmStepHandler = (
+  request: AgentStepExecutionRequest,
+) => Promise<AgentStepExecution | null>;
+
+export function createAutomaticSwarmStepExecutor({
+  delegate,
+  getHandler,
+}: {
+  delegate: AgentStepExecutor;
+  getHandler: () => AutomaticSwarmStepHandler | null;
+}): AgentStepExecutor {
+  return {
+    async execute(request) {
+      const handler = getHandler();
+      if (request.context.executionTarget !== 'cloud' && handler) {
+        const execution = await handler(request);
+        if (execution) return execution;
+      }
+      return await delegate.execute(request);
+    },
+  };
+}
+
 export class AgentManagerService extends DisposableService {
   private readonly manager: AgentManager;
   private readonly commandRegistry: CommandRegistry;
   private readonly karton: KartonService;
-  private swarmSubmitHandler: SwarmSubmitHandler | null = null;
+  private readonly installAutomaticSwarmStepHandler:
+    | ((handler: AutomaticSwarmStepHandler) => void)
+    | undefined;
   private lifecycleHookRunner:
     | ((
         trigger: HookTrigger,
@@ -116,11 +143,15 @@ export class AgentManagerService extends DisposableService {
       entries: AgentHistoryEntry[],
     ) => Promise<AgentHistoryEntry[]>,
     stepExecutor?: AgentStepExecutor,
+    installAutomaticSwarmStepHandler?: (
+      handler: AutomaticSwarmStepHandler,
+    ) => void,
     toolApprovalLifecycle?: ToolApprovalLifecycleHooks,
   ) {
     super();
     this.commandRegistry = commandRegistry;
     this.karton = karton;
+    this.installAutomaticSwarmStepHandler = installAutomaticSwarmStepHandler;
     this.manager = new AgentManager({
       host: agentCoreHost,
       commandRegistry,
@@ -191,8 +222,21 @@ export class AgentManagerService extends DisposableService {
     await this.manager.retryNetworkFailedAgentsNow(reason);
   }
 
-  public setSwarmSubmitHandler(handler: SwarmSubmitHandler): void {
-    this.swarmSubmitHandler = handler;
+  public setSwarmSubmitHandler(_handler: SwarmSubmitHandler): void {
+    // Compatibility registration retained for composition-root parity.
+    // Swarm routing happens only after BaseAgent durably admits the user turn
+    // and reaches the host AgentStepExecutor seam.
+  }
+
+  public setAutomaticSwarmStepHandler(
+    handler: AutomaticSwarmStepHandler,
+  ): void {
+    if (!this.installAutomaticSwarmStepHandler) {
+      throw new Error(
+        'Automatic Swarm local-executor composition is unavailable',
+      );
+    }
+    this.installAutomaticSwarmStepHandler(handler);
   }
 
   public setLifecycleHookRunner(
@@ -278,16 +322,6 @@ export class AgentManagerService extends DisposableService {
                   });
                 }
                 rest[1] = message;
-              }
-              const handled = await this.swarmSubmitHandler?.(
-                instanceId,
-                message,
-              );
-              if (handled) {
-                await this.lifecycleHookRunner?.('after-turn', {
-                  values: { agentInstanceId: instanceId, swarm: true },
-                });
-                return;
               }
             }
 

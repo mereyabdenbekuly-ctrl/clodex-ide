@@ -8,6 +8,7 @@ export {
 } from './planner';
 export {
   DynamicSwarmOrchestrator,
+  type DynamicSwarmExecuteOptions,
   type DynamicSwarmExecutionResult,
   type DynamicSwarmOrchestratorOptions,
   type SwarmTriageProvider,

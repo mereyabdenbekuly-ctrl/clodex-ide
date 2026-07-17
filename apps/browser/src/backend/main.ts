@@ -4,7 +4,11 @@
 
 import { app, ipcMain, powerMonitor } from 'electron';
 import { generateText } from 'ai';
-import { AgentManagerService } from './services/agent-manager';
+import {
+  AgentManagerService,
+  createAutomaticSwarmStepExecutor,
+  type AutomaticSwarmStepHandler,
+} from './services/agent-manager';
 import { enrichHistoryEntryWorkspaces } from './services/agent-manager/history-workspace-enrichment';
 import { Logger } from './services/logger';
 import { createMainShutdownCoordinator } from './services/shutdown-coordinator';
@@ -453,6 +457,11 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
         __APP_RELEASE_CHANNEL__,
       ).enabled,
   });
+  let automaticSwarmStepHandler: AutomaticSwarmStepHandler | null = null;
+  const admittedSwarmLocalExecutionTarget = createAutomaticSwarmStepExecutor({
+    delegate: localExecutionTarget,
+    getHandler: () => automaticSwarmStepHandler,
+  });
   const cloudTaskKillSwitchActive = isCloudTaskKillSwitchActive(
     process.env.CLODEX_CLOUD_TASKS_KILL_SWITCH,
   );
@@ -556,7 +565,10 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     residency: cloudTaskRuntime?.residency,
   });
   const executionTargetRouter = createExecutionTargetRouter({
-    localExecutor: localExecutionTarget,
+    // Keep the execution-target router outermost so every admitted Swarm turn
+    // receives the same task record, audit events and terminal classification
+    // as an ordinary local model step.
+    localExecutor: admittedSwarmLocalExecutionTarget,
     cloudAdapter: cloudTaskRuntime?.adapter,
     snapshotPackager: cloudTaskRuntime?.snapshotPackager,
     isCloudEnabled: () =>
@@ -599,6 +611,9 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       notificationSoundsService.notifyAgentEvent(event, agentId),
     enrichAgentHistoryEntries,
     executionTargetRouter,
+    (handler) => {
+      automaticSwarmStepHandler = handler;
+    },
     {
       prepareResponse: (intent) =>
         toolboxService.prepareToolApprovalResponse(intent),

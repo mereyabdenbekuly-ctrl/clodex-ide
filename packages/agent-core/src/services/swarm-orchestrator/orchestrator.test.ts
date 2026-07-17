@@ -19,6 +19,29 @@ describe('DynamicSwarmOrchestrator', () => {
     expect(executor).not.toHaveBeenCalled();
   });
 
+  it('promotes direct triage to a real fallback workflow when forced', async () => {
+    const executor = vi.fn(async (context) => `${context.task.name} answered`);
+    const orchestrator = new DynamicSwarmOrchestrator({
+      idGenerator: () => 'run-forced',
+      triage: async () => ({
+        type: 'direct',
+        task_complexity: 'low',
+        reason: 'Small explanation',
+      }),
+      executor,
+    });
+
+    const result = await orchestrator.execute('Explain X', {
+      forceSwarmOnDirect: true,
+    });
+
+    expect(result.type).toBe('swarm');
+    if (result.type !== 'swarm') throw new Error('Expected forced Swarm');
+    expect(result.triage.taskComplexity).toBe('medium');
+    expect(result.run.results.length).toBeGreaterThan(0);
+    expect(executor).toHaveBeenCalled();
+  });
+
   it('runs the swarm plan returned by triage', async () => {
     const events: string[] = [];
     const orchestrator = new DynamicSwarmOrchestrator({

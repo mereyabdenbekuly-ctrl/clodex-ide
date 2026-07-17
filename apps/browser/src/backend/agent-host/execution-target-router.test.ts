@@ -14,6 +14,8 @@ import {
   type AgentExecutionTargetAdapter,
 } from './execution-target-router';
 import type { CloudTaskSnapshotPackager } from './cloud-task-snapshot-packager';
+import { createAutomaticSwarmStepExecutor } from '../services/agent-manager';
+import { createAutomaticSwarmStepExecution } from '../services/swarm-runtime';
 
 function createRequest(
   target?: AgentExecutionTarget,
@@ -155,6 +157,103 @@ describe('ExecutionTargetRouter', () => {
     expect(JSON.stringify(audit.mock.calls)).not.toContain('hello');
     expect(JSON.stringify(audit.mock.calls)).not.toContain('agent-1');
     expect(JSON.stringify(audit.mock.calls)).not.toContain('trace-1');
+  });
+
+  it('keeps the router outermost for an admitted automatic Swarm turn', async () => {
+    const ordinary = createExecutor();
+    const automaticExecution = createExecution([
+      { type: 'text-delta', id: 'swarm', delta: 'done' },
+      { type: 'finish' },
+    ]);
+    const handler = vi.fn(async () => automaticExecution);
+    const localWithAutomaticSwarm = createAutomaticSwarmStepExecutor({
+      delegate: ordinary.executor,
+      getHandler: () => handler,
+    });
+    const audit = vi.fn();
+    const router = new ExecutionTargetRouter({
+      localExecutor: localWithAutomaticSwarm,
+      isCloudEnabled: () => false,
+      isLocalExecutionAllowed: () => true,
+      createTaskId: () => 'task-ultra',
+      now: sequenceClock(),
+      audit,
+    });
+
+    const execution = await router.execute(createRequest('local'));
+    await collectStream(execution.toUIMessageStream());
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          executionTarget: 'local',
+          executionTaskId: 'task-ultra',
+        }),
+      }),
+    );
+    expect(ordinary.executor.execute).not.toHaveBeenCalled();
+    expect(router.getTask('task-ultra')).toMatchObject({
+      target: 'local',
+      status: 'completed',
+      finishedAt: expect.any(Number),
+    });
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'transition',
+        target: 'local',
+        status: 'completed',
+      }),
+    );
+  });
+
+  it('marks an admitted automatic Swarm failure as failed', async () => {
+    const ordinary = createExecutor();
+    const failure = new Error('automatic Swarm failed');
+    const abortController = new AbortController();
+    const onError = vi.fn(() => abortController.abort());
+    const request = createRequest('local', abortController.signal);
+    request.options = { ...request.options, onError };
+    const handler = vi.fn(async (routedRequest: AgentStepExecutionRequest) =>
+      createAutomaticSwarmStepExecution({
+        request: routedRequest,
+        run: async () => {
+          throw failure;
+        },
+      }),
+    );
+    const router = new ExecutionTargetRouter({
+      localExecutor: createAutomaticSwarmStepExecutor({
+        delegate: ordinary.executor,
+        getHandler: () => handler,
+      }),
+      isCloudEnabled: () => false,
+      isLocalExecutionAllowed: () => true,
+      createTaskId: () => 'task-ultra-failed',
+      now: sequenceClock(),
+    });
+
+    const execution = await router.execute(request);
+    const uiStream = execution.toUIMessageStream();
+    const [chunks] = await Promise.all([
+      collectStream(uiStream),
+      execution.consumeStream(),
+    ]);
+
+    expect(chunks).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        errorText: failure.message,
+      }),
+    ]);
+    expect(onError).toHaveBeenCalledWith({ error: failure });
+    expect(abortController.signal.aborted).toBe(true);
+    expect(ordinary.executor.execute).not.toHaveBeenCalled();
+    expect(router.getTask('task-ultra-failed')).toMatchObject({
+      target: 'local',
+      status: 'failed',
+      failureReason: 'execution-error',
+      finishedAt: expect.any(Number),
+    });
   });
 
   it('rejects local execution while cloud holds the agent lease', async () => {

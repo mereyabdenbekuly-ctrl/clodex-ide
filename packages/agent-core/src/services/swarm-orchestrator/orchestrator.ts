@@ -22,6 +22,15 @@ export interface DynamicSwarmOrchestratorOptions {
   onTriageError?: (error: Error) => void;
 }
 
+export interface DynamicSwarmExecuteOptions {
+  /**
+   * Ultra-style orchestration must never replace the normal model turn with
+   * a status-only direct triage result. When enabled, a direct result is
+   * promoted to the deterministic medium Swarm plan.
+   */
+  forceSwarmOnDirect?: boolean;
+}
+
 export type DynamicSwarmExecutionResult =
   | {
       type: 'direct';
@@ -64,14 +73,25 @@ export class DynamicSwarmOrchestrator {
 
   public async execute(
     userPrompt: string,
+    options: DynamicSwarmExecuteOptions = {},
   ): Promise<DynamicSwarmExecutionResult> {
-    const triage = await this.triage(userPrompt);
-    if (triage.type === 'direct') {
-      return { type: 'direct', triage };
+    const triageResult = await this.triage(userPrompt);
+    if (triageResult.type === 'direct') {
+      if (!options.forceSwarmOnDirect) {
+        return { type: 'direct', triage: triageResult };
+      }
+      const plan = createFallbackSwarmPlan(userPrompt, 'medium');
+      const triage: Extract<DynamicTriageResult, { type: 'swarm' }> = {
+        type: 'swarm',
+        taskComplexity: 'medium',
+        plan,
+      };
+      const run = await this.runner.run(plan);
+      return { type: 'swarm', triage, run };
     }
 
-    const run = await this.runner.run(triage.plan);
-    return { type: 'swarm', triage, run };
+    const run = await this.runner.run(triageResult.plan);
+    return { type: 'swarm', triage: triageResult, run };
   }
 
   private createFallbackTriage(userPrompt: string): DynamicTriageResult {

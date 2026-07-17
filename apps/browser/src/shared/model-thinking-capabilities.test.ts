@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   createThinkingProviderOptionsPatch,
   getEffectiveThinkingSelection,
+  getProviderProfileModelThinkingSupport,
   getSupportedThinkingOptions,
+  isGpt56UltraThinkingSelected,
+  supportsNativeThinkingProviderProfile,
   type ThinkingCapableModel,
 } from './model-thinking-capabilities';
 
@@ -13,6 +16,24 @@ const openAiModel: ThinkingCapableModel = {
   providerOptions: {
     clodex: { reasoning: { enabled: true, effort: 'medium' } },
     openai: { reasoningEffort: 'medium', reasoningSummary: 'auto' },
+  },
+};
+
+const gpt56SolModel: ThinkingCapableModel = {
+  modelId: 'gpt-5.6-sol',
+  officialProvider: 'openai',
+  thinkingEnabled: true,
+  providerOptions: {
+    clodex: { reasoning: { effort: 'medium' } },
+  },
+};
+
+const gpt56TerraModel: ThinkingCapableModel = {
+  modelId: 'gpt-5.6-terra',
+  officialProvider: 'openai',
+  thinkingEnabled: true,
+  providerOptions: {
+    clodex: { reasoning: { effort: 'medium' } },
   },
 };
 
@@ -71,6 +92,89 @@ const glm52Model: ThinkingCapableModel = {
 };
 
 describe('model thinking capabilities', () => {
+  it('limits editable profile thinking to native provider integrations', () => {
+    expect(
+      ['openai', 'anthropic', 'clodex'].every(
+        supportsNativeThinkingProviderProfile,
+      ),
+    ).toBe(true);
+    expect(
+      ['ollama', 'openrouter', 'openai-compatible'].some(
+        supportsNativeThinkingProviderProfile,
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    'gpt-5.6-sol',
+    'openai/gpt-5.6-terra',
+  ])('infers %s reasoning for direct OpenAI Responses catalogs', (modelId) => {
+    expect(
+      getProviderProfileModelThinkingSupport({
+        providerType: 'openai',
+        protocol: 'openai-responses',
+        modelId,
+        discoveredReasoning: false,
+      }),
+    ).toEqual({ thinkingEnabled: true, editable: true });
+  });
+
+  it('keeps inferred OpenAI Chat Sol/Terra reasoning editable', () => {
+    expect(
+      getProviderProfileModelThinkingSupport({
+        providerType: 'openai',
+        protocol: 'openai-chat',
+        modelId: 'gpt-5.6-sol',
+        discoveredReasoning: false,
+      }),
+    ).toEqual({ thinkingEnabled: true, editable: true });
+  });
+
+  it.each([
+    'ollama',
+    'openrouter',
+    'openai-compatible',
+  ])('keeps %s catalog reasoning non-editable', (providerType) => {
+    expect(
+      getProviderProfileModelThinkingSupport({
+        providerType,
+        protocol: 'openai-responses',
+        modelId: 'gpt-5.6-terra',
+        discoveredReasoning: true,
+      }),
+    ).toEqual({ thinkingEnabled: true, editable: false });
+  });
+
+  it('does not infer unknown OpenAI model reasoning', () => {
+    expect(
+      getProviderProfileModelThinkingSupport({
+        providerType: 'openai',
+        protocol: 'openai-responses',
+        modelId: 'gpt-5.6-luna',
+        discoveredReasoning: false,
+      }),
+    ).toEqual({ thinkingEnabled: false, editable: false });
+    expect(
+      getProviderProfileModelThinkingSupport({
+        providerType: 'anthropic',
+        protocol: 'anthropic-messages',
+        modelId: 'gpt-5.6-sol',
+        discoveredReasoning: false,
+      }),
+    ).toEqual({ thinkingEnabled: false, editable: false });
+  });
+
+  it('labels known generic-profile reasoning without making it editable', () => {
+    expect(
+      getProviderProfileModelThinkingSupport({
+        providerType: 'openai-compatible',
+        protocol: 'openai-responses',
+        modelId: 'gpt-5.6-sol',
+        discoveredReasoning: false,
+      }),
+    ).toEqual({ thinkingEnabled: true, editable: false });
+  });
+
   it('coerces unsupported OpenAI minimal away from provider options', () => {
     expect(
       createThinkingProviderOptionsPatch({
@@ -101,6 +205,110 @@ describe('model thinking capabilities', () => {
         override: { enabled: true, provider: 'openai', value: 'xhigh' },
       }),
     ).toEqual({ openai: { reasoningEffort: 'xhigh' } });
+  });
+
+  it.each([
+    gpt56SolModel,
+    gpt56TerraModel,
+  ])('exposes Clodex Max and Ultra presets for $modelId', (model) => {
+    expect(
+      getSupportedThinkingOptions(model, {
+        providerMode: 'clodex',
+        modelProvider: 'openai',
+      }).map((option) => [option.value, option.label]),
+    ).toEqual([
+      ['minimal', 'Minimal'],
+      ['low', 'Low'],
+      ['medium', 'Medium'],
+      ['high', 'High'],
+      ['xhigh', 'Extra high'],
+      ['max', 'Max'],
+      ['ultra', 'Ultra'],
+    ]);
+  });
+
+  it.each([
+    [gpt56SolModel, 'max', 'max'],
+    [gpt56SolModel, 'ultra', 'max'],
+    [gpt56TerraModel, 'max', 'max'],
+    [gpt56TerraModel, 'ultra', 'max'],
+  ] as const)('normalizes the Clodex %s selection to provider effort %s', (model, selection, providerEffort) => {
+    expect(
+      createThinkingProviderOptionsPatch({
+        model,
+        route: { providerMode: 'clodex', modelProvider: 'openai' },
+        override: { enabled: true, provider: 'clodex', value: selection },
+      }),
+    ).toEqual({ clodex: { reasoning: { effort: providerEffort } } });
+  });
+
+  it('exposes provider Max plus orchestration Ultra on direct OpenAI routes', () => {
+    expect(
+      getSupportedThinkingOptions(gpt56SolModel, {
+        providerMode: 'official',
+        modelProvider: 'openai',
+      }).map((option) => option.value),
+    ).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+
+    expect(
+      createThinkingProviderOptionsPatch({
+        model: gpt56SolModel,
+        route: { providerMode: 'official', modelProvider: 'openai' },
+        override: { enabled: true, provider: 'openai', value: 'ultra' },
+      }),
+    ).toEqual({ openai: { reasoningEffort: 'max' } });
+  });
+
+  it('keeps OpenAI chat-completions routes conservative for Sol/Terra', () => {
+    const route = {
+      providerMode: 'custom' as const,
+      modelProvider: 'openai' as const,
+      customEndpointApiSpec: 'openai-chat-completions' as const,
+    };
+
+    expect(
+      getSupportedThinkingOptions(gpt56TerraModel, route).map(
+        (option) => option.value,
+      ),
+    ).toEqual(['low', 'medium', 'high']);
+    expect(
+      createThinkingProviderOptionsPatch({
+        model: gpt56TerraModel,
+        route,
+        override: { enabled: true, value: 'ultra' },
+      }),
+    ).toEqual({ openai: { reasoningEffort: 'medium' } });
+  });
+
+  it('recognizes Ultra only for active Sol/Terra routes', () => {
+    expect(
+      isGpt56UltraThinkingSelected({
+        modelId: 'gpt-5.6-sol',
+        override: { enabled: true, provider: 'clodex', value: 'ultra' },
+        providerMode: 'clodex',
+      }),
+    ).toBe(true);
+    expect(
+      isGpt56UltraThinkingSelected({
+        modelId: 'openai/gpt-5.6-terra',
+        override: { enabled: true, provider: 'openai', value: 'ultra' },
+        providerMode: 'official',
+      }),
+    ).toBe(true);
+    expect(
+      isGpt56UltraThinkingSelected({
+        modelId: 'gpt-5.6-sol',
+        override: { enabled: false, provider: 'clodex', value: 'ultra' },
+        providerMode: 'clodex',
+      }),
+    ).toBe(false);
+    expect(
+      isGpt56UltraThinkingSelected({
+        modelId: 'gpt-5.6-luna',
+        override: { enabled: true, provider: 'clodex', value: 'ultra' },
+        providerMode: 'clodex',
+      }),
+    ).toBe(false);
   });
 
   it('uses model-specific Google thinking option sets', () => {
