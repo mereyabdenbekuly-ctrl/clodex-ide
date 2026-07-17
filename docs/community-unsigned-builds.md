@@ -27,11 +27,12 @@ does not identify CLODEx as the publisher. SHA-256 values provide integrity
 relative to the manifest from the same canonical workflow run; they do not
 replace a platform publisher identity.
 
-Users MUST download only from the exact canonical Actions run, verify the
-recorded source commit and checksums, and keep the community application
-separate from any future official installation. Documentation MUST NOT advise
-users to disable Gatekeeper, SmartScreen, antivirus, or other OS security
-controls globally.
+Users MUST download only from the exact canonical Actions run or from a
+corresponding GitHub community prerelease published under the bounded process
+below. They must verify the recorded source commit and checksums and keep the
+community application separate from any future official installation.
+Documentation MUST NOT advise users to disable Gatekeeper, SmartScreen,
+antivirus, or other OS security controls globally.
 
 ## Build identity
 
@@ -55,8 +56,10 @@ output:     apps/browser/out/community-unsigned
 
 Package metadata uses `<base-version>-community<GITHUB_RUN_NUMBER>`, a single
 SemVer prerelease identifier. The exact source SHA remains the authoritative
-build identity. The workflow MUST NOT create or reuse a Git tag for this
-metadata version.
+build identity. The build workflow MUST NOT create or reuse a Git tag for this
+metadata version. A later bounded GitHub community prerelease may create a tag
+that points to that exact source commit; the tag does not participate in the
+build and does not convert the artifact into an official release.
 
 ## Workflow contract
 
@@ -89,9 +92,9 @@ metadata version. The Actions artifact name carries the short source SHA; the
 warning and bundle manifest bind the full source SHA. No output may claim a
 release tag.
 
-## Mandatory exclusions
+## Mandatory build exclusions
 
-The community workflow and its outputs MUST NOT:
+The community build workflow MUST NOT:
 
 - reference the protected `Release` Environment or any other GitHub
   Environment;
@@ -117,6 +120,36 @@ Build validation reports, checksums, and SBOMs are community build diagnostics.
 They are not protected acceptance evidence and MUST remain outside the
 preview.2 -> preview.3 -> stable evidence chain.
 
+## Optional GitHub community prerelease
+
+The release owner may copy the exact validated installer bytes from one
+successful canonical community workflow run to a GitHub **prerelease** for
+public testing. This is a distribution convenience only; it is not the
+protected signed release pipeline.
+
+Publication MUST satisfy all of the following:
+
+1. the tag is `v<community-version>`, points to the exact source commit recorded
+   by the bundle manifests, and is not reused by any official channel;
+2. the GitHub record is marked prerelease, is not selected as `latest`, and its
+   title contains `Community Unsigned`;
+3. every installer is byte-for-byte identical to the validated Actions output;
+4. `SHA256SUMS.txt` is uploaded alongside the installers and verified again
+   after upload;
+5. the notes link the canonical Actions run and exact source commit and state
+   that signing, account sign-in, telemetry, auto-update, and promotion
+   evidence are unavailable;
+6. the release is excluded from update feeds, preview/canary/stable acceptance,
+   installation counters, and rollback baselines; and
+7. a changed installer is published only through a new canonical community
+   build and a new community prerelease. Published assets are never replaced
+   in place.
+
+If the tag target, manifest, version, filename, size, or hash differs, the
+publication must stop. A community prerelease never satisfies Developer ID,
+notarization, Authenticode, protected acceptance, canary, or stable release
+requirements.
+
 ## Redistribution and review gate
 
 Unsigned status does not relax source, license, provenance, or bundled-notice
@@ -138,5 +171,5 @@ public website download.
 
 When official signing credentials become available, the project MUST build new
 artifacts through the protected signed release workflow. A community artifact
-must never be renamed, re-uploaded, signed in place, or promoted as the official
+must never be renamed, signed in place, or promoted/re-uploaded as the official
 binary.
