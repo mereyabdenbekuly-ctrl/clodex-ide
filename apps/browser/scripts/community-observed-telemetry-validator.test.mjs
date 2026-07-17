@@ -1,14 +1,21 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createPackage } from '@electron/asar';
+import { createPackage, listPackage } from '@electron/asar';
 import {
   COMMUNITY_OBSERVED_RENDERER_POSTHOG_NOOP,
   COMMUNITY_OBSERVED_TELEMETRY_ARTIFACT_ASSERTION,
   COMMUNITY_OBSERVED_TELEMETRY_CONTRACT,
   inspectCommunityObservedTelemetryAsar,
+  normalizeCommunityObservedArchivePath,
 } from './community-observed-telemetry-validator.mjs';
 
 const TEST_PROJECT_KEY = [
@@ -31,6 +38,27 @@ async function makeFixture(options = {}) {
   );
   mkdirSync(backend, { recursive: true });
   mkdirSync(renderer, { recursive: true });
+  const semverTarget = path.join(
+    source,
+    'node_modules',
+    'semver',
+    'bin',
+    'semver.js',
+  );
+  const sharpBinDirectory = path.join(
+    source,
+    'node_modules',
+    'sharp',
+    'node_modules',
+    '.bin',
+  );
+  mkdirSync(path.dirname(semverTarget), { recursive: true });
+  mkdirSync(sharpBinDirectory, { recursive: true });
+  writeFileSync(semverTarget, 'export const semver = true;\n');
+  symlinkSync(
+    path.relative(sharpBinDirectory, semverTarget),
+    path.join(sharpBinDirectory, 'semver.js'),
+  );
   writeFileSync(path.join(backend, 'main.js'), 'import "./telemetry.js";\n');
   writeFileSync(
     path.join(backend, 'telemetry.js'),
@@ -87,6 +115,29 @@ test('validates a single backend-only observed PostHog project key', async () =>
     assert.equal(evidence.renderer.projectKeyEmbedded, false);
     assert.equal(evidence.exceptions, 'disabled');
     assert.equal(evidence.modelTracing, 'disabled');
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('normalizes Windows ASAR paths and ignores node_modules .bin links', async () => {
+  assert.equal(
+    normalizeCommunityObservedArchivePath('\\.vite\\build\\main.js'),
+    '.vite/build/main.js',
+  );
+  const fixture = await makeFixture();
+  try {
+    assert.ok(
+      listPackage(fixture.asarPath).some((entry) =>
+        normalizeCommunityObservedArchivePath(entry).endsWith(
+          'node_modules/sharp/node_modules/.bin/semver.js',
+        ),
+      ),
+    );
+    assert.equal(
+      inspectCommunityObservedTelemetryAsar(fixture.asarPath).status,
+      'validated',
+    );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
   }
