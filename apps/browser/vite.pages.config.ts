@@ -48,6 +48,22 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      ...(buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-observed'
+        ? {
+            '@ui/hooks/use-posthog': path.resolve(
+              __dirname,
+              './src/ui/telemetry/posthog-react-noop.tsx',
+            ),
+            'posthog-js/react': path.resolve(
+              __dirname,
+              './src/ui/telemetry/posthog-react-noop.tsx',
+            ),
+            'posthog-js': path.resolve(
+              __dirname,
+              './src/ui/telemetry/posthog-noop.ts',
+            ),
+          }
+        : {}),
       // Redirect @ui/hooks/use-karton to pages version (pages renderer
       // uses window.clodexPagesApi, not window.electron.karton)
       '@ui/hooks/use-karton': path.resolve(

@@ -14,6 +14,14 @@ const workflowPath = path.join(
 );
 const source = readFileSync(workflowPath, 'utf8');
 const workflow = YAML.parse(source);
+const uiViteSource = readFileSync(
+  path.join(repositoryRoot, 'apps', 'browser', 'vite.ui.config.ts'),
+  'utf8',
+);
+const pagesViteSource = readFileSync(
+  path.join(repositoryRoot, 'apps', 'browser', 'vite.pages.config.ts'),
+  'utf8',
+);
 
 function expression(value) {
   return `\${{ ${value} }}`;
@@ -147,5 +155,41 @@ test('observed community workflow builds isolated unsigned artifacts and validat
     .filter((entry) => entry.key === 'uses')
     .map((entry) => entry.value)) {
     assert.match(action, /^[^@]+@[a-f0-9]{40}$/u);
+  }
+});
+
+test('all renderer builds replace PostHog with observed no-op modules', () => {
+  const expectedAliases = [
+    ['@ui/hooks/use-posthog', './src/ui/telemetry/posthog-react-noop.tsx'],
+    ['posthog-js/react', './src/ui/telemetry/posthog-react-noop.tsx'],
+    ['posthog-js', './src/ui/telemetry/posthog-noop.ts'],
+  ];
+  for (const [label, configSource] of [
+    ['main window', uiViteSource],
+    ['pages', pagesViteSource],
+  ]) {
+    const observedBlocks = [
+      ...configSource.matchAll(
+        /\.\.\.\(buildConstants\.__APP_DISTRIBUTION_MODE__\s*===\s*'community-observed'\s*\?\s*\{([\s\S]*?)\}\s*:\s*\{\}\),/gu,
+      ),
+    ];
+    assert.equal(observedBlocks.length, 1, label);
+    const observedBlock = observedBlocks[0];
+    const aliases = [
+      ...(observedBlock[1] ?? '').matchAll(
+        /'([^']+)'\s*:\s*path\.resolve\(\s*__dirname,\s*'([^']+)'\s*,?\s*\)/gu,
+      ),
+    ].map((match) => [match[1], match[2]]);
+    assert.deepEqual(aliases, expectedAliases, label);
+
+    const observedBlockStart = observedBlock.index;
+    assert.notEqual(observedBlockStart, undefined, label);
+    const observedBlockEnd =
+      (observedBlockStart ?? 0) + observedBlock[0].length;
+    const generalUiAlias = configSource.indexOf("'@ui':", observedBlockEnd);
+    assert.ok(
+      generalUiAlias > observedBlockEnd,
+      `${label}: observed aliases must precede the general @ui alias`,
+    );
   }
 });
