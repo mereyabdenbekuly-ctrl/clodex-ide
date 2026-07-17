@@ -603,6 +603,9 @@ importers:
       ogl:
         specifier: ^1.0.11
         version: 1.0.11
+      parse5:
+        specifier: 7.3.0
+        version: 7.3.0
       postcss:
         specifier: 8.5.14
         version: 8.5.14
