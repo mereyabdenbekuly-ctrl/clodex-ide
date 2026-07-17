@@ -10,12 +10,52 @@ import path from 'node:path';
 import { parse } from 'parse5';
 import ts from 'typescript';
 
+const communityObservedTelemetryContractSource = JSON.parse(
+  readFileSync(
+    new URL(
+      '../src/shared/community-observed-telemetry-contract.json',
+      import.meta.url,
+    ),
+    'utf8',
+  ),
+);
+
 export const COMMUNITY_OBSERVED_TELEMETRY_CONTRACT =
-  'clodex-community-observed-backend-anonymous-v1';
+  communityObservedTelemetryContractSource.backendTelemetryContract;
 export const COMMUNITY_OBSERVED_TELEMETRY_ARTIFACT_ASSERTION =
-  'clodex-community-observed-contract:{"allowedTelemetryLevel":"anonymous","contentPolicy":"event-field-allowlist-v1","disableGeoip":true,"exceptions":"disabled","modelTracing":"disabled","optIn":"explicit","privacyMode":true,"renderer":"noop"}';
+  communityObservedTelemetryContractSource.backendArtifactAssertion;
 export const COMMUNITY_OBSERVED_RENDERER_POSTHOG_NOOP =
-  'clodex-community-observed-renderer-posthog-noop-v1';
+  communityObservedTelemetryContractSource.rendererPosthogNoop;
+export const COMMUNITY_OBSERVED_TELEMETRY_CONSENT_UI_ASSERTION =
+  communityObservedTelemetryContractSource.consentUiAssertion;
+export const COMMUNITY_OBSERVED_TELEMETRY_CONSENT_VERSION =
+  communityObservedTelemetryContractSource.consentVersion;
+
+function parseContractAssertion(value, prefix) {
+  if (typeof value !== 'string' || !value.startsWith(prefix)) {
+    throw new Error(`community-observed contract is missing ${prefix}`);
+  }
+  return JSON.parse(value.slice(prefix.length));
+}
+
+const backendContractAssertion = parseContractAssertion(
+  COMMUNITY_OBSERVED_TELEMETRY_ARTIFACT_ASSERTION,
+  'clodex-community-observed-contract:',
+);
+const consentUiContractAssertion = parseContractAssertion(
+  COMMUNITY_OBSERVED_TELEMETRY_CONSENT_UI_ASSERTION,
+  'clodex-community-observed-consent-ui:',
+);
+if (
+  backendContractAssertion.consentVersion !==
+    COMMUNITY_OBSERVED_TELEMETRY_CONSENT_VERSION ||
+  consentUiContractAssertion.version !==
+    COMMUNITY_OBSERVED_TELEMETRY_CONSENT_VERSION
+) {
+  throw new Error(
+    'community-observed consent version is inconsistent across the canonical contract',
+  );
+}
 
 const PROJECT_KEY_PREFIX_TEXT = 'phc_';
 const PROJECT_KEY_PREFIX = Buffer.from(PROJECT_KEY_PREFIX_TEXT, 'ascii');
@@ -202,6 +242,56 @@ function staticStringValue(expression) {
     return value;
   }
   return undefined;
+}
+
+function staticPropertyName(name) {
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) return name.text;
+  if (ts.isComputedPropertyName(name)) {
+    return staticStringValue(name.expression);
+  }
+  return undefined;
+}
+
+function staticBooleanValue(expression) {
+  if (expression.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (expression.kind === ts.SyntaxKind.FalseKeyword) return false;
+  if (
+    ts.isPrefixUnaryExpression(expression) &&
+    expression.operator === ts.SyntaxKind.ExclamationToken &&
+    ts.isNumericLiteral(expression.operand)
+  ) {
+    if (expression.operand.text === '0') return true;
+    if (expression.operand.text === '1') return false;
+  }
+  return undefined;
+}
+
+function collectStaticBooleanPropertyValues(source, propertyName) {
+  const sourceFile = ts.createSourceFile(
+    'community-observed-backend.js',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  if (sourceFile.parseDiagnostics.length > 0) {
+    throw new Error(
+      'community-observed backend JavaScript is not parseable for telemetry property validation',
+    );
+  }
+  const values = new Set();
+  const visit = (node) => {
+    if (
+      ts.isPropertyAssignment(node) &&
+      staticPropertyName(node.name) === propertyName
+    ) {
+      const value = staticBooleanValue(node.initializer);
+      if (value !== undefined) values.add(value);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return values;
 }
 
 function javascriptRelativeModuleSpecifiers(source, sourcePath) {
@@ -698,9 +788,33 @@ export function inspectCommunityObservedTelemetryAsar(
       'community-observed backend is missing the canonical telemetry contract assertion',
     );
   }
+  const personProfileValues = collectStaticBooleanPropertyValues(
+    backendSource,
+    '$process_person_profile',
+  );
+  if (personProfileValues.has(true)) {
+    throw new Error(
+      'community-observed backend enables the PostHog person-profile property',
+    );
+  }
+  if (!personProfileValues.has(false)) {
+    throw new Error(
+      'community-observed backend is missing an enforced PostHog person-profile disable property',
+    );
+  }
   if (!rendererSource.includes(COMMUNITY_OBSERVED_RENDERER_POSTHOG_NOOP)) {
     throw new Error(
       'community-observed renderer is missing the compile-time PostHog no-op assertion',
+    );
+  }
+  if (
+    !containsJavaScriptString(
+      rendererSource,
+      COMMUNITY_OBSERVED_TELEMETRY_CONSENT_UI_ASSERTION,
+    )
+  ) {
+    throw new Error(
+      'community-observed renderer is missing the required telemetry consent UI assertion',
     );
   }
   for (const [label, pattern] of [
@@ -729,15 +843,20 @@ export function inspectCommunityObservedTelemetryAsar(
     status: 'validated',
     transport: 'posthog-node-backend',
     optIn: 'explicit',
+    declaredConsentContract: 'required-choice-v1',
+    consentVersion: COMMUNITY_OBSERVED_TELEMETRY_CONSENT_VERSION,
+    consentUiMarker: 'present',
     allowedTelemetryLevel: 'anonymous',
     privacyMode: true,
     disableGeoip: true,
+    personProfileDisableProperty: 'present',
     renderer: {
       enabled: false,
       projectKeyEmbedded: false,
       autocapture: 'disabled',
       sessionRecording: 'disabled',
     },
+    consentUiAssertion: COMMUNITY_OBSERVED_TELEMETRY_CONSENT_UI_ASSERTION,
     exceptions: 'disabled',
     modelTracing: 'disabled',
     contentPolicy: 'event-field-allowlist-v1',

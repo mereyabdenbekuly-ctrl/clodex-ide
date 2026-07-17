@@ -7,6 +7,7 @@ import {
 import { Logo } from '@ui/components/ui/logo';
 import { WebContentsBoundsSyncer } from '@ui/components/web-contents-bounds-syncer';
 import { TutorialOverlay } from '@ui/components/tutorial/tutorial-overlay';
+import { shouldShowCommunityObservedTelemetryConsent } from '@shared/community-observed-telemetry-consent';
 
 // Lazy-load the heavy screen trees. Both `DefaultLayout` and `OnboardingWizard`
 // only render *after* the karton connection is established, yet importing them
@@ -22,6 +23,11 @@ const DefaultLayout = lazy(() =>
 );
 const OnboardingWizard = lazy(() =>
   import('./onboarding').then((m) => ({ default: m.OnboardingWizard })),
+);
+const TelemetryConsentScreen = lazy(() =>
+  import('./telemetry-consent').then((m) => ({
+    default: m.TelemetryConsentScreen,
+  })),
 );
 
 function LoadingScreen({
@@ -65,10 +71,22 @@ export function ScreenRouter() {
   const hasSeenOnboarding = useKartonState(
     (s) => s.userExperience.storedExperienceData.hasSeenOnboardingFlow,
   );
+  const telemetryPrivacy = useKartonState((s) => s.preferences.privacy);
+  const needsTelemetryConsent =
+    connected &&
+    hasSeenOnboarding !== null &&
+    shouldShowCommunityObservedTelemetryConsent(
+      __APP_TELEMETRY_MODE__,
+      telemetryPrivacy,
+    );
   return (
     <div className="fixed inset-0">
       {!connected || hasSeenOnboarding === null ? (
         <LoadingScreen reconnectState={reconnectState} />
+      ) : needsTelemetryConsent ? (
+        <Suspense fallback={<LoadingScreen reconnectState={reconnectState} />}>
+          <TelemetryConsentScreen />
+        </Suspense>
       ) : hasSeenOnboarding ? (
         <Suspense fallback={<LoadingScreen reconnectState={reconnectState} />}>
           <DefaultLayout show />
@@ -79,7 +97,7 @@ export function ScreenRouter() {
           <OnboardingWizard />
         </Suspense>
       )}
-      <TutorialOverlay />
+      {!needsTelemetryConsent && <TutorialOverlay />}
     </div>
   );
 }

@@ -32,6 +32,17 @@ export const COMMUNITY_OBSERVED_MANIFEST_FILE =
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const browserDirectory = path.resolve(scriptDirectory, '..');
+const communityObservedTelemetryContractSource = JSON.parse(
+  readFileSync(
+    path.join(
+      browserDirectory,
+      'src/shared/community-observed-telemetry-contract.json',
+    ),
+    'utf8',
+  ),
+);
+export const COMMUNITY_OBSERVED_TELEMETRY_CONSENT_VERSION =
+  communityObservedTelemetryContractSource.consentVersion;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SOURCE_COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const COMMUNITY_UNSIGNED_VERSION_PATTERN =
@@ -58,10 +69,13 @@ const DISTRIBUTION_PROFILES = Object.freeze({
     bundleKind: 'clodex-community-observed-bundle',
     manifestFile: COMMUNITY_OBSERVED_MANIFEST_FILE,
     telemetry: Object.freeze({
-      status: 'explicit-opt-in',
+      status: 'explicit-required-choice',
+      consentPrompt: 'required-choice',
+      consentVersion: COMMUNITY_OBSERVED_TELEMETRY_CONSENT_VERSION,
       allowedLevel: 'anonymous',
       transport: 'posthog-node-backend',
       privacyMode: true,
+      personProfiles: 'disabled',
       renderer: 'disabled',
       exceptions: 'disabled',
       modelTracing: 'disabled',
@@ -455,9 +469,14 @@ function assertManifestIdentity(manifest, expected) {
       telemetry.status !== 'validated' ||
       telemetry.transport !== 'posthog-node-backend' ||
       telemetry.optIn !== 'explicit' ||
+      telemetry.declaredConsentContract !== 'required-choice-v1' ||
+      telemetry.consentVersion !==
+        COMMUNITY_OBSERVED_TELEMETRY_CONSENT_VERSION ||
+      telemetry.consentUiMarker !== 'present' ||
       telemetry.allowedTelemetryLevel !== 'anonymous' ||
       telemetry.privacyMode !== true ||
       telemetry.disableGeoip !== true ||
+      telemetry.personProfileDisableProperty !== 'present' ||
       telemetry.renderer?.enabled !== false ||
       telemetry.renderer?.projectKeyEmbedded !== false ||
       telemetry.renderer?.autocapture !== 'disabled' ||
@@ -482,7 +501,7 @@ function buildWarning({
 }) {
   const telemetryNotice =
     distributionMode === COMMUNITY_OBSERVED_DISTRIBUTION_MODE
-      ? `\nTelemetry is disabled by default. If the user explicitly selects anonymous\ntelemetry, only the backend PostHog client may send centrally filtered,\ncontent-free counters and enum metadata. Renderer capture, session recording,\nexceptions, user identification, full telemetry and AI tracing are disabled.\n`
+      ? `\nTelemetry remains disabled until the user completes the required first-run\nchoice. If anonymous telemetry is allowed, only the backend PostHog client may\nsend centrally filtered, content-free counters and enum metadata. Renderer\ncapture, person profiles, session recording, exceptions, account identification,\nfull telemetry and AI tracing are disabled. The choice can be changed later in\nSettings.\n`
       : '\nTelemetry is disabled in this distribution.\n';
   return `# CLODEx ${
     distributionMode === COMMUNITY_OBSERVED_DISTRIBUTION_MODE

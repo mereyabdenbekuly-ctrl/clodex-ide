@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "consentVersion": 1,
+  "backendTelemetryContract": "clodex-community-observed-backend-anonymous-v1",
+  "backendArtifactAssertion": "clodex-community-observed-contract:{\"allowedTelemetryLevel\":\"anonymous\",\"consentVersion\":1,\"contentPolicy\":\"event-field-allowlist-v1\",\"disableGeoip\":true,\"exceptions\":\"disabled\",\"modelTracing\":\"disabled\",\"optIn\":\"explicit-required-choice\",\"personProfiles\":\"disabled\",\"privacyMode\":true,\"renderer\":\"noop\"}",
+  "rendererPosthogNoop": "clodex-community-observed-renderer-posthog-noop-v1",
+  "consentUiAssertion": "clodex-community-observed-consent-ui:{\"choice\":\"required\",\"decline\":\"visible\",\"primary\":\"allow-anonymous\",\"version\":1}"
+}

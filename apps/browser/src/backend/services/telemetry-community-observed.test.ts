@@ -10,6 +10,12 @@ const posthogClient = vi.hoisted(() => ({
 }));
 const posthogConstructor = vi.hoisted(() => vi.fn(() => posthogClient));
 const withTracingMock = vi.hoisted(() => vi.fn());
+const captureProcessSnapshotMock = vi.hoisted(() =>
+  vi.fn(async () => ({
+    matched_process_counts: { private_process: 1 },
+    total_matched: 1,
+  })),
+);
 
 vi.hoisted(() => {
   vi.stubGlobal('__APP_VERSION__', '1.16.0-communityobserved42');
@@ -26,6 +32,9 @@ vi.hoisted(() => {
 
 vi.mock('posthog-node', () => ({ PostHog: posthogConstructor }));
 vi.mock('@posthog/ai', () => ({ withTracing: withTracingMock }));
+vi.mock('./telemetry/process-snapshot', () => ({
+  captureProcessSnapshot: captureProcessSnapshotMock,
+}));
 
 import {
   sanitizeCommunityObservedProperties,
@@ -33,18 +42,25 @@ import {
 } from './telemetry';
 
 type TelemetryLevel = 'off' | 'anonymous' | 'full';
+type Privacy = {
+  telemetryLevel: TelemetryLevel;
+  anonymousTelemetryConsentVersion: number;
+};
 const TEST_PROJECT_KEY = [
   'phc',
   'community_observed_test_project_key_000000',
 ].join('_');
 
-function makeHarness(initialLevel: TelemetryLevel) {
-  let level = initialLevel;
+function makeHarness(
+  initialLevel: TelemetryLevel,
+  initialConsentVersion = initialLevel === 'anonymous' ? 1 : 0,
+) {
+  let privacy: Privacy = {
+    telemetryLevel: initialLevel,
+    anonymousTelemetryConsentVersion: initialConsentVersion,
+  };
   let listener:
-    | ((
-        next: { privacy: { telemetryLevel: TelemetryLevel } },
-        previous: { privacy: { telemetryLevel: TelemetryLevel } },
-      ) => void)
+    | ((next: { privacy: Privacy }, previous: { privacy: Privacy }) => void)
     | undefined;
   const service = new TelemetryService(
     { getMachineId: vi.fn(() => 'raw-machine-identifier') } as never,
@@ -52,7 +68,7 @@ function makeHarness(initialLevel: TelemetryLevel) {
       addListener: vi.fn((candidate) => {
         listener = candidate;
       }),
-      get: vi.fn(() => ({ privacy: { telemetryLevel: level } })),
+      get: vi.fn(() => ({ privacy })),
     } as never,
     {
       debug: vi.fn(),
@@ -64,13 +80,10 @@ function makeHarness(initialLevel: TelemetryLevel) {
   );
   return {
     service,
-    setLevel(next: TelemetryLevel) {
-      const previous = level;
-      level = next;
-      listener?.(
-        { privacy: { telemetryLevel: next } },
-        { privacy: { telemetryLevel: previous } },
-      );
+    setPrivacy(next: Privacy) {
+      const previous = privacy;
+      privacy = next;
+      listener?.({ privacy: next }, { privacy: previous });
     },
   };
 }
@@ -82,6 +95,7 @@ describe('TelemetryService community-observed privacy contract', () => {
     posthogConstructor.mockClear();
     for (const mock of Object.values(posthogClient)) mock.mockClear();
     withTracingMock.mockClear();
+    captureProcessSnapshotMock.mockClear();
   });
 
   it('creates no PostHog client before explicit anonymous opt-in', async () => {
@@ -89,6 +103,15 @@ describe('TelemetryService community-observed privacy contract', () => {
     expect(service.telemetryLevel).toBe('off');
     expect(posthogConstructor).not.toHaveBeenCalled();
 
+    service.capture('settings-opened');
+    expect(posthogConstructor).not.toHaveBeenCalled();
+    expect(posthogClient.capture).not.toHaveBeenCalled();
+    await service.teardown();
+  });
+
+  it('does not trust an anonymous level without the current consent version', async () => {
+    const { service } = makeHarness('anonymous', 0);
+    expect(service.telemetryLevel).toBe('off');
     service.capture('settings-opened');
     expect(posthogConstructor).not.toHaveBeenCalled();
     expect(posthogClient.capture).not.toHaveBeenCalled();
@@ -154,6 +177,7 @@ describe('TelemetryService community-observed privacy contract', () => {
       duration_ms: 125,
       telemetry_level: 'anonymous',
       app_distribution_mode: 'community-observed',
+      $process_person_profile: false,
     });
     for (const forbidden of [
       'tool_name',
@@ -167,6 +191,25 @@ describe('TelemetryService community-observed privacy contract', () => {
       expect(event.properties).not.toHaveProperty(forbidden);
     }
     await service.teardown();
+  });
+
+  it('emits lifecycle events without inspecting the host process list', async () => {
+    const { service } = makeHarness('anonymous');
+
+    service.captureAppLaunched();
+
+    expect(captureProcessSnapshotMock).not.toHaveBeenCalled();
+    expect(posthogClient.capture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'app-launched',
+        properties: expect.not.objectContaining({
+          matched_process_counts: expect.anything(),
+          total_matched_processes: expect.anything(),
+        }),
+      }),
+    );
+    await service.teardown();
+    expect(captureProcessSnapshotMock).not.toHaveBeenCalled();
   });
 
   it('disables exception capture and AI tracing even after opt-in', async () => {
@@ -190,8 +233,11 @@ describe('TelemetryService community-observed privacy contract', () => {
   });
 
   it('starts only on an off-to-anonymous preference transition', async () => {
-    const { service, setLevel } = makeHarness('off');
-    setLevel('anonymous');
+    const { service, setPrivacy } = makeHarness('off');
+    setPrivacy({
+      telemetryLevel: 'anonymous',
+      anonymousTelemetryConsentVersion: 1,
+    });
 
     expect(posthogConstructor).toHaveBeenCalledTimes(1);
     expect(posthogClient.capture).toHaveBeenCalledWith(
@@ -204,6 +250,19 @@ describe('TelemetryService community-observed privacy contract', () => {
         }),
       }),
     );
+    await service.teardown();
+  });
+
+  it('persists an explicit decline without creating a client', async () => {
+    const { service, setPrivacy } = makeHarness('off');
+    setPrivacy({
+      telemetryLevel: 'off',
+      anonymousTelemetryConsentVersion: 1,
+    });
+
+    expect(service.telemetryLevel).toBe('off');
+    expect(posthogConstructor).not.toHaveBeenCalled();
+    expect(posthogClient.capture).not.toHaveBeenCalled();
     await service.teardown();
   });
 });

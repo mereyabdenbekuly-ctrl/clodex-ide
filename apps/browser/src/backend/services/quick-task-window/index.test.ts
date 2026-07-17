@@ -152,6 +152,43 @@ afterEach(() => {
 });
 
 describe('QuickTaskWindowService', () => {
+  it('blocks window creation and submission until the required choice is complete', async () => {
+    const deps = createDeps();
+    let allowed = false;
+    const service = await QuickTaskWindowService.create({
+      logger,
+      karton: deps.karton,
+      agentManagerService: deps.agentManagerService,
+      windowLayoutService: deps.windowLayoutService,
+      canUseQuickTask: () => allowed,
+    });
+
+    await expect(service.show('Blocked task')).resolves.toBe(false);
+    expect(electronMock.latestWindow).toBeNull();
+
+    allowed = true;
+    await expect(service.show('Allowed task')).resolves.toBe(true);
+    expect(electronMock.latestWindow).not.toBeNull();
+
+    allowed = false;
+    const submit = electronMock.ipcHandlers.get(
+      QUICK_TASK_WINDOW_CHANNELS.submit,
+    );
+    const result = await submit?.(
+      { sender: electronMock.latestWindow?.webContents },
+      { requestId: 1, prompt: 'Still blocked' },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error:
+        'Complete the required privacy choice in the main CLODEx window before starting a task.',
+      retryable: true,
+    });
+    expect(deps.dispatchCommand).not.toHaveBeenCalled();
+
+    await service.teardown();
+  });
+
   it('opens a dedicated window and exposes the current context', async () => {
     const deps = createDeps();
     const service = await QuickTaskWindowService.create({

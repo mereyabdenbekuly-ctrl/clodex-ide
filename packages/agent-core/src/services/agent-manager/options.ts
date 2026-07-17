@@ -130,6 +130,12 @@ export interface AgentManagerHooksOptions {
    * an offline retry loop.
    */
   isNetworkOnline?: () => boolean;
+  /**
+   * Optional host execution gate for automatic retry/recovery paths. Hosts
+   * use this to suspend model work behind a required first-run decision while
+   * still allowing persisted agents to be restored as idle UI state.
+   */
+  canRunAgentWork?: () => boolean;
 }
 
 /**

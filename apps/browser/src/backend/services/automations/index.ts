@@ -159,10 +159,32 @@ export class AutomationService extends DisposableService {
       options.wakeSource?.onResume(() => {
         void service.handleResume();
       }) ?? null;
-    await service.reconcileStartup();
-    service.scheduleNextTimer();
-    await service.syncNativeWake();
+    await service.refreshExecutionGate();
     return service;
+  }
+
+  /**
+   * Reconcile timers and native wake state after an external execution gate
+   * changes. A closed gate cancels every local/native wake. Re-opening it
+   * applies the persisted missed-run policy before scheduling future work.
+   */
+  public async refreshExecutionGate(): Promise<void> {
+    this.assertNotDisposed();
+    if (this.timer) {
+      this.clearTimer(this.timer);
+      this.timer = null;
+    }
+    if (this.shuttingDown || !this.options.isFeatureEnabled()) {
+      await this.options.nativeWakeScheduler?.sync(null);
+      return;
+    }
+    await this.reconcileStartup();
+    if (this.shuttingDown || !this.options.isFeatureEnabled()) {
+      await this.options.nativeWakeScheduler?.sync(null);
+      return;
+    }
+    this.scheduleNextTimer();
+    await this.syncNativeWake();
   }
 
   public getSnapshot(): AutomationSnapshot {
@@ -781,7 +803,9 @@ export class AutomationService extends DisposableService {
   private async syncNativeWake(): Promise<void> {
     const scheduler = this.options.nativeWakeScheduler;
     if (!scheduler) return;
-    const nextWakeAt = this.getSnapshot().nextWakeAt;
+    const nextWakeAt = this.options.isFeatureEnabled()
+      ? this.getSnapshot().nextWakeAt
+      : null;
     await scheduler.sync(nextWakeAt);
   }
 

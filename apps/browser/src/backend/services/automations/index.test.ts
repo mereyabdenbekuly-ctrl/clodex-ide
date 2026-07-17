@@ -456,6 +456,83 @@ describe('AutomationService', () => {
     await service.teardown();
   });
 
+  it('re-arms overdue work, timers and native wake when the execution gate changes', async () => {
+    const seedHarness = createHarness({
+      now: Date.parse('2026-07-11T10:00:00.000Z'),
+    });
+    const seed = await AutomationService.create({
+      logger: {} as Logger,
+      karton: seedHarness.karton,
+      notifications: seedHarness.notifications,
+      persistence: seedHarness.persistence,
+      dispatchWalPersistence: seedHarness.dispatchWalPersistence,
+      isFeatureEnabled: () => true,
+      dispatch: seedHarness.dispatch,
+      now: () => seedHarness.now,
+      setTimer: () => 1 as any,
+      clearTimer: vi.fn(),
+    });
+    await seedHarness.handlers.get('automations.create')?.('ui', {
+      title: 'Consent-gated overdue task',
+      prompt: 'Run once the execution gate opens.',
+      schedule: { kind: 'interval', everyMs: 60_000 },
+    });
+    const persisted = structuredClone(seedHarness.getData());
+    await seed.teardown();
+
+    let enabled = false;
+    const harness = createHarness({
+      initial: persisted,
+      now: Date.parse('2026-07-11T10:02:00.000Z'),
+    });
+    const setTimer = vi.fn(() => 1 as any);
+    const clearTimer = vi.fn();
+    const nativeWakeScheduler = {
+      getStatus: () => ({
+        platform: 'linux' as const,
+        mode: 'native' as const,
+        canWakeSystem: true,
+        scheduledFor: null,
+        registeredAt: null,
+        message: 'test scheduler',
+      }),
+      sync: vi.fn(async () => undefined),
+    };
+    const service = await AutomationService.create({
+      logger: {} as Logger,
+      karton: harness.karton,
+      notifications: harness.notifications,
+      persistence: harness.persistence,
+      dispatchWalPersistence: harness.dispatchWalPersistence,
+      isFeatureEnabled: () => enabled,
+      dispatch: harness.dispatch,
+      nativeWakeScheduler,
+      now: () => harness.now,
+      setTimer,
+      clearTimer,
+    });
+
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    expect(setTimer).not.toHaveBeenCalled();
+    expect(nativeWakeScheduler.sync).toHaveBeenLastCalledWith(null);
+
+    enabled = true;
+    await service.refreshExecutionGate();
+
+    expect(harness.dispatch).toHaveBeenCalledTimes(1);
+    expect(setTimer).toHaveBeenCalledTimes(1);
+    expect(nativeWakeScheduler.sync).toHaveBeenLastCalledWith(
+      '2026-07-11T10:03:00.000Z',
+    );
+
+    enabled = false;
+    await service.refreshExecutionGate();
+
+    expect(clearTimer).toHaveBeenCalledWith(1);
+    expect(nativeWakeScheduler.sync).toHaveBeenLastCalledWith(null);
+    await service.teardown();
+  });
+
   it('rechecks the automation gate at the real adapter boundary', async () => {
     let enabled = true;
     let releaseAdapter!: () => void;

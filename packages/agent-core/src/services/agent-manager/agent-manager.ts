@@ -254,6 +254,7 @@ export class AgentManager extends DisposableService {
     entries: AgentHistoryEntry[],
   ) => Promise<AgentHistoryEntry[]>;
   private readonly isNetworkOnline?: () => boolean;
+  private readonly canRunAgentWork: () => boolean;
   private readonly imageCache?: ProcessedImageCacheService;
   /**
    * App-wide `FileReadCacheService` shared across all agent instances.
@@ -350,6 +351,7 @@ export class AgentManager extends DisposableService {
     this.toolApprovalLifecycle = hooks?.toolApprovalLifecycle;
     this.enrichHistoryEntries = hooks?.enrichHistoryEntries;
     this.isNetworkOnline = hooks?.isNetworkOnline;
+    this.canRunAgentWork = hooks?.canRunAgentWork ?? (() => true);
     this.getSkillsForSlashRedaction =
       hooks?.skillsForSlashRedaction ?? (() => []);
 
@@ -1158,6 +1160,7 @@ export class AgentManager extends DisposableService {
   }
 
   private async processNetworkRetries(force = false): Promise<void> {
+    if (!this.canRunAgentWork()) return;
     if (!this.isNetworkOnline) return;
 
     const now = Date.now();
@@ -1273,6 +1276,12 @@ export class AgentManager extends DisposableService {
     reason: 'system-resumed' | 'event-loop-stalled',
     details?: { stalledForMs?: number },
   ): Promise<void> {
+    if (!this.canRunAgentWork()) {
+      this.logger.debug(
+        `[AgentManager] Automatic recovery suspended by the host execution gate. reason=${reason}`,
+      );
+      return;
+    }
     const recoverableAgentIds = [...this.activeAgents.keys()].filter((id) =>
       this.isRecoverableInterruptedAgent(id),
     );

@@ -36,6 +36,7 @@ type QuickTaskWindowServiceDeps = {
   karton: KartonService;
   agentManagerService: AgentManagerService;
   windowLayoutService: WindowLayoutService;
+  canUseQuickTask?: () => boolean;
 };
 
 export class QuickTaskWindowService extends DisposableService {
@@ -43,6 +44,7 @@ export class QuickTaskWindowService extends DisposableService {
   private readonly karton: KartonService;
   private readonly agentManagerService: AgentManagerService;
   private readonly windowLayoutService: WindowLayoutService;
+  private readonly canUseQuickTask: () => boolean;
   private window: BrowserWindow | null = null;
   private loaded = false;
   private desiredVisibility = false;
@@ -61,6 +63,7 @@ export class QuickTaskWindowService extends DisposableService {
     this.karton = deps.karton;
     this.agentManagerService = deps.agentManagerService;
     this.windowLayoutService = deps.windowLayoutService;
+    this.canUseQuickTask = deps.canUseQuickTask ?? (() => true);
     this.currentContext = this.buildContext('');
   }
 
@@ -78,6 +81,12 @@ export class QuickTaskWindowService extends DisposableService {
 
   public async show(initialPrompt = ''): Promise<boolean> {
     this.assertNotDisposed();
+    if (!this.canUseQuickTask()) {
+      this.logger.debug(
+        '[QuickTaskWindowService] Blocked until the required first-run choice is complete',
+      );
+      return false;
+    }
     try {
       if (this.completedAgentId) await this.finalizeCompletedTask();
       if (this.activeSubmission) {
@@ -107,6 +116,7 @@ export class QuickTaskWindowService extends DisposableService {
 
   public async toggle(initialPrompt = ''): Promise<boolean> {
     this.assertNotDisposed();
+    if (!this.canUseQuickTask()) return false;
     if (this.completedAgentId) {
       await this.finalizeCompletedTask();
       return true;
@@ -237,6 +247,14 @@ export class QuickTaskWindowService extends DisposableService {
   }
 
   private async submit(input: unknown): Promise<QuickTaskWindowSubmitResult> {
+    if (!this.canUseQuickTask()) {
+      return {
+        ok: false,
+        error:
+          'Complete the required privacy choice in the main CLODEx window before starting a task.',
+        retryable: true,
+      };
+    }
     const payload =
       input && typeof input === 'object'
         ? (input as Partial<QuickTaskWindowSubmitInput>)

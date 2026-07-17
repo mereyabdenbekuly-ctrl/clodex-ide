@@ -8,6 +8,24 @@ export const onboardingEn = {
     intro: 'Welcome to the open-source agentic IDE.',
     product: 'Welcome to CLODEx.',
   },
+  telemetryConsent: {
+    title: 'Help improve CLODEx',
+    description:
+      'CLODEx can send a small allowlisted set of anonymous product events to PostHog using a pseudonymous installation ID. Choose whether to enable it before continuing.',
+    sharedTitle: 'What may be shared',
+    sharedDescription:
+      'Feature usage, success or failure counters, bounded timing data, and app version or platform metadata.',
+    privateTitle: 'What always stays private',
+    privateDescription:
+      'Prompts and messages, source code, commands, tool arguments, file paths, URLs, API keys and credentials, error text, and session recordings.',
+    safeguards:
+      'Account identification, GeoIP enrichment, exception capture, session recording, and AI tracing are disabled.',
+    allow: 'Allow anonymous statistics',
+    decline: 'Continue without statistics',
+    settingsNote:
+      'You can disable or enable anonymous statistics later in Settings → Account.',
+    saveError: 'Could not save your choice. Please try again.',
+  },
   auth: {
     blockReason: {
       withCloud: 'Connect a provider key, a local model, or CLODEx Cloud',
@@ -19,9 +37,6 @@ export const onboardingEn = {
       identifiableLabel: 'Share identifiable chat and usage data with CLODEx.',
       defaultOffNote:
         'Telemetry is disabled by default and can be configured in settings.',
-      anonymousObservedLabel: 'Share anonymous product usage metrics.',
-      anonymousObservedNote:
-        'Optional. Never includes prompts, source code, tool arguments, commands, paths, URLs, error text, or session recordings.',
     },
     chooseConnection: {
       title: 'Choose how to connect',

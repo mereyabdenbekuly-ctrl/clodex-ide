@@ -27,6 +27,7 @@ import { AgentTypes } from '@shared/karton-contracts/ui/agent';
 import type { ArtifactBridgeContext } from '@shared/artifact-bridge';
 import { WorktreeSetupSettingsService } from './services/worktree-setup-settings';
 import { resolveFeatureGate } from '@shared/feature-gates';
+import { shouldShowCommunityObservedTelemetryConsent } from '@shared/community-observed-telemetry-consent';
 import {
   getIsolatedAgentRuntimeRolloutPolicy,
   ISOLATED_AGENT_RUNTIME_DISABLE_SWITCH,
@@ -154,6 +155,11 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     logger,
     releaseChannel: __APP_RELEASE_CHANNEL__,
   });
+  const hasCompletedRequiredFirstRunChoice = () =>
+    !shouldShowCommunityObservedTelemetryConsent(
+      __APP_TELEMETRY_MODE__,
+      preferencesService.get().privacy,
+    );
   const guardianEgressStartup = await initializeGuardianEgressStartup({
     logger,
     isFeatureEnabled: startupFeatureEnabled,
@@ -572,6 +578,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     cloudAdapter: cloudTaskRuntime?.adapter,
     snapshotPackager: cloudTaskRuntime?.snapshotPackager,
     isCloudEnabled: () =>
+      hasCompletedRequiredFirstRunChoice() &&
       isClodexCloudEnabled() &&
       resolveFeatureGate(
         'cloud-tasks',
@@ -580,6 +587,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       ).enabled &&
       !cloudTaskKillSwitchActive,
     isLocalExecutionAllowed: (agentInstanceId) =>
+      hasCompletedRequiredFirstRunChoice() &&
       cloudTaskExecutionLeaseRegistry.isLocalExecutionAllowed(agentInstanceId),
     audit: (event) => {
       telemetryService.capture('cloud-task-execution-event', {
@@ -622,6 +630,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       invalidateOpen: (intent) =>
         toolboxService.invalidateOpenToolApprovals(intent),
     },
+    hasCompletedRequiredFirstRunChoice,
   );
   const cloudTaskTeleportController = new CloudTaskTeleportController({
     karton: uiKarton,
@@ -718,6 +727,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     karton: uiKarton,
     notifications: notificationService,
     isFeatureEnabled: () =>
+      hasCompletedRequiredFirstRunChoice() &&
       resolveFeatureGate(
         'automations',
         preferencesService.get().featureGates.overrides,
@@ -757,6 +767,37 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       return { agentId: created };
     },
   });
+  const telemetryConsentGatePreferenceListener = (
+    next: ReturnType<typeof preferencesService.get>,
+    previous: ReturnType<typeof preferencesService.get>,
+  ) => {
+    const wasBlocked = shouldShowCommunityObservedTelemetryConsent(
+      __APP_TELEMETRY_MODE__,
+      previous.privacy,
+    );
+    const isBlocked = shouldShowCommunityObservedTelemetryConsent(
+      __APP_TELEMETRY_MODE__,
+      next.privacy,
+    );
+    if (wasBlocked === isBlocked) return;
+    void automationService.refreshExecutionGate().catch((error) => {
+      logger.warn(
+        '[Main] Failed to refresh the automation execution gate after telemetry consent changed',
+        error,
+      );
+    });
+    if (wasBlocked && !isBlocked) {
+      void agentManagerService
+        .retryNetworkFailedAgentsNow('first-run-choice-completed')
+        .catch((error) => {
+          logger.warn(
+            '[Main] Failed to resume network retry scanning after the first-run choice completed',
+            error,
+          );
+        });
+    }
+  };
+  preferencesService.addListener(telemetryConsentGatePreferenceListener);
   const generatedAppIdentityResolver = new GeneratedAppIdentityResolver();
   const artifactBridgeAuditLedger = new ArtifactBridgeAuditLedger(
     getArtifactBridgeAuditPath(),
@@ -784,6 +825,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     auditRecorder: artifactBridgeAuditLedger,
     auditReader: artifactBridgeAuditLedger,
     isFeatureEnabled: () =>
+      hasCompletedRequiredFirstRunChoice() &&
       resolveFeatureGate(
         'artifact-bridge',
         preferencesService.get().featureGates.overrides,
@@ -811,6 +853,11 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       return {
         modelAdapterIdentity,
         execute: async (prompt, options) => {
+          if (!hasCompletedRequiredFirstRunChoice()) {
+            throw new Error(
+              'Complete the required first-run privacy choice before using generated-app model actions.',
+            );
+          }
           options.beforeDispatch();
           const result = await generateText({
             model,
@@ -824,6 +871,11 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       };
     },
     askAgent: async (context, prompt, options) => {
+      if (!hasCompletedRequiredFirstRunChoice()) {
+        throw new Error(
+          'Complete the required first-run privacy choice before using generated-app model actions.',
+        );
+      }
       if (context.kind !== 'agent') {
         throw new Error(
           'Packaged generated apps cannot impersonate or ask an agent',
@@ -1218,6 +1270,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     karton: uiKarton,
     agentManagerService,
     windowLayoutService,
+    canUseQuickTask: () => hasCompletedRequiredFirstRunChoice(),
   });
 
   const isAgentOsFeatureEnabled = (
@@ -1304,6 +1357,16 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       };
     },
     remoteCommandHandler: async (command, payload) => {
+      if (
+        !hasCompletedRequiredFirstRunChoice() &&
+        command !== 'stopAgent' &&
+        command !== 'rejectTool' &&
+        command !== 'pushToTalkStop'
+      ) {
+        throw new Error(
+          'Complete the required first-run privacy choice in the main CLODEx window before using remote control.',
+        );
+      }
       const agentId =
         typeof payload.agentId === 'string' ? payload.agentId : undefined;
       switch (command) {
@@ -1581,7 +1644,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
 
   logger.debug('[Main] Normal operation services bootstrapped');
 
-  if (process.env.CLODEX_DIAG_GEMINI === '1') {
+  if (process.env.CLODEX_DIAG_GEMINI === '1' && !app.isPackaged) {
     void runManualGeminiDiagnostic();
   }
 
@@ -1618,6 +1681,11 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       },
       updateEvidenceMemorySummaryModel: () => {
         preferencesService.removeListener(updateEvidenceMemorySummaryModel);
+      },
+      telemetryConsentGatePreferenceListener: () => {
+        preferencesService.removeListener(
+          telemetryConsentGatePreferenceListener,
+        );
       },
     },
     synchronousServices: {

@@ -1,5 +1,7 @@
+import communityObservedTelemetryContract from '@shared/community-observed-telemetry-contract.json';
+
 export const COMMUNITY_OBSERVED_RENDERER_POSTHOG_NOOP =
-  'clodex-community-observed-renderer-posthog-noop-v1';
+  communityObservedTelemetryContract.rendererPosthogNoop;
 
 const noop = () => undefined;
 
