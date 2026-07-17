@@ -9,7 +9,7 @@
 
 [![Website](https://img.shields.io/badge/website-ide.clodex.xyz-00d88a?style=flat-square)](https://ide.clodex.xyz)
 ![Status](https://img.shields.io/badge/status-technical_preview-2563eb?style=flat-square)
-[![Community build](https://img.shields.io/badge/community_build-1.16.0--community4-00d88a?style=flat-square)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-community4)
+[![Community build](https://img.shields.io/badge/community_observed-1.16.0--observed6-00d88a?style=flat-square)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved6)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-111827?style=flat-square)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-22.23.1-43853d?style=flat-square)
 ![pnpm](https://img.shields.io/badge/pnpm-10.30.3-f69220?style=flat-square)
@@ -39,26 +39,37 @@ evidence and manual sign-off are complete.
 
 ## Community test build
 
-The current public tester build is **`1.16.0-community4`**, produced from the
+The current public tester build is **`1.16.0-communityobserved6`**, produced from the
 canonical `main` commit
-[`a0031a61193108553b6357fc0ed1f8bad825bd9f`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/a0031a61193108553b6357fc0ed1f8bad825bd9f)
-by [GitHub Actions run `29547743973`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29547743973)
+[`31c3ac4a1119208158d140b937ae0b6c81ac7451`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/31c3ac4a1119208158d140b937ae0b6c81ac7451)
+by [GitHub Actions run `29591675705`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29591675705)
 and published as a clearly separated
-[GitHub community prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-community4).
+[GitHub community prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved6).
+It adds the **Русский (beta)** interface and an explicitly opt-in anonymous
+telemetry profile. The previous
+[community4 prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-community4)
+remains available as the telemetry-free predecessor.
 
 | Platform            | Package   | Download |
 | ------------------- | --------- | -------- |
-| macOS Apple Silicon | ARM64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-community4/clodex-community-unsigned-1.16.0-community4-macos-arm64.dmg) |
-| macOS Intel         | x64 DMG   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-community4/clodex-community-unsigned-1.16.0-community4-macos-x64.dmg) |
-| Windows             | x64 EXE   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-community4/clodex-community-unsigned-1.16.0-community4-windows-x64-setup.exe) |
-| Linux               | x64 DEB   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-community4/clodex-community-unsigned_1.16.0-community4_amd64.deb) |
-| Linux               | x64 RPM   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-community4/clodex-community-unsigned-1.16.0.community4-1.x86_64.rpm) |
+| macOS Apple Silicon | ARM64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/clodex-community-observed-1.16.0-communityobserved6-arm64.dmg) |
+| macOS Intel         | x64 DMG   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/clodex-community-observed-1.16.0-communityobserved6-x64.dmg) |
+| Windows             | x64 EXE   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/clodex-community-observed-1.16.0-communityobserved6-x64-setup.exe) |
+| Linux               | x64 DEB   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/clodex-community-observed_1.16.0-communityobserved6_amd64.deb) |
+| Linux               | x64 RPM   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/clodex-community-observed-1.16.0.communityobserved6-1.x86_64.rpm) |
 
-Download [`SHA256SUMS.txt`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-community4/SHA256SUMS.txt)
+Download [`SHA256SUMS.txt`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/SHA256SUMS.txt)
 from the same prerelease and verify the installer before opening it. The exact
-source manifests, CycloneDX SBOMs, warning, and platform validation reports are
-retained in the canonical Actions bundles. Do not use repackaged binaries from
-an unverified mirror.
+source manifests, CycloneDX SBOMs, warnings, platform validation reports, and
+byte-level audit report are retained in the compact
+[evidence archive](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/clodex-community-observed-1.16.0-communityobserved6-evidence.zip).
+Do not use repackaged binaries from an unverified mirror.
+
+Telemetry is **off by default**. If the user explicitly selects anonymous
+telemetry, only the backend PostHog client may send allowlisted counters and
+enum metadata. Renderer capture, prompts, source code, commands, paths, URLs,
+tool arguments, feedback, exceptions, user identification, session recording,
+full telemetry, and AI tracing are disabled.
 
 ### Verify and install
 
@@ -70,14 +81,14 @@ binary.
 
 1. Confirm that the bundle manifest records the expected version, platform,
    architecture, and source commit.
-2. Verify every file before installation:
+2. Verify the selected file before installation. For example:
 
    ```bash
-   # macOS
-   shasum -a 256 -c SHA256SUMS
+   # macOS: replace FILE with the downloaded DMG name
+   grep "  FILE$" SHA256SUMS.txt | shasum -a 256 -c -
 
-   # Linux
-   sha256sum -c SHA256SUMS
+   # Linux: replace FILE with the downloaded DEB or RPM name
+   grep "  FILE$" SHA256SUMS.txt | sha256sum -c -
    ```
 
    On Windows, compare `Get-FileHash <installer.exe> -Algorithm SHA256` with
@@ -92,19 +103,24 @@ binary.
    - **Linux:** install either the downloaded DEB (`apt install ./<file>.deb`)
      or RPM (`rpm -i ./<file>.rpm`) for your distribution.
 
-The community build has a separate application identity, account sign-in and
-telemetry are disabled, and auto-update is excluded. Install newer community
-builds manually.
+The observed community build has a separate application identity. Account
+sign-in, auto-update, and default protocol registration are excluded. Anonymous
+telemetry remains disabled until the user explicitly enables it. Install newer
+community builds manually.
 
 ### First launch: connect a model
 
-1. Open a local project or workspace.
-2. In onboarding or **Settings -> Models & Providers**, choose one of:
+1. Choose **System**, **English**, or **Русский (beta)** in onboarding or
+   **Settings -> General**, then restart once to verify persistence.
+2. Leave anonymous telemetry off, or explicitly opt in after reviewing the
+   description in onboarding or settings.
+3. Open a local project or workspace.
+4. In onboarding or **Settings -> Models & Providers**, choose one of:
    - a BYOK API key for a supported provider such as OpenAI, Anthropic, or
      Google;
    - a custom OpenAI-compatible endpoint; or
    - local Ollama, normally at `http://localhost:11434`.
-3. Test the connection, select a discovered model, and start a small task.
+5. Test the connection, select a discovered model, and start a small task.
 
 Provider usage and billing remain between you and the provider. Never include
 API keys, tokens, private source, or unredacted logs in an issue or tester
