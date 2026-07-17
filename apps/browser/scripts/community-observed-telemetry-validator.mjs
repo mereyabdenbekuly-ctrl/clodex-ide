@@ -417,17 +417,19 @@ function isProjectKeyCharacter(character) {
   );
 }
 
-function projectKeyOccurrenceCount(source) {
-  let count = 0;
+function extractProjectKeyOccurrences(source) {
+  const occurrences = [];
   let searchFrom = 0;
   while (true) {
     const start = source.indexOf(PROJECT_KEY_PREFIX_TEXT, searchFrom);
-    if (start < 0) return count;
+    if (start < 0) return occurrences;
     let cursor = start + PROJECT_KEY_PREFIX_TEXT.length;
     while (cursor < source.length && isProjectKeyCharacter(source[cursor])) {
       cursor += 1;
     }
-    if (cursor - start - PROJECT_KEY_PREFIX_TEXT.length >= 20) count += 1;
+    if (cursor - start - PROJECT_KEY_PREFIX_TEXT.length >= 20) {
+      occurrences.push(source.slice(start, cursor));
+    }
     searchFrom = start + PROJECT_KEY_PREFIX_TEXT.length;
   }
 }
@@ -584,7 +586,7 @@ function assertNoProjectKeyInUnpackedResources(asarPath, required) {
       const contents = readFileSync(current);
       if (
         contents.indexOf(PROJECT_KEY_PREFIX) >= 0 &&
-        projectKeyOccurrenceCount(contents.toString('latin1')) > 0
+        extractProjectKeyOccurrences(contents.toString('latin1')).length > 0
       ) {
         throw new Error(
           `community-observed PostHog project key escaped into app.asar.unpacked: ${current}`,
@@ -626,8 +628,12 @@ export function inspectCommunityObservedTelemetryAsar(
   for (const entry of regularEntries) {
     const contents = readArchiveBuffer(asarPath, entry, asarApi);
     if (contents.indexOf(PROJECT_KEY_PREFIX) >= 0) {
-      const count = projectKeyOccurrenceCount(contents.toString('latin1'));
-      if (count > 0) projectKeyOccurrences.set(entry.comparisonPath, count);
+      const occurrences = extractProjectKeyOccurrences(
+        contents.toString('latin1'),
+      );
+      if (occurrences.length > 0) {
+        projectKeyOccurrences.set(entry.comparisonPath, occurrences);
+      }
     }
     if (
       isExecutableVitePath(entry.comparisonPath) &&
@@ -649,13 +655,17 @@ export function inspectCommunityObservedTelemetryAsar(
   const backendSource = [...backendClosure]
     .map((entry) => sources.get(entry) ?? '')
     .join('\n');
-  const backendProjectKeyCount = [...backendClosure].reduce(
-    (count, entry) => count + (projectKeyOccurrences.get(entry) ?? 0),
-    0,
-  );
+  const backendProjectKeys = new Set();
+  let backendProjectKeyOccurrenceCount = 0;
+  for (const entry of backendClosure) {
+    const occurrences = projectKeyOccurrences.get(entry) ?? [];
+    backendProjectKeyOccurrenceCount += occurrences.length;
+    for (const projectKey of occurrences) backendProjectKeys.add(projectKey);
+  }
+  const backendProjectKeyCount = backendProjectKeys.size;
   if (backendProjectKeyCount !== 1) {
     throw new Error(
-      `community-observed backend must embed exactly one PostHog project key; found ${backendProjectKeyCount}`,
+      `community-observed backend must embed exactly one unique PostHog project key; found ${backendProjectKeyCount} unique values across ${backendProjectKeyOccurrenceCount} occurrences`,
     );
   }
 
