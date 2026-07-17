@@ -1902,8 +1902,15 @@ test('the exact installed repository dependency graph is strict-green', () => {
     9,
   );
   assert.equal(inventory.licenseOverrides.status, 'ENGINEERING_REVIEWED');
-  assert.equal(inventory.licenseOverrides.entryCount, 54);
+  assert.equal(inventory.licenseOverrides.entryCount, 55);
   assert.ok(inventory.licenseOverrides.appliedCount >= 40);
+  assert.equal(
+    overrideRegistry.entries.find(
+      (entry) =>
+        entry.package === 'html-parse-stringify' && entry.version === '3.0.1',
+    )?.packageSource.integrity,
+    'sha512-KknJ50kTInJ7qIScF3jeaFRpMpE8/lfiTdzf/twXyPBLAGrLRTmkz3AdTnKeh40X8k9L2fdYwEp/42WGXIRGcg==',
+  );
   assert.equal(
     overrideRegistry.entries.find(
       (entry) =>

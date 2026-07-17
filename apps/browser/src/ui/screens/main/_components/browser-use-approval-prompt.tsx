@@ -3,16 +3,10 @@ import { Button } from '@clodex/stage-ui/components/button';
 import type { BrowserUseApprovalResponse } from '@shared/agent-os';
 import { useKartonProcedure, useKartonState } from '@ui/hooks/use-karton';
 import { GlobeLockIcon } from 'lucide-react';
-
-const CAPABILITY_LABELS = {
-  read: 'read page content',
-  click: 'click or interact with the page',
-  fileTransfer: 'upload or download files',
-  fullCdpAccess: 'use unrestricted browser debugging access',
-  history: 'read browsing history',
-} as const;
+import { useTranslation } from 'react-i18next';
 
 export function BrowserUseApprovalPrompt() {
+  const { t } = useTranslation('task');
   const approval = useKartonState(
     (state) => state.agentOs.browserUse.pendingApprovals[0],
   );
@@ -53,13 +47,15 @@ export function BrowserUseApprovalPrompt() {
               id="browser-use-approval-title"
               className="font-semibold text-foreground text-sm"
             >
-              Allow browser automation?
+              {t('approval.browser.title')}
             </h2>
             <p
               id="browser-use-approval-description"
               className="mt-1 text-muted-foreground text-xs"
             >
-              The agent wants to {CAPABILITY_LABELS[approval.capability]} on{' '}
+              {t('approval.browser.requestPrefix')}{' '}
+              {t(`approval.browser.capabilities.${approval.capability}`)}{' '}
+              {t('approval.browser.requestOrigin')}{' '}
               <code className="break-all text-foreground">
                 {approval.origin}
               </code>
@@ -79,7 +75,7 @@ export function BrowserUseApprovalPrompt() {
             disabled={resolving}
             onClick={() => void respond('allow-once')}
           >
-            Allow once
+            {t('approval.actions.allowOnce')}
           </Button>
           <Button
             variant="secondary"
@@ -87,7 +83,7 @@ export function BrowserUseApprovalPrompt() {
             disabled={resolving}
             onClick={() => void respond('always-allow')}
           >
-            Always allow
+            {t('approval.actions.alwaysAllow')}
           </Button>
           <Button
             variant="ghost"
@@ -95,7 +91,7 @@ export function BrowserUseApprovalPrompt() {
             disabled={resolving}
             onClick={() => void respond('block-once')}
           >
-            Block once
+            {t('approval.actions.blockOnce')}
           </Button>
           <Button
             variant="ghost"
@@ -103,7 +99,7 @@ export function BrowserUseApprovalPrompt() {
             disabled={resolving}
             onClick={() => void respond('always-block')}
           >
-            Always block
+            {t('approval.actions.alwaysBlock')}
           </Button>
         </div>
       </section>

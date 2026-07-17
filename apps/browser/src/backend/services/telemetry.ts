@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { PostHog } from 'posthog-node';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import { withTracing } from '@posthog/ai';
@@ -951,12 +952,157 @@ export type ExceptionProperties = {
   service?: string;
 } & Record<string, unknown>;
 
+export const COMMUNITY_OBSERVED_TELEMETRY_CONTRACT =
+  'clodex-community-observed-backend-anonymous-v1';
+export const COMMUNITY_OBSERVED_TELEMETRY_ARTIFACT_ASSERTION =
+  'clodex-community-observed-contract:{"allowedTelemetryLevel":"anonymous","contentPolicy":"event-field-allowlist-v1","disableGeoip":true,"exceptions":"disabled","modelTracing":"disabled","optIn":"explicit","privacyMode":true,"renderer":"noop"}';
+
+type CommunityObservedEventPolicy = {
+  booleans?: readonly string[];
+  numbers?: Readonly<Record<string, number>>;
+  strings?: Readonly<Record<string, readonly string[]>>;
+};
+
+const COMMUNITY_OBSERVED_EVENT_POLICY: Readonly<
+  Record<string, CommunityObservedEventPolicy>
+> = Object.freeze({
+  'app-launched': {
+    numbers: { total_matched_processes: 10_000 },
+  },
+  'app-closed': {
+    numbers: { total_matched_processes: 10_000 },
+  },
+  'telemetry-level-changed': {
+    strings: {
+      from: ['off', 'anonymous', 'full'],
+      to: ['off', 'anonymous', 'full'],
+    },
+  },
+  'plugin-marketplace-operation': {
+    booleans: ['success'],
+    numbers: {
+      catalog_size: 1_000_000,
+      duration_ms: 31_536_000_000,
+      permission_count: 1_000_000,
+    },
+    strings: {
+      operation: ['refresh', 'install', 'update', 'uninstall', 'rollback'],
+    },
+  },
+  'agent-step-completed': {
+    numbers: {
+      duration_ms: 31_536_000_000,
+      input_tokens: 1_000_000_000,
+      output_tokens: 1_000_000_000,
+      tool_call_count: 1_000_000,
+    },
+    strings: {
+      finish_reason: [
+        'stop',
+        'length',
+        'tool-calls',
+        'content-filter',
+        'error',
+        'other',
+        'unknown',
+      ],
+      provider_mode: ['clodex', 'official', 'custom'],
+    },
+  },
+  'tool-call-executed': {
+    booleans: ['success'],
+    numbers: { duration_ms: 31_536_000_000 },
+  },
+  'edits-accepted': { numbers: { hunk_count: 1_000_000 } },
+  'edits-rejected': { numbers: { hunk_count: 1_000_000 } },
+  'tab-created': { numbers: { tab_count_after: 100_000 } },
+  'tab-destroyed': { numbers: { tab_count_after: 100_000 } },
+  'tabs-cleaned': { numbers: { closed_count: 100_000 } },
+  'closed-lid-sleep-toggled': { booleans: ['enabled'] },
+  'guardian-assessed': {
+    booleans: ['irreversible', 'narrowly_scoped', 'read_only', 'valid_context'],
+    numbers: {
+      capability_count: 1_000_000,
+      evidence_count: 1_000_000,
+      latency_ms: 31_536_000_000,
+      policy_version: 1_000_000,
+    },
+    strings: {
+      action_kind: ['shell', 'network', 'mcp', 'sandbox'],
+      decision: ['approve', 'deny', 'escalate'],
+      resource_scope: ['agent', 'workspace', 'host', 'remote', 'unknown'],
+      risk_level: ['low', 'medium', 'high', 'critical'],
+      user_authorization: ['unknown', 'low', 'medium', 'high'],
+    },
+  },
+  'settings-opened': {},
+  'account-page-viewed': {},
+  'custom-model-add-started': {},
+  'custom-model-add-finished': {},
+  'custom-provider-add-started': {},
+  'workspace-connect-started': {},
+  'workspace-connect-finished': {},
+});
+
+/**
+ * Community-observed telemetry is deliberately lossy. Numeric counters and
+ * booleans are retained, while string properties require an explicit bounded
+ * enum-style allowlist. Arrays and nested objects are dropped. This makes raw
+ * prompts, source, tool arguments, commands, paths, URLs, errors, titles and
+ * feedback unavailable even if a future caller accidentally adds them to an
+ * existing event.
+ */
+export function sanitizeCommunityObservedProperties(
+  eventName: string,
+  properties: unknown,
+): Record<string, boolean | number | string> | null {
+  const policy = COMMUNITY_OBSERVED_EVENT_POLICY[eventName];
+  if (!policy) return null;
+  if (
+    !properties ||
+    typeof properties !== 'object' ||
+    Array.isArray(properties)
+  )
+    return {};
+
+  const sanitized: Record<string, boolean | number | string> = {};
+  for (const [key, value] of Object.entries(properties)) {
+    if (typeof value === 'boolean' && policy.booleans?.includes(key)) {
+      sanitized[key] = value;
+      continue;
+    }
+    const maximum = policy.numbers?.[key];
+    if (
+      typeof value === 'number' &&
+      maximum !== undefined &&
+      Number.isFinite(value) &&
+      value >= 0
+    ) {
+      sanitized[key] = Math.min(value, maximum);
+      continue;
+    }
+    const allowedValues = policy.strings?.[key];
+    if (typeof value === 'string' && allowedValues?.includes(value)) {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
+}
+
 export class TelemetryService extends DisposableService {
   private readonly identifierService: IdentifierService;
   private readonly preferencesService: PreferencesService;
   private readonly logger: Logger;
+  private readonly distributionMode: string;
+  private readonly telemetryEnabled: boolean;
+  private readonly telemetryMode: string;
+  private readonly telemetryPrivacyMode: boolean;
+  private readonly exceptionTelemetryEnabled: boolean;
+  private readonly modelTracingEnabled: boolean;
+  private readonly posthogApiKey: string;
   private userProperties: UserProperties = {};
   private pendingAppLaunchedCapture: Promise<void> | null = null;
+  private missingApiKeyLogged = false;
   public posthogClient: PostHog | null = null;
 
   public constructor(
@@ -968,33 +1114,61 @@ export class TelemetryService extends DisposableService {
     this.identifierService = identifierService;
     this.preferencesService = preferencesService;
     this.logger = logger;
-    const telemetryEnabled =
+    this.telemetryEnabled =
       typeof __APP_TELEMETRY_ENABLED__ === 'boolean'
         ? __APP_TELEMETRY_ENABLED__
         : true;
-    const distributionMode =
+    this.distributionMode =
       typeof __APP_DISTRIBUTION_MODE__ === 'string'
         ? __APP_DISTRIBUTION_MODE__
         : 'official';
-    const apiKey = telemetryEnabled ? (process.env.POSTHOG_API_KEY ?? '') : '';
-    if (apiKey) {
-      this.posthogClient = new PostHog(apiKey, {
-        host: process.env.POSTHOG_HOST || 'https://eu.i.posthog.com',
-        flushAt: 1,
-        flushInterval: 0,
-      });
-    } else {
-      this.logger.debug(
-        telemetryEnabled
-          ? 'PostHog API key missing; telemetry is disabled.'
-          : `Telemetry is disabled for ${distributionMode} distribution.`,
-      );
+    this.telemetryMode =
+      typeof __APP_TELEMETRY_MODE__ === 'string'
+        ? __APP_TELEMETRY_MODE__
+        : this.distributionMode === 'community-observed'
+          ? 'anonymous-backend-only'
+          : this.telemetryEnabled
+            ? 'standard'
+            : 'disabled';
+    this.telemetryPrivacyMode =
+      typeof __APP_TELEMETRY_PRIVACY_MODE__ === 'boolean'
+        ? __APP_TELEMETRY_PRIVACY_MODE__
+        : this.distributionMode !== 'official';
+    this.exceptionTelemetryEnabled =
+      typeof __APP_EXCEPTION_TELEMETRY_ENABLED__ === 'boolean'
+        ? __APP_EXCEPTION_TELEMETRY_ENABLED__
+        : this.distributionMode === 'official';
+    this.modelTracingEnabled =
+      typeof __APP_MODEL_TRACING_ENABLED__ === 'boolean'
+        ? __APP_MODEL_TRACING_ENABLED__
+        : this.distributionMode === 'official';
+    this.posthogApiKey = this.telemetryEnabled
+      ? (process.env.POSTHOG_API_KEY?.trim() ?? '')
+      : '';
+
+    // The observed lane creates no network client until the persisted
+    // preference proves an explicit anonymous opt-in. Official builds retain
+    // the existing eager client behavior.
+    if (
+      this.telemetryMode !== 'anonymous-backend-only' ||
+      this.getTelemetryLevel() === 'anonymous'
+    ) {
+      this.ensurePostHogClient();
+    }
+    if (this.telemetryMode === 'anonymous-backend-only') {
+      this.logger.debug(COMMUNITY_OBSERVED_TELEMETRY_ARTIFACT_ASSERTION);
     }
 
     this.identifyUser();
 
     this.preferencesService.addListener((newPrefs, oldPrefs) => {
       if (newPrefs.privacy.telemetryLevel !== oldPrefs.privacy.telemetryLevel) {
+        if (
+          this.telemetryMode === 'anonymous-backend-only' &&
+          newPrefs.privacy.telemetryLevel !== 'anonymous'
+        ) {
+          void this.shutdownObservedClient();
+        }
         this.capture('telemetry-level-changed', {
           from: oldPrefs.privacy.telemetryLevel,
           to: newPrefs.privacy.telemetryLevel,
@@ -1009,7 +1183,11 @@ export class TelemetryService extends DisposableService {
    * Get the current telemetry level from preferences.
    */
   public get telemetryLevel(): TelemetryLevel {
-    return this.preferencesService.get().privacy.telemetryLevel;
+    const configured = this.preferencesService.get().privacy.telemetryLevel;
+    if (this.telemetryMode === 'anonymous-backend-only') {
+      return configured === 'anonymous' ? 'anonymous' : 'off';
+    }
+    return configured;
   }
 
   private getTelemetryLevel(): TelemetryLevel {
@@ -1017,16 +1195,76 @@ export class TelemetryService extends DisposableService {
   }
 
   setUserProperties(properties: UserProperties): void {
+    if (this.telemetryMode === 'anonymous-backend-only') return;
     this.userProperties = { ...this.userProperties, ...properties };
   }
 
   private getDistinctId(): string {
+    if (this.telemetryMode === 'anonymous-backend-only') {
+      const anonymousId = createHash('sha256')
+        .update('clodex-community-observed-v1\0')
+        .update(this.identifierService.getMachineId())
+        .digest('hex')
+        .slice(0, 32);
+      return `community-observed-${anonymousId}`;
+    }
     return this.getTelemetryLevel() === 'full' && this.userProperties.user_id
       ? this.userProperties.user_id
       : this.identifierService.getMachineId();
   }
 
+  private ensurePostHogClient(): PostHog | null {
+    if (this.posthogClient) return this.posthogClient;
+    if (!this.telemetryEnabled) return null;
+    if (
+      this.telemetryMode === 'anonymous-backend-only' &&
+      this.getTelemetryLevel() !== 'anonymous'
+    ) {
+      return null;
+    }
+    if (!this.posthogApiKey) {
+      if (!this.missingApiKeyLogged) {
+        this.logger.debug('PostHog API key missing; telemetry is disabled.');
+        this.missingApiKeyLogged = true;
+      }
+      return null;
+    }
+
+    this.posthogClient = new PostHog(this.posthogApiKey, {
+      host: process.env.POSTHOG_HOST || 'https://eu.i.posthog.com',
+      flushAt: 1,
+      flushInterval: 0,
+      ...(this.telemetryMode === 'anonymous-backend-only'
+        ? {
+            defaultOptIn: true,
+            disableGeoip: true,
+            disableRemoteConfig: true,
+            disableSurveys: true,
+            enableExceptionAutocapture: false,
+            preloadFeatureFlags: false,
+            privacyMode: true,
+            sendFeatureFlagEvent: false,
+          }
+        : { privacyMode: this.telemetryPrivacyMode }),
+    });
+    return this.posthogClient;
+  }
+
+  private async shutdownObservedClient(): Promise<void> {
+    if (this.telemetryMode !== 'anonymous-backend-only') return;
+    const client = this.posthogClient;
+    this.posthogClient = null;
+    if (!client) return;
+    try {
+      await client.optOut();
+      await client.shutdown();
+    } catch (error) {
+      this.logger.debug(`Failed to stop observed PostHog client: ${error}`);
+    }
+  }
+
   identifyUser() {
+    if (this.telemetryMode === 'anonymous-backend-only') return;
     if (!this.posthogClient) return;
 
     if (
@@ -1056,6 +1294,7 @@ export class TelemetryService extends DisposableService {
     model: LanguageModelV3,
     properties?: Parameters<typeof withTracing>[2],
   ): LanguageModelV3 {
+    if (!this.modelTracingEnabled) return model;
     const telemetryLevel = this.getTelemetryLevel();
     if (telemetryLevel !== 'full' || !this.posthogClient) return model;
 
@@ -1091,6 +1330,7 @@ export class TelemetryService extends DisposableService {
   }
 
   public captureAppLaunched(): void {
+    if (this.getTelemetryLevel() === 'off') return;
     this.pendingAppLaunchedCapture = captureProcessSnapshot()
       .then((launchProcessSnapshot) => {
         this.captureSync('app-launched', {
@@ -1115,12 +1355,19 @@ export class TelemetryService extends DisposableService {
     properties?: EventProperties[T],
   ): void {
     try {
+      const observedProperties =
+        this.telemetryMode === 'anonymous-backend-only'
+          ? sanitizeCommunityObservedProperties(eventName as string, properties)
+          : properties;
+      if (observedProperties === null) return;
       // Guard the stringify — `capture` runs on every tracked event
       // (including high-volume ones like tool-call-executed) and
       // JSON.stringify is not free. Skip it when debug is disabled.
       if (this.logger.isDebugEnabled) {
         this.logger.debug(
-          `[TelemetryService] Capturing event: ${eventName} with properties: ${JSON.stringify(properties)}`,
+          this.telemetryMode === 'anonymous-backend-only'
+            ? `[TelemetryService] Capturing observed event: ${eventName} with property keys: ${Object.keys(observedProperties ?? {}).join(',')}`
+            : `[TelemetryService] Capturing event: ${eventName} with properties: ${JSON.stringify(properties)}`,
         );
       }
       const telemetryLevel = this.getTelemetryLevel();
@@ -1129,24 +1376,31 @@ export class TelemetryService extends DisposableService {
       // onboarding events, may leave the device.
       if (telemetryLevel === 'off') return;
 
-      if (!this.posthogClient) return;
+      const posthogClient = this.ensurePostHogClient();
+      if (!posthogClient) return;
 
       const distinctId = this.getDistinctId();
 
       const finalProperties = {
-        ...(typeof properties === 'object' ? properties : {}),
+        ...(typeof observedProperties === 'object' ? observedProperties : {}),
         product: 'clodex-browser',
         telemetry_level: telemetryLevel,
+        app_distribution_mode: this.distributionMode,
         app_version: __APP_VERSION__,
         app_release_channel: __APP_RELEASE_CHANNEL__,
         app_platform: __APP_PLATFORM__,
         app_arch: __APP_ARCH__,
+        ...(this.telemetryMode === 'anonymous-backend-only'
+          ? { telemetry_contract: COMMUNITY_OBSERVED_TELEMETRY_CONTRACT }
+          : {}),
       };
 
-      this.posthogClient.capture({
+      posthogClient.capture({
+        disableGeoip: this.telemetryMode === 'anonymous-backend-only',
         distinctId,
         event: eventName as string,
         properties: finalProperties,
+        sendFeatureFlags: false,
       });
     } catch (error) {
       this.logger.error(
@@ -1167,6 +1421,7 @@ export class TelemetryService extends DisposableService {
     properties?: ExceptionProperties,
   ): void {
     try {
+      if (!this.exceptionTelemetryEnabled) return;
       const telemetryLevel = this.getTelemetryLevel();
       if (telemetryLevel === 'off') return;
 

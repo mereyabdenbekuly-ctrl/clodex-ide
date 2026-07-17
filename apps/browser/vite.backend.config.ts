@@ -2,6 +2,19 @@ import path from 'node:path';
 import { defineConfig } from 'vite';
 import * as buildConstants from './build-constants';
 
+const backendPostHogApiKey = buildConstants.__APP_TELEMETRY_ENABLED__
+  ? process.env.POSTHOG_API_KEY?.trim()
+  : undefined;
+
+if (
+  buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-observed' &&
+  !/^phc_[A-Za-z0-9_-]{20,}$/u.test(backendPostHogApiKey ?? '')
+) {
+  throw new Error(
+    'community-observed backend build requires a non-empty PostHog project API key',
+  );
+}
+
 // https://vitejs.dev/config
 export default defineConfig({
   build: {
@@ -46,10 +59,11 @@ export default defineConfig({
     'process.env': JSON.stringify({
       BUILD_MODE: process.env.BUILD_MODE ?? 'production',
       NODE_ENV: process.env.NODE_ENV ?? 'production',
-      POSTHOG_API_KEY: buildConstants.__APP_TELEMETRY_ENABLED__
-        ? process.env.POSTHOG_API_KEY
-        : undefined,
-      POSTHOG_HOST: process.env.POSTHOG_HOST ?? 'https://eu.i.posthog.com',
+      POSTHOG_API_KEY: backendPostHogApiKey,
+      POSTHOG_HOST:
+        buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-observed'
+          ? 'https://eu.i.posthog.com'
+          : (process.env.POSTHOG_HOST ?? 'https://eu.i.posthog.com'),
       CLODEX_CONSOLE_URL:
         process.env.CLODEX_CONSOLE_URL ??
         process.env.CLODEX_ORIGIN ??

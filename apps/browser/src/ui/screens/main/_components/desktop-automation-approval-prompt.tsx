@@ -3,14 +3,10 @@ import { Button } from '@clodex/stage-ui/components/button';
 import type { DesktopAutomationApprovalResponse } from '@shared/desktop-automation';
 import { useKartonProcedure, useKartonState } from '@ui/hooks/use-karton';
 import { ShieldAlertIcon } from 'lucide-react';
-
-const OPERATION_LABELS = {
-  inspect: 'inspect accessibility controls',
-  capture: 'capture the frontmost window',
-  press: 'press a desktop control',
-} as const;
+import { useTranslation } from 'react-i18next';
 
 export function DesktopAutomationApprovalPrompt() {
+  const { t } = useTranslation('task');
   const approval = useKartonState(
     (state) => state.agentOs.desktopAutomation.pendingApprovals[0],
   );
@@ -53,13 +49,15 @@ export function DesktopAutomationApprovalPrompt() {
               id="desktop-automation-approval-title"
               className="font-semibold text-foreground text-sm"
             >
-              Allow desktop automation?
+              {t('approval.desktop.title')}
             </h2>
             <p
               id="desktop-automation-approval-description"
               className="mt-1 text-muted-foreground text-xs"
             >
-              The agent wants to {OPERATION_LABELS[approval.operation]} in{' '}
+              {t('approval.desktop.requestPrefix')}{' '}
+              {t(`approval.desktop.operations.${approval.operation}`)}{' '}
+              {t('approval.desktop.requestApplication')}{' '}
               <strong className="text-foreground">{approval.app.name}</strong>.
             </p>
             <p className="mt-2 rounded-lg bg-surface-1 px-2.5 py-2 text-muted-foreground text-xs">
@@ -68,8 +66,8 @@ export function DesktopAutomationApprovalPrompt() {
             {approval.risk !== 'normal' && (
               <p className="mt-2 font-medium text-danger-solid text-xs">
                 {approval.risk === 'irreversible'
-                  ? 'This control may be irreversible. Persistent approval is disabled.'
-                  : 'This is a system application. Persistent approval is disabled.'}
+                  ? t('approval.desktop.irreversibleWarning')
+                  : t('approval.desktop.systemApplicationWarning')}
               </p>
             )}
           </div>
@@ -87,7 +85,7 @@ export function DesktopAutomationApprovalPrompt() {
             disabled={resolving}
             onClick={() => void respond('allow-once')}
           >
-            Allow once
+            {t('approval.actions.allowOnce')}
           </Button>
           {persistentChoiceAllowed && (
             <Button
@@ -96,7 +94,7 @@ export function DesktopAutomationApprovalPrompt() {
               disabled={resolving}
               onClick={() => void respond('always-allow')}
             >
-              Always allow
+              {t('approval.actions.alwaysAllow')}
             </Button>
           )}
           <Button
@@ -105,7 +103,7 @@ export function DesktopAutomationApprovalPrompt() {
             disabled={resolving}
             onClick={() => void respond('block-once')}
           >
-            Block once
+            {t('approval.actions.blockOnce')}
           </Button>
           {persistentChoiceAllowed && (
             <Button
@@ -114,7 +112,7 @@ export function DesktopAutomationApprovalPrompt() {
               disabled={resolving}
               onClick={() => void respond('always-block')}
             >
-              Always block
+              {t('approval.actions.alwaysBlock')}
             </Button>
           )}
         </div>

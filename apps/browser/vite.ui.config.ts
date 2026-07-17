@@ -12,7 +12,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   define: {
     'process.env': 'import.meta.env',
-    ...(buildConstants.__APP_TELEMETRY_ENABLED__
+    ...(buildConstants.__APP_RENDERER_TELEMETRY_ENABLED__
       ? {}
       : {
           'import.meta.env.VITE_DISABLE_TELEMETRY': JSON.stringify('true'),
@@ -28,6 +28,22 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      ...(buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-observed'
+        ? {
+            '@ui/hooks/use-posthog': path.resolve(
+              __dirname,
+              './src/ui/telemetry/posthog-react-noop.tsx',
+            ),
+            'posthog-js/react': path.resolve(
+              __dirname,
+              './src/ui/telemetry/posthog-react-noop.tsx',
+            ),
+            'posthog-js': path.resolve(
+              __dirname,
+              './src/ui/telemetry/posthog-noop.ts',
+            ),
+          }
+        : {}),
       '@shared': path.resolve(__dirname, './src/shared'),
       '@ui': path.resolve(__dirname, './src/ui'),
       '@pages': path.resolve(__dirname, './src/pages'),

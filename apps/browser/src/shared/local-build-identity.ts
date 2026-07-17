@@ -1,13 +1,29 @@
 export type AppReleaseChannel = 'dev' | 'prerelease' | 'nightly' | 'release';
 
-export type AppDistributionMode = 'official' | 'community-unsigned';
+export type AppDistributionMode =
+  | 'official'
+  | 'community-unsigned'
+  | 'community-observed';
+
+export type AppTelemetryMode =
+  | 'standard'
+  | 'disabled'
+  | 'anonymous-backend-only';
 
 export interface AppDistributionPolicy {
   authEnabled: boolean;
   autoUpdateEnabled: boolean;
-  buildIdentifier: AppReleaseChannel | 'community-unsigned';
+  buildIdentifier:
+    | AppReleaseChannel
+    | 'community-unsigned'
+    | 'community-observed';
+  exceptionTelemetryEnabled: boolean;
+  modelTracingEnabled: boolean;
   registerDefaultProtocols: boolean;
+  rendererTelemetryEnabled: boolean;
   telemetryEnabled: boolean;
+  telemetryMode: AppTelemetryMode;
+  telemetryPrivacyMode: boolean;
 }
 
 export interface AppIdentity {
@@ -49,12 +65,28 @@ const COMMUNITY_UNSIGNED_IDENTITY: Omit<AppIdentity, 'localBuildId'> = {
   bundleId: 'xyz.clodex.agentic-ide.community-unsigned',
 };
 
+const COMMUNITY_OBSERVED_IDENTITY: Omit<AppIdentity, 'localBuildId'> = {
+  baseName: 'clodex-community-observed',
+  appName: 'Clodex Agentic IDE (Community Observed)',
+  bundleId: 'xyz.clodex.agentic-ide.community-observed',
+};
+
+export function isCommunityDistributionMode(
+  distributionMode: AppDistributionMode,
+): distributionMode is 'community-unsigned' | 'community-observed' {
+  return (
+    distributionMode === 'community-unsigned' ||
+    distributionMode === 'community-observed'
+  );
+}
+
 export function resolveAppDistributionMode(
   value: string | undefined,
 ): AppDistributionMode {
   const normalized = value?.trim() ?? '';
   if (!normalized || normalized === 'official') return 'official';
   if (normalized === 'community-unsigned') return 'community-unsigned';
+  if (normalized === 'community-observed') return 'community-observed';
   throw new Error(`Unsupported CLODEX_DISTRIBUTION_MODE: ${normalized}`);
 }
 
@@ -62,18 +94,37 @@ export function resolveAppDistributionPolicy(options: {
   distributionMode: AppDistributionMode;
   releaseChannel: AppReleaseChannel;
 }): AppDistributionPolicy {
-  if (options.distributionMode === 'community-unsigned') {
+  if (isCommunityDistributionMode(options.distributionMode)) {
     if (options.releaseChannel !== 'release') {
       throw new Error(
-        'community-unsigned distribution requires RELEASE_CHANNEL=release',
+        `${options.distributionMode} distribution requires RELEASE_CHANNEL=release`,
       );
+    }
+    if (options.distributionMode === 'community-observed') {
+      return {
+        authEnabled: false,
+        autoUpdateEnabled: false,
+        buildIdentifier: 'community-observed',
+        exceptionTelemetryEnabled: false,
+        modelTracingEnabled: false,
+        registerDefaultProtocols: false,
+        rendererTelemetryEnabled: false,
+        telemetryEnabled: true,
+        telemetryMode: 'anonymous-backend-only',
+        telemetryPrivacyMode: true,
+      };
     }
     return {
       authEnabled: false,
       autoUpdateEnabled: false,
       buildIdentifier: 'community-unsigned',
+      exceptionTelemetryEnabled: false,
+      modelTracingEnabled: false,
       registerDefaultProtocols: false,
+      rendererTelemetryEnabled: false,
       telemetryEnabled: false,
+      telemetryMode: 'disabled',
+      telemetryPrivacyMode: true,
     };
   }
 
@@ -81,8 +132,13 @@ export function resolveAppDistributionPolicy(options: {
     authEnabled: true,
     autoUpdateEnabled: true,
     buildIdentifier: options.releaseChannel,
+    exceptionTelemetryEnabled: true,
+    modelTracingEnabled: true,
     registerDefaultProtocols: true,
+    rendererTelemetryEnabled: true,
     telemetryEnabled: true,
+    telemetryMode: 'standard',
+    telemetryPrivacyMode: false,
   };
 }
 
@@ -98,18 +154,23 @@ export function resolveAppIdentity(options: {
 }): AppIdentity {
   const distributionMode = options.distributionMode ?? 'official';
   const localBuildId = options.localBuildId?.trim() ?? '';
-  if (distributionMode === 'community-unsigned') {
+  if (isCommunityDistributionMode(distributionMode)) {
     if (options.releaseChannel !== 'release') {
       throw new Error(
-        'community-unsigned distribution requires RELEASE_CHANNEL=release',
+        `${distributionMode} distribution requires RELEASE_CHANNEL=release`,
       );
     }
     if (localBuildId || options.allowUnsignedLocalBuild) {
       throw new Error(
-        'community-unsigned distribution cannot use unsigned local-build overrides',
+        `${distributionMode} distribution cannot use unsigned local-build overrides`,
       );
     }
-    return { localBuildId: '', ...COMMUNITY_UNSIGNED_IDENTITY };
+    return {
+      localBuildId: '',
+      ...(distributionMode === 'community-observed'
+        ? COMMUNITY_OBSERVED_IDENTITY
+        : COMMUNITY_UNSIGNED_IDENTITY),
+    };
   }
 
   if (localBuildId && !options.allowUnsignedLocalBuild) {

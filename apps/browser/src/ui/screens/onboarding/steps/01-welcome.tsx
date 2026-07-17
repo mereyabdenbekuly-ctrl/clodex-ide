@@ -3,6 +3,7 @@ import { Logo } from '@ui/components/ui/logo';
 import { useWindowFocused } from '@ui/hooks/use-window-focused';
 import { cn } from '@ui/utils';
 import { SplitText } from '@clodex/stage-ui/components/split-text';
+import { useTranslation } from 'react-i18next';
 import type { StepValidityCallback } from '..';
 
 export function StepWelcome({
@@ -14,6 +15,7 @@ export function StepWelcome({
   onValidityChange: StepValidityCallback;
   onAnimationStart?: () => void;
 }) {
+  const { t } = useTranslation('onboarding');
   const [isComplete, setIsComplete] = useState(false);
   const [showText, setShowText] = useState(false);
   const [showSecondLine, setShowSecondLine] = useState(false);
@@ -50,12 +52,12 @@ export function StepWelcome({
       <Logo className="mb-4 size-16" />
       <div className="relative w-full text-center">
         <span className="invisible font-normal text-foreground text-lg">
-          Welcome to the Open Source Agentic IDE.
+          {t('welcome.intro')}
         </span>
         {showText && (
           <div className="absolute inset-0 flex items-center justify-center">
             <SplitText
-              text="Welcome to the Open Source Agentic IDE."
+              text={t('welcome.intro')}
               className="font-normal text-foreground text-lg"
               delay={10}
               duration={0.25}
@@ -74,12 +76,12 @@ export function StepWelcome({
       </div>
       <div className="relative w-full text-center">
         <span className="invisible font-normal text-base text-primary-foreground">
-          Welcome to Clodex.
+          {t('welcome.product')}
         </span>
         {showSecondLine && (
           <div className="absolute inset-0 flex items-center justify-center">
             <SplitText
-              text="Welcome to Clodex."
+              text={t('welcome.product')}
               className={cn('font-normal text-base text-primary-foreground')}
               delay={12}
               duration={0.25}

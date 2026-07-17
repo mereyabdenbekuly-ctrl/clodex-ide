@@ -96,6 +96,7 @@ import {
   type ChatInputPrefillRequestedEvent,
 } from '../_lib/chat-input-events';
 import { resolveFeatureGate } from '@shared/feature-gates';
+import { useTranslation } from 'react-i18next';
 
 // Stable empty arrays to avoid new-reference re-renders
 const EMPTY_HISTORY: AgentMessage[] = [];
@@ -193,6 +194,7 @@ function getPendingWorkspacePreparationKind(
 }
 
 export const ChatPanelFooter = memo(function ChatPanelFooter() {
+  const { t } = useTranslation('task');
   const chatInputRef = useRef<ChatInputHandle>(null);
   const { registerDraftGetter } = useChatDraft();
   const dictation = useGlobalDictation();
@@ -962,9 +964,7 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
         return {
           ok: false as const,
           message: `${getWorkspaceDisplayLabel(mount)}: ${
-            error instanceof Error
-              ? error.message
-              : 'Failed to execute workspace action.'
+            error instanceof Error ? error.message : t('workspace.actionFailed')
           }`,
         };
       }
@@ -981,6 +981,7 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
     switchWorkspaceGitBranch,
     unmountWorkspace,
     workspaceGitActionPreferences,
+    t,
   ]);
 
   const handleSubmit = useCallback(async () => {
@@ -1873,7 +1874,7 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
             onSubmit={handleSubmit}
             disabled={!enableInputField}
             placeholder={
-              hasPendingQuestion ? 'Write a message instead' : undefined
+              hasPendingQuestion ? t('composer.writeMessageInstead') : undefined
             }
             attachmentCount={fileAttachments.length}
             showCollaborationModeSelect={collaborationPresetsEnabled}

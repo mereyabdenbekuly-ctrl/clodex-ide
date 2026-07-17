@@ -95,6 +95,40 @@ test('community validator parsers fail closed on identity, source, tag, and plan
   }
 });
 
+test('community-observed validator parsers preserve unsigned trust semantics', () => {
+  const exactSource = '0123456789abcdef0123456789abcdef01234567';
+  for (const [label, parser, unsignedOption] of [
+    ['macOS', parseMacosReleaseArguments, 'allowAdhoc'],
+    ['cross-platform', parseReleaseArtifactArguments, 'allowUnsigned'],
+  ]) {
+    const parsed = parser(
+      [
+        '--channel=release',
+        '--distribution-mode=community-observed',
+        `--source-commit=${exactSource}`,
+        '--version=1.16.0-communityobserved42',
+      ],
+      {},
+    );
+    assert.equal(parsed.distributionMode, 'community-observed', label);
+    assert.equal(parsed[unsignedOption], true, label);
+    assert.equal(parsed.sourceCommit, exactSource, label);
+
+    assert.throws(
+      () =>
+        parser(
+          [
+            '--channel=nightly',
+            '--distribution-mode=community-observed',
+            `--source-commit=${exactSource}`,
+          ],
+          {},
+        ),
+      /community-observed distribution must use the release feature channel/,
+    );
+  }
+});
+
 test('community validators bind separate output, READY attribution, and explicit trust metadata', () => {
   const macosValidatorSource = readFileSync(
     path.join(browserDirectory, 'scripts/validate-macos-release.mjs'),
@@ -107,21 +141,25 @@ test('community validators bind separate output, READY attribution, and explicit
 
   for (const source of [macosValidatorSource, artifactValidatorSource]) {
     assert.match(source, /outputDirectoryName: 'community-unsigned'/);
+    assert.match(source, /outputDirectoryName: 'community-observed'/);
     assert.match(source, /distributionMode: options\.distributionMode/);
     assert.match(source, /CLODEX_COMMUNITY_UNSIGNED_NO_OS_TRUST/);
+    assert.match(source, /CLODEX_COMMUNITY_OBSERVED_NO_OS_TRUST/);
     assert.match(source, /updater: 'excluded'/);
     assert.match(
       source,
-      /options\.distributionMode === 'community-unsigned'[\s\S]*requireReady/,
+      /isCommunityDistributionMode\(options\.distributionMode\)[\s\S]*requireReady/,
     );
   }
   assert.match(macosValidatorSource, /requiredMode:[\s\S]*'community-ad-hoc'/);
   assert.match(macosValidatorSource, /notarization: 'absent'/);
+  assert.match(artifactValidatorSource, /must be explicitly NotSigned/);
+  assert.match(artifactValidatorSource, /osTrust: 'platform-package-unsigned'/);
+  assert.match(macosValidatorSource, /inspectCommunityObservedTelemetryAsar/);
   assert.match(
     artifactValidatorSource,
-    /community-unsigned .*must be explicitly NotSigned/,
+    /inspectCommunityObservedTelemetryAsar/,
   );
-  assert.match(artifactValidatorSource, /osTrust: 'platform-package-unsigned'/);
 });
 
 test('community RPM validation binds the exact normalized version and pinned release', () => {

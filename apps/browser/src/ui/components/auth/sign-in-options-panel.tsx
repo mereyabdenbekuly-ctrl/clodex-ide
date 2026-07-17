@@ -9,6 +9,7 @@ import {
   ShieldCheckIcon,
 } from 'lucide-react';
 import { useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import './sign-in-options-panel.css';
 
 export type SignInMethod = SocialAuthProvider | 'email' | 'telegram';
@@ -30,8 +31,6 @@ const CLODEX_REGISTER_URL = `${CLODEX_HOME_URL}/sign-up`;
 // renderer guard in addition to the backend guard so the UI never advertises
 // the legacy callback as secure or opens it accidentally.
 const SECURE_BROWSER_HANDOFF_AVAILABLE = false;
-const BROWSER_HANDOFF_DISABLED_MESSAGE =
-  'Вход через CLODEx.xyz временно отключён: серверный desktop-flow ещё не подтверждает state + PKCE. Используйте Telegram или локальные API-ключи.';
 
 // This component is shared by both Electron renderer hosts: the main UI
 // preload exposes `window.electron`, while internal pages expose
@@ -59,8 +58,8 @@ export type SignInOptionsPanelProps = {
 };
 
 export function SignInOptionsPanel({
-  title = 'С возвращением',
-  description = 'Войдите в аккаунт CLODEx, чтобы управлять доступом к моделям и API.',
+  title,
+  description,
   variant = 'centered',
   signInEmail,
   signInTelegram,
@@ -70,9 +69,15 @@ export function SignInOptionsPanel({
   onAuthenticated,
   className,
 }: SignInOptionsPanelProps) {
+  const { t, i18n } = useTranslation('common');
   const [activeAction, setActiveAction] = useState<AuthAction | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const panelTitle = title ?? t('auth.signIn.defaultTitle');
+  const panelDescription = description ?? t('auth.signIn.defaultDescription');
+  const browserHandoffDisabledMessage = t(
+    'auth.signIn.browserHandoffDisabledMessage',
+  );
   const isCentered = variant === 'centered';
   const isLoading = activeAction !== null;
 
@@ -93,7 +98,7 @@ export function SignInOptionsPanel({
       if (isLoading) return;
 
       if (action === 'login' && !SECURE_BROWSER_HANDOFF_AVAILABLE) {
-        setError(BROWSER_HANDOFF_DISABLED_MESSAGE);
+        setError(null);
         return;
       }
 
@@ -125,7 +130,7 @@ export function SignInOptionsPanel({
           provider: action,
           error_kind: 'network-error',
         });
-        setError('Не удалось завершить вход через CLODEx. Попробуйте ещё раз.');
+        setError(t('auth.signIn.genericFailure'));
       } finally {
         setActiveAction(null);
       }
@@ -137,25 +142,29 @@ export function SignInOptionsPanel({
       signInTelegram,
       track,
       trackingPrefix,
+      t,
     ],
   );
 
   const loginPanel = (
-    <section className="clodex-login-panel" aria-label="Вход в CLODEx">
+    <section
+      className="clodex-login-panel"
+      aria-label={t('auth.signIn.panelAriaLabel')}
+    >
       <span className="clodex-login-panel-accent" aria-hidden="true" />
 
       <div className="clodex-login-panel-content">
         <div className="clodex-login-panel-intro">
           <div className="clodex-login-eyebrow">
             <span aria-hidden="true" />
-            Доступ к аккаунту
+            {t('auth.signIn.eyebrow')}
           </div>
-          <h2>{title}</h2>
-          <p className="clodex-login-description">{description}</p>
+          <h2>{panelTitle}</h2>
+          <p className="clodex-login-description">{panelDescription}</p>
           <p className="clodex-login-switch">
-            Нет аккаунта?{' '}
+            {t('auth.signIn.noAccount')}{' '}
             <button type="button" onClick={() => openUrl(CLODEX_REGISTER_URL)}>
-              Зарегистрироваться
+              {t('auth.signIn.register')}
             </button>
           </p>
         </div>
@@ -163,11 +172,8 @@ export function SignInOptionsPanel({
         <div className="clodex-login-browser-handoff">
           <ShieldCheckIcon aria-hidden="true" />
           <div>
-            <strong>Защищённый desktop-вход готовится</strong>
-            <span>
-              Legacy callback отключён до обязательной проверки state и PKCE
-              S256.
-            </span>
+            <strong>{t('auth.signIn.secureHandoffTitle')}</strong>
+            <span>{t('auth.signIn.secureHandoffDescription')}</span>
           </div>
         </div>
 
@@ -180,7 +186,7 @@ export function SignInOptionsPanel({
           }}
         >
           <div className="clodex-login-divider">
-            <span>Выберите способ входа</span>
+            <span>{t('auth.signIn.chooseMethod')}</span>
           </div>
 
           <button
@@ -194,7 +200,7 @@ export function SignInOptionsPanel({
             ) : (
               <SendIcon aria-hidden="true" />
             )}
-            Продолжить с Telegram
+            {t('auth.signIn.continueWithTelegram')}
           </button>
 
           <button
@@ -208,7 +214,7 @@ export function SignInOptionsPanel({
             ) : (
               <LogInIcon aria-hidden="true" />
             )}
-            Вход через CLODEx.xyz временно отключён
+            {t('auth.signIn.browserHandoffDisabledButton')}
           </button>
 
           {!SECURE_BROWSER_HANDOFF_AVAILABLE && (
@@ -217,11 +223,11 @@ export function SignInOptionsPanel({
               role="status"
               className="clodex-login-error"
             >
-              {BROWSER_HANDOFF_DISABLED_MESSAGE}
+              {browserHandoffDisabledMessage}
             </p>
           )}
 
-          {error && error !== BROWSER_HANDOFF_DISABLED_MESSAGE && (
+          {error && (
             <p
               role="alert"
               aria-live="assertive"
@@ -233,10 +239,7 @@ export function SignInOptionsPanel({
           )}
         </form>
 
-        <p className="clodex-login-terms">
-          Продолжая, вы соглашаетесь с применимыми условиями использования и
-          политикой конфиденциальности CLODEx.xyz.
-        </p>
+        <p className="clodex-login-terms">{t('auth.signIn.terms')}</p>
       </div>
     </section>
   );
@@ -244,17 +247,20 @@ export function SignInOptionsPanel({
   if (!isCentered) {
     return (
       <div
-        lang="ru"
+        lang={i18n.resolvedLanguage ?? 'en'}
         className={cn('clodex-login-section app-no-drag', className)}
       >
         {loginPanel}
-        <SecurityNote />
+        <SecurityNote label={t('auth.signIn.unsafeCallbackBlocked')} />
       </div>
     );
   }
 
   return (
-    <div lang="ru" className={cn('clodex-login-shell app-no-drag', className)}>
+    <div
+      lang={i18n.resolvedLanguage ?? 'en'}
+      className={cn('clodex-login-shell app-no-drag', className)}
+    >
       <div className="clodex-login-grid" aria-hidden="true" />
       <div className="clodex-login-glow" aria-hidden="true" />
 
@@ -270,38 +276,39 @@ export function SignInOptionsPanel({
           className="clodex-login-home-link"
           onClick={() => openUrl(CLODEX_HOME_URL)}
         >
-          <span>На CLODEx.xyz</span>
+          <span>{t('auth.signIn.homeLink')}</span>
           <ArrowUpRightIcon aria-hidden="true" />
         </button>
       </header>
 
       <main className="clodex-login-layout">
-        <section className="clodex-login-story" aria-label="О CLODEx">
+        <section
+          className="clodex-login-story"
+          aria-label={t('auth.signIn.storyAriaLabel')}
+        >
           <div className="clodex-login-story-copy">
             <div className="clodex-login-story-eyebrow">
               <span aria-hidden="true" />
-              CLODEx для AI-продуктов
+              {t('auth.signIn.storyEyebrow')}
             </div>
             <h1>
-              <span>Один аккаунт.</span>
-              <span>Лучшие модели.</span>
-              <span>Полный контроль.</span>
+              <span>{t('auth.signIn.headline.account')}</span>
+              <span>{t('auth.signIn.headline.models')}</span>
+              <span>{t('auth.signIn.headline.control')}</span>
             </h1>
-            <p>
-              Подключайте coding agents и AI-продукты через единый вход CLODEx.
-            </p>
+            <p>{t('auth.signIn.storyDescription')}</p>
             <ul className="clodex-login-benefits">
               <li>
                 <span aria-hidden="true">✓</span>
-                Системный браузер без передачи пароля renderer-процессу
+                {t('auth.signIn.benefits.systemBrowser')}
               </li>
               <li>
                 <span aria-hidden="true">!</span>
-                Desktop callback закрыт до внедрения state + PKCE S256
+                {t('auth.signIn.benefits.callbackClosed')}
               </li>
               <li>
                 <span aria-hidden="true">✓</span>
-                Пароль не обрабатывается renderer-процессом
+                {t('auth.signIn.benefits.passwordNotHandled')}
               </li>
             </ul>
           </div>
@@ -310,32 +317,32 @@ export function SignInOptionsPanel({
             <div className="clodex-login-status-heading">
               <span>
                 <i aria-hidden="true" />
-                Browser handoff
+                {t('auth.signIn.status.browserHandoff')}
               </span>
               <strong>clodex.xyz/login</strong>
             </div>
             <div className="clodex-login-status-tags">
-              <span>System browser</span>
-              <span>IDE callback</span>
-              <span>Account access</span>
+              <span>{t('auth.signIn.status.systemBrowser')}</span>
+              <span>{t('auth.signIn.status.ideCallback')}</span>
+              <span>{t('auth.signIn.status.accountAccess')}</span>
             </div>
           </div>
         </section>
 
         <section className="clodex-login-form-region">
           {loginPanel}
-          <SecurityNote />
+          <SecurityNote label={t('auth.signIn.unsafeCallbackBlocked')} />
         </section>
       </main>
     </div>
   );
 }
 
-function SecurityNote() {
+function SecurityNote({ label }: { label: string }) {
   return (
     <p className="clodex-login-security-note">
       <ShieldCheckIcon aria-hidden="true" />
-      Небезопасный callback заблокирован fail-closed
+      {label}
     </p>
   );
 }

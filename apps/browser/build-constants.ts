@@ -58,6 +58,15 @@ export const __APP_AUTO_UPDATE_ENABLED__ = distributionPolicy.autoUpdateEnabled;
 export const __APP_REGISTER_DEFAULT_PROTOCOLS__ =
   distributionPolicy.registerDefaultProtocols;
 export const __APP_TELEMETRY_ENABLED__ = distributionPolicy.telemetryEnabled;
+export const __APP_RENDERER_TELEMETRY_ENABLED__ =
+  distributionPolicy.rendererTelemetryEnabled;
+export const __APP_EXCEPTION_TELEMETRY_ENABLED__ =
+  distributionPolicy.exceptionTelemetryEnabled;
+export const __APP_MODEL_TRACING_ENABLED__ =
+  distributionPolicy.modelTracingEnabled;
+export const __APP_TELEMETRY_MODE__ = distributionPolicy.telemetryMode;
+export const __APP_TELEMETRY_PRIVACY_MODE__ =
+  distributionPolicy.telemetryPrivacyMode;
 
 export const __APP_VERSION__ = (() => {
   const override = process.env.APP_VERSION_OVERRIDE;

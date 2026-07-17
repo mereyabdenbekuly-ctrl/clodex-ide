@@ -23,21 +23,66 @@ export const COMMUNITY_UNSIGNED_WARNING_FILE = 'COMMUNITY-UNSIGNED-WARNING.md';
 export const COMMUNITY_UNSIGNED_MANIFEST_FILE =
   'community-unsigned-manifest.json';
 export const COMMUNITY_UNSIGNED_CHECKSUMS_FILE = 'SHA256SUMS';
+export const COMMUNITY_OBSERVED_DISTRIBUTION_MODE = 'community-observed';
+export const COMMUNITY_OBSERVED_WARNING_CODE =
+  'CLODEX_COMMUNITY_OBSERVED_NO_OS_TRUST';
+export const COMMUNITY_OBSERVED_WARNING_FILE = 'COMMUNITY-OBSERVED-WARNING.md';
+export const COMMUNITY_OBSERVED_MANIFEST_FILE =
+  'community-observed-manifest.json';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const browserDirectory = path.resolve(scriptDirectory, '..');
-const defaultSourceRoot = path.join(
-  browserDirectory,
-  'out',
-  COMMUNITY_UNSIGNED_DISTRIBUTION_MODE,
-);
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SOURCE_COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
-const COMMUNITY_VERSION_PATTERN =
+const COMMUNITY_UNSIGNED_VERSION_PATTERN =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-community(?:0|[1-9]\d*)$/u;
+const COMMUNITY_OBSERVED_VERSION_PATTERN =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-communityobserved(?:0|[1-9]\d*)$/u;
 const SAFE_FILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+()-]*$/u;
 const SUPPORTED_PLATFORMS = new Set(['linux', 'macos', 'windows']);
 const SUPPORTED_ARCHITECTURES = new Set(['arm64', 'x64']);
+
+const DISTRIBUTION_PROFILES = Object.freeze({
+  [COMMUNITY_UNSIGNED_DISTRIBUTION_MODE]: Object.freeze({
+    baseName: 'clodex-community-unsigned',
+    bundleKind: 'clodex-community-unsigned-bundle',
+    manifestFile: COMMUNITY_UNSIGNED_MANIFEST_FILE,
+    telemetry: Object.freeze({ status: 'disabled' }),
+    versionPattern: COMMUNITY_UNSIGNED_VERSION_PATTERN,
+    versionExample: '1.16.0-community42',
+    warningCode: COMMUNITY_UNSIGNED_WARNING_CODE,
+    warningFile: COMMUNITY_UNSIGNED_WARNING_FILE,
+  }),
+  [COMMUNITY_OBSERVED_DISTRIBUTION_MODE]: Object.freeze({
+    baseName: 'clodex-community-observed',
+    bundleKind: 'clodex-community-observed-bundle',
+    manifestFile: COMMUNITY_OBSERVED_MANIFEST_FILE,
+    telemetry: Object.freeze({
+      status: 'explicit-opt-in',
+      allowedLevel: 'anonymous',
+      transport: 'posthog-node-backend',
+      privacyMode: true,
+      renderer: 'disabled',
+      exceptions: 'disabled',
+      modelTracing: 'disabled',
+      contentPolicy: 'event-field-allowlist-v1',
+    }),
+    versionPattern: COMMUNITY_OBSERVED_VERSION_PATTERN,
+    versionExample: '1.16.0-communityobserved42',
+    warningCode: COMMUNITY_OBSERVED_WARNING_CODE,
+    warningFile: COMMUNITY_OBSERVED_WARNING_FILE,
+  }),
+});
+
+function distributionProfile(distributionMode) {
+  const profile = DISTRIBUTION_PROFILES[distributionMode];
+  if (!profile) {
+    throw new Error(
+      `Unsupported community distribution mode: ${distributionMode}`,
+    );
+  }
+  return profile;
+}
 
 const FORBIDDEN_UPDATER_PATTERNS = Object.freeze([
   { code: 'macos-update-zip', pattern: /\.zip$/iu },
@@ -204,10 +249,13 @@ function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
-function classifyAsset({ architecture, platform, version }, fileName) {
+function classifyAsset(
+  { architecture, distributionMode, platform, version },
+  fileName,
+) {
   const excluded = updaterExclusion(fileName);
   if (excluded) return { kind: 'excluded-updater', reason: excluded.code };
-  const baseName = 'clodex-community-unsigned';
+  const baseName = distributionProfile(distributionMode).baseName;
   const escapedBase = escapeRegex(baseName);
   const escapedVersion = escapeRegex(version);
   const escapedArch = escapeRegex(architecture);
@@ -233,7 +281,7 @@ function classifyAsset({ architecture, platform, version }, fileName) {
     // MakerRPM maps the SemVer prerelease separator to an RPM-safe dot while
     // retaining the exact community identifier (for example,
     // 1.16.0-community2 -> 1.16.0.community2-1).
-    const rpmPackageVersion = version.replace('-community', '.community');
+    const rpmPackageVersion = version.replace('-', '.');
     if (
       new RegExp(
         `^${escapedBase}_${escapedVersion}_${escapeRegex(debArch)}\\.deb$`,
@@ -308,13 +356,14 @@ function assertReadyAttribution(manifest, platform) {
   }
 }
 
-function assertCommunityTrust(manifest, platform) {
+function assertCommunityTrust(manifest, platform, distributionMode) {
+  const profile = distributionProfile(distributionMode);
   const trust = manifest.distributionTrust;
   if (
     !isObject(trust) ||
-    trust.mode !== COMMUNITY_UNSIGNED_DISTRIBUTION_MODE ||
+    trust.mode !== distributionMode ||
     trust.updater !== 'excluded' ||
-    trust.warningCode !== COMMUNITY_UNSIGNED_WARNING_CODE
+    trust.warningCode !== profile.warningCode
   ) {
     throw new Error(
       'Community distribution trust metadata is missing or invalid',
@@ -382,7 +431,7 @@ function assertManifestIdentity(manifest, expected) {
     manifest.status !== 'passed' ||
     !isObject(build) ||
     build.channel !== 'release' ||
-    build.distributionMode !== COMMUNITY_UNSIGNED_DISTRIBUTION_MODE ||
+    build.distributionMode !== expected.distributionMode ||
     build.sourceCommit !== expected.sourceCommit ||
     build.version !== expected.version ||
     build.platform !== expected.platform ||
@@ -398,15 +447,52 @@ function assertManifestIdentity(manifest, expected) {
     throw new Error('Validation manifest community identity is invalid');
   }
   assertReadyAttribution(manifest, expected.platform);
-  assertCommunityTrust(manifest, expected.platform);
+  assertCommunityTrust(manifest, expected.platform, expected.distributionMode);
+  if (expected.distributionMode === COMMUNITY_OBSERVED_DISTRIBUTION_MODE) {
+    const telemetry = manifest.telemetryTrust;
+    if (
+      !isObject(telemetry) ||
+      telemetry.status !== 'validated' ||
+      telemetry.transport !== 'posthog-node-backend' ||
+      telemetry.optIn !== 'explicit' ||
+      telemetry.allowedTelemetryLevel !== 'anonymous' ||
+      telemetry.privacyMode !== true ||
+      telemetry.disableGeoip !== true ||
+      telemetry.renderer?.enabled !== false ||
+      telemetry.renderer?.projectKeyEmbedded !== false ||
+      telemetry.renderer?.autocapture !== 'disabled' ||
+      telemetry.renderer?.sessionRecording !== 'disabled' ||
+      telemetry.exceptions !== 'disabled' ||
+      telemetry.modelTracing !== 'disabled' ||
+      telemetry.contentPolicy !== 'event-field-allowlist-v1'
+    ) {
+      throw new Error(
+        'community-observed telemetry trust metadata is missing or invalid',
+      );
+    }
+  }
 }
 
-function buildWarning({ architecture, platform, sourceCommit, version }) {
-  return `# CLODEx Community Unsigned Build
+function buildWarning({
+  architecture,
+  distributionMode,
+  platform,
+  sourceCommit,
+  version,
+}) {
+  const telemetryNotice =
+    distributionMode === COMMUNITY_OBSERVED_DISTRIBUTION_MODE
+      ? `\nTelemetry is disabled by default. If the user explicitly selects anonymous\ntelemetry, only the backend PostHog client may send centrally filtered,\ncontent-free counters and enum metadata. Renderer capture, session recording,\nexceptions, user identification, full telemetry and AI tracing are disabled.\n`
+      : '\nTelemetry is disabled in this distribution.\n';
+  return `# CLODEx ${
+    distributionMode === COMMUNITY_OBSERVED_DISTRIBUTION_MODE
+      ? 'Community Observed'
+      : 'Community Unsigned'
+  } Build
 
 > **WARNING:** This package has no trusted operating-system distribution signature.
 
-- Distribution mode: \`community-unsigned\`
+- Distribution mode: \`${distributionMode}\`
 - Version: \`${version}\`
 - Platform: \`${platform}\`
 - Architecture: \`${architecture}\`
@@ -420,6 +506,7 @@ expected.
 Auto-update metadata and updater payloads are intentionally excluded. Updates
 must be installed manually. This package is not an official preview, canary, or
 stable release and must not be counted as release acceptance evidence.
+${telemetryNotice}
 
 Verify every downloaded byte against \`${COMMUNITY_UNSIGNED_CHECKSUMS_FILE}\`
 before installation.
@@ -459,21 +546,23 @@ function fileRecord(filePath, kind) {
   };
 }
 
-export function assembleCommunityUnsignedBundle({
-  allowedSourceRoot = defaultSourceRoot,
+export function assembleCommunityBundle({
+  allowedSourceRoot,
   architecture,
+  distributionMode = COMMUNITY_UNSIGNED_DISTRIBUTION_MODE,
   manifestPath,
   outputDirectory,
   platform,
   sourceCommit,
   version,
 }) {
+  const profile = distributionProfile(distributionMode);
   if (!SOURCE_COMMIT_PATTERN.test(String(sourceCommit ?? ''))) {
     throw new Error('sourceCommit must be an exact lowercase 40-character SHA');
   }
-  if (!COMMUNITY_VERSION_PATTERN.test(String(version ?? ''))) {
+  if (!profile.versionPattern.test(String(version ?? ''))) {
     throw new Error(
-      `version must be canonical community SemVer (for example 1.16.0-community42): ${version}`,
+      `version must be canonical ${distributionMode} SemVer (for example ${profile.versionExample}): ${version}`,
     );
   }
   if (!SUPPORTED_PLATFORMS.has(platform)) {
@@ -482,7 +571,9 @@ export function assembleCommunityUnsignedBundle({
   if (!SUPPORTED_ARCHITECTURES.has(architecture)) {
     throw new Error(`Unsupported community architecture: ${architecture}`);
   }
-  const sourceRoot = path.resolve(allowedSourceRoot);
+  const sourceRoot = path.resolve(
+    allowedSourceRoot ?? path.join(browserDirectory, 'out', distributionMode),
+  );
   if (!existsSync(sourceRoot) || !statSync(sourceRoot).isDirectory()) {
     throw new Error(`Community build output root is missing: ${sourceRoot}`);
   }
@@ -497,6 +588,7 @@ export function assembleCommunityUnsignedBundle({
   );
   assertManifestIdentity(validationManifest, {
     architecture,
+    distributionMode,
     platform,
     sourceCommit,
     version,
@@ -507,7 +599,7 @@ export function assembleCommunityUnsignedBundle({
   const excludedUpdaterAssets = [];
   for (const artifact of publicationAssets) {
     const classification = classifyAsset(
-      { architecture, platform, version },
+      { architecture, distributionMode, platform, version },
       artifact.fileName,
     );
     const source = assertRegularSourceFile(
@@ -561,10 +653,16 @@ export function assembleCommunityUnsignedBundle({
   copyFileSync(manifestSource.filePath, validationDestination);
   bundleFiles.push(fileRecord(validationDestination, 'validation'));
 
-  const warningPath = path.join(output, COMMUNITY_UNSIGNED_WARNING_FILE);
+  const warningPath = path.join(output, profile.warningFile);
   writeFileSync(
     warningPath,
-    buildWarning({ architecture, platform, sourceCommit, version }),
+    buildWarning({
+      architecture,
+      distributionMode,
+      platform,
+      sourceCommit,
+      version,
+    }),
     'utf8',
   );
   bundleFiles.push(fileRecord(warningPath, 'warning'));
@@ -574,17 +672,18 @@ export function assembleCommunityUnsignedBundle({
   );
   const bundleManifest = {
     schemaVersion: 1,
-    kind: 'clodex-community-unsigned-bundle',
+    kind: profile.bundleKind,
     status: 'validated',
-    distributionMode: COMMUNITY_UNSIGNED_DISTRIBUTION_MODE,
+    distributionMode,
     sourceCommit,
     version,
     platform,
     architecture,
     warning: {
-      code: COMMUNITY_UNSIGNED_WARNING_CODE,
-      fileName: COMMUNITY_UNSIGNED_WARNING_FILE,
+      code: profile.warningCode,
+      fileName: profile.warningFile,
     },
+    telemetry: profile.telemetry,
     updater: {
       status: 'excluded',
       excludedAssets: excludedUpdaterAssets.sort((left, right) =>
@@ -594,10 +693,7 @@ export function assembleCommunityUnsignedBundle({
     files: bundleFiles,
     checksumsFile: COMMUNITY_UNSIGNED_CHECKSUMS_FILE,
   };
-  const bundleManifestPath = path.join(
-    output,
-    COMMUNITY_UNSIGNED_MANIFEST_FILE,
-  );
+  const bundleManifestPath = path.join(output, profile.manifestFile);
   writeFileSync(
     bundleManifestPath,
     `${JSON.stringify(bundleManifest, null, 2)}\n`,
@@ -638,19 +734,24 @@ export function assembleCommunityUnsignedBundle({
   };
 }
 
+export const assembleCommunityUnsignedBundle = assembleCommunityBundle;
+
 function parseArguments(values) {
-  const options = {};
+  const options = {
+    distributionMode: COMMUNITY_UNSIGNED_DISTRIBUTION_MODE,
+  };
   for (const value of values) {
     if (value === '--') continue;
     if (value === '--help') {
       console.log(`
-Assemble a fail-closed CLODEx community-unsigned bundle.
+Assemble a fail-closed CLODEx community distribution bundle.
 
 Usage:
   node apps/browser/scripts/assemble-community-unsigned-bundle.mjs \\
     --manifest=<validation.json> --output=<directory> \\
     --source-commit=<40sha> --version=<semver> \\
-    --platform=<macos|windows|linux> --arch=<arm64|x64>
+    --platform=<macos|windows|linux> --arch=<arm64|x64> \\
+    --distribution-mode=<community-unsigned|community-observed>
 `);
       process.exit(0);
     }
@@ -664,6 +765,8 @@ Usage:
     else if (name === 'version') options.version = optionValue;
     else if (name === 'platform') options.platform = optionValue;
     else if (name === 'arch') options.architecture = optionValue;
+    else if (name === 'distribution-mode')
+      options.distributionMode = optionValue;
     else throw new Error(`Unknown argument: --${name}`);
   }
   for (const [name, value] of Object.entries({
@@ -673,6 +776,7 @@ Usage:
     version: options.version,
     platform: options.platform,
     arch: options.architecture,
+    'distribution-mode': options.distributionMode,
   })) {
     if (!value) throw new Error(`Missing required --${name} option`);
   }
@@ -686,18 +790,18 @@ const isEntryPoint =
 
 if (isEntryPoint) {
   try {
-    const result = assembleCommunityUnsignedBundle(
+    const result = assembleCommunityBundle(
       parseArguments(process.argv.slice(2)),
     );
     console.log(
-      `[community-unsigned] assembled ${result.checksummedFiles.length} checksummed files at ${result.outputDirectory}`,
+      `[community-bundle] assembled ${result.checksummedFiles.length} checksummed files at ${result.outputDirectory}`,
     );
     console.log(
-      `[community-unsigned] excluded ${result.excludedUpdaterAssets.length} updater payload(s)`,
+      `[community-bundle] excluded ${result.excludedUpdaterAssets.length} updater payload(s)`,
     );
   } catch (error) {
     console.error(
-      `[community-unsigned] FAILED: ${error instanceof Error ? error.message : String(error)}`,
+      `[community-bundle] FAILED: ${error instanceof Error ? error.message : String(error)}`,
     );
     process.exitCode = 1;
   }

@@ -16,6 +16,8 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   assembleCommunityUnsignedBundle,
+  COMMUNITY_OBSERVED_MANIFEST_FILE,
+  COMMUNITY_OBSERVED_WARNING_FILE,
   COMMUNITY_UNSIGNED_CHECKSUMS_FILE,
   COMMUNITY_UNSIGNED_MANIFEST_FILE,
   COMMUNITY_UNSIGNED_WARNING_FILE,
@@ -339,6 +341,68 @@ test('accepts MakerRPM ARM64 output naming', () => {
         'clodex-community-unsigned-1.16.0.community42-1.arm64.rpm',
       ),
     );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('assembles a separately identified community-observed bundle with validated telemetry policy', () => {
+  const fixture = makeFixture('linux');
+  const observedVersion = '1.16.0-communityobserved42';
+  try {
+    fixture.manifest.build.distributionMode = 'community-observed';
+    fixture.manifest.build.version = observedVersion;
+    fixture.manifest.distributionTrust.mode = 'community-observed';
+    fixture.manifest.distributionTrust.warningCode =
+      'CLODEX_COMMUNITY_OBSERVED_NO_OS_TRUST';
+    fixture.manifest.telemetryTrust = {
+      status: 'validated',
+      transport: 'posthog-node-backend',
+      optIn: 'explicit',
+      allowedTelemetryLevel: 'anonymous',
+      privacyMode: true,
+      disableGeoip: true,
+      renderer: {
+        enabled: false,
+        projectKeyEmbedded: false,
+        autocapture: 'disabled',
+        sessionRecording: 'disabled',
+      },
+      exceptions: 'disabled',
+      modelTracing: 'disabled',
+      contentPolicy: 'event-field-allowlist-v1',
+    };
+
+    fixture.assets.forEach((asset, index) => {
+      const nextFileName = asset.fileName
+        .replaceAll('clodex-community-unsigned', 'clodex-community-observed')
+        .replaceAll('1.16.0.community42', '1.16.0.communityobserved42')
+        .replaceAll(version, observedVersion);
+      const nextPath = path.join(path.dirname(asset.path), nextFileName);
+      renameSync(asset.path, nextPath);
+      asset.fileName = nextFileName;
+      asset.path = nextPath;
+      fixture.manifest.publication.assets[index].fileName = nextFileName;
+    });
+    rewriteManifest(fixture);
+
+    const result = assemble(fixture, {
+      distributionMode: 'community-observed',
+      version: observedVersion,
+    });
+    const names = readdirSync(result.outputDirectory);
+    assert.ok(names.includes(COMMUNITY_OBSERVED_WARNING_FILE));
+    assert.ok(names.includes(COMMUNITY_OBSERVED_MANIFEST_FILE));
+    assert.ok(
+      names.includes(
+        'clodex-community-observed-1.16.0.communityobserved42-1.x86_64.rpm',
+      ),
+    );
+    assert.equal(
+      result.bundleManifest.telemetry.transport,
+      'posthog-node-backend',
+    );
+    assert.equal(result.bundleManifest.telemetry.allowedLevel, 'anonymous');
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
   }

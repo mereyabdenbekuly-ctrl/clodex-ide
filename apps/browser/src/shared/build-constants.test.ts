@@ -70,6 +70,21 @@ describe('build constants local package identity', () => {
     });
   });
 
+  it('derives a separate identity and profile namespace for observed community artifacts', () => {
+    expect(
+      resolveAppIdentity({
+        distributionMode: 'community-observed',
+        releaseChannel: 'release',
+        allowUnsignedLocalBuild: false,
+      }),
+    ).toEqual({
+      localBuildId: '',
+      baseName: 'clodex-community-observed',
+      appName: 'Clodex Agentic IDE (Community Observed)',
+      bundleId: 'xyz.clodex.agentic-ide.community-observed',
+    });
+  });
+
   it('keeps community distribution orthogonal to release-channel policy', () => {
     expect(
       resolveAppDistributionPolicy({
@@ -80,8 +95,13 @@ describe('build constants local package identity', () => {
       authEnabled: false,
       autoUpdateEnabled: false,
       buildIdentifier: 'community-unsigned',
+      exceptionTelemetryEnabled: false,
+      modelTracingEnabled: false,
       registerDefaultProtocols: false,
+      rendererTelemetryEnabled: false,
       telemetryEnabled: false,
+      telemetryMode: 'disabled',
+      telemetryPrivacyMode: true,
     });
     expect(() =>
       resolveAppDistributionPolicy({
@@ -93,12 +113,43 @@ describe('build constants local package identity', () => {
     );
   });
 
+  it('keeps observed community builds unsigned while enabling only anonymous backend telemetry', () => {
+    expect(
+      resolveAppDistributionPolicy({
+        distributionMode: 'community-observed',
+        releaseChannel: 'release',
+      }),
+    ).toEqual({
+      authEnabled: false,
+      autoUpdateEnabled: false,
+      buildIdentifier: 'community-observed',
+      exceptionTelemetryEnabled: false,
+      modelTracingEnabled: false,
+      registerDefaultProtocols: false,
+      rendererTelemetryEnabled: false,
+      telemetryEnabled: true,
+      telemetryMode: 'anonymous-backend-only',
+      telemetryPrivacyMode: true,
+    });
+    expect(() =>
+      resolveAppDistributionPolicy({
+        distributionMode: 'community-observed',
+        releaseChannel: 'nightly',
+      }),
+    ).toThrow(
+      'community-observed distribution requires RELEASE_CHANNEL=release',
+    );
+  });
+
   it('parses only canonical distribution modes', () => {
     expect(resolveAppDistributionMode(undefined)).toBe('official');
     expect(resolveAppDistributionMode('')).toBe('official');
     expect(resolveAppDistributionMode(' official ')).toBe('official');
     expect(resolveAppDistributionMode('community-unsigned')).toBe(
       'community-unsigned',
+    );
+    expect(resolveAppDistributionMode('community-observed')).toBe(
+      'community-observed',
     );
     expect(() => resolveAppDistributionMode('community')).toThrow(
       'Unsupported CLODEX_DISTRIBUTION_MODE: community',
@@ -115,6 +166,16 @@ describe('build constants local package identity', () => {
       }),
     ).toThrow(
       'community-unsigned distribution cannot use unsigned local-build overrides',
+    );
+    expect(() =>
+      resolveAppIdentity({
+        distributionMode: 'community-observed',
+        releaseChannel: 'release',
+        localBuildId: 'smoke',
+        allowUnsignedLocalBuild: true,
+      }),
+    ).toThrow(
+      'community-observed distribution cannot use unsigned local-build overrides',
     );
   });
 
