@@ -18,14 +18,15 @@ export const COMMUNITY_OBSERVED_RENDERER_POSTHOG_NOOP =
 const PROJECT_KEY_PATTERN = /phc_[A-Za-z0-9_-]{20,}/gu;
 const JAVASCRIPT_OR_HTML_PATTERN = /\.(?:c?js|mjs|html)$/u;
 
-function normalizeArchivePath(value) {
-  return value.replace(/^\/+/, '');
+export function normalizeCommunityObservedArchivePath(value) {
+  return value.replaceAll('\\', '/').replace(/^\/+/, '');
 }
 
 function readArchiveText(asarPath, archivePath) {
-  return extractFile(asarPath, normalizeArchivePath(archivePath)).toString(
-    'utf8',
-  );
+  return extractFile(
+    asarPath,
+    normalizeCommunityObservedArchivePath(archivePath),
+  ).toString('utf8');
 }
 
 function importedRelativePaths(source) {
@@ -68,8 +69,15 @@ function projectKeys(source) {
 
 function regularArchiveEntries(asarPath) {
   return listPackage(asarPath)
-    .map(normalizeArchivePath)
-    .filter((entry) => Number.isSafeInteger(statFile(asarPath, entry).size));
+    .map(normalizeCommunityObservedArchivePath)
+    .filter(
+      (entry) =>
+        entry.startsWith('.vite/build/') || entry.startsWith('.vite/renderer/'),
+    )
+    .filter((entry) => {
+      const metadata = statFile(asarPath, entry, false);
+      return Number.isSafeInteger(metadata.size) && metadata.unpacked !== true;
+    });
 }
 
 function assertNoProjectKeyInUnpackedResources(asarPath) {
