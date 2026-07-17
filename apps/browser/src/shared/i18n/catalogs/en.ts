@@ -23,10 +23,11 @@ export const enCatalog = {
       anonymousLabel: 'Help improve CLODEx by sharing anonymized events.',
       fullLabel: 'Share identifiable chat and usage data with CLODEx.',
       observedDescription:
-        'Optionally share anonymous product metrics from this community test build.',
+        'Control the anonymous product statistics choice made during first-run setup.',
       observedLabel: 'Send anonymous product usage metrics.',
       observedPrivacyNote:
-        'Never includes prompts, source code, tool arguments, commands, file paths, URLs, error text, or session recordings.',
+        'Uses a pseudonymous installation ID. Never includes prompts, messages, source code, tool arguments, commands, file paths, URLs, API keys, credentials, error text, or session recordings.',
+      saveError: 'Could not save the telemetry setting. Please try again.',
     },
     personalization: {
       eyebrow: 'Experience',

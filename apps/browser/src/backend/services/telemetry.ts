@@ -14,7 +14,9 @@ import {
   type SocialAuthProvider,
   type TelemetryLevel,
   type ToolApprovalMode,
+  type UserPreferences,
 } from '@shared/karton-contracts/ui/shared-types';
+import { getCommunityObservedTelemetryLevel } from '@shared/community-observed-telemetry-consent';
 import type { CodingPlanId } from '@shared/coding-plans';
 import type {
   AgentHostProcessTelemetryEvents,
@@ -24,6 +26,7 @@ import type {
 import type { Logger } from './logger';
 import { DisposableService } from './disposable';
 import { captureProcessSnapshot } from './telemetry/process-snapshot';
+import communityObservedTelemetryContractSource from '@shared/community-observed-telemetry-contract.json';
 
 type OnboardingAuthMethod = 'clodex' | 'api-keys' | 'coding-plan' | 'local';
 type OnboardingAuthCompletionMethod = OnboardingAuthMethod | 'unknown';
@@ -953,9 +956,9 @@ export type ExceptionProperties = {
 } & Record<string, unknown>;
 
 export const COMMUNITY_OBSERVED_TELEMETRY_CONTRACT =
-  'clodex-community-observed-backend-anonymous-v1';
+  communityObservedTelemetryContractSource.backendTelemetryContract;
 export const COMMUNITY_OBSERVED_TELEMETRY_ARTIFACT_ASSERTION =
-  'clodex-community-observed-contract:{"allowedTelemetryLevel":"anonymous","contentPolicy":"event-field-allowlist-v1","disableGeoip":true,"exceptions":"disabled","modelTracing":"disabled","optIn":"explicit","privacyMode":true,"renderer":"noop"}';
+  communityObservedTelemetryContractSource.backendArtifactAssertion;
 
 type CommunityObservedEventPolicy = {
   booleans?: readonly string[];
@@ -966,12 +969,10 @@ type CommunityObservedEventPolicy = {
 const COMMUNITY_OBSERVED_EVENT_POLICY: Readonly<
   Record<string, CommunityObservedEventPolicy>
 > = Object.freeze({
-  'app-launched': {
-    numbers: { total_matched_processes: 10_000 },
-  },
-  'app-closed': {
-    numbers: { total_matched_processes: 10_000 },
-  },
+  // Observed builds emit lifecycle counters without inspecting the host's
+  // running process list. Official builds retain their existing snapshot.
+  'app-launched': {},
+  'app-closed': {},
   'telemetry-level-changed': {
     strings: {
       from: ['off', 'anonymous', 'full'],
@@ -1162,16 +1163,19 @@ export class TelemetryService extends DisposableService {
     this.identifyUser();
 
     this.preferencesService.addListener((newPrefs, oldPrefs) => {
-      if (newPrefs.privacy.telemetryLevel !== oldPrefs.privacy.telemetryLevel) {
+      const nextTelemetryLevel = this.getTelemetryLevelForPreferences(newPrefs);
+      const previousTelemetryLevel =
+        this.getTelemetryLevelForPreferences(oldPrefs);
+      if (nextTelemetryLevel !== previousTelemetryLevel) {
         if (
           this.telemetryMode === 'anonymous-backend-only' &&
-          newPrefs.privacy.telemetryLevel !== 'anonymous'
+          nextTelemetryLevel !== 'anonymous'
         ) {
           void this.shutdownObservedClient();
         }
         this.capture('telemetry-level-changed', {
-          from: oldPrefs.privacy.telemetryLevel,
-          to: newPrefs.privacy.telemetryLevel,
+          from: previousTelemetryLevel,
+          to: nextTelemetryLevel,
         });
       }
     });
@@ -1183,9 +1187,15 @@ export class TelemetryService extends DisposableService {
    * Get the current telemetry level from preferences.
    */
   public get telemetryLevel(): TelemetryLevel {
-    const configured = this.preferencesService.get().privacy.telemetryLevel;
+    return this.getTelemetryLevelForPreferences(this.preferencesService.get());
+  }
+
+  private getTelemetryLevelForPreferences(
+    preferences: Pick<UserPreferences, 'privacy'>,
+  ): TelemetryLevel {
+    const configured = preferences.privacy.telemetryLevel;
     if (this.telemetryMode === 'anonymous-backend-only') {
-      return configured === 'anonymous' ? 'anonymous' : 'off';
+      return getCommunityObservedTelemetryLevel(preferences.privacy);
     }
     return configured;
   }
@@ -1331,6 +1341,13 @@ export class TelemetryService extends DisposableService {
 
   public captureAppLaunched(): void {
     if (this.getTelemetryLevel() === 'off') return;
+    if (this.telemetryMode === 'anonymous-backend-only') {
+      this.captureSync('app-launched', {
+        matched_process_counts: {},
+        total_matched_processes: 0,
+      });
+      return;
+    }
     this.pendingAppLaunchedCapture = captureProcessSnapshot()
       .then((launchProcessSnapshot) => {
         this.captureSync('app-launched', {
@@ -1391,7 +1408,10 @@ export class TelemetryService extends DisposableService {
         app_platform: __APP_PLATFORM__,
         app_arch: __APP_ARCH__,
         ...(this.telemetryMode === 'anonymous-backend-only'
-          ? { telemetry_contract: COMMUNITY_OBSERVED_TELEMETRY_CONTRACT }
+          ? {
+              telemetry_contract: COMMUNITY_OBSERVED_TELEMETRY_CONTRACT,
+              $process_person_profile: false,
+            }
           : {}),
       };
 
@@ -1469,9 +1489,12 @@ export class TelemetryService extends DisposableService {
           ]);
         }
 
-        // Use a short timeout on close — we would rather lose the snapshot
-        // than add up to 1.5 s to window-close latency.
-        const snapshot = await captureProcessSnapshot(500);
+        // Observed builds never inspect the host process list. Official builds
+        // retain the bounded snapshot used by their existing lifecycle event.
+        const snapshot =
+          this.telemetryMode === 'anonymous-backend-only'
+            ? { matched_process_counts: {}, total_matched: 0 }
+            : await captureProcessSnapshot(500);
         // Bypass the microtask hop used by `capture()` so the event is
         // enqueued into the PostHog client BEFORE `shutdown()` starts
         // draining. Going through `queueMicrotask` here races shutdown and

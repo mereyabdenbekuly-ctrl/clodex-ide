@@ -29,6 +29,30 @@ describe('userPreferencesSchema agent personality defaults', () => {
   });
 });
 
+describe('userPreferencesSchema telemetry consent defaults', () => {
+  it('treats a missing consent marker as unanswered', () => {
+    const parsed = userPreferencesSchema.parse({
+      privacy: { telemetryLevel: 'off' },
+    });
+
+    expect(parsed.privacy).toEqual({
+      telemetryLevel: 'off',
+      anonymousTelemetryConsentVersion: 0,
+    });
+  });
+
+  it('fails closed when the persisted consent version is invalid', () => {
+    const parsed = userPreferencesSchema.parse({
+      privacy: {
+        telemetryLevel: 'anonymous',
+        anonymousTelemetryConsentVersion: -10,
+      },
+    });
+
+    expect(parsed.privacy.anonymousTelemetryConsentVersion).toBe(0);
+  });
+});
+
 describe('userPreferencesSchema interface language defaults', () => {
   it('keeps legacy installations in English until they opt in', () => {
     const parsed = userPreferencesSchema.parse({

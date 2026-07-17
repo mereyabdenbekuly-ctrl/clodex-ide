@@ -35,21 +35,33 @@ properties and the exact source commit are present.
 
 ## Telemetry contract
 
-Telemetry is **off by default**. Only an explicit selection of the existing
-`anonymous` telemetry level starts the backend client. Selecting `full` is
-treated as telemetry off in this distribution.
+Telemetry remains **off until the user makes a required first-run choice**.
+The blocking screen provides two equally available outcomes: allow anonymous
+statistics or continue without statistics. The decision is versioned and
+stored locally; it can be changed later in Settings without signing in.
+Profiles created by an earlier observed build have no current decision marker
+and must make the new choice once after upgrading, including profiles that had
+previously enabled the older checkbox.
+Only the current consent version together with the `anonymous` telemetry level
+starts the backend client. Selecting `full`, or setting `anonymous` without a
+current consent marker, is treated as telemetry off in this distribution.
 
 When opted in:
 
 - only `posthog-node` in the backend receives the project ingestion key;
 - PostHog `privacyMode`, GeoIP disablement, remote-config disablement and
   exception-autocapture disablement are enforced;
+- PostHog person-profile processing is disabled for every observed event;
 - renderer PostHog has no key; autocapture and session recording are disabled;
 - account identification/aliasing, exception events and AI model tracing are
   disabled;
+- lifecycle events do not inspect the host running-process list;
+- a stable pseudonymous installation identifier separates installations
+  without sending an account identity;
 - a central sanitizer retains bounded enum metadata, booleans and numeric
   counters while dropping strings/objects that could contain prompts, source,
-  tool arguments, commands, paths, URLs, errors, titles or feedback.
+  messages, tool arguments, commands, paths, URLs, API keys, credentials,
+  errors, titles or feedback.
 
 Packaged-ASAR validation requires exactly one `phc_` project key in the backend
 entry graph, rejects that key in every other ASAR entry and in

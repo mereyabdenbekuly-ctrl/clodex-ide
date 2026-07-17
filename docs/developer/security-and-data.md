@@ -135,6 +135,14 @@ Forbidden telemetry:
 - audio or transcripts;
 - private keys or access tokens.
 
+The `community-observed` desktop distribution adds a stricter contract. It
+does not construct a PostHog client until the user completes a required,
+versioned first-run choice and explicitly allows anonymous statistics. Its
+renderer is a compile-time telemetry no-op, PostHog person profiles and GeoIP
+enrichment are disabled, lifecycle events do not inspect the running-process
+list, and Settings can revoke consent without requiring an account. A central
+event/field allowlist drops unknown events and all free-form content fields.
+
 ## 10. Security review checklist
 
 Before merging a sensitive capability:

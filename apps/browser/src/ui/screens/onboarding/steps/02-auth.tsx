@@ -546,36 +546,6 @@ export function StepAuth({
           </Button>
         </div>
       )}
-
-      {__APP_TELEMETRY_MODE__ === 'anonymous-backend-only' && (
-        <div className="app-no-drag mt-2 flex max-w-sm flex-col items-center gap-1.5">
-          <div className="flex items-center gap-2">
-            <Checkbox
-              size="xs"
-              id="onboarding-telemetry-anonymous-checkbox"
-              checked={preferences.privacy.telemetryLevel === 'anonymous'}
-              onCheckedChange={(checked: boolean) => {
-                void preferencesUpdate([
-                  {
-                    op: 'replace',
-                    path: ['privacy', 'telemetryLevel'],
-                    value: checked ? 'anonymous' : 'off',
-                  },
-                ]);
-              }}
-            />
-            <label
-              htmlFor="onboarding-telemetry-anonymous-checkbox"
-              className="text-muted-foreground text-xs"
-            >
-              {t('auth.telemetry.anonymousObservedLabel')}
-            </label>
-          </div>
-          <p className="max-w-sm text-center text-[11px] text-muted-foreground/80">
-            {t('auth.telemetry.anonymousObservedNote')}
-          </p>
-        </div>
-      )}
     </div>
   );
 }

@@ -41,6 +41,7 @@ export interface MainShutdownCoordinatorOptions {
     agentBehaviorPreferenceListener: () => void;
     agentOsFeatureGatePreferenceListener: () => void;
     updateEvidenceMemorySummaryModel: () => void;
+    telemetryConsentGatePreferenceListener: () => void;
   };
   synchronousServices: {
     localPortsScannerService: TeardownResource;
@@ -241,6 +242,11 @@ export function createMainShutdownCoordinator(
       {
         name: 'updateEvidenceMemorySummaryModel',
         teardown: preferenceListenerTeardowns.updateEvidenceMemorySummaryModel,
+      },
+      {
+        name: 'telemetryConsentGatePreferenceListener',
+        teardown:
+          preferenceListenerTeardowns.telemetryConsentGatePreferenceListener,
       },
       teardownTask(
         'localPortsScannerService',

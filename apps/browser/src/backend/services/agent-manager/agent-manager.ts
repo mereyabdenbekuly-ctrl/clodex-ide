@@ -147,6 +147,7 @@ export class AgentManagerService extends DisposableService {
       handler: AutomaticSwarmStepHandler,
     ) => void,
     toolApprovalLifecycle?: ToolApprovalLifecycleHooks,
+    canRunAgentWork?: () => boolean,
   ) {
     super();
     this.commandRegistry = commandRegistry;
@@ -181,6 +182,7 @@ export class AgentManagerService extends DisposableService {
         skillsForSlashRedaction: getSkillsForSlashRedaction,
         enrichHistoryEntries,
         isNetworkOnline: () => net.isOnline(),
+        canRunAgentWork,
       },
     });
     this.registerKartonForwarders();

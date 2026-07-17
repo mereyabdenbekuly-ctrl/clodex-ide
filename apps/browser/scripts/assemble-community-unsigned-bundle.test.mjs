@@ -17,6 +17,7 @@ import test from 'node:test';
 import {
   assembleCommunityUnsignedBundle,
   COMMUNITY_OBSERVED_MANIFEST_FILE,
+  COMMUNITY_OBSERVED_TELEMETRY_CONSENT_VERSION,
   COMMUNITY_OBSERVED_WARNING_FILE,
   COMMUNITY_UNSIGNED_CHECKSUMS_FILE,
   COMMUNITY_UNSIGNED_MANIFEST_FILE,
@@ -359,9 +360,13 @@ test('assembles a separately identified community-observed bundle with validated
       status: 'validated',
       transport: 'posthog-node-backend',
       optIn: 'explicit',
+      declaredConsentContract: 'required-choice-v1',
+      consentVersion: COMMUNITY_OBSERVED_TELEMETRY_CONSENT_VERSION,
+      consentUiMarker: 'present',
       allowedTelemetryLevel: 'anonymous',
       privacyMode: true,
       disableGeoip: true,
+      personProfileDisableProperty: 'present',
       renderer: {
         enabled: false,
         projectKeyEmbedded: false,
@@ -402,7 +407,16 @@ test('assembles a separately identified community-observed bundle with validated
       result.bundleManifest.telemetry.transport,
       'posthog-node-backend',
     );
+    assert.equal(
+      result.bundleManifest.telemetry.consentPrompt,
+      'required-choice',
+    );
+    assert.equal(
+      result.bundleManifest.telemetry.consentVersion,
+      COMMUNITY_OBSERVED_TELEMETRY_CONSENT_VERSION,
+    );
     assert.equal(result.bundleManifest.telemetry.allowedLevel, 'anonymous');
+    assert.equal(result.bundleManifest.telemetry.personProfiles, 'disabled');
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
   }

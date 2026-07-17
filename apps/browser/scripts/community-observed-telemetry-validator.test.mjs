@@ -18,6 +18,8 @@ import {
 import {
   COMMUNITY_OBSERVED_RENDERER_POSTHOG_NOOP,
   COMMUNITY_OBSERVED_TELEMETRY_ARTIFACT_ASSERTION,
+  COMMUNITY_OBSERVED_TELEMETRY_CONSENT_VERSION,
+  COMMUNITY_OBSERVED_TELEMETRY_CONSENT_UI_ASSERTION,
   COMMUNITY_OBSERVED_TELEMETRY_CONTRACT,
   inspectCommunityObservedTelemetryAsar,
   normalizeCommunityObservedArchivePath,
@@ -99,7 +101,14 @@ async function makeFixture(options = {}) {
       )};`,
       options.omitPrivacyMarkers
         ? 'const options = {};'
-        : 'const options = { privacyMode: true, disableGeoip: true, disableRemoteConfig: true, enableExceptionAutocapture: false };',
+        : options.omitPersonProfileMarker
+          ? 'const options = { privacyMode: true, disableGeoip: true, disableRemoteConfig: true, enableExceptionAutocapture: false };'
+          : options.enablePersonProfile
+            ? 'const options = { privacyMode: true, disableGeoip: true, disableRemoteConfig: true, enableExceptionAutocapture: false, "$process_person_profile": true };'
+            : 'const options = { privacyMode: true, disableGeoip: true, disableRemoteConfig: true, enableExceptionAutocapture: false, "$process_person_profile": false };',
+      options.mixedPersonProfile
+        ? 'const unsafeOptions = { "$process_person_profile": true };'
+        : '',
       options.backendNonStaticRequire
         ? 'const runtimeModuleName = "pdf-runtime"; require(runtimeModuleName);'
         : '',
@@ -192,6 +201,11 @@ async function makeFixture(options = {}) {
                 : `const rendererTelemetry = ${JSON.stringify(
                     COMMUNITY_OBSERVED_RENDERER_POSTHOG_NOOP,
                   )};`,
+      `const consentUi = ${JSON.stringify(
+        options.omitConsentUiMarker
+          ? 'missing-consent-ui-marker'
+          : COMMUNITY_OBSERVED_TELEMETRY_CONSENT_UI_ASSERTION,
+      )};`,
     ].join('\n'),
   );
   let rendererHtmlScript = '<script type="module" src="./app.js"></script>';
@@ -327,7 +341,14 @@ test('validates a single backend-only observed PostHog project key', async () =>
     const evidence = inspectCommunityObservedTelemetryAsar(fixture.asarPath);
     assert.equal(evidence.status, 'validated');
     assert.equal(evidence.transport, 'posthog-node-backend');
+    assert.equal(evidence.declaredConsentContract, 'required-choice-v1');
+    assert.equal(
+      evidence.consentVersion,
+      COMMUNITY_OBSERVED_TELEMETRY_CONSENT_VERSION,
+    );
+    assert.equal(evidence.consentUiMarker, 'present');
     assert.equal(evidence.allowedTelemetryLevel, 'anonymous');
+    assert.equal(evidence.personProfileDisableProperty, 'present');
     assert.equal(evidence.renderer.projectKeyEmbedded, false);
     assert.equal(evidence.exceptions, 'disabled');
     assert.equal(evidence.modelTracing, 'disabled');
@@ -973,6 +994,54 @@ test('rejects a backend with a non-canonical privacy contract', async () => {
     assert.throws(
       () => inspectCommunityObservedTelemetryAsar(fixture.asarPath),
       /missing the canonical telemetry contract assertion/,
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('rejects a backend without the person-profile disable marker', async () => {
+  const fixture = await makeFixture({ omitPersonProfileMarker: true });
+  try {
+    assert.throws(
+      () => inspectCommunityObservedTelemetryAsar(fixture.asarPath),
+      /missing an enforced PostHog person-profile disable property/,
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('rejects a backend that enables PostHog person profiles', async () => {
+  const fixture = await makeFixture({ enablePersonProfile: true });
+  try {
+    assert.throws(
+      () => inspectCommunityObservedTelemetryAsar(fixture.asarPath),
+      /enables the PostHog person-profile property/,
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('rejects mixed disabled and enabled PostHog person-profile properties', async () => {
+  const fixture = await makeFixture({ mixedPersonProfile: true });
+  try {
+    assert.throws(
+      () => inspectCommunityObservedTelemetryAsar(fixture.asarPath),
+      /enables the PostHog person-profile property/,
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('rejects a renderer without the required consent UI marker', async () => {
+  const fixture = await makeFixture({ omitConsentUiMarker: true });
+  try {
+    assert.throws(
+      () => inspectCommunityObservedTelemetryAsar(fixture.asarPath),
+      /missing the required telemetry consent UI assertion/,
     );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });

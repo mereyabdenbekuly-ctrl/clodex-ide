@@ -545,8 +545,23 @@ export const userPreferencesSchema = z.object({
   privacy: z
     .object({
       telemetryLevel: z.enum(['off', 'anonymous', 'full']).default('off'),
+      /**
+       * Version of the explicit community-observed telemetry choice. Zero
+       * means that the user has not yet accepted or declined the current
+       * disclosure. The telemetry level remains separate so an explicit
+       * decline can be represented as version=current + level=off.
+       */
+      anonymousTelemetryConsentVersion: z
+        .number()
+        .int()
+        .nonnegative()
+        .catch(0)
+        .default(0),
     })
-    .default({ telemetryLevel: 'off' }),
+    .default({
+      telemetryLevel: 'off',
+      anonymousTelemetryConsentVersion: 0,
+    }),
   search: z
     .object({
       /** ID of the default search engine (references keywords.id in Web Data DB) */
@@ -777,6 +792,7 @@ const defaultDevToolbarForUserPrefs: DevToolbarPreferences = {
 export const defaultUserPreferences: UserPreferences = {
   privacy: {
     telemetryLevel: 'off',
+    anonymousTelemetryConsentVersion: 0,
   },
   search: {
     defaultEngineId: 1,

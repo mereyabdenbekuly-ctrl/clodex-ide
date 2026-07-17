@@ -12,8 +12,9 @@ import { useTrack } from '@ui/hooks/use-track';
 import { cn } from '@ui/utils';
 import { produceWithPatches } from 'immer';
 import { BoxIcon, KeyRoundIcon, UserRoundIcon } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { createCommunityObservedTelemetryConsentPatches } from '../../telemetry-consent/model';
 import {
   SettingsPage,
   SettingsPanel,
@@ -152,6 +153,12 @@ export function AccountSection() {
           >
             Open model providers
           </Button>
+        </SettingsPanel>
+      )}
+
+      {__APP_TELEMETRY_ENABLED__ && (
+        <SettingsPanel className="mx-auto max-w-2xl p-5 sm:p-7">
+          <TelemetrySetting />
         </SettingsPanel>
       )}
     </SettingsPage>
@@ -306,10 +313,6 @@ function AuthenticatedView({
             </div>
           )}
         </div>
-      </div>
-
-      <div className="p-5">
-        <TelemetrySetting />
       </div>
 
       <div className="flex flex-col-reverse gap-2 bg-token-bg-secondary/35 p-4 sm:flex-row sm:justify-end">
@@ -532,6 +535,8 @@ function TelemetrySetting() {
   const { t } = useTranslation('settings');
   const preferences = useKartonState((s) => s.preferences);
   const updatePreferences = useKartonProcedure((p) => p.preferences.update);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState(false);
   const observedCommunityTelemetry =
     __APP_TELEMETRY_MODE__ === 'anonymous-backend-only';
 
@@ -542,10 +547,28 @@ function TelemetrySetting() {
       : preferences.privacy.telemetryLevel;
 
   const handleTelemetryChange = async (value: TelemetryLevel) => {
-    const [, patches] = produceWithPatches(preferences, (draft) => {
-      draft.privacy.telemetryLevel = value;
-    });
-    await updatePreferences(patches);
+    if (isSaving) return;
+    setIsSaving(true);
+    setSaveError(false);
+    try {
+      if (observedCommunityTelemetry) {
+        await updatePreferences(
+          createCommunityObservedTelemetryConsentPatches(
+            value === 'anonymous' ? 'allow' : 'decline',
+          ),
+        );
+        return;
+      }
+
+      const [, patches] = produceWithPatches(preferences, (draft) => {
+        draft.privacy.telemetryLevel = value;
+      });
+      await updatePreferences(patches);
+    } catch {
+      setSaveError(true);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -564,6 +587,7 @@ function TelemetrySetting() {
           size="xs"
           id="telemetry-anonymous-checkbox"
           checked={telemetryMode === 'anonymous' || telemetryMode === 'full'}
+          disabled={isSaving}
           onCheckedChange={(checked: boolean) => {
             void handleTelemetryChange(checked ? 'anonymous' : 'off');
           }}
@@ -594,7 +618,7 @@ function TelemetrySetting() {
             size="xs"
             id="telemetry-full-checkbox"
             checked={telemetryMode === 'full'}
-            disabled={telemetryMode === 'off'}
+            disabled={telemetryMode === 'off' || isSaving}
             onCheckedChange={(checked: boolean) => {
               void handleTelemetryChange(checked ? 'full' : 'anonymous');
             }}
@@ -607,6 +631,13 @@ function TelemetrySetting() {
           </label>
         </div>
       )}
+      <p
+        role="alert"
+        aria-live="assertive"
+        className="min-h-4 text-error-foreground text-xs"
+      >
+        {saveError ? t('telemetry.saveError') : ''}
+      </p>
     </div>
   );
 }
