@@ -29,13 +29,14 @@ import {
   verifyBundledComponentSourceBytes,
 } from './scripts/release-attribution.mjs';
 
-const isCommunityUnsignedDistribution =
-  buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-unsigned';
+const isCommunityDistribution =
+  buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-unsigned' ||
+  buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-observed';
 
 // Community artifacts must remain unsigned even if a developer happens to have
 // official Azure signing variables in the ambient environment.
 const configuredWindowsSignConfig = getWindowsSignConfig();
-const windowsSignConfig = isCommunityUnsignedDistribution
+const windowsSignConfig = isCommunityDistribution
   ? undefined
   : configuredWindowsSignConfig;
 
@@ -90,8 +91,7 @@ const electronRuntimeNoticePaths = resolveElectronRuntimeNoticePaths({
 });
 const allowUnsignedLocalBuild =
   process.env.CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD === 'true';
-const useAdhocMacSignature =
-  allowUnsignedLocalBuild || isCommunityUnsignedDistribution;
+const useAdhocMacSignature = allowUnsignedLocalBuild || isCommunityDistribution;
 const configuredAuthCallbackScheme =
   process.env.CLODEX_AUTH_CALLBACK_SCHEME?.trim().replace(/:$/, '');
 const authCallbackScheme = configuredAuthCallbackScheme || 'clodex-ide';
@@ -152,9 +152,9 @@ if (
     'CLODEX_ALLOW_UNSIGNED_LOCAL_BUILD is forbidden in CI release builds',
   );
 }
-if (isCommunityUnsignedDistribution) {
+if (isCommunityDistribution) {
   console.warn(
-    '[forge.config] Building a community-unsigned package with no official Apple or Windows signing identity',
+    `[forge.config] Building a ${buildConstants.__APP_DISTRIBUTION_MODE__} package with no official Apple or Windows signing identity`,
   );
 }
 if (
@@ -537,19 +537,32 @@ const uploadSourceMapsAndCleanup = (
   _arch: string,
   callback: (error?: Error) => void,
 ) => {
-  if (
-    !buildConstants.__APP_TELEMETRY_ENABLED__ ||
-    !process.env.CI ||
-    !process.env.POSTHOG_CLI_API_KEY
-  ) {
+  const viteDir = path.join(buildPath, '.vite');
+  const deleteMapFiles = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) deleteMapFiles(fullPath);
+      else if (entry.name.endsWith('.map')) fs.unlinkSync(fullPath);
+    }
+  };
+
+  if (!buildConstants.__APP_EXCEPTION_TELEMETRY_ENABLED__) {
+    if (fs.existsSync(viteDir)) deleteMapFiles(viteDir);
     console.log(
-      '[forge.config] Skipping source map upload (telemetry disabled, not in CI, or missing POSTHOG_CLI_API_KEY)',
+      '[forge.config] Removed source maps because exception telemetry is disabled',
     );
     callback();
     return;
   }
 
-  const viteDir = path.join(buildPath, '.vite');
+  if (!process.env.CI || !process.env.POSTHOG_CLI_API_KEY) {
+    console.log(
+      '[forge.config] Skipping source map upload (not in CI or missing POSTHOG_CLI_API_KEY)',
+    );
+    callback();
+    return;
+  }
+
   if (!fs.existsSync(viteDir)) {
     console.log(
       '[forge.config] No .vite directory found, skipping source map upload',
@@ -572,14 +585,6 @@ const uploadSourceMapsAndCleanup = (
       { stdio: 'inherit' },
     );
 
-    // Delete all .map files so they don't ship with the app
-    const deleteMapFiles = (dir: string) => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) deleteMapFiles(fullPath);
-        else if (entry.name.endsWith('.map')) fs.unlinkSync(fullPath);
-      }
-    };
     deleteMapFiles(viteDir);
 
     console.log(

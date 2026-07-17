@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "status": "ENGINEERING_REVIEWED",
-  "reviewedAt": "2026-07-15",
+  "reviewedAt": "2026-07-17",
   "legalConclusion": false,
   "policy": "Exact package@version overrides only. An override may fill missing text or missing/Unknown license metadata; it may not contradict a non-empty package declaration. Hash or identity drift fails closed.",
   "entries": [
@@ -1124,6 +1124,34 @@
         ]
       },
       "notes": "Public license snapshot only; release/legal owner must separately confirm the product use is permitted."
+    },
+    {
+      "package": "html-parse-stringify",
+      "version": "3.0.1",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-17",
+      "basis": "PINNED_CANONICAL_LICENSE_SUPPLEMENT",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/html-parse-stringify/-/html-parse-stringify-3.0.1.tgz",
+        "integrity": "sha512-KknJ50kTInJ7qIScF3jeaFRpMpE8/lfiTdzf/twXyPBLAGrLRTmkz3AdTnKeh40X8k9L2fdYwEp/42WGXIRGcg==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/henrikjoreteg/html-parse-stringify.git"
+        },
+        "gitHead": "ce46022f537ef9b050fac592f9fcc30bf838e5ba"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/SPDX-MIT.txt",
+        "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+        "sourceReferences": [
+          "https://github.com/henrikjoreteg/html-parse-stringify/tree/ce46022f537ef9b050fac592f9fcc30bf838e5ba",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/MIT.txt"
+        ]
+      },
+      "notes": "The exact package declares MIT but omits a standalone license text."
     },
     {
       "package": "input-otp",

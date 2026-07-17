@@ -10,6 +10,7 @@ import { ContextUsageRing } from './context-usage-ring';
 import { DictationControl } from './dictation-control';
 import { Button } from '@clodex/stage-ui/components/button';
 import { cn } from '@ui/utils';
+import { useTranslation } from 'react-i18next';
 import type { DictationState } from '@shared/dictation';
 import { HotkeyActions } from '@shared/hotkeys';
 import {
@@ -320,12 +321,15 @@ export const ChatInput = memo(function ChatInput({
   className,
   ref,
 }: ChatInputProps) {
+  const { t } = useTranslation('task');
   const shownPlaceholder = useRef('');
   useEffect(() => {
     shownPlaceholder.current =
       placeholder ??
-      `Use / to plan and run commands. Use @ for context. ${hasQueuedMessages ? 'Press ↵ to send now' : ''}`;
-  }, [placeholder, hasQueuedMessages]);
+      t('composer.placeholder', {
+        queuedHint: hasQueuedMessages ? t('composer.sendQueuedHint') : '',
+      });
+  }, [placeholder, hasQueuedMessages, t]);
   const staticPlaceholderRef = useRef(() => shownPlaceholder.current);
 
   const [textContent, setTextContent] = useState<string>('');
@@ -983,6 +987,7 @@ export const ChatInputActions = memo(function ChatInputActions({
   canSendMessage,
   onSubmit,
 }: ChatInputActionsProps) {
+  const { t } = useTranslation('task');
   // Always show the send button; show stop button alongside it when agent is working
   const showStopButton = isAgentWorking && !hasPendingQuestion && !!onStop;
   const showSendButton = true;
@@ -1007,7 +1012,7 @@ export const ChatInputActions = memo(function ChatInputActions({
                   e.stopPropagation();
                   onToggleElementSelection?.();
                 }}
-                aria-label="Select context elements"
+                aria-label={t('composer.actions.selectContextElements')}
               >
                 <SquareDashedMousePointerIcon className="size-3.5 stroke-[2.5px]" />
               </Button>
@@ -1016,8 +1021,8 @@ export const ChatInputActions = memo(function ChatInputActions({
               <span className="flex items-center gap-1.5">
                 <span>
                   {elementSelectionActive
-                    ? 'Stop selecting elements'
-                    : 'Add reference elements'}
+                    ? t('composer.actions.stopSelectingElements')
+                    : t('composer.actions.addReferenceElements')}
                 </span>
                 {elementSelectionActive ? (
                   <ShortcutCombo value="Esc" size="xs" />
@@ -1045,7 +1050,7 @@ export const ChatInputActions = memo(function ChatInputActions({
               <Button
                 size="icon-sm"
                 variant="ghost"
-                aria-label="Attach file"
+                aria-label={t('composer.actions.attachFile')}
                 className="shrink-0"
                 onClick={() => {
                   const input = document.getElementById(
@@ -1065,7 +1070,7 @@ export const ChatInputActions = memo(function ChatInputActions({
                 <IconPaperclip2Outline18 className="size-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Attach file</TooltipContent>
+            <TooltipContent>{t('composer.actions.attachFile')}</TooltipContent>
           </Tooltip>
         </>
       )}
@@ -1097,12 +1102,12 @@ export const ChatInputActions = memo(function ChatInputActions({
                 data-active={swarmModeActive || automaticSwarmModeActive}
                 aria-label={
                   automaticSwarmModeActive && battleModeActive
-                    ? 'Battle Agent overrides Ultra Deep Think'
+                    ? t('composer.swarm.battleOverridesUltraLabel')
                     : automaticSwarmModeActive && swarmModeActive
-                      ? 'Clear manual Deep Think; Ultra remains active'
+                      ? t('composer.swarm.clearManualLabel')
                       : automaticSwarmModeActive
-                        ? 'Ultra automatically enables Deep Think'
-                        : 'Toggle Deep Think'
+                        ? t('composer.swarm.ultraAutomaticLabel')
+                        : t('composer.swarm.toggleLabel')
                 }
                 onClick={(e) => {
                   e.preventDefault();
@@ -1115,14 +1120,14 @@ export const ChatInputActions = memo(function ChatInputActions({
             </TooltipTrigger>
             <TooltipContent>
               {automaticSwarmModeActive && battleModeActive
-                ? 'Battle Agent overrides Ultra: this turn uses Battle instead of automatic standard Swarm.'
+                ? t('composer.swarm.battleOverridesUltraDescription')
                 : automaticSwarmModeActive && swarmModeActive
-                  ? 'Manual Deep Think is also enabled. Click to clear the manual flag; Ultra will remain active.'
+                  ? t('composer.swarm.clearManualDescription')
                   : automaticSwarmModeActive
-                    ? 'Ultra active: Max reasoning with automatic standard Swarm. Change model effort to disable it.'
+                    ? t('composer.swarm.ultraAutomaticDescription')
                     : swarmModeActive
-                      ? 'Deep Think enabled: route next message through Swarm'
-                      : 'Enable Deep Think / Swarm'}
+                      ? t('composer.swarm.enabledDescription')
+                      : t('composer.swarm.enableDescription')}
             </TooltipContent>
           </Tooltip>
         )}
@@ -1135,7 +1140,7 @@ export const ChatInputActions = memo(function ChatInputActions({
                 disabled={swarmModeDisabled}
                 className="z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 disabled:opacity-50 data-[active=true]:bg-clodex-green-400/12 data-[active=true]:text-clodex-green-400 data-[active=true]:ring-1 data-[active=true]:ring-clodex-green-400/25"
                 data-active={battleModeActive}
-                aria-label="Toggle Battle Agent"
+                aria-label={t('composer.battle.toggleLabel')}
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -1147,10 +1152,10 @@ export const ChatInputActions = memo(function ChatInputActions({
             </TooltipTrigger>
             <TooltipContent>
               {battleModeActive && automaticSwarmModeActive
-                ? 'Battle Agent overrides Ultra automatic standard Swarm for the next message.'
+                ? t('composer.battle.overridesUltraDescription')
                 : battleModeActive
-                  ? 'Battle Agent enabled: models will debate before coding'
-                  : 'Enable Battle Agent'}
+                  ? t('composer.battle.enabledDescription')
+                  : t('composer.battle.enableDescription')}
             </TooltipContent>
           </Tooltip>
         )}
@@ -1159,7 +1164,7 @@ export const ChatInputActions = memo(function ChatInputActions({
             <TooltipTrigger>
               <Button
                 onClick={onStop}
-                aria-label="Stop agent"
+                aria-label={t('composer.actions.stopAgent')}
                 variant="secondary"
                 className="group z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 opacity-100! shadow-md"
               >
@@ -1168,7 +1173,7 @@ export const ChatInputActions = memo(function ChatInputActions({
             </TooltipTrigger>
             <TooltipContent>
               <span className="flex items-center gap-1.5">
-                <span>Stop agent</span>
+                <span>{t('composer.actions.stopAgent')}</span>
                 <HotkeyCombo action={HotkeyActions.STOP_AGENT} size="xs" />
                 <ShortcutCombo value="Esc" size="xs" />
               </span>
@@ -1181,14 +1186,14 @@ export const ChatInputActions = memo(function ChatInputActions({
               <Button
                 disabled={!canSendMessage}
                 onClick={onSubmit}
-                aria-label="Send message"
+                aria-label={t('composer.actions.sendMessage')}
                 variant="primary"
                 className="z-10 size-8 shrink-0 cursor-pointer rounded-full border-clodex-green-400 bg-clodex-green-400 p-1 shadow-codex-md transition-all hover:bg-clodex-green-500 disabled:opacity-40 disabled:shadow-none"
               >
                 <ArrowUpIcon className="size-4 stroke-3" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Send message</TooltipContent>
+            <TooltipContent>{t('composer.actions.sendMessage')}</TooltipContent>
           </Tooltip>
         )}
       </div>

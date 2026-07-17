@@ -8,24 +8,27 @@ import { ErrorBoundary } from './error-boundary';
 import { TutorialProvider } from '@ui/contexts/tutorial';
 import { PersonalizationThemeSyncer } from './personalization-theme-syncer';
 import { useAnimationIdleGate } from '@ui/hooks/use-animation-idle-gate';
+import { InterfaceLanguageProvider } from './interface-language-provider';
 
 export function ContextProviders({ children }: { children?: ReactNode }) {
   useAnimationIdleGate();
   return (
     <TooltipProvider>
       <KartonProvider>
-        <PostHogProvider>
-          <ErrorBoundary>
-            <TutorialProvider>
-              <MessageEditStateProvider>
-                <TabStateUIProvider>
-                  <PersonalizationThemeSyncer />
-                  {children}
-                </TabStateUIProvider>
-              </MessageEditStateProvider>
-            </TutorialProvider>
-          </ErrorBoundary>
-        </PostHogProvider>
+        <InterfaceLanguageProvider>
+          <PostHogProvider>
+            <ErrorBoundary>
+              <TutorialProvider>
+                <MessageEditStateProvider>
+                  <TabStateUIProvider>
+                    <PersonalizationThemeSyncer />
+                    {children}
+                  </TabStateUIProvider>
+                </MessageEditStateProvider>
+              </TutorialProvider>
+            </ErrorBoundary>
+          </PostHogProvider>
+        </InterfaceLanguageProvider>
       </KartonProvider>
     </TooltipProvider>
   );

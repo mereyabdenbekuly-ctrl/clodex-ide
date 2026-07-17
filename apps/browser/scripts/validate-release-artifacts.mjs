@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import yauzl from 'yauzl';
 import { toSquirrelInternalVersion } from '../etc/squirrel-version.mjs';
+import { inspectCommunityObservedTelemetryAsar } from './community-observed-telemetry-validator.mjs';
 import {
   ATTRIBUTION_DIRECTORY_NAME,
   inspectPackagedAttribution,
@@ -44,7 +45,15 @@ const distributionConfig = {
     baseName: 'clodex-community-unsigned',
     outputDirectoryName: 'community-unsigned',
   },
+  'community-observed': {
+    baseName: 'clodex-community-observed',
+    outputDirectoryName: 'community-observed',
+  },
 };
+
+function isCommunityDistributionMode(value) {
+  return value === 'community-unsigned' || value === 'community-observed';
+}
 
 const help = `
 Validate Windows or Linux Clodex release artifacts.
@@ -55,13 +64,13 @@ Usage:
 Options:
   --platform=<windows|linux>                  Target platform
   --channel=<dev|nightly|prerelease|release>             Build channel (default: release)
-  --distribution-mode=<official|community-unsigned>      Distribution trust mode (default: official)
+  --distribution-mode=<official|community-unsigned|community-observed> Distribution trust mode (default: official)
   --arch=<arm64|x64>                                    Target architecture
   --version=<semver>                                    Package version
   --allow-unsigned                                      Accept unsigned Windows binaries (legacy dev-only escape hatch)
   --output=<path>                                       JSON manifest output path
   --require-trusted-binding                             Require source/tag/plan binding
-  --source-commit=<sha>                                 Exact source commit (required for community-unsigned)
+  --source-commit=<sha>                                 Exact source commit (required for community distributions)
   --help                                                Show this message
 `;
 
@@ -145,25 +154,25 @@ export function parseReleaseArtifactArguments(
       'Release validation requires exact source/tag/plan binding',
     );
   }
-  if (options.distributionMode === 'community-unsigned') {
+  if (isCommunityDistributionMode(options.distributionMode)) {
     if (options.channel !== 'release') {
       throw new Error(
-        'community-unsigned distribution must use the release feature channel',
+        `${options.distributionMode} distribution must use the release feature channel`,
       );
     }
     if (!/^[a-f0-9]{40}$/.test(String(options.sourceCommit ?? ''))) {
       throw new Error(
-        'community-unsigned distribution requires an exact 40-character source commit',
+        `${options.distributionMode} distribution requires an exact 40-character source commit`,
       );
     }
     if (options.requireTrustedBinding) {
       throw new Error(
-        'community-unsigned distribution cannot claim trusted release-plan binding',
+        `${options.distributionMode} distribution cannot claim trusted release-plan binding`,
       );
     }
     if (options.releasePlanPath || options.releasePlanSha256 || options.tag) {
       throw new Error(
-        'community-unsigned distribution must not carry an official tag or release plan',
+        `${options.distributionMode} distribution must not carry an official tag or release plan`,
       );
     }
     options.allowUnsigned = true;
@@ -661,7 +670,7 @@ async function validateWindows({
     allowUnsigned,
   );
   const setupAuthenticode = verifyAuthenticode(setupPath, allowUnsigned);
-  if (distributionMode === 'community-unsigned') {
+  if (isCommunityDistributionMode(distributionMode)) {
     for (const [label, signature] of [
       ['packaged executable', packagedExecutableAuthenticode],
       ['setup executable', setupAuthenticode],
@@ -672,7 +681,7 @@ async function validateWindows({
         signature.status !== 'NotSigned'
       ) {
         throw new Error(
-          `community-unsigned ${label} must be explicitly NotSigned; received ${signature.status || 'unknown'}`,
+          `${distributionMode} ${label} must be explicitly NotSigned; received ${signature.status || 'unknown'}`,
         );
       }
     }
@@ -979,9 +988,15 @@ async function main() {
       ATTRIBUTION_DIRECTORY_NAME,
     ),
     requireReady:
-      options.distributionMode === 'community-unsigned' ||
+      isCommunityDistributionMode(options.distributionMode) ||
       options.channel !== 'dev',
   });
+  const telemetryTrust =
+    options.distributionMode === 'community-observed'
+      ? inspectCommunityObservedTelemetryAsar(
+          path.join(packagedResourcesDirectory, 'app.asar'),
+        )
+      : undefined;
   const expectedPayload = {
     appAsarSha256: await hashFile(
       path.join(packagedResourcesDirectory, 'app.asar'),
@@ -1037,38 +1052,45 @@ async function main() {
     ) {
       throw new Error('Validated publication asset filenames are not unique');
     }
-    const distributionTrust =
-      options.distributionMode === 'community-unsigned'
-        ? options.platform === 'windows'
-          ? {
-              codeSigning: {
-                packagedExecutable:
-                  validation.checks.packagedExecutableAuthenticode,
-                setupExecutable: validation.checks.setupAuthenticode,
-              },
-              mode: 'community-unsigned',
-              notarization: 'not-applicable',
-              osTrust: 'absent',
-              updater: 'excluded',
-              warningCode: 'CLODEX_COMMUNITY_UNSIGNED_NO_OS_TRUST',
-            }
-          : {
-              codeSigning: 'not-applicable',
-              mode: 'community-unsigned',
-              notarization: 'not-applicable',
-              osTrust: 'platform-package-unsigned',
-              updater: 'excluded',
-              warningCode: 'CLODEX_COMMUNITY_UNSIGNED_NO_OS_TRUST',
-            }
+    const distributionTrust = isCommunityDistributionMode(
+      options.distributionMode,
+    )
+      ? options.platform === 'windows'
+        ? {
+            codeSigning: {
+              packagedExecutable:
+                validation.checks.packagedExecutableAuthenticode,
+              setupExecutable: validation.checks.setupAuthenticode,
+            },
+            mode: options.distributionMode,
+            notarization: 'not-applicable',
+            osTrust: 'absent',
+            updater: 'excluded',
+            warningCode:
+              options.distributionMode === 'community-observed'
+                ? 'CLODEX_COMMUNITY_OBSERVED_NO_OS_TRUST'
+                : 'CLODEX_COMMUNITY_UNSIGNED_NO_OS_TRUST',
+          }
         : {
-            mode: 'official',
-            osTrust:
-              options.platform === 'windows'
-                ? options.allowUnsigned
-                  ? 'unsigned-allowed-local'
-                  : 'authenticode-required'
-                : 'platform-package-default',
-          };
+            codeSigning: 'not-applicable',
+            mode: options.distributionMode,
+            notarization: 'not-applicable',
+            osTrust: 'platform-package-unsigned',
+            updater: 'excluded',
+            warningCode:
+              options.distributionMode === 'community-observed'
+                ? 'CLODEX_COMMUNITY_OBSERVED_NO_OS_TRUST'
+                : 'CLODEX_COMMUNITY_UNSIGNED_NO_OS_TRUST',
+          }
+      : {
+          mode: 'official',
+          osTrust:
+            options.platform === 'windows'
+              ? options.allowUnsigned
+                ? 'unsigned-allowed-local'
+                : 'authenticode-required'
+              : 'platform-package-default',
+        };
     const manifest = {
       schemaVersion: 2,
       status: 'passed',
@@ -1087,6 +1109,7 @@ async function main() {
       },
       checks: validation.checks,
       distributionTrust,
+      ...(telemetryTrust ? { telemetryTrust } : {}),
       artifacts,
       publication: {
         assets: publicationAssets,

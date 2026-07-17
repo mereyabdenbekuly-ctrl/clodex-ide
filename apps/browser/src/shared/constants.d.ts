@@ -3,17 +3,29 @@ declare const __APP_RELEASE_CHANNEL__:
   | 'prerelease'
   | 'nightly'
   | 'release';
-declare const __APP_DISTRIBUTION_MODE__: 'official' | 'community-unsigned';
+declare const __APP_DISTRIBUTION_MODE__:
+  | 'official'
+  | 'community-unsigned'
+  | 'community-observed';
 declare const __APP_BUILD_IDENTIFIER__:
   | 'dev'
   | 'prerelease'
   | 'nightly'
   | 'release'
-  | 'community-unsigned';
+  | 'community-unsigned'
+  | 'community-observed';
 declare const __APP_AUTH_ENABLED__: boolean;
 declare const __APP_AUTO_UPDATE_ENABLED__: boolean;
 declare const __APP_REGISTER_DEFAULT_PROTOCOLS__: boolean;
 declare const __APP_TELEMETRY_ENABLED__: boolean;
+declare const __APP_RENDERER_TELEMETRY_ENABLED__: boolean;
+declare const __APP_EXCEPTION_TELEMETRY_ENABLED__: boolean;
+declare const __APP_MODEL_TRACING_ENABLED__: boolean;
+declare const __APP_TELEMETRY_MODE__:
+  | 'standard'
+  | 'disabled'
+  | 'anonymous-backend-only';
+declare const __APP_TELEMETRY_PRIVACY_MODE__: boolean;
 declare const __APP_LOCAL_BUILD_ID__: string;
 declare const __APP_BASE_NAME__: string;
 declare const __APP_NAME__: string;

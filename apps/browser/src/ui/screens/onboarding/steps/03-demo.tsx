@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AgentOs,
   Automations,
@@ -8,56 +8,62 @@ import {
 } from '@ui/assets/feature-images';
 import { useTrack } from '@ui/hooks/use-track';
 import { cn } from '@ui/utils';
+import { useTranslation } from 'react-i18next';
 
 interface Slide {
+  trackingName: string;
   heading: string;
   previewHeading: string;
   subtitle: string;
   image: string;
 }
 
-const slides: Slide[] = [
-  {
-    heading: 'Keep the whole task in one workspace',
-    previewHeading: 'Workspace',
-    subtitle:
-      'Connect code, terminals, browser tabs and task history in one persistent environment.',
-    image: Workspace,
-  },
-  {
-    heading: 'Govern execution with Agent OS',
-    previewHeading: 'Agent OS',
-    subtitle:
-      'Review capabilities, goals and execution boundaries before agents take action.',
-    image: AgentOs,
-  },
-  {
-    heading: 'Automate recurring engineering work',
-    previewHeading: 'Automations',
-    subtitle:
-      'Turn repeatable workflows into governed automations with clear triggers and controls.',
-    image: Automations,
-  },
-  {
-    heading: 'Connect tools through MCP',
-    previewHeading: 'MCP Runtime',
-    subtitle:
-      'Attach local and remote MCP servers without giving every tool unrestricted access.',
-    image: McpRuntime,
-  },
-  {
-    heading: 'Extend Clodex with plugins and skills',
-    previewHeading: 'Extensions',
-    subtitle:
-      'Install integrations for your stack and keep their permissions visible and controlled.',
-    image: PluginLibrary,
-  },
-];
-
 const SLIDE_INTERVAL = 6500;
 const FADE_DURATION = 200;
+const SLIDE_COUNT = 5;
 
 export function StepDemo() {
+  const { t } = useTranslation('onboarding');
+  const slides = useMemo<Slide[]>(
+    () => [
+      {
+        trackingName: 'Workspace',
+        heading: t('demo.slides.workspace.heading'),
+        previewHeading: t('demo.slides.workspace.previewHeading'),
+        subtitle: t('demo.slides.workspace.subtitle'),
+        image: Workspace,
+      },
+      {
+        trackingName: 'Agent OS',
+        heading: t('demo.slides.agentOs.heading'),
+        previewHeading: t('demo.slides.agentOs.previewHeading'),
+        subtitle: t('demo.slides.agentOs.subtitle'),
+        image: AgentOs,
+      },
+      {
+        trackingName: 'Automations',
+        heading: t('demo.slides.automations.heading'),
+        previewHeading: t('demo.slides.automations.previewHeading'),
+        subtitle: t('demo.slides.automations.subtitle'),
+        image: Automations,
+      },
+      {
+        trackingName: 'MCP Runtime',
+        heading: t('demo.slides.mcpRuntime.heading'),
+        previewHeading: t('demo.slides.mcpRuntime.previewHeading'),
+        subtitle: t('demo.slides.mcpRuntime.subtitle'),
+        image: McpRuntime,
+      },
+      {
+        trackingName: 'Extensions',
+        heading: t('demo.slides.extensions.heading'),
+        previewHeading: t('demo.slides.extensions.previewHeading'),
+        subtitle: t('demo.slides.extensions.subtitle'),
+        image: PluginLibrary,
+      },
+    ],
+    [t],
+  );
   const [activeIndex, setActiveIndex] = useState(0);
   const [slideKey, setSlideKey] = useState(0);
   const [visible, setVisible] = useState(true);
@@ -86,7 +92,7 @@ export function StepDemo() {
         setVisible(true);
         if (resumeAutoPlay && !pausedRef.current) {
           timerRef.current = setInterval(
-            () => transitionTo((p) => (p + 1) % slides.length, true),
+            () => transitionTo((p) => (p + 1) % SLIDE_COUNT, true),
             SLIDE_INTERVAL,
           );
         }
@@ -105,7 +111,7 @@ export function StepDemo() {
       if (index === activeIndex) return;
       pause();
       track('onboarding-demo-slide-clicked', {
-        slide_name: slides[index]?.previewHeading ?? `slide-${index}`,
+        slide_name: slides[index]?.trackingName ?? `slide-${index}`,
       });
       transitionTo(() => index, false);
     },
@@ -114,7 +120,7 @@ export function StepDemo() {
 
   useEffect(() => {
     timerRef.current = setInterval(
-      () => transitionTo((p) => (p + 1) % slides.length, true),
+      () => transitionTo((p) => (p + 1) % SLIDE_COUNT, true),
       SLIDE_INTERVAL,
     );
     return clearTimers;

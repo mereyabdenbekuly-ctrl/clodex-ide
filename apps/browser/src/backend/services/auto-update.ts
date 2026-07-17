@@ -34,7 +34,10 @@ declare const __APP_RELEASE_CHANNEL__:
 declare const __APP_VERSION__: string;
 declare const __APP_PLATFORM__: string;
 declare const __APP_ARCH__: string;
-declare const __APP_DISTRIBUTION_MODE__: 'official' | 'community-unsigned';
+declare const __APP_DISTRIBUTION_MODE__:
+  | 'official'
+  | 'community-unsigned'
+  | 'community-observed';
 declare const __APP_AUTO_UPDATE_ENABLED__: boolean;
 
 export class AutoUpdateService extends DisposableService {

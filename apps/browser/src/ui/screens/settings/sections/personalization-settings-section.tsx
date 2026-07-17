@@ -7,6 +7,7 @@ import {
   PERSONALIZATION_THEMES,
   getPersonalizationTheme,
 } from '@shared/personalization-themes';
+import { isInterfaceLanguage, type InterfaceLanguage } from '@shared/i18n';
 import {
   agentPersonalityIds,
   type AgentPersonality,
@@ -24,6 +25,7 @@ import {
   MASCOT_OVERLAY_MIN_SIZE,
 } from '@shared/mascot-overlay';
 import { BellRingIcon, BotIcon, PaletteIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import {
   SettingsPage,
   SettingsPanel,
@@ -45,6 +47,59 @@ function isAgentPersonality(value: unknown): value is AgentPersonality {
   return (
     typeof value === 'string' &&
     agentPersonalityIds.some((personality) => personality === value)
+  );
+}
+
+function InterfaceLanguageSetting() {
+  const { t: tCommon } = useTranslation('common');
+  const { t: tSettings } = useTranslation('settings');
+  const preferences = useKartonState((state) => state.preferences);
+  const updatePreferences = useKartonProcedure(
+    (procedures) => procedures.preferences.update,
+  );
+  const interfaceLanguage = preferences.general.interfaceLanguage;
+  const items: Array<{ value: InterfaceLanguage; label: string }> = [
+    { value: 'system', label: tCommon('language.system') },
+    { value: 'en', label: tCommon('language.english') },
+    { value: 'ru', label: tCommon('language.russianBeta') },
+  ];
+
+  const handleInterfaceLanguageChange = async (value: unknown) => {
+    if (!isInterfaceLanguage(value) || value === interfaceLanguage) return;
+
+    const [, patches] = produceWithPatches(preferences, (draft) => {
+      draft.general.interfaceLanguage = value;
+    });
+
+    try {
+      await updatePreferences(patches);
+    } catch (error) {
+      console.error(tSettings('personalization.language.saveError'), error);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="min-w-0">
+        <h3 className="font-medium text-sm text-token-text-primary">
+          {tSettings('personalization.language.title')}
+        </h3>
+        <p className="mt-1 text-token-text-secondary text-xs leading-5">
+          {tSettings('personalization.language.description')}
+        </p>
+      </div>
+
+      <Select
+        value={interfaceLanguage}
+        onValueChange={handleInterfaceLanguageChange}
+        items={items}
+        triggerVariant="secondary"
+        size="xs"
+        triggerClassName="w-auto min-w-36 rounded-lg px-2 py-3"
+        side="bottom"
+        align="end"
+      />
+    </div>
   );
 }
 
@@ -598,6 +653,7 @@ function ThemeSetting() {
 }
 
 export function PersonalizationSettingsSection() {
+  const { t } = useTranslation('settings');
   const mascotOverlayEnabled = useKartonState(
     (s) =>
       resolveFeatureGate(
@@ -617,9 +673,9 @@ export function PersonalizationSettingsSection() {
 
   return (
     <SettingsPage
-      eyebrow="Experience"
-      title="Personalization"
-      description="Tune the visual language, interface scale, notifications, and agent communication style."
+      eyebrow={t('personalization.eyebrow')}
+      title={t('personalization.title')}
+      description={t('personalization.description')}
       toolbar={
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <SettingsSummaryCard
@@ -644,6 +700,16 @@ export function PersonalizationSettingsSection() {
       }
     >
       <div className="space-y-8">
+        <section className="space-y-3">
+          <SettingsSectionHeader
+            title={t('personalization.language.sectionTitle')}
+            description={t('personalization.language.sectionDescription')}
+          />
+          <SettingsPanel className="p-4">
+            <InterfaceLanguageSetting />
+          </SettingsPanel>
+        </section>
+
         <section className="space-y-3">
           <SettingsSectionHeader
             title="Appearance"

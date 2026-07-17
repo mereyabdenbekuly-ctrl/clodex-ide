@@ -10,6 +10,10 @@ import {
 import { memoryNotesRetentionSchema } from '../../memory-notes';
 import { networkEgressPreferencesSchema } from '../../network-egress-control';
 import {
+  DEFAULT_INTERFACE_LANGUAGE,
+  INTERFACE_LANGUAGE_OPTIONS,
+} from '../../i18n/locales';
+import {
   AI_PROVIDER_PROTOCOLS,
   AI_PROVIDER_TYPES,
 } from '../../ai-provider/types';
@@ -532,6 +536,11 @@ const sidebarPreferencesSchema = z
   .default(defaultSidebarPreferences)
   .catch(defaultSidebarPreferences);
 
+export const interfaceLanguageSchema = z
+  .enum(INTERFACE_LANGUAGE_OPTIONS)
+  .catch(DEFAULT_INTERFACE_LANGUAGE)
+  .default(DEFAULT_INTERFACE_LANGUAGE);
+
 export const userPreferencesSchema = z.object({
   privacy: z
     .object({
@@ -552,6 +561,8 @@ export const userPreferencesSchema = z.object({
       startupPage: pageSettingSchema.default({ type: 'home' }),
       /** UI zoom percentage applied to the Clodex interface (70-130) */
       uiZoomPercentage: z.number().min(70).max(130).default(100),
+      /** Language used by the Clodex interface */
+      interfaceLanguage: interfaceLanguageSchema,
       /** Global terminal zoom percentage applied to all terminal tabs (50-150) */
       terminalZoomPercentage: z.number().min(50).max(150).default(100),
       /** Global file code editor zoom percentage applied to all file tabs (50-200) */
@@ -573,6 +584,7 @@ export const userPreferencesSchema = z.object({
       newTabPage: { type: 'home' },
       startupPage: { type: 'home' },
       uiZoomPercentage: 100,
+      interfaceLanguage: DEFAULT_INTERFACE_LANGUAGE,
       terminalZoomPercentage: 100,
       fileCodeZoomPercentage: 100,
       fileSearchIncludeGitignored: false,
@@ -773,6 +785,7 @@ export const defaultUserPreferences: UserPreferences = {
     newTabPage: { type: 'home' },
     startupPage: { type: 'home' },
     uiZoomPercentage: 100,
+    interfaceLanguage: DEFAULT_INTERFACE_LANGUAGE,
     terminalZoomPercentage: 100,
     fileCodeZoomPercentage: 100,
     fileSearchIncludeGitignored: false,

@@ -23,6 +23,7 @@ import {
   useState,
 } from 'react';
 import { cn } from '@ui/utils';
+import { useTranslation } from 'react-i18next';
 
 interface ToolApprovalOption {
   value: ToolApprovalMode;
@@ -38,31 +39,6 @@ interface ToolApprovalOption {
   trailingIcon?: ComponentType<{ className?: string }>;
 }
 
-const OPTIONS: ToolApprovalOption[] = [
-  {
-    value: 'alwaysAsk',
-    label: 'Always ask',
-    title: 'Ask before shell commands',
-    description:
-      'This agent will pause and ask for your approval before running any shell command.',
-  },
-  {
-    value: 'smart',
-    label: 'Smart approval',
-    trailingIcon: IconSparkleOutline18,
-    title: 'Only ask for risky commands',
-    description:
-      'A fast classifier decides per command. Read-only and workspace-scoped commands run automatically; destructive or system-level commands still ask for approval.',
-  },
-  {
-    value: 'alwaysAllow',
-    label: 'Always allow',
-    title: 'Skip future approvals',
-    description:
-      'This agent will run every shell command without asking. Only enable this if you trust what this agent is about to do.',
-  },
-];
-
 interface ToolApprovalSelectProps {
   onToolApprovalChange?: () => void;
 }
@@ -70,6 +46,7 @@ interface ToolApprovalSelectProps {
 export const ToolApprovalSelect = memo(function ToolApprovalSelect({
   onToolApprovalChange,
 }: ToolApprovalSelectProps) {
+  const { t } = useTranslation('task');
   const [openAgent] = useOpenAgent();
   const currentMode = useKartonState((s) =>
     openAgent
@@ -81,11 +58,37 @@ export const ToolApprovalSelect = memo(function ToolApprovalSelect({
     (p) => p.agents.setToolApprovalMode,
   );
 
-  const currentOption = useMemo(
-    () => OPTIONS.find((o) => o.value === currentMode),
-    [currentMode],
+  const options = useMemo<ToolApprovalOption[]>(
+    () => [
+      {
+        value: 'alwaysAsk',
+        label: t('approval.mode.alwaysAsk.label'),
+        title: t('approval.mode.alwaysAsk.title'),
+        description: t('approval.mode.alwaysAsk.description'),
+      },
+      {
+        value: 'smart',
+        label: t('approval.mode.smart.label'),
+        trailingIcon: IconSparkleOutline18,
+        title: t('approval.mode.smart.title'),
+        description: t('approval.mode.smart.description'),
+      },
+      {
+        value: 'alwaysAllow',
+        label: t('approval.mode.alwaysAllow.label'),
+        title: t('approval.mode.alwaysAllow.title'),
+        description: t('approval.mode.alwaysAllow.description'),
+      },
+    ],
+    [t],
   );
-  const currentLabel = currentOption?.label ?? 'Always ask';
+
+  const currentOption = useMemo(
+    () => options.find((o) => o.value === currentMode),
+    [currentMode, options],
+  );
+  const currentLabel =
+    currentOption?.label ?? t('approval.mode.alwaysAsk.label');
   const CurrentIcon = currentOption?.icon;
 
   // Side-panel hover state
@@ -204,7 +207,7 @@ export const ToolApprovalSelect = memo(function ToolApprovalSelect({
               )}
             >
               <ComboboxList>
-                {OPTIONS.map((option) => (
+                {options.map((option) => (
                   <ToolApprovalItem
                     key={option.value}
                     option={option}

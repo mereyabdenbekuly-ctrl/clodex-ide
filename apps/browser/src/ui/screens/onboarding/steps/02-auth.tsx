@@ -26,6 +26,7 @@ import {
   isProviderApiKeyConnected,
   supportsProviderAuthMethod,
 } from '@shared/provider-auth';
+import { useTranslation } from 'react-i18next';
 
 type AuthMode = 'clodex' | 'api-keys' | 'local';
 type CompletionAuthMode = 'clodex' | 'api-keys' | 'local';
@@ -79,6 +80,7 @@ export function StepAuth({
   onValidityChange?: StepValidityCallback;
   onAuthCompleted?: (completion: OnboardingAuthCompletion) => void;
 }) {
+  const { t } = useTranslation('onboarding');
   const sendOtp = useKartonProcedure((p) => p.userAccount.sendOtp);
   const verifyOtp = useKartonProcedure((p) => p.userAccount.verifyOtp);
   // Auth handoff procedures wait for OS callbacks (system browser → OAuth/OTP
@@ -228,11 +230,11 @@ export function StepAuth({
         isValid
           ? undefined
           : __APP_AUTH_ENABLED__
-            ? 'Connect a provider key, a local model, or Clodex Cloud'
-            : 'Connect a provider key or a local model',
+            ? t('auth.blockReason.withCloud')
+            : t('auth.blockReason.localOnly'),
       );
     }
-  }, [isActive, isValid, onValidityChange]);
+  }, [isActive, isValid, onValidityChange, t]);
 
   const handleGetApiKey = useCallback(
     (url: string) => {
@@ -286,10 +288,7 @@ export function StepAuth({
       <div className="flex flex-1 flex-col items-center justify-center gap-2.5">
         <div className="flex flex-col items-center gap-2">
           <h1 className="font-medium text-foreground text-xl">
-            You&apos;re signed in as{' '}
-            <span className="text-foreground">
-              {userDisplayName ?? 'Clodex'}
-            </span>
+            {t('auth.signedInAs', { name: userDisplayName ?? 'CLODEx' })}
           </h1>
           <Button
             variant="ghost"
@@ -298,7 +297,7 @@ export function StepAuth({
               setPhase('form-input');
             }}
           >
-            Use a different email
+            {t('auth.useDifferentAccount')}
           </Button>
         </div>
         <div className="app-no-drag mt-2 flex items-center gap-2">
@@ -321,11 +320,11 @@ export function StepAuth({
             htmlFor="telemetry-full-checkbox"
             className="text-muted-foreground text-xs"
           >
-            Share identifiable chat and usage data with clodex.
+            {t('auth.telemetry.identifiableLabel')}
           </label>
         </div>
         <p className="mt-1 max-w-sm text-center text-[11px] text-muted-foreground/80">
-          Telemetry is disabled by default and can be configured in settings.
+          {t('auth.telemetry.defaultOffNote')}
         </p>
       </div>
     );
@@ -336,20 +335,20 @@ export function StepAuth({
       {mode !== 'clodex' && (
         <div className="flex flex-col items-center gap-2 pb-2">
           <h1 className="font-medium text-foreground text-xl">
-            Choose how to connect
+            {t('auth.chooseConnection.title')}
           </h1>
           <p className="text-muted-foreground text-sm">
             {__APP_AUTH_ENABLED__
-              ? 'Use your own key, a local model, or optional Clodex Cloud.'
-              : 'Use your own provider key or a local model.'}
+              ? t('auth.chooseConnection.withCloud')
+              : t('auth.chooseConnection.localOnly')}
           </p>
         </div>
       )}
 
       {mode === 'clodex' && phase === 'form-input' && (
         <SignInOptionsPanel
-          title="С возвращением"
-          description="Войдите в CLODEx.xyz, чтобы подключить аккаунт к IDE."
+          title={t('auth.cloudSignIn.title')}
+          description={t('auth.cloudSignIn.description')}
           sendOtp={(email, token) => sendOtp(email, token ?? '')}
           verifyOtp={verifyOtp}
           signInSocial={signInSocial}
@@ -498,7 +497,7 @@ export function StepAuth({
               size="xs"
               onClick={() => void handleUseLocalOllama()}
             >
-              Use local Ollama
+              {t('auth.apiKey.useLocalOllama')}
             </Button>
             <Button
               variant="ghost"
@@ -513,7 +512,9 @@ export function StepAuth({
                 });
               }}
             >
-              {showMoreProviders ? 'Show less' : 'Show 4 more providers'}
+              {showMoreProviders
+                ? t('auth.apiKey.showLess')
+                : t('auth.apiKey.showMoreProviders', { count: 4 })}
             </Button>
           </div>
           {__APP_AUTH_ENABLED__ && (
@@ -522,7 +523,7 @@ export function StepAuth({
               size="sm"
               onClick={() => switchMode('clodex')}
             >
-              Quick start with Clodex Cloud
+              {t('auth.cloudSignIn.quickStart')}
             </Button>
           )}
         </div>
@@ -530,18 +531,49 @@ export function StepAuth({
 
       {mode === 'local' && (
         <div className="app-no-drag flex w-full max-w-xs flex-col gap-3 text-center">
-          <p className="text-foreground text-sm">Local Ollama is configured.</p>
+          <p className="text-foreground text-sm">
+            {t('auth.localOllama.configured')}
+          </p>
           <p className="text-muted-foreground text-xs">
-            Models will be loaded from http://localhost:11434 and no API key is
-            required.
+            {t('auth.localOllama.description')}
           </p>
           <Button
             variant="ghost"
             size="xs"
             onClick={() => switchMode('api-keys')}
           >
-            Choose another provider
+            {t('auth.localOllama.chooseAnotherProvider')}
           </Button>
+        </div>
+      )}
+
+      {__APP_TELEMETRY_MODE__ === 'anonymous-backend-only' && (
+        <div className="app-no-drag mt-2 flex max-w-sm flex-col items-center gap-1.5">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              size="xs"
+              id="onboarding-telemetry-anonymous-checkbox"
+              checked={preferences.privacy.telemetryLevel === 'anonymous'}
+              onCheckedChange={(checked: boolean) => {
+                void preferencesUpdate([
+                  {
+                    op: 'replace',
+                    path: ['privacy', 'telemetryLevel'],
+                    value: checked ? 'anonymous' : 'off',
+                  },
+                ]);
+              }}
+            />
+            <label
+              htmlFor="onboarding-telemetry-anonymous-checkbox"
+              className="text-muted-foreground text-xs"
+            >
+              {t('auth.telemetry.anonymousObservedLabel')}
+            </label>
+          </div>
+          <p className="max-w-sm text-center text-[11px] text-muted-foreground/80">
+            {t('auth.telemetry.anonymousObservedNote')}
+          </p>
         </div>
       )}
     </div>
@@ -571,6 +603,7 @@ function ApiKeyRow({
   onGetApiKey: (url: string) => void;
   onFocusProvider?: (provider: ProviderKey) => void;
 }) {
+  const { t } = useTranslation('onboarding');
   const [localInput, setLocalInput] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
@@ -614,12 +647,12 @@ function ApiKeyRow({
         setLocalError(res.error);
       }
     } catch {
-      setLocalError('Connection failed. Please try again.');
+      setLocalError(t('auth.apiKey.connectionFailed'));
     } finally {
       connectInFlightRef.current = false;
       setIsConnecting(false);
     }
-  }, [localInput, onConnect, provider]);
+  }, [localInput, onConnect, provider, t]);
 
   const handleDisconnect = useCallback(async () => {
     if (disconnectInFlightRef.current) return;
@@ -632,13 +665,13 @@ function ApiKeyRow({
       setLocalError(
         err instanceof Error
           ? err.message
-          : 'Disconnection failed. Please try again.',
+          : t('auth.apiKey.disconnectionFailed'),
       );
     } finally {
       disconnectInFlightRef.current = false;
       setIsDisconnecting(false);
     }
-  }, [onDisconnect, provider]);
+  }, [onDisconnect, provider, t]);
 
   return (
     <div
@@ -665,7 +698,7 @@ function ApiKeyRow({
                 className="text-primary-foreground text-xs transition-colors hover:cursor-pointer hover:text-hover-derived"
                 onClick={() => onGetApiKey(apiKeyUrl)}
               >
-                Create key
+                {t('auth.apiKey.createKey')}
               </button>
             </TooltipTrigger>
             <TooltipContent>{apiKeyUrl}</TooltipContent>
@@ -731,7 +764,9 @@ function ApiKeyRow({
             onClick={() => void handleDisconnect()}
             disabled={isDisconnecting}
           >
-            {isDisconnecting ? 'Disconnecting…' : 'Disconnect'}
+            {isDisconnecting
+              ? t('auth.apiKey.disconnecting')
+              : t('auth.apiKey.disconnect')}
           </Button>
         ) : (
           localInput.trim() && (
@@ -741,7 +776,9 @@ function ApiKeyRow({
               onClick={() => void handleConnect()}
               disabled={isConnecting}
             >
-              {isConnecting ? 'Connecting…' : 'Connect'}
+              {isConnecting
+                ? t('auth.apiKey.connecting')
+                : t('auth.apiKey.connect')}
             </Button>
           )
         )}

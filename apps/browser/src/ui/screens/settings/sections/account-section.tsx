@@ -13,6 +13,7 @@ import { cn } from '@ui/utils';
 import { produceWithPatches } from 'immer';
 import { BoxIcon, KeyRoundIcon, UserRoundIcon } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   SettingsPage,
   SettingsPanel,
@@ -528,10 +529,17 @@ function formatProtocol(protocol: string): string {
 }
 
 function TelemetrySetting() {
+  const { t } = useTranslation('settings');
   const preferences = useKartonState((s) => s.preferences);
   const updatePreferences = useKartonProcedure((p) => p.preferences.update);
+  const observedCommunityTelemetry =
+    __APP_TELEMETRY_MODE__ === 'anonymous-backend-only';
 
-  const telemetryMode = preferences.privacy.telemetryLevel;
+  const telemetryMode =
+    observedCommunityTelemetry &&
+    preferences.privacy.telemetryLevel !== 'anonymous'
+      ? 'off'
+      : preferences.privacy.telemetryLevel;
 
   const handleTelemetryChange = async (value: TelemetryLevel) => {
     const [, patches] = produceWithPatches(preferences, (draft) => {
@@ -543,8 +551,12 @@ function TelemetrySetting() {
   return (
     <div className="flex flex-col gap-4">
       <SettingsSectionHeader
-        title="Telemetry"
-        description="Control what usage data is collected to help improve Clodex."
+        title={t('telemetry.title')}
+        description={t(
+          observedCommunityTelemetry
+            ? 'telemetry.observedDescription'
+            : 'telemetry.standardDescription',
+        )}
       />
 
       <div className="flex items-center gap-2">
@@ -560,31 +572,41 @@ function TelemetrySetting() {
           htmlFor="telemetry-anonymous-checkbox"
           className="text-token-text-secondary text-xs"
         >
-          Help improve Clodex by sharing anonymized events.
+          {t(
+            observedCommunityTelemetry
+              ? 'telemetry.observedLabel'
+              : 'telemetry.anonymousLabel',
+          )}
         </label>
       </div>
-      <div
-        className={cn(
-          'flex items-center gap-2',
-          telemetryMode === 'off' && 'pointer-events-none opacity-50',
-        )}
-      >
-        <Checkbox
-          size="xs"
-          id="telemetry-full-checkbox"
-          checked={telemetryMode === 'full'}
-          disabled={telemetryMode === 'off'}
-          onCheckedChange={(checked: boolean) => {
-            void handleTelemetryChange(checked ? 'full' : 'anonymous');
-          }}
-        />
-        <label
-          htmlFor="telemetry-full-checkbox"
-          className="text-token-text-secondary text-xs"
+      {observedCommunityTelemetry ? (
+        <p className="text-token-text-tertiary text-xs leading-5">
+          {t('telemetry.observedPrivacyNote')}
+        </p>
+      ) : (
+        <div
+          className={cn(
+            'flex items-center gap-2',
+            telemetryMode === 'off' && 'pointer-events-none opacity-50',
+          )}
         >
-          Share identifiable chat and usage data with Clodex.
-        </label>
-      </div>
+          <Checkbox
+            size="xs"
+            id="telemetry-full-checkbox"
+            checked={telemetryMode === 'full'}
+            disabled={telemetryMode === 'off'}
+            onCheckedChange={(checked: boolean) => {
+              void handleTelemetryChange(checked ? 'full' : 'anonymous');
+            }}
+          />
+          <label
+            htmlFor="telemetry-full-checkbox"
+            className="text-token-text-secondary text-xs"
+          >
+            {t('telemetry.fullLabel')}
+          </label>
+        </div>
+      )}
     </div>
   );
 }

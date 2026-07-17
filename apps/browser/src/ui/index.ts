@@ -38,36 +38,40 @@ function errorFromErrorEvent(event: ErrorEvent) {
   return new Error(message);
 }
 
-// Global safety net: capture unhandled errors and rejections to PostHog
-window.addEventListener('error', (event) => {
-  if (
-    containsResizeObserverLoopError(event.error) ||
-    containsResizeObserverLoopError(event.message)
-  ) {
-    event.preventDefault();
-    return;
-  }
+// The observed community lane never initializes renderer PostHog and never
+// registers renderer exception capture. Its project key exists only in the
+// backend bundle.
+if (__APP_RENDERER_TELEMETRY_ENABLED__) {
+  window.addEventListener('error', (event) => {
+    if (
+      containsResizeObserverLoopError(event.error) ||
+      containsResizeObserverLoopError(event.message)
+    ) {
+      event.preventDefault();
+      return;
+    }
 
-  posthog.captureException(errorFromErrorEvent(event), {
-    source: 'renderer',
-    handler: 'globalOnError',
-    message: event.message,
-    filename: event.filename,
-    lineno: event.lineno,
-    colno: event.colno,
+    posthog.captureException(errorFromErrorEvent(event), {
+      source: 'renderer',
+      handler: 'globalOnError',
+      message: event.message,
+      filename: event.filename,
+      lineno: event.lineno,
+      colno: event.colno,
+    });
   });
-});
 
-window.addEventListener('unhandledrejection', (event) => {
-  const error =
-    event.reason instanceof Error
-      ? event.reason
-      : new Error(String(event.reason));
-  posthog.captureException(error, {
-    source: 'renderer',
-    handler: 'unhandledRejection',
+  window.addEventListener('unhandledrejection', (event) => {
+    const error =
+      event.reason instanceof Error
+        ? event.reason
+        : new Error(String(event.reason));
+    posthog.captureException(error, {
+      source: 'renderer',
+      handler: 'unhandledRejection',
+    });
   });
-});
+}
 
 async function bootstrapRenderer() {
   const windowMode = new URLSearchParams(window.location.search).get('window');
@@ -98,8 +102,10 @@ async function bootstrapRenderer() {
 
 void bootstrapRenderer().catch((error) => {
   console.error(error);
-  posthog.captureException(
-    error instanceof Error ? error : new Error(String(error)),
-    { source: 'renderer', handler: 'reactRootRender' },
-  );
+  if (__APP_RENDERER_TELEMETRY_ENABLED__) {
+    posthog.captureException(
+      error instanceof Error ? error : new Error(String(error)),
+      { source: 'renderer', handler: 'reactRootRender' },
+    );
+  }
 });

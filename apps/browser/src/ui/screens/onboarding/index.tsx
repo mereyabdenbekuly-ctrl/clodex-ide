@@ -8,6 +8,7 @@ import {
 import { IconArrowLeftFill18, IconArrowRightFill18 } from '@clodex/icons';
 import { useKartonProcedure } from '@ui/hooks/use-karton';
 import { cn } from '@ui/utils';
+import { useTranslation } from 'react-i18next';
 import { StepWelcome } from './steps/01-welcome';
 import { StepAuth, type OnboardingAuthCompletion } from './steps/02-auth';
 import { StepDemo } from './steps/03-demo';
@@ -19,6 +20,7 @@ export type StepValidityCallback = (
 ) => void;
 
 export function OnboardingWizard() {
+  const { t } = useTranslation('onboarding');
   const [currentStep, setCurrentStep] = useState(0);
   const [canProceed, setCanProceed] = useState(false);
   const [blockReason, setBlockReason] = useState<string | null>(null);
@@ -110,7 +112,7 @@ export function OnboardingWizard() {
             className={cn(hideBackButton && 'invisible')}
           >
             <IconArrowLeftFill18 className="size-4" />
-            Back
+            {t('navigation.back')}
           </Button>
         </div>
 
@@ -141,7 +143,7 @@ export function OnboardingWizard() {
                 disabled={!canProceed}
                 className="text-primary-foreground! hover:text-hover-derived! active:text-active-derived!"
               >
-                Finish
+                {t('navigation.finish')}
                 <IconArrowRightFill18 className="size-4" />
               </Button>
             </NextButtonTooltip>
@@ -157,7 +159,7 @@ export function OnboardingWizard() {
                     'text-primary-foreground! hover:text-hover-derived! active:text-active-derived!',
                 )}
               >
-                Next
+                {t('navigation.next')}
                 <IconArrowRightFill18 className="size-4" />
               </Button>
             </NextButtonTooltip>

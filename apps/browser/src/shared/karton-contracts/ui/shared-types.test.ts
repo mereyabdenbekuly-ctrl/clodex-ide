@@ -29,6 +29,37 @@ describe('userPreferencesSchema agent personality defaults', () => {
   });
 });
 
+describe('userPreferencesSchema interface language defaults', () => {
+  it('keeps legacy installations in English until they opt in', () => {
+    const parsed = userPreferencesSchema.parse({
+      general: { uiZoomPercentage: 110 },
+    });
+
+    expect(parsed.general.interfaceLanguage).toBe('en');
+    expect(parsed.general.uiZoomPercentage).toBe(110);
+  });
+
+  it.each([
+    'system',
+    'en',
+    'ru',
+  ] as const)('preserves the supported %s preference', (interfaceLanguage) => {
+    const parsed = userPreferencesSchema.parse({
+      general: { interfaceLanguage },
+    });
+
+    expect(parsed.general.interfaceLanguage).toBe(interfaceLanguage);
+  });
+
+  it('sanitizes unsupported persisted languages', () => {
+    const parsed = userPreferencesSchema.parse({
+      general: { interfaceLanguage: 'de' },
+    });
+
+    expect(parsed.general.interfaceLanguage).toBe('en');
+  });
+});
+
 describe('userPreferencesSchema collaboration and feature gate defaults', () => {
   it('defaults legacy preferences to the neutral collaboration mode', () => {
     const parsed = userPreferencesSchema.parse({});
