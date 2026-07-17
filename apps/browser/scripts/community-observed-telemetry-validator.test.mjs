@@ -89,6 +89,9 @@ async function makeFixture(options = {}) {
       options.omitPrivacyMarkers
         ? 'const options = {};'
         : 'const options = { privacyMode: true, disableGeoip: true, disableRemoteConfig: true, enableExceptionAutocapture: false };',
+      options.backendNonStaticRequire
+        ? 'const runtimeModuleName = "pdf-runtime"; require(runtimeModuleName);'
+        : '',
       'export { key, contract, assertion, options };',
     ].join('\n'),
   );
@@ -143,6 +146,11 @@ async function makeFixture(options = {}) {
   }
   if (options.rendererModuleBracketRequireEscape) {
     rendererImports.push('module["require"]("../../../../resources/evil.js");');
+  }
+  if (options.rendererNonStaticImport) {
+    rendererImports.push(
+      'const runtimeModulePath = "./runtime.js"; import(runtimeModulePath);',
+    );
   }
   if (options.uppercaseRendererCode) {
     writeFileSync(
@@ -373,6 +381,62 @@ test('uses native lookup paths with real ASAR stat and extract operations', asyn
   }
 });
 
+test('keeps broken absolute dependency .bin links no-follow', async () => {
+  const fixture = await makeFixture();
+  const asarApi = {
+    listPackage,
+    statFile(asarPath, lookupPath, followLinks) {
+      const metadata = statFile(asarPath, lookupPath, followLinks);
+      return normalizeCommunityObservedArchivePath(lookupPath).endsWith(
+        'node_modules/sharp/node_modules/.bin/semver.js',
+      )
+        ? {
+            link: 'node_modules/sharp/node_modules/.bin/home/runner/work/clodex-ide/clodex-ide/node_modules/sharp/node_modules/semver/bin/semver.js',
+          }
+        : metadata;
+    },
+    extractFile,
+  };
+  try {
+    assert.equal(
+      inspectCommunityObservedTelemetryAsar(fixture.asarPath, { asarApi })
+        .status,
+      'validated',
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('rejects missing dependency .bin links whose source touches .vite', async () => {
+  const fixture = await makeFixture();
+  const listedLink = '/node_modules/pkg/.vite/node_modules/x/.bin/nested-tool';
+  const asarApi = {
+    listPackage(asarPath) {
+      return [...listPackage(asarPath), listedLink];
+    },
+    statFile(asarPath, lookupPath, followLinks) {
+      if (
+        normalizeCommunityObservedArchivePath(lookupPath) ===
+        normalizeCommunityObservedArchivePath(listedLink)
+      ) {
+        return { link: 'node_modules/missing/tool.js' };
+      }
+      return statFile(asarPath, lookupPath, followLinks);
+    },
+    extractFile,
+  };
+  try {
+    assert.throws(
+      () =>
+        inspectCommunityObservedTelemetryAsar(fixture.asarPath, { asarApi }),
+      /protected ASAR entry must not be a symlink: node_modules\/pkg\/\.vite\//,
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
 test('uses win32 lookup paths throughout ASAR inspection', async () => {
   const fixture = await makeFixture();
   const nativeLookups = [];
@@ -559,6 +623,30 @@ test('rejects renderer imports that escape the protected namespace', async () =>
     assert.throws(
       () => inspectCommunityObservedTelemetryAsar(fixture.asarPath),
       /renderer relative import escapes \.vite\/renderer/,
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('allows non-static backend module loading under the trusted-source threat model', async () => {
+  const fixture = await makeFixture({ backendNonStaticRequire: true });
+  try {
+    assert.equal(
+      inspectCommunityObservedTelemetryAsar(fixture.asarPath).status,
+      'validated',
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('rejects non-static renderer module loading', async () => {
+  const fixture = await makeFixture({ rendererNonStaticImport: true });
+  try {
+    assert.throws(
+      () => inspectCommunityObservedTelemetryAsar(fixture.asarPath),
+      /protected JavaScript has a non-static module specifier: \.vite\/renderer/,
     );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });

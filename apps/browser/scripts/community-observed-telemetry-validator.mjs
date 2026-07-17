@@ -80,6 +80,20 @@ function isVitePath(comparisonPath) {
   return comparisonPath === '.vite' || comparisonPath.startsWith('.vite/');
 }
 
+function pathTouchesViteNamespace(comparisonPath) {
+  return comparisonPath.split('/').includes('.vite');
+}
+
+function isDependencyBinLink(comparisonPath) {
+  const parts = comparisonPath.split('/');
+  const binIndex = parts.lastIndexOf('.bin');
+  return (
+    binIndex > 0 &&
+    binIndex === parts.length - 2 &&
+    parts.slice(0, binIndex).includes('node_modules')
+  );
+}
+
 function isExecutableVitePath(comparisonPath) {
   return (
     comparisonPath === '.vite/build' ||
@@ -207,7 +221,7 @@ function javascriptRelativeModuleSpecifiers(source, sourcePath) {
   const addExpression = (expression, dynamic) => {
     const specifier = staticStringValue(expression);
     if (specifier === undefined) {
-      if (dynamic) {
+      if (dynamic && sourcePath.startsWith('.vite/renderer/')) {
         throw new Error(
           `community-observed protected JavaScript has a non-static module specifier: ${sourcePath}`,
         );
@@ -505,7 +519,10 @@ function regularArchiveEntries(asarPath, { archivePathApi, asarApi }) {
     const visited = new Set([entry.comparisonPath]);
     let targetPath = entry.targetComparisonPath;
     while (true) {
-      if (isVitePath(entry.comparisonPath) || isVitePath(targetPath)) {
+      if (
+        pathTouchesViteNamespace(entry.comparisonPath) ||
+        pathTouchesViteNamespace(targetPath)
+      ) {
         throw new Error(
           `community-observed protected ASAR entry must not be a symlink: ${entry.comparisonPath} -> ${targetPath}`,
         );
@@ -518,6 +535,7 @@ function regularArchiveEntries(asarPath, { archivePathApi, asarApi }) {
       visited.add(targetPath);
       const target = entries.get(targetPath);
       if (!target) {
+        if (isDependencyBinLink(entry.comparisonPath)) break;
         throw new Error(
           `community-observed ASAR symlink target is missing: ${entry.comparisonPath} -> ${targetPath}`,
         );
