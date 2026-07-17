@@ -40,6 +40,7 @@ export function ModelThinkingPanel({
   const options = getModelThinkingOptions(model, defaultOptions);
   const defaultOption = getDefaultThinkingOption(model, defaultOptions);
   const hasOverride = display.isOverride;
+  const hasUltra = options.some((option) => option.value === 'ultra');
 
   return (
     <>
@@ -94,6 +95,12 @@ export function ModelThinkingPanel({
             <p className="text-muted-foreground">
               Default: {defaultOption.label}
             </p>
+            {hasUltra && (
+              <p className="mt-1 text-muted-foreground">
+                Ultra uses Max reasoning and routes the turn through standard
+                Swarm for proactive subagents.
+              </p>
+            )}
           </div>
           <RadioGroup
             value={display.value}

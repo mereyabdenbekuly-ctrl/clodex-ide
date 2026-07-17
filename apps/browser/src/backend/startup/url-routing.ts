@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import type { Logger } from '../services/logger';
 import type { WindowLayoutService } from '../services/window-layout';
+import { AUTH_CALLBACK_PROTOCOL } from '../services/auth/callback-scheme';
 import {
   registerStartupFileHandler,
   registerStartupUrlHandler,
@@ -26,22 +27,16 @@ const MAX_QUEUED_SKILL_INSTALL_URLS = 5;
 function isAuthCallbackUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    if (
-      parsed.protocol !== 'clodex:' &&
-      parsed.protocol !== 'clodex-ide:' &&
-      parsed.protocol !== 'clodex-prerelease:' &&
-      parsed.protocol !== 'clodex-nightly:' &&
-      parsed.protocol !== 'clodex-dev:'
-    ) {
+    if (parsed.protocol !== AUTH_CALLBACK_PROTOCOL) {
       return false;
     }
-    // Auth callback URLs have /auth in the path.
+    // Only the canonical callback endpoint is reserved for account auth.
     // Normalize: clodex://auth/callback → hostname='auth', pathname='/callback',
     // so reconstruct the full path the same way auth/index.ts does.
     const callbackPath = parsed.hostname
       ? `/${parsed.hostname}${parsed.pathname}`
       : parsed.pathname;
-    return callbackPath.includes('/auth');
+    return callbackPath === '/auth/callback';
   } catch {
     return false;
   }

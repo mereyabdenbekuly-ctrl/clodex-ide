@@ -227,7 +227,9 @@ export function StepAuth({
         isValid,
         isValid
           ? undefined
-          : 'Connect a provider key, a local model, or Clodex Cloud',
+          : __APP_AUTH_ENABLED__
+            ? 'Connect a provider key, a local model, or Clodex Cloud'
+            : 'Connect a provider key or a local model',
       );
     }
   }, [isActive, isValid, onValidityChange]);
@@ -337,15 +339,17 @@ export function StepAuth({
             Choose how to connect
           </h1>
           <p className="text-muted-foreground text-sm">
-            Use your own key, a local model, or optional Clodex Cloud.
+            {__APP_AUTH_ENABLED__
+              ? 'Use your own key, a local model, or optional Clodex Cloud.'
+              : 'Use your own provider key or a local model.'}
           </p>
         </div>
       )}
 
       {mode === 'clodex' && phase === 'form-input' && (
         <SignInOptionsPanel
-          title="Connect Clodex"
-          description="Sign in to use Clodex Cloud as an optional model provider."
+          title="С возвращением"
+          description="Войдите в CLODEx.xyz, чтобы подключить аккаунт к IDE."
           sendOtp={(email, token) => sendOtp(email, token ?? '')}
           verifyOtp={verifyOtp}
           signInSocial={signInSocial}
@@ -512,13 +516,15 @@ export function StepAuth({
               {showMoreProviders ? 'Show less' : 'Show 4 more providers'}
             </Button>
           </div>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => switchMode('clodex')}
-          >
-            Quick start with Clodex Cloud
-          </Button>
+          {__APP_AUTH_ENABLED__ && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => switchMode('clodex')}
+            >
+              Quick start with Clodex Cloud
+            </Button>
+          )}
         </div>
       )}
 

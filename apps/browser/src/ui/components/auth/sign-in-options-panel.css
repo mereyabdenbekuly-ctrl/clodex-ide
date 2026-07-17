@@ -1,0 +1,683 @@
+.clodex-login-shell,
+.clodex-login-section {
+  --clodex-login-green: #39ff88;
+  --clodex-login-green-hover: #70ffa8;
+  color: #f4f4f4;
+  color-scheme: dark;
+  font-family:
+    Inter, "Public Sans", system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+}
+
+.clodex-login-shell,
+.clodex-login-shell *,
+.clodex-login-section,
+.clodex-login-section * {
+  box-sizing: border-box;
+}
+
+.clodex-login-shell button,
+.clodex-login-section button {
+  font: inherit;
+}
+
+.clodex-login-shell {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  background: #080a08;
+}
+
+.clodex-login-grid,
+.clodex-login-glow {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  min-height: 100%;
+  pointer-events: none;
+}
+
+.clodex-login-grid {
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 3%) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 3%) 1px, transparent 1px);
+  background-size: 64px 64px;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 0%,
+    #000 54%,
+    transparent 92%
+  );
+  mask-image: linear-gradient(to right, #000 0%, #000 54%, transparent 92%);
+}
+
+.clodex-login-glow {
+  z-index: -1;
+  background:
+    radial-gradient(
+      circle at 22% 36%,
+      rgb(57 255 136 / 10%),
+      transparent 29%
+    ),
+    radial-gradient(
+      circle at 76% 16%,
+      rgb(57 255 136 / 5%),
+      transparent 24%
+    );
+}
+
+.clodex-login-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 20;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22px 30px;
+}
+
+.clodex-login-logo {
+  width: 118px;
+  height: 42px;
+  object-fit: contain;
+  object-position: left center;
+  user-select: none;
+}
+
+.clodex-login-home-link {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 11px;
+  border: 1px solid rgb(244 244 244 / 10%);
+  border-radius: 999px;
+  background: rgb(10 10 10 / 56%);
+  color: #9a9a9a;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+  backdrop-filter: blur(12px);
+  transition: 180ms ease;
+}
+
+.clodex-login-home-link svg {
+  width: 15px;
+  height: 15px;
+}
+
+.clodex-login-home-link:hover:not(:disabled) {
+  border-color: rgb(57 255 136 / 34%);
+  background: rgb(57 255 136 / 7%);
+  color: #f4f4f4;
+  transform: translateY(-1px);
+}
+
+.clodex-login-layout {
+  display: grid;
+  min-height: max(650px, 100%);
+  grid-template-columns: minmax(0, 1.05fr) minmax(430px, 0.95fr);
+}
+
+.clodex-login-story {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 116px clamp(42px, 6vw, 92px) 42px;
+}
+
+.clodex-login-story-copy {
+  max-width: 660px;
+}
+
+.clodex-login-story-eyebrow,
+.clodex-login-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #999;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.clodex-login-story-eyebrow > span,
+.clodex-login-eyebrow > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--clodex-login-green);
+  box-shadow: 0 0 14px rgb(57 255 136 / 78%);
+}
+
+.clodex-login-story h1 {
+  max-width: 680px;
+  margin: 24px 0 20px;
+  color: #f4f4f4;
+  font-size: clamp(42px, 4.7vw, 70px);
+  font-weight: 560;
+  letter-spacing: -0.055em;
+  line-height: 0.99;
+}
+
+.clodex-login-story h1 span {
+  display: block;
+}
+
+.clodex-login-story-copy > p {
+  max-width: 610px;
+  margin: 0;
+  color: #969696;
+  font-size: clamp(14px, 1.25vw, 18px);
+  line-height: 1.62;
+}
+
+.clodex-login-benefits {
+  display: grid;
+  gap: 11px;
+  margin: 28px 0 0;
+  padding: 0;
+  color: #c6c6c6;
+  font-size: 13px;
+  list-style: none;
+}
+
+.clodex-login-benefits li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.clodex-login-benefits li > span {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid rgb(57 255 136 / 28%);
+  border-radius: 50%;
+  background: rgb(57 255 136 / 8%);
+  color: var(--clodex-login-green);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.clodex-login-status-card {
+  width: min(100%, 640px);
+  padding: 17px 19px;
+  border: 1px solid rgb(244 244 244 / 8%);
+  border-radius: 16px;
+  background: rgb(15 15 15 / 76%);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 26%);
+  backdrop-filter: blur(18px);
+}
+
+.clodex-login-status-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgb(244 244 244 / 7%);
+}
+
+.clodex-login-status-heading > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #b5b5b5;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.clodex-login-status-heading i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--clodex-login-green);
+  box-shadow: 0 0 12px rgb(57 255 136 / 76%);
+}
+
+.clodex-login-status-heading strong {
+  overflow: hidden;
+  color: #828282;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clodex-login-status-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding-top: 14px;
+}
+
+.clodex-login-status-tags span {
+  padding: 6px 9px;
+  border: 1px solid rgb(244 244 244 / 7%);
+  border-radius: 8px;
+  background: #0b0b0b;
+  color: #8f8f8f;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.clodex-login-form-region {
+  display: flex;
+  min-width: 0;
+  min-height: 100%;
+  flex-direction: column;
+  justify-content: center;
+  padding: 92px clamp(28px, 3.5vw, 56px) 32px;
+  border-left: 1px solid rgb(244 244 244 / 7%);
+  background: rgb(8 8 8 / 72%);
+}
+
+.clodex-login-panel {
+  position: relative;
+  width: min(100%, 510px);
+  margin: auto;
+  overflow: hidden;
+  border: 1px solid rgb(244 244 244 / 9%);
+  border-radius: 24px;
+  background: rgb(17 17 17 / 94%);
+  box-shadow:
+    0 32px 100px rgb(0 0 0 / 42%),
+    inset 0 1px 0 rgb(255 255 255 / 3%);
+  backdrop-filter: blur(24px);
+}
+
+.clodex-login-panel-accent {
+  position: absolute;
+  top: 0;
+  left: 28px;
+  width: 96px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--clodex-login-green), transparent);
+  box-shadow: 0 0 18px rgb(57 255 136 / 72%);
+}
+
+.clodex-login-panel-content {
+  padding: 30px;
+}
+
+.clodex-login-panel-intro {
+  display: grid;
+  gap: 10px;
+}
+
+.clodex-login-panel-intro h2 {
+  margin: 4px 0 0;
+  color: #f4f4f4;
+  font-size: clamp(28px, 3vw, 38px);
+  font-weight: 680;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+}
+
+.clodex-login-description,
+.clodex-login-switch {
+  margin: 0;
+  color: #8d8d8d;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.clodex-login-switch button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--clodex-login-green);
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.clodex-login-switch button:hover:not(:disabled) {
+  color: #8cffb8;
+}
+
+.clodex-login-browser-handoff {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin-top: 23px;
+  padding: 14px;
+  border: 1px solid rgb(57 255 136 / 16%);
+  border-radius: 12px;
+  background: rgb(57 255 136 / 5%);
+}
+
+.clodex-login-browser-handoff > svg {
+  width: 19px;
+  height: 19px;
+  flex: 0 0 auto;
+  color: var(--clodex-login-green);
+}
+
+.clodex-login-browser-handoff > div {
+  display: grid;
+  gap: 4px;
+}
+
+.clodex-login-browser-handoff strong {
+  color: #dcdcdc;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.clodex-login-browser-handoff span {
+  color: #9a9a9a;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.clodex-login-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.clodex-login-divider {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: #919191;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.clodex-login-divider::before,
+.clodex-login-divider::after {
+  height: 1px;
+  flex: 1;
+  background: #282828;
+  content: "";
+}
+
+.clodex-login-provider-button,
+.clodex-login-submit {
+  display: inline-flex;
+  width: 100%;
+  min-height: 46px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 680;
+  transition: 180ms ease;
+}
+
+.clodex-login-provider-button {
+  border: 1px solid #2b2b2b;
+  background: #151515;
+  color: #ededed;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 2%);
+}
+
+.clodex-login-provider-button:hover:not(:disabled) {
+  border-color: rgb(57 255 136 / 38%);
+  background: rgb(57 255 136 / 7%);
+}
+
+.clodex-login-provider-button svg,
+.clodex-login-submit svg {
+  width: 18px;
+  height: 18px;
+}
+
+.clodex-login-provider-button svg {
+  color: var(--clodex-login-green);
+  fill: none;
+}
+
+.clodex-login-submit {
+  border: 1px solid var(--clodex-login-green);
+  background: var(--clodex-login-green);
+  color: #07140c;
+  box-shadow: 0 12px 32px rgb(57 255 136 / 12%);
+}
+
+.clodex-login-submit:hover:not(:disabled) {
+  border-color: var(--clodex-login-green-hover);
+  background: var(--clodex-login-green-hover);
+  box-shadow: 0 14px 38px rgb(57 255 136 / 18%);
+  transform: translateY(-1px);
+}
+
+.clodex-login-provider-button:disabled,
+.clodex-login-submit:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.clodex-login-spinner {
+  animation: clodex-login-spin 0.85s linear infinite;
+}
+
+.clodex-login-error {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgb(255 112 112 / 22%);
+  border-radius: 10px;
+  background: rgb(255 76 76 / 7%);
+  color: #ff9d98;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.clodex-login-terms {
+  margin: 20px 0 0;
+  color: #8a8a8a;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.clodex-login-security-note {
+  display: flex;
+  width: min(100%, 510px);
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin: 15px auto 0;
+  color: #858585;
+  font-size: 11px;
+}
+
+.clodex-login-security-note svg {
+  width: 13px;
+  height: 13px;
+  color: #707070;
+}
+
+.clodex-login-section {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+}
+
+.clodex-login-section .clodex-login-panel {
+  width: 100%;
+  max-width: 560px;
+  margin: 0;
+}
+
+.clodex-login-shell button:focus-visible,
+.clodex-login-section button:focus-visible {
+  outline: 2px solid var(--clodex-login-green);
+  outline-offset: 3px;
+}
+
+@keyframes clodex-login-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1100px) {
+  .clodex-login-layout {
+    display: block;
+  }
+
+  .clodex-login-story {
+    display: none;
+  }
+
+  .clodex-login-grid {
+    background-size: 58px 58px;
+    -webkit-mask-image: radial-gradient(
+      circle at 35% 20%,
+      #000 0%,
+      transparent 76%
+    );
+    mask-image: radial-gradient(
+      circle at 35% 20%,
+      #000 0%,
+      transparent 76%
+    );
+  }
+
+  .clodex-login-form-region {
+    min-height: max(650px, 100%);
+    padding: 92px 24px 28px;
+    border-left: 0;
+    background: transparent;
+  }
+}
+
+@media (max-width: 640px) {
+  .clodex-login-header {
+    padding: 15px 16px;
+  }
+
+  .clodex-login-logo {
+    width: 102px;
+    height: 38px;
+  }
+
+  .clodex-login-home-link {
+    min-height: 34px;
+    padding: 6px 9px;
+    font-size: 11px;
+  }
+
+  .clodex-login-form-region {
+    min-height: max(610px, 100%);
+    padding: 76px 14px 22px;
+  }
+
+  .clodex-login-panel {
+    border-radius: 20px;
+  }
+
+  .clodex-login-panel-content {
+    padding: 23px 20px;
+  }
+
+  .clodex-login-panel-intro h2 {
+    font-size: 29px;
+  }
+
+  .clodex-login-section .clodex-login-panel-content {
+    padding: 22px 18px;
+  }
+}
+
+@media (max-width: 410px) {
+  .clodex-login-home-link span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .clodex-login-home-link {
+    width: 36px;
+    justify-content: center;
+    padding: 0;
+  }
+}
+
+@media (min-width: 1101px) and (max-height: 760px) {
+  .clodex-login-layout {
+    min-height: max(590px, 100%);
+  }
+
+  .clodex-login-story {
+    padding-top: 92px;
+    padding-bottom: 28px;
+  }
+
+  .clodex-login-story h1 {
+    margin-block: 18px 14px;
+    font-size: clamp(38px, 4.1vw, 58px);
+  }
+
+  .clodex-login-benefits {
+    margin-top: 20px;
+  }
+
+  .clodex-login-form-region {
+    padding-top: 74px;
+    padding-bottom: 22px;
+  }
+
+  .clodex-login-panel-content {
+    padding: 24px 27px;
+  }
+
+  .clodex-login-browser-handoff {
+    margin-top: 18px;
+  }
+
+  .clodex-login-form {
+    margin-top: 18px;
+  }
+
+  .clodex-login-status-card {
+    padding: 13px 15px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clodex-login-shell *,
+  .clodex-login-shell *::before,
+  .clodex-login-shell *::after,
+  .clodex-login-section *,
+  .clodex-login-section *::before,
+  .clodex-login-section *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .clodex-login-spinner {
+    animation: none;
+  }
+}

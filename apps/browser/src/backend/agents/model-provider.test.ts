@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { defaultUserPreferences } from '@shared/karton-contracts/ui/shared-types';
+import {
+  defaultUserPreferences,
+  type ProviderProfile,
+} from '@shared/karton-contracts/ui/shared-types';
 import { MODEL_REQUEST_PURPOSE_METADATA_KEY } from '@clodex/agent-core/host';
 import { ModelProviderService } from './model-provider';
 import {
@@ -27,7 +30,7 @@ function createTestModelProviderService({
     string,
     {
       enabled?: boolean;
-      value?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+      value?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
     }
   >;
   customEndpoints?: typeof defaultUserPreferences.customEndpoints;
@@ -117,6 +120,39 @@ describe('provider-qualified model routing', () => {
     expect(ensureModelAccessTokenForRoute).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['ollama', 'ollama', false],
+    ['openai-compatible', 'openai-chat', false],
+    ['openrouter', 'openai-chat', true],
+  ] as const)('does not attach OpenAI provider options to qualified %s GPT slugs', (providerType, protocol, needsKey) => {
+    const profile: ProviderProfile = {
+      id: `${providerType}-profile`,
+      providerType,
+      displayName: providerType,
+      baseUrl: 'http://localhost:11434',
+      ...(needsKey
+        ? { apiKeyReference: `provider.${providerType}-profile` }
+        : {}),
+      protocol,
+      customHeaders: {},
+      enabled: true,
+    };
+    const service = createTestModelProviderService({
+      providerProfiles: [profile],
+      providerApiKeys: needsKey
+        ? { [`provider.${providerType}-profile`]: 'test-secret' }
+        : {},
+    });
+
+    const result = service.getModelWithOptions(
+      `${profile.id}:gpt-5.6-sol`,
+      `trace-${providerType}`,
+      agentStepMetadata,
+    );
+
+    expect(result.providerOptions).toEqual({});
+  });
+
   it('uses the credential reference for an OpenRouter model', () => {
     const service = createTestModelProviderService({
       providerProfiles: [
@@ -143,6 +179,151 @@ describe('provider-qualified model routing', () => {
         'trace-openrouter',
       ).providerMode,
     ).toBe('custom');
+  });
+
+  it('maps direct OpenAI Terra Ultra to provider Max', () => {
+    const service = createTestModelProviderService({
+      modelThinkingOverrides: {
+        'openai-main:gpt-5.6-terra': { value: 'ultra' },
+      },
+      providerProfiles: [
+        {
+          id: 'openai-main',
+          providerType: 'openai',
+          displayName: 'OpenAI',
+          apiKeyReference: 'provider.openai-main',
+          protocol: 'openai-responses',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      providerApiKeys: {
+        'provider.openai-main': 'openai-secret',
+      },
+    });
+
+    const result = service.getModelWithOptions(
+      'openai-main:gpt-5.6-terra',
+      'trace-openai-terra',
+      agentStepMetadata,
+    );
+
+    expect(result.providerMode).toBe('official');
+    expect(result.providerOptions).toMatchObject({
+      openai: { reasoningEffort: 'max' },
+    });
+  });
+
+  it('keeps qualified OpenAI and Clodex effort overrides isolated', () => {
+    const service = createTestModelProviderService({
+      modelThinkingOverrides: {
+        'openai-main:gpt-5.6-sol': { value: 'ultra' },
+        'clodex-main:gpt-5.6-sol': { value: 'high' },
+      },
+      providerProfiles: [
+        {
+          id: 'openai-main',
+          providerType: 'openai',
+          displayName: 'OpenAI',
+          apiKeyReference: 'provider.openai-main',
+          protocol: 'openai-responses',
+          customHeaders: {},
+          enabled: true,
+        },
+        {
+          id: 'clodex-main',
+          providerType: 'clodex',
+          displayName: 'Clodex',
+          apiKeyReference: 'provider.clodex-main',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      providerApiKeys: {
+        'provider.openai-main': 'openai-secret',
+        'provider.clodex-main': 'clodex-secret',
+      },
+    });
+
+    expect(
+      service.getModelWithOptions(
+        'openai-main:gpt-5.6-sol',
+        'trace-openai-sol',
+        agentStepMetadata,
+      ).providerOptions,
+    ).toMatchObject({ openai: { reasoningEffort: 'max' } });
+    expect(
+      service.getModelWithOptions(
+        'clodex-main:gpt-5.6-sol',
+        'trace-clodex-sol',
+        agentStepMetadata,
+      ).providerOptions,
+    ).toMatchObject({ clodex: { reasoning: { effort: 'high' } } });
+  });
+
+  it('keeps OpenAI chat-completions profiles on conservative effort values', () => {
+    const service = createTestModelProviderService({
+      modelThinkingOverrides: {
+        'gpt-5.6-sol': { value: 'ultra' },
+      },
+      providerProfiles: [
+        {
+          id: 'openai-chat',
+          providerType: 'openai',
+          displayName: 'OpenAI Chat',
+          apiKeyReference: 'provider.openai-chat',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      providerApiKeys: {
+        'provider.openai-chat': 'openai-secret',
+      },
+    });
+
+    const result = service.getModelWithOptions(
+      'openai-chat:gpt-5.6-sol',
+      'trace-openai-chat-sol',
+      agentStepMetadata,
+    );
+
+    expect(result.providerOptions).toMatchObject({
+      openai: { reasoningEffort: 'medium' },
+    });
+  });
+
+  it('sanitizes legacy reasoning.enabled for Clodex provider profiles', () => {
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'clodex-main',
+          providerType: 'clodex',
+          displayName: 'Clodex',
+          apiKeyReference: 'provider.clodex-main',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      providerApiKeys: {
+        'provider.clodex-main': 'clodex-secret',
+      },
+    });
+
+    const result = service.getModelWithOptions(
+      'clodex-main:gpt-5.5',
+      'trace-clodex-profile',
+      agentStepMetadata,
+    );
+
+    expect(result.providerOptions).toMatchObject({
+      clodex: { reasoning: { effort: 'medium' } },
+    });
+    expect(result.providerOptions?.clodex?.reasoning).not.toHaveProperty(
+      'enabled',
+    );
   });
 });
 
@@ -1255,16 +1436,21 @@ describe('thinking override provider option resolution', () => {
     });
   });
 
-  it('supports reasoning effort for dynamic GPT-5.6 key models', () => {
+  it.each([
+    ['gpt-5.6-sol', 'max', 'max'],
+    ['gpt-5.6-sol', 'ultra', 'max'],
+    ['gpt-5.6-terra', 'max', 'max'],
+    ['gpt-5.6-terra', 'ultra', 'max'],
+  ] as const)('maps the dynamic %s %s selection to Clodex provider effort %s', (modelId, selection, providerEffort) => {
     const service = createTestModelProviderService({
-      modelThinkingOverrides: { 'gpt-5.6-sol': { value: 'high' } },
+      modelThinkingOverrides: { [modelId]: { value: selection } },
       authService: {
         modelAccessToken: 'ide-model-token',
         ensureModelAccessToken: vi.fn().mockResolvedValue('ide-model-token'),
         authState: {
           models: [
             {
-              id: 'gpt-5.6-sol',
+              id: modelId,
               provider: 'openai',
               enabled: true,
             },
@@ -1274,13 +1460,13 @@ describe('thinking override provider option resolution', () => {
     });
 
     const result = service.getModelWithOptions(
-      'gpt-5.6-sol',
+      modelId,
       'trace-1',
       agentStepMetadata,
     );
 
     expect(result.providerOptions).toMatchObject({
-      clodex: { reasoning: { effort: 'high' } },
+      clodex: { reasoning: { effort: providerEffort } },
     });
     expect(result.providerOptions?.clodex?.reasoning).not.toHaveProperty(
       'enabled',

@@ -51,6 +51,15 @@ import {
   type ModelForThinking,
 } from '@ui/utils/model-thinking';
 import type { UserPreferences } from '@shared/karton-contracts/ui/shared-types';
+import {
+  getProviderProfileModelThinkingSupport,
+  supportsNativeThinkingProviderProfile,
+} from '@shared/model-thinking-capabilities';
+import {
+  getModelThinkingOverride,
+  getThinkingOverrideModelId,
+} from '@shared/model-effort-routing';
+import { getQualifiedBuiltInThinkingPresentation } from './model-select-thinking';
 import { enablePatches, produceWithPatches } from 'immer';
 
 enablePatches();
@@ -64,6 +73,7 @@ interface ModelOption {
   thinkingLabel?: string;
   isAlias?: boolean;
   thinkingModel?: ModelForThinking;
+  thinkingOverrideKey?: string;
   targetModelId?: string;
   pricingMultiplier?: number;
   providerLabel: string;
@@ -116,6 +126,22 @@ function getThinkingDefaultOptionsForModel(
   const provider = model.officialProvider;
   if (!provider) return { providerMode: 'clodex' };
 
+  const activeProfile = preferences.providerProfiles.find(
+    (profile) => profile.id === preferences.defaultProviderProfileId,
+  );
+  if (activeProfile?.providerType === 'clodex') {
+    return { providerMode: 'clodex' };
+  }
+  if (activeProfile?.providerType === provider) {
+    if (provider === 'openai' && activeProfile.protocol === 'openai-chat') {
+      return {
+        providerMode: 'custom',
+        customEndpointApiSpec: 'openai-chat-completions',
+      };
+    }
+    return { providerMode: 'official' };
+  }
+
   const config = preferences.providerConfigs[provider];
   if (config.mode !== 'custom') return { providerMode: config.mode };
 
@@ -151,27 +177,47 @@ function getCatalogModelForClodexModel(
   );
 }
 
-function getDynamicThinkingModelForClodexModel(
-  model: ClodexModel,
-): ModelForThinking | undefined {
-  const bareModelId = getBareModelId(model.id).toLowerCase();
-  const provider = model.provider?.toLowerCase();
+function getDynamicGpt5ThinkingModel({
+  modelId,
+  displayName,
+  provider,
+}: {
+  modelId: string;
+  displayName?: string;
+  provider?: string;
+}): ModelForThinking | undefined {
+  const bareModelId = getBareModelId(modelId).toLowerCase();
+  const normalizedProvider = provider?.toLowerCase();
   if (
     !/^gpt-5(?:\.|$)/.test(bareModelId) ||
-    (provider && provider !== 'openai' && provider !== 'openai-compatible')
+    (normalizedProvider &&
+      normalizedProvider !== 'openai' &&
+      normalizedProvider !== 'openai-compatible' &&
+      normalizedProvider !== 'clodex')
   ) {
     return undefined;
   }
 
   return {
-    modelId: model.id,
-    modelDisplayName: model.name?.trim() || model.id,
+    modelId,
+    modelDisplayName: displayName?.trim() || modelId,
     officialProvider: 'openai',
     thinkingEnabled: true,
     providerOptions: {
       clodex: { reasoning: { effort: 'medium' } },
+      openai: { reasoningEffort: 'medium', reasoningSummary: 'auto' },
     },
   };
+}
+
+function getDynamicThinkingModelForClodexModel(
+  model: ClodexModel,
+): ModelForThinking | undefined {
+  return getDynamicGpt5ThinkingModel({
+    modelId: model.id,
+    displayName: model.name,
+    provider: model.provider,
+  });
 }
 
 function createClodexModelOption(
@@ -190,7 +236,7 @@ function createClodexModelOption(
   const thinkingDisplay = thinkingModel
     ? getModelThinkingDisplayState(
         thinkingModel,
-        modelThinkingOverrides[thinkingModel.modelId],
+        getModelThinkingOverride(modelThinkingOverrides, model.id),
         getThinkingDefaultOptionsForModel(thinkingModel, preferences),
       )
     : null;
@@ -205,6 +251,7 @@ function createClodexModelOption(
     thinkingEnabled: thinkingDisplay !== null,
     thinkingLabel: thinkingDisplay?.label,
     thinkingModel,
+    thinkingOverrideKey: thinkingModel ? model.id : undefined,
     targetModelId: thinkingModel?.modelId,
     pricingMultiplier: catalogModel?.pricing?.relativeMultiplier,
     providerLabel: 'Clodex Cloud',
@@ -220,7 +267,7 @@ function createBuiltInModelOption(
 ): ModelOption {
   const thinkingDisplay = getModelThinkingDisplayState(
     model,
-    modelThinkingOverrides[model.modelId],
+    getModelThinkingOverride(modelThinkingOverrides, model.modelId),
     getThinkingDefaultOptionsForModel(model, preferences),
   );
 
@@ -232,6 +279,7 @@ function createBuiltInModelOption(
     thinkingEnabled: thinkingDisplay !== null,
     thinkingLabel: thinkingDisplay?.label,
     thinkingModel: model,
+    thinkingOverrideKey: model.modelId,
     targetModelId: model.modelId,
     pricingMultiplier: model.pricing?.relativeMultiplier,
     providerLabel: formatProviderName(model.officialProvider),
@@ -322,18 +370,61 @@ export const ModelSelect = memo(function ModelSelect({
     if (activeProviderProfile && discoveredModels.length > 0) {
       return discoveredModels
         .filter((model) => !disabled.has(model.id))
-        .map((model) => ({
-          modelId: `${activeProviderProfile.id}:${model.id}`,
-          displayName: model.displayName,
-          description: `${activeProviderProfile.displayName} model`,
-          context: model.capabilities.contextWindow
-            ? `${Math.round(model.capabilities.contextWindow / 1000)}k context`
-            : activeProviderProfile.displayName,
-          thinkingEnabled: model.capabilities.reasoning,
-          thinkingLabel: model.capabilities.reasoning ? 'Reasoning' : undefined,
-          providerLabel: activeProviderProfile.displayName,
-          group: 'Custom' as const,
-        }));
+        .map((model) => {
+          const qualifiedModelId = `${activeProviderProfile.id}:${model.id}`;
+          const thinkingSupport = getProviderProfileModelThinkingSupport({
+            providerType: activeProviderProfile.providerType,
+            protocol: activeProviderProfile.protocol,
+            modelId: model.id,
+            discoveredReasoning: model.capabilities.reasoning,
+          });
+          const catalogModel = thinkingSupport.editable
+            ? getAvailableModel(model.id)
+            : undefined;
+          const compatibleCatalogModel =
+            catalogModel?.thinkingEnabled &&
+            (activeProviderProfile.providerType === 'clodex' ||
+              catalogModel.officialProvider ===
+                activeProviderProfile.providerType)
+              ? catalogModel
+              : undefined;
+          const thinkingModel = thinkingSupport.editable
+            ? (compatibleCatalogModel ??
+              getDynamicGpt5ThinkingModel({
+                modelId: model.id,
+                displayName: model.displayName,
+                provider: activeProviderProfile.providerType,
+              }))
+            : undefined;
+          const thinkingDisplay = thinkingModel
+            ? getModelThinkingDisplayState(
+                thinkingModel,
+                getModelThinkingOverride(
+                  modelThinkingOverrides,
+                  qualifiedModelId,
+                ),
+                getThinkingDefaultOptionsForModel(thinkingModel, preferences),
+              )
+            : null;
+
+          return {
+            modelId: qualifiedModelId,
+            displayName: model.displayName,
+            description: `${activeProviderProfile.displayName} model`,
+            context: model.capabilities.contextWindow
+              ? `${Math.round(model.capabilities.contextWindow / 1000)}k context`
+              : activeProviderProfile.displayName,
+            thinkingEnabled: thinkingSupport.thinkingEnabled,
+            thinkingLabel:
+              thinkingDisplay?.label ??
+              (thinkingSupport.thinkingEnabled ? 'Reasoning' : undefined),
+            thinkingModel,
+            thinkingOverrideKey: thinkingModel ? qualifiedModelId : undefined,
+            targetModelId: model.id,
+            providerLabel: activeProviderProfile.displayName,
+            group: 'Custom' as const,
+          };
+        });
     }
 
     let selectableBuiltIns = getSelectableBuiltInModels({
@@ -360,13 +451,44 @@ export const ModelSelect = memo(function ModelSelect({
           ),
     );
     const qualifiedBuiltIn = activeProviderProfile
-      ? builtIn.map((model) => ({
-          ...model,
-          modelId: `${activeProviderProfile.id}:${
+      ? builtIn.map((model) => {
+          const qualifiedModelId = `${activeProviderProfile.id}:${
             model.targetModelId ?? model.modelId
-          }`,
-          providerLabel: activeProviderProfile.displayName,
-        }))
+          }`;
+          const supportsEditableThinking =
+            supportsNativeThinkingProviderProfile(
+              activeProviderProfile.providerType,
+            );
+          const thinkingDisplay =
+            supportsEditableThinking && model.thinkingModel
+              ? getModelThinkingDisplayState(
+                  model.thinkingModel,
+                  getModelThinkingOverride(
+                    modelThinkingOverrides,
+                    qualifiedModelId,
+                  ),
+                  getThinkingDefaultOptionsForModel(
+                    model.thinkingModel,
+                    preferences,
+                  ),
+                )
+              : null;
+          const thinkingPresentation = getQualifiedBuiltInThinkingPresentation({
+            profileProviderType: activeProviderProfile.providerType,
+            qualifiedModelId,
+            thinkingEnabled: model.thinkingEnabled,
+            thinkingLabel: model.thinkingLabel,
+            computedThinkingLabel: thinkingDisplay?.label,
+            isAlias: model.isAlias,
+            thinkingModel: model.thinkingModel,
+          });
+          return {
+            ...model,
+            modelId: qualifiedModelId,
+            ...thinkingPresentation,
+            providerLabel: activeProviderProfile.displayName,
+          };
+        })
       : builtIn;
 
     const custom: ModelOption[] = customModels
@@ -536,6 +658,14 @@ export const ModelSelect = memo(function ModelSelect({
         : undefined,
     [editingThinkingModelId, modelMap],
   );
+  const editingThinkingOverride = useMemo(() => {
+    if (!editingThinkingModelId) return undefined;
+    const option = modelMap.get(editingThinkingModelId);
+    return getModelThinkingOverride(
+      modelThinkingOverrides,
+      option?.thinkingOverrideKey ?? editingThinkingModelId,
+    );
+  }, [editingThinkingModelId, modelMap, modelThinkingOverrides]);
 
   useLayoutEffect(() => {
     if (!hoveredModel || !sidePanelRef.current || !containerRef.current) return;
@@ -614,27 +744,26 @@ export const ModelSelect = memo(function ModelSelect({
 
   const handleSetThinkingEnabled = useCallback(
     async (modelId: string, enabled: boolean) => {
-      const model =
-        modelMap.get(modelId)?.thinkingModel ?? getAvailableModel(modelId);
+      const modelOption = modelMap.get(modelId);
+      const model = modelOption?.thinkingModel ?? getAvailableModel(modelId);
       if (!model) return;
-      const targetModelId = model.modelId;
+      const overrideKey = modelOption?.thinkingOverrideKey ?? model.modelId;
+      const currentOverride = getModelThinkingOverride(
+        modelThinkingOverrides,
+        overrideKey,
+      );
 
       const route = getThinkingDefaultOptionsForModel(model, preferences);
       const option = enabled
-        ? getEnabledModelThinkingOption(
-            model,
-            modelThinkingOverrides[targetModelId]?.value,
-            route,
-          )
+        ? getEnabledModelThinkingOption(model, currentOverride?.value, route)
         : (getModelThinkingOptions(model, route).find(
-            (item) =>
-              item.value === modelThinkingOverrides[targetModelId]?.value,
+            (item) => item.value === currentOverride?.value,
           ) ?? getModelThinkingOptions(model, route)[0]);
       if (!option) return;
 
       const [, patches] = produceWithPatches(preferences, (draft) => {
-        draft.agent.modelThinkingOverrides[targetModelId] = {
-          ...draft.agent.modelThinkingOverrides[targetModelId],
+        draft.agent.modelThinkingOverrides[overrideKey] = {
+          ...currentOverride,
           enabled,
           provider: option.provider,
           value: option.value,
@@ -647,10 +776,10 @@ export const ModelSelect = memo(function ModelSelect({
 
   const handleSetThinkingValue = useCallback(
     async (modelId: string, value: string) => {
-      const model =
-        modelMap.get(modelId)?.thinkingModel ?? getAvailableModel(modelId);
+      const modelOption = modelMap.get(modelId);
+      const model = modelOption?.thinkingModel ?? getAvailableModel(modelId);
       if (!model) return;
-      const targetModelId = model.modelId;
+      const overrideKey = modelOption?.thinkingOverrideKey ?? model.modelId;
 
       const route = getThinkingDefaultOptionsForModel(model, preferences);
       const option = getModelThinkingOptions(model, route).find(
@@ -659,7 +788,7 @@ export const ModelSelect = memo(function ModelSelect({
       if (!option) return;
 
       const [, patches] = produceWithPatches(preferences, (draft) => {
-        draft.agent.modelThinkingOverrides[targetModelId] = {
+        draft.agent.modelThinkingOverrides[overrideKey] = {
           enabled: true,
           provider: option.provider,
           value: option.value,
@@ -672,12 +801,18 @@ export const ModelSelect = memo(function ModelSelect({
 
   const handleResetThinkingOverride = useCallback(
     async (modelId: string) => {
-      const targetModelId =
-        modelMap.get(modelId)?.thinkingModel?.modelId ??
+      const modelOption = modelMap.get(modelId);
+      const overrideKey =
+        modelOption?.thinkingOverrideKey ??
+        modelOption?.thinkingModel?.modelId ??
         getAvailableModel(modelId)?.modelId ??
         modelId;
       const [, patches] = produceWithPatches(preferences, (draft) => {
-        delete draft.agent.modelThinkingOverrides[targetModelId];
+        if (getThinkingOverrideModelId(overrideKey) !== overrideKey) {
+          draft.agent.modelThinkingOverrides[overrideKey] = {};
+        } else {
+          delete draft.agent.modelThinkingOverrides[overrideKey];
+        }
       });
       await updatePreferences(patches);
     },
@@ -690,15 +825,15 @@ export const ModelSelect = memo(function ModelSelect({
     // Aliases use fixed thinking presets — cycling is disabled for them.
     if (getModelAlias(selectedModel)) return false;
 
+    const modelOption = modelMap.get(selectedModel);
     const model =
-      modelMap.get(selectedModel)?.thinkingModel ??
-      getAvailableModel(selectedModel);
+      modelOption?.thinkingModel ?? getAvailableModel(selectedModel);
     if (!model) return false;
-    const targetModelId = model.modelId;
+    const overrideKey = modelOption?.thinkingOverrideKey ?? model.modelId;
 
     const display = getModelThinkingDisplayState(
       model,
-      modelThinkingOverrides[targetModelId],
+      getModelThinkingOverride(modelThinkingOverrides, overrideKey),
       getThinkingDefaultOptionsForModel(model, preferences),
     );
     if (!display) return false;
@@ -706,7 +841,7 @@ export const ModelSelect = memo(function ModelSelect({
     const route = getThinkingDefaultOptionsForModel(model, preferences);
     const nextOption = getNextModelThinkingOption(model, display.value, route);
     const [, patches] = produceWithPatches(preferences, (draft) => {
-      draft.agent.modelThinkingOverrides[targetModelId] = {
+      draft.agent.modelThinkingOverrides[overrideKey] = {
         enabled: true,
         provider: nextOption.provider,
         value: nextOption.value,
@@ -866,27 +1001,19 @@ export const ModelSelect = memo(function ModelSelect({
                 {editingThinkingModel ? (
                   <ModelThinkingPanel
                     model={editingThinkingModel}
-                    override={
-                      modelThinkingOverrides[editingThinkingModel.modelId]
-                    }
+                    override={editingThinkingOverride}
                     defaultOptions={getThinkingDefaultOptionsForModel(
                       editingThinkingModel,
                       preferences,
                     )}
                     onEnabledChange={(enabled) =>
-                      handleSetThinkingEnabled(
-                        editingThinkingModel.modelId,
-                        enabled,
-                      )
+                      handleSetThinkingEnabled(editingThinkingModelId!, enabled)
                     }
                     onValueChange={(value) =>
-                      handleSetThinkingValue(
-                        editingThinkingModel.modelId,
-                        value,
-                      )
+                      handleSetThinkingValue(editingThinkingModelId!, value)
                     }
                     onReset={() =>
-                      handleResetThinkingOverride(editingThinkingModel.modelId)
+                      handleResetThinkingOverride(editingThinkingModelId!)
                     }
                   />
                 ) : (
@@ -958,7 +1085,8 @@ const ModelItem = memo(function ModelItem({
             <span
               className={cn(
                 'inline-flex items-center gap-1 text-subtle-foreground',
-                !model.isAlias && 'group-data-[highlighted]/item:opacity-0',
+                model.thinkingModel &&
+                  'group-data-[highlighted]/item:opacity-0',
               )}
             >
               <IconBrainOutline18 className="size-2.75" />
@@ -970,9 +1098,7 @@ const ModelItem = memo(function ModelItem({
                 variant="ghost"
                 size="xs"
                 className="absolute right-0 h-auto px-0 py-0 text-[10px] opacity-0 group-data-[highlighted]/item:opacity-100"
-                onClick={(event) =>
-                  onEditThinking(model.targetModelId ?? model.modelId, event)
-                }
+                onClick={(event) => onEditThinking(model.modelId, event)}
               >
                 Edit
               </Button>

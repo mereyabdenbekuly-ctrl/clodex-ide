@@ -44,6 +44,10 @@ vi.mock('../startup-url-events', () => ({
   registerStartupUrlHandler: routingEvents.registerStartupUrlHandler,
 }));
 
+vi.mock('../services/auth/callback-scheme', () => ({
+  AUTH_CALLBACK_PROTOCOL: 'clodex-ide:',
+}));
+
 import type { Logger } from '../services/logger';
 import type { WindowLayoutService } from '../services/window-layout';
 import { createSkillInstallUrl } from '../skill-package-routing';
@@ -147,12 +151,26 @@ describe('startup URL routing', () => {
     expect(debugOutput).not.toContain('hidden');
   });
 
+  it('reserves only the exact account auth callback path', () => {
+    const { openUrlInNewTab, registrations } = createHarness();
+    const authHandler = vi.fn(() => true);
+    registrations.registerAuthCallbackHandler(authHandler);
+
+    const handleUrl = getStartupUrlHandler();
+    const lookalikeUrl =
+      'clodex-ide://authorization/callback?code=unbound-code';
+    handleUrl(lookalikeUrl);
+
+    expect(authHandler).not.toHaveBeenCalled();
+    expect(openUrlInNewTab).toHaveBeenCalledWith(lookalikeUrl);
+  });
+
   it('keeps independent FIFO queues capped at five URLs per handler', () => {
     const { openUrlInNewTab, registrations } = createHarness();
     const handleUrl = getStartupUrlHandler();
     const authUrls = Array.from(
       { length: 6 },
-      (_, index) => `clodex://auth/callback?index=${index}`,
+      (_, index) => `clodex-ide://auth/callback?index=${index}`,
     );
     const mcpUrls = Array.from(
       { length: 6 },
@@ -237,7 +255,7 @@ describe('startup URL routing', () => {
 
     order.length = 0;
     const genericUrl = 'https://second.example/path';
-    const authUrl = 'clodex://auth/callback?source=second';
+    const authUrl = 'clodex-ide://auth/callback?source=second';
     const mcpUrl = 'clodex://mcp/oauth/callback?source=second';
     const skillUrl = 'clodex://skill/install?source=second';
     const firstFile = '/tmp/first.skill';
@@ -287,7 +305,7 @@ describe('startup URL routing', () => {
       order.push(`skill:${url}`);
       return true;
     });
-    const authUrl = 'clodex://auth/callback?source=cli';
+    const authUrl = 'clodex-ide://auth/callback?source=cli';
     const genericUrl = 'https://cli.example/path?secret=hidden';
     const mcpUrl = 'clodex://mcp/oauth/callback?source=cli';
     const skillFile = '/tmp/command.skill';
@@ -339,7 +357,7 @@ describe('startup URL routing', () => {
     });
 
     const handleUrl = getStartupUrlHandler();
-    handleUrl('clodex://auth/callback');
+    handleUrl('clodex-ide://auth/callback');
     handleUrl('clodex://mcp/oauth/callback');
     handleUrl('clodex://skill/install');
     await Promise.resolve();

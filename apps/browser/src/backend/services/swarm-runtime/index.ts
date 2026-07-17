@@ -14,14 +14,61 @@ import {
   type SwarmTaskRole,
 } from '@clodex/agent-core';
 import type { AttachmentsService } from '@clodex/agent-core/attachments';
-import { generateText, stepCountIs, type ModelMessage, type ToolSet } from 'ai';
+import type {
+  AgentStepExecution,
+  AgentStepExecutionRequest,
+} from '@clodex/agent-core/agents';
+import {
+  generateText,
+  stepCountIs,
+  type AsyncIterableStream,
+  type InferUIMessageChunk,
+  type ModelMessage,
+  type StepResult,
+  type ToolSet,
+  type UIMessage,
+  type UIMessageStreamOptions,
+} from 'ai';
 import type { AgentManagerService } from '../agent-manager';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import { BrowserSwarmStore } from '../swarm-orchestrator';
 import type { ToolboxService } from '../toolbox';
+import {
+  getActiveGptThinkingProviderMode,
+  getModelThinkingOverride,
+  getThinkingOverrideModelId,
+  resolveSubmitSwarmRoute,
+} from '@shared/model-effort-routing';
+import type {
+  ModelThinkingOverride,
+  ProviderEndpointMode,
+} from '@shared/karton-contracts/ui/shared-types';
 
 export type SwarmRunMode = 'standard' | 'battle';
+
+const isAbortError = (error: unknown): boolean =>
+  error instanceof DOMException
+    ? error.name === 'AbortError'
+    : error instanceof Error && error.name === 'AbortError';
+
+const createAbortError = (signal?: AbortSignal): Error => {
+  const reason = signal?.reason;
+  const error = new Error(
+    reason instanceof Error
+      ? reason.message
+      : typeof reason === 'string'
+        ? reason
+        : 'Swarm execution was aborted',
+    reason instanceof Error ? { cause: reason } : undefined,
+  );
+  error.name = 'AbortError';
+  return error;
+};
+
+const throwIfAborted = (signal?: AbortSignal): void => {
+  if (signal?.aborted) throw createAbortError(signal);
+};
 
 export interface SwarmRuntimeDependencies {
   uiKarton: KartonService;
@@ -31,7 +78,10 @@ export interface SwarmRuntimeDependencies {
   logger: Pick<Logger, 'debug' | 'warn' | 'error'>;
   toolboxService: Pick<ToolboxService, 'getTool' | 'getWorkspaceSnapshot'>;
   pendingEditService: PendingEditService;
-  agentManagerService: Pick<AgentManagerService, 'setSwarmSubmitHandler'>;
+  agentManagerService: Pick<
+    AgentManagerService,
+    'setSwarmSubmitHandler' | 'setAutomaticSwarmStepHandler'
+  >;
   assertLocalExecutionAllowed?: (agentInstanceId: string) => void;
 }
 
@@ -110,52 +160,593 @@ type SwarmSubmitHandler = Parameters<
   AgentManagerService['setSwarmSubmitHandler']
 >[0];
 
+type AutomaticSwarmStepHandler = Parameters<
+  AgentManagerService['setAutomaticSwarmStepHandler']
+>[0];
+
+type ModelThinkingSubmitContext = {
+  modelId: string | null;
+  override: ModelThinkingOverride | undefined;
+  providerMode: ProviderEndpointMode | undefined;
+};
+
 export function createSwarmSubmitHandler({
-  extractSwarmPromptFromMessage,
-  runSwarmWorkflow,
   logger,
 }: {
-  extractSwarmPromptFromMessage: (
-    agentInstanceId: string,
-    message: Parameters<SwarmSubmitHandler>[1],
-  ) => Promise<string>;
-  runSwarmWorkflow: SwarmRuntime['runSwarmWorkflow'];
-  logger: Pick<Logger, 'debug' | 'error'>;
+  logger: Pick<Logger, 'debug'>;
 }): SwarmSubmitHandler {
   return async (agentInstanceId, message) => {
-    const prompt = await extractSwarmPromptFromMessage(
-      agentInstanceId,
-      message,
-    );
     const metadata = message.metadata as AgentMessage['metadata'] & {
       swarmMode?: boolean;
       swarmModeVariant?: 'standard' | 'battle';
     };
-    const shouldRunSwarm = metadata?.swarmMode === true;
-
-    logger.debug('[SwarmRun] sendUserMessage guard', {
+    logger.debug('[SwarmRun] pre-admission guard deferred to step executor', {
       agentInstanceId,
       swarmMode: metadata?.swarmMode,
       swarmModeVariant: metadata?.swarmModeVariant,
-      promptLength: prompt.length,
-      shouldRunSwarm,
+      executionTarget: metadata?.executionTarget,
     });
+    return false;
+  };
+}
 
-    if (!shouldRunSwarm) return false;
+const SAFE_AUTOMATIC_SWARM_METADATA_KEYS = new Set([
+  'createdAt',
+  'partsMetadata',
+  'swarmMode',
+  'swarmModeVariant',
+  'executionTarget',
+  'attachments',
+  'textClipAttachments',
+  'mentions',
+  'pathReferences',
+  'envState',
+]);
 
-    const swarmPrompt = prompt || 'Run Dynamic Swarm.';
-    const swarmModeVariant =
-      metadata?.swarmModeVariant === 'battle' ? 'battle' : 'standard';
-    void runSwarmWorkflow(agentInstanceId, swarmPrompt, swarmModeVariant).catch(
-      (error) => {
-        logger.error('[SwarmRun] Background workflow failed', {
-          agentInstanceId,
-          error,
+const AUTOMATIC_SWARM_CURRENT_REQUEST_MAX_CHARS = 16_000;
+const AUTOMATIC_SWARM_RECENT_CONTEXT_MAX_CHARS = 32_000;
+const AUTOMATIC_SWARM_SYSTEM_CONTEXT_MAX_CHARS = 8_000;
+const AUTOMATIC_SWARM_MESSAGE_MAX_CHARS = 8_000;
+
+const hasArrayValues = (value: unknown): boolean =>
+  Array.isArray(value) && value.length > 0;
+
+function truncateAutomaticSwarmContext(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const headLength = Math.floor(maxChars * 0.6);
+  const tailLength = Math.max(0, maxChars - headLength - 36);
+  return `${text.slice(0, headLength)}\n...[context truncated]...\n${text.slice(-tailLength)}`;
+}
+
+function stringifyAutomaticSwarmValue(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === 'string' ? serialized : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderAutomaticSwarmToolResultOutput(output: unknown): string | null {
+  if (typeof output !== 'object' || output === null || Array.isArray(output)) {
+    return null;
+  }
+
+  const record = output as Record<string, unknown>;
+  if (
+    (record.type === 'text' || record.type === 'error-text') &&
+    typeof record.value === 'string'
+  ) {
+    return record.value;
+  }
+  if (record.type !== 'content' || !Array.isArray(record.value)) return null;
+
+  const textParts: string[] = [];
+  for (const part of record.value) {
+    if (
+      typeof part !== 'object' ||
+      part === null ||
+      Array.isArray(part) ||
+      (part as Record<string, unknown>).type !== 'text' ||
+      typeof (part as Record<string, unknown>).text !== 'string'
+    ) {
+      return null;
+    }
+    textParts.push((part as { text: string }).text);
+  }
+  return textParts.join('\n\n');
+}
+
+function renderAutomaticSwarmModelContent(content: unknown): string | null {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return null;
+
+  const sections: string[] = [];
+  for (const part of content) {
+    if (typeof part !== 'object' || part === null || Array.isArray(part)) {
+      return null;
+    }
+    const record = part as Record<string, unknown>;
+    const type = typeof record.type === 'string' ? record.type : '';
+    if (type === 'text' && typeof record.text === 'string') {
+      sections.push(record.text);
+      continue;
+    }
+    // Provider reasoning/signature payloads are intentionally not replayed
+    // into Swarm prompts.
+    if (type === 'reasoning' || type === 'redacted-reasoning') continue;
+    if (type === 'tool-call') {
+      const toolName =
+        typeof record.toolName === 'string' ? record.toolName : 'unknown';
+      const input = stringifyAutomaticSwarmValue(record.input);
+      if (input === null) return null;
+      sections.push(`[tool-call ${toolName}] ${input}`);
+      continue;
+    }
+    if (type === 'tool-result') {
+      const toolName =
+        typeof record.toolName === 'string' ? record.toolName : 'unknown';
+      const output = renderAutomaticSwarmToolResultOutput(record.output);
+      if (output === null) return null;
+      sections.push(`[tool-result ${toolName}] ${output}`);
+      continue;
+    }
+    return null;
+  }
+  return sections.join('\n\n');
+}
+
+/**
+ * Serializes the already-converted model context so automatic Ultra keeps
+ * prior-turn references, resolved slash commands, environment rendering and
+ * bounded tool results without replaying private reasoning payloads.
+ */
+export function buildAutomaticSwarmModelContext(
+  messages: ReadonlyArray<ModelMessage>,
+): string | null {
+  const rendered: Array<{ role: ModelMessage['role']; text: string }> = [];
+  for (const message of messages) {
+    const text = renderAutomaticSwarmModelContent(message.content);
+    if (text === null) return null;
+    if (text.length > 0) {
+      rendered.push({
+        role: message.role,
+        text,
+      });
+    }
+  }
+  let currentIndex = -1;
+  for (let index = rendered.length - 1; index >= 0; index -= 1) {
+    if (rendered[index]?.role === 'user') {
+      currentIndex = index;
+      break;
+    }
+  }
+  if (currentIndex < 0) return null;
+
+  const currentRequest = rendered[currentIndex]!.text;
+  if (currentRequest.length > AUTOMATIC_SWARM_CURRENT_REQUEST_MAX_CHARS) {
+    return null;
+  }
+  const systemContext = truncateAutomaticSwarmContext(
+    rendered
+      .filter((message) => message.role === 'system')
+      .map((message) => message.text)
+      .join('\n\n'),
+    AUTOMATIC_SWARM_SYSTEM_CONTEXT_MAX_CHARS,
+  );
+
+  const recentBlocks: string[] = [];
+  let recentChars = 0;
+  for (let index = currentIndex - 1; index >= 0; index -= 1) {
+    const message = rendered[index]!;
+    if (message.role === 'system') continue;
+    const block = `[${message.role}]\n${truncateAutomaticSwarmContext(
+      message.text,
+      AUTOMATIC_SWARM_MESSAGE_MAX_CHARS,
+    )}`;
+    if (recentChars + block.length > AUTOMATIC_SWARM_RECENT_CONTEXT_MAX_CHARS) {
+      break;
+    }
+    recentBlocks.unshift(block);
+    recentChars += block.length;
+  }
+
+  return [
+    systemContext
+      ? `<system-context>\n${systemContext}\n</system-context>`
+      : '',
+    recentBlocks.length > 0
+      ? `<conversation-context>\n${recentBlocks.join('\n\n')}\n</conversation-context>`
+      : '',
+    `<current-request>\n${currentRequest}\n</current-request>`,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function getRenderedAutomaticSwarmEnvContext(value: unknown): string | null {
+  if (value === undefined) return '';
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  const sections: string[] = [];
+  for (const entry of Object.values(value)) {
+    if (
+      typeof entry !== 'object' ||
+      entry === null ||
+      Array.isArray(entry) ||
+      typeof (entry as { renderedState?: unknown }).renderedState !== 'string'
+    ) {
+      return null;
+    }
+    const renderedState = (
+      entry as { renderedState: string }
+    ).renderedState.trim();
+    if (renderedState) sections.push(renderedState);
+  }
+  return sections.join('\n\n');
+}
+
+/**
+ * Automatic Ultra may only replace a normal step when every bit of the
+ * admitted user turn can be represented by the Swarm string prompt. Manual
+ * Swarm keeps its existing, explicit behavior.
+ */
+export function getAutomaticUltraSwarmPrompt(
+  history: ReadonlyArray<AgentMessage>,
+): string | null {
+  const message = history.at(-1);
+  if (!message || message.role !== 'user') return null;
+  if (history.length > 1 && history.at(-2)?.role !== 'assistant') return null;
+
+  const metadata = message.metadata as Record<string, unknown> | undefined;
+  if (!metadata) return null;
+  if (
+    metadata.executionTarget === 'cloud' ||
+    (metadata.swarmMode === true && metadata.swarmModeVariant === 'battle')
+  ) {
+    return null;
+  }
+  if (
+    hasArrayValues(metadata.attachments) ||
+    hasArrayValues(metadata.textClipAttachments) ||
+    hasArrayValues(metadata.mentions) ||
+    (typeof metadata.pathReferences === 'object' &&
+      metadata.pathReferences !== null &&
+      Object.keys(metadata.pathReferences).length > 0)
+  ) {
+    return null;
+  }
+  for (const [key, value] of Object.entries(metadata)) {
+    if (!SAFE_AUTOMATIC_SWARM_METADATA_KEYS.has(key) && value !== undefined) {
+      return null;
+    }
+  }
+
+  const textParts: string[] = [];
+  for (const part of message.parts) {
+    if (
+      part.type !== 'text' ||
+      typeof (part as { text?: unknown }).text !== 'string'
+    ) {
+      return null;
+    }
+    const text = (part as { text: string }).text.trim();
+    if (text) textParts.push(text);
+  }
+  if (textParts.length === 0) return null;
+
+  const envContext = getRenderedAutomaticSwarmEnvContext(metadata.envState);
+  if (envContext === null) return null;
+  return [...textParts, envContext].filter(Boolean).join('\n\n');
+}
+
+function getSingleTrailingUserMessage(
+  history: ReadonlyArray<AgentMessage>,
+): (AgentMessage & { role: 'user' }) | null {
+  const message = history.at(-1);
+  if (!message || message.role !== 'user') return null;
+  if (history.length > 1 && history.at(-2)?.role !== 'assistant') return null;
+  return message as AgentMessage & { role: 'user' };
+}
+
+type AdmittedSwarmWorkflowRunner = (
+  agentInstanceId: string,
+  prompt: string,
+  mode: SwarmRunMode,
+  options: {
+    appendUserMessage: false;
+    rethrowFailure: true;
+    abortSignal: AbortSignal | undefined;
+    forceSwarmOnDirect: boolean;
+  },
+) => Promise<string>;
+
+export function createAdmittedSwarmStepHandler({
+  getAgentHistory,
+  getModelThinkingSubmitContext,
+  hasWorkspaceMounts = () => true,
+  extractSwarmPromptFromMessage,
+  runSwarmWorkflow,
+  logger,
+}: {
+  getAgentHistory: (agentInstanceId: string) => ReadonlyArray<AgentMessage>;
+  getModelThinkingSubmitContext: (
+    requestedModelId: string,
+  ) => ModelThinkingSubmitContext;
+  hasWorkspaceMounts?: (agentInstanceId: string) => boolean;
+  extractSwarmPromptFromMessage: (
+    agentInstanceId: string,
+    message: AgentMessage & { role: 'user' },
+  ) => Promise<string>;
+  runSwarmWorkflow: AdmittedSwarmWorkflowRunner;
+  logger: Pick<Logger, 'debug'>;
+}): AutomaticSwarmStepHandler {
+  return async (request) => {
+    const { agentInstanceId, executionTarget } = request.context;
+    if (executionTarget === 'cloud') return null;
+
+    const history = getAgentHistory(agentInstanceId);
+    const message = getSingleTrailingUserMessage(history);
+    if (!message) return null;
+    const metadata = message.metadata as AgentMessage['metadata'] & {
+      swarmMode?: boolean;
+      swarmModeVariant?: 'standard' | 'battle';
+    };
+    const manualModeActive = metadata?.swarmMode === true;
+    const admittedRoute = resolveSubmitSwarmRoute({
+      ...getModelThinkingSubmitContext(request.context.requestedModelId),
+      manualModeActive,
+      manualModeVariant: metadata?.swarmModeVariant ?? null,
+      executionTarget,
+    });
+    if (!admittedRoute.enabled) return null;
+
+    // Ultra's standard orchestration remains authoritative over a stale or
+    // explicit manual-standard flag. Only explicit Battle overrides it.
+    const automaticUltra =
+      admittedRoute.automaticUltra && admittedRoute.variant !== 'battle';
+    if (automaticUltra && !hasWorkspaceMounts(agentInstanceId)) {
+      logger.debug(
+        '[SwarmRun] Automatic Ultra declined because no workspace is mounted',
+        { agentInstanceId },
+      );
+      return null;
+    }
+    const rawAutomaticPrompt = automaticUltra
+      ? getAutomaticUltraSwarmPrompt(history)
+      : null;
+    const convertedMessages = (request.options.messages ??
+      []) as ReadonlyArray<ModelMessage>;
+    const prompt = automaticUltra
+      ? rawAutomaticPrompt
+        ? convertedMessages.length > 0
+          ? buildAutomaticSwarmModelContext(convertedMessages)
+          : rawAutomaticPrompt
+        : null
+      : (await extractSwarmPromptFromMessage(agentInstanceId, message)) ||
+        'Run Dynamic Swarm.';
+    if (!prompt) {
+      logger.debug(
+        '[SwarmRun] Automatic Ultra declined because the admitted turn contains unsupported or ambiguous context',
+        { agentInstanceId },
+      );
+      return null;
+    }
+
+    logger.debug('[SwarmRun] Swarm admitted after user lifecycle', {
+      agentInstanceId,
+      automaticUltra,
+      mode: admittedRoute.variant,
+      promptLength: prompt.length,
+    });
+    return createAutomaticSwarmStepExecution({
+      request,
+      run: async () => {
+        await runSwarmWorkflow(agentInstanceId, prompt, admittedRoute.variant, {
+          appendUserMessage: false,
+          rethrowFailure: true,
+          abortSignal: request.options.abortSignal,
+          forceSwarmOnDirect: automaticUltra,
         });
       },
-    );
-    return true;
+    });
   };
+}
+
+type AutomaticSwarmStepCallbacks = {
+  onFinish?: (
+    result: StepResult<ToolSet> & {
+      steps: StepResult<ToolSet>[];
+      totalUsage: StepResult<ToolSet>['usage'];
+    },
+  ) => void | PromiseLike<void>;
+  onError?: (event: { error: unknown }) => void | PromiseLike<void>;
+  onAbort?: (event: {
+    steps: StepResult<ToolSet>[];
+  }) => void | PromiseLike<void>;
+};
+
+function createAutomaticSwarmStepResult(
+  request: AgentStepExecutionRequest,
+): StepResult<ToolSet> {
+  const model = request.options.model as {
+    provider?: string;
+    modelId?: string;
+  };
+  const usage: StepResult<ToolSet>['usage'] = {
+    inputTokens: 0,
+    inputTokenDetails: {
+      noCacheTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    },
+    outputTokens: 0,
+    outputTokenDetails: {
+      textTokens: 0,
+      reasoningTokens: 0,
+    },
+    totalTokens: 0,
+    cachedInputTokens: 0,
+    reasoningTokens: 0,
+  };
+  return {
+    stepNumber: 0,
+    model: {
+      provider: model.provider ?? 'clodex-swarm',
+      modelId: model.modelId ?? request.context.resolvedModelId,
+    },
+    functionId: undefined,
+    metadata: request.context.metadata,
+    experimental_context: request.options.experimental_context,
+    content: [],
+    text: '',
+    reasoning: [],
+    reasoningText: undefined,
+    files: [],
+    sources: [],
+    toolCalls: [],
+    staticToolCalls: [],
+    dynamicToolCalls: [],
+    toolResults: [],
+    staticToolResults: [],
+    dynamicToolResults: [],
+    finishReason: 'stop',
+    rawFinishReason: 'stop',
+    usage,
+    warnings: undefined,
+    request: {},
+    response: {
+      id: crypto.randomUUID(),
+      timestamp: new Date(),
+      modelId: request.context.resolvedModelId,
+      messages: [],
+    },
+    providerMetadata: undefined,
+  } as StepResult<ToolSet>;
+}
+
+export function createAutomaticSwarmStepExecution({
+  request,
+  run,
+}: {
+  request: AgentStepExecutionRequest;
+  run: () => Promise<void>;
+}): AgentStepExecution {
+  let started = false;
+  let resolveCompletion!: () => void;
+  let rejectCompletion!: (error: unknown) => void;
+  const completion = new Promise<void>((resolve, reject) => {
+    resolveCompletion = resolve;
+    rejectCompletion = reject;
+  });
+  // A UI-only consumer is valid. Keep the internal completion rejection from
+  // becoming an unhandled promise while still allowing consumeStream() to
+  // observe and classify the same failure.
+  void completion.catch(() => {});
+
+  return {
+    consumeStream(options) {
+      return completion.catch((error) => {
+        options?.onError?.(error);
+      });
+    },
+    toUIMessageStream<UI_MESSAGE extends UIMessage>(
+      _options: UIMessageStreamOptions<UI_MESSAGE> = {},
+    ): AsyncIterableStream<InferUIMessageChunk<UI_MESSAGE>> {
+      if (started) {
+        throw new Error(
+          'Automatic Swarm step UI stream can only be consumed once',
+        );
+      }
+      started = true;
+      const callbacks = request.options as AutomaticSwarmStepCallbacks;
+      const stream = new ReadableStream<InferUIMessageChunk<UI_MESSAGE>>({
+        start(controller) {
+          void (async () => {
+            try {
+              if (request.options.abortSignal?.aborted) {
+                await callbacks.onAbort?.({ steps: [] });
+                return;
+              }
+              await run();
+              throwIfAborted(request.options.abortSignal);
+              const result = createAutomaticSwarmStepResult(request);
+              await callbacks.onFinish?.({
+                ...result,
+                steps: [result],
+                totalUsage: result.usage,
+              });
+            } catch (error) {
+              if (request.options.abortSignal?.aborted || isAbortError(error)) {
+                await callbacks.onAbort?.({ steps: [] });
+              } else {
+                controller.enqueue({
+                  type: 'error',
+                  errorText: stringifyErrorPart(error),
+                } as InferUIMessageChunk<UI_MESSAGE>);
+                rejectCompletion(error);
+                // Publish the execution failure before BaseAgent's onError
+                // callback aborts the shared signal. This lets the outer
+                // ExecutionTargetRouter commit terminal=failed rather than
+                // racing into cancelled/aborted.
+                await Promise.resolve();
+                await callbacks.onError?.({ error });
+              }
+            } finally {
+              try {
+                controller.close();
+              } catch {
+                // The BaseAgent consumer may already be cancelled by stop().
+              } finally {
+                resolveCompletion();
+              }
+            }
+          })();
+        },
+      });
+      return toAsyncIterableStream(stream);
+    },
+  };
+}
+
+function toAsyncIterableStream<T>(
+  source: ReadableStream<T>,
+): AsyncIterableStream<T> {
+  const stream = source as AsyncIterableStream<T>;
+  (
+    stream as unknown as {
+      [Symbol.asyncIterator]: () => AsyncIterator<T>;
+    }
+  )[Symbol.asyncIterator] = () => {
+    const reader = source.getReader();
+    const iterator: AsyncIterator<T> & AsyncIterable<T> = {
+      async next(): Promise<IteratorResult<T>> {
+        const result = await reader.read();
+        if (result.done) {
+          reader.releaseLock();
+          return { done: true, value: undefined };
+        }
+        return { done: false, value: result.value };
+      },
+      async return(): Promise<IteratorResult<T>> {
+        try {
+          await reader.cancel();
+        } finally {
+          reader.releaseLock();
+        }
+        return { done: true, value: undefined };
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    };
+    return iterator;
+  };
+  return stream;
 }
 
 export function createSwarmRuntime({
@@ -388,11 +979,14 @@ export function createSwarmRuntime({
     agentInstanceId,
     prompt,
     result,
+    abortSignal,
   }: {
     agentInstanceId: string;
     prompt: string;
     result: SwarmExecutionResult;
+    abortSignal?: AbortSignal;
   }): Promise<string> => {
+    throwIfAborted(abortSignal);
     if (result.type === 'direct') return summarizeSwarmRun(result);
 
     const traceId = `${agentInstanceId}:${result.run.runId}:swarm-reporter`;
@@ -415,6 +1009,7 @@ export function createSwarmRuntime({
       model: modelWithOptions.model,
       providerOptions: modelWithOptions.providerOptions,
       headers: modelWithOptions.headers,
+      abortSignal,
       system: [
         'You are the final reporter for a Dynamic Swarm workflow in an IDE.',
         'Tools are disabled. Write a concise Markdown answer for the user.',
@@ -445,7 +1040,9 @@ export function createSwarmRuntime({
   const getSwarmWorkerTools = async (
     agentInstanceId: string,
     role: string,
+    abortSignal?: AbortSignal,
   ): Promise<ToolSet> => {
+    throwIfAborted(abortSignal);
     const readOnlyTools = [
       'searchProjectSymbols',
       'getFileSkeleton',
@@ -466,6 +1063,7 @@ export function createSwarmRuntime({
     const availableEntries = entries.filter(
       (entry): entry is readonly [string, ToolSet[string]] => entry !== null,
     );
+    throwIfAborted(abortSignal);
     return Object.fromEntries(
       availableEntries.map(([toolName, resolvedTool]) => {
         const execute = resolvedTool.execute;
@@ -475,6 +1073,7 @@ export function createSwarmRuntime({
           {
             ...resolvedTool,
             execute(input, options) {
+              throwIfAborted(abortSignal);
               assertLocalExecutionAllowed(agentInstanceId);
               return execute(input, options);
             },
@@ -486,14 +1085,32 @@ export function createSwarmRuntime({
   const waitForSwarmWorkspaceMounts = async (
     agentInstanceId: string,
     timeoutMs = 5_000,
+    abortSignal?: AbortSignal,
   ): Promise<
     ReturnType<typeof toolboxService.getWorkspaceSnapshot>['mounts']
   > => {
     const startedAt = Date.now();
+    throwIfAborted(abortSignal);
     let mounts = toolboxService.getWorkspaceSnapshot(agentInstanceId).mounts;
 
     while (mounts.length === 0 && Date.now() - startedAt < timeoutMs) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const finish = (callback: () => void) => {
+          if (settled) return;
+          settled = true;
+          abortSignal?.removeEventListener('abort', onAbort);
+          callback();
+        };
+        const timeout = setTimeout(() => finish(resolve), 100);
+        const onAbort = () => {
+          clearTimeout(timeout);
+          finish(() => reject(createAbortError(abortSignal)));
+        };
+        abortSignal?.addEventListener('abort', onAbort, { once: true });
+        if (abortSignal?.aborted) onAbort();
+      });
+      throwIfAborted(abortSignal);
       mounts = toolboxService.getWorkspaceSnapshot(agentInstanceId).mounts;
     }
 
@@ -521,13 +1138,18 @@ export function createSwarmRuntime({
   };
   const ensureSwarmWorkspaceMounts = async (
     agentInstanceId: string,
+    abortSignal?: AbortSignal,
   ): Promise<
     ReturnType<typeof toolboxService.getWorkspaceSnapshot>['mounts']
   > => {
     // A swarm may inherit only mounts already attached to its owning agent.
     // Recent/global workspaces are ambient host state, not delegated
     // authority, so an empty scope remains empty and fails closed.
-    return await waitForSwarmWorkspaceMounts(agentInstanceId);
+    return await waitForSwarmWorkspaceMounts(
+      agentInstanceId,
+      5_000,
+      abortSignal,
+    );
   };
   const formatSwarmWorkspaceMountContext = (
     mounts: ReturnType<typeof toolboxService.getWorkspaceSnapshot>['mounts'],
@@ -726,14 +1348,31 @@ export function createSwarmRuntime({
     agentInstanceId: string,
     prompt: string,
     mode: SwarmRunMode = 'standard',
+    options: {
+      appendUserMessage?: boolean;
+      rethrowFailure?: boolean;
+      abortSignal?: AbortSignal;
+      forceSwarmOnDirect?: boolean;
+    } = {},
   ): Promise<string> => {
+    const abortSignal = options.abortSignal;
+    throwIfAborted(abortSignal);
     assertLocalExecutionAllowed(agentInstanceId);
     logger.debug(
       `[SwarmRun] Starting DynamicSwarmOrchestrator for agent ${agentInstanceId} (${mode})`,
     );
-    appendSwarmMessage(agentInstanceId, createSwarmTextMessage('user', prompt));
-    const workspaceMounts = await ensureSwarmWorkspaceMounts(agentInstanceId);
+    if (options.appendUserMessage !== false) {
+      appendSwarmMessage(
+        agentInstanceId,
+        createSwarmTextMessage('user', prompt),
+      );
+    }
+    const workspaceMounts = await ensureSwarmWorkspaceMounts(
+      agentInstanceId,
+      abortSignal,
+    );
     if (workspaceMounts.length === 0) {
+      throwIfAborted(abortSignal);
       appendSwarmMessage(
         agentInstanceId,
         createSwarmTextMessage(
@@ -753,6 +1392,7 @@ export function createSwarmRuntime({
 
     const orchestrator = new DynamicSwarmOrchestrator({
       triage: async (triagePrompt) => {
+        throwIfAborted(abortSignal);
         if (forceBattleMode) {
           logger.debug(
             '[SwarmRun] Battle Agent mode forced fan-out/fan-in plan',
@@ -781,6 +1421,7 @@ export function createSwarmRuntime({
           model: modelWithOptions.model,
           providerOptions: modelWithOptions.providerOptions,
           headers: modelWithOptions.headers,
+          abortSignal,
           messages: [
             {
               role: 'user',
@@ -794,9 +1435,11 @@ export function createSwarmRuntime({
         logger.debug(
           `[SwarmRun] LLM triage completed | finishReason=${result.finishReason} | totalTokens=${result.usage.totalTokens ?? 'unknown'}`,
         );
+        throwIfAborted(abortSignal);
         return result.text;
       },
       executor: async (context) => {
+        throwIfAborted(abortSignal);
         const traceId = `${agentInstanceId}:${context.runId}:${context.task.id}`;
         const isBattleSynthesizerTask =
           forceBattleMode &&
@@ -806,6 +1449,7 @@ export function createSwarmRuntime({
         const swarmWorkerTools = await getSwarmWorkerTools(
           agentInstanceId,
           context.task.role,
+          abortSignal,
         );
         let { resolvedModelId, modelWithOptions } = await resolveSwarmModel({
           agentInstanceId,
@@ -821,6 +1465,7 @@ export function createSwarmRuntime({
             preferred_model_id: context.task.preferredModelId,
           },
         });
+        throwIfAborted(abortSignal);
         context.emitProgress({
           resolvedModelId,
           log: {
@@ -838,6 +1483,9 @@ export function createSwarmRuntime({
 
         const workerTimeoutMs = getSwarmWorkerTimeoutMs(context.task.role);
         const abortController = new AbortController();
+        const workerAbortSignal = abortSignal
+          ? AbortSignal.any([abortController.signal, abortSignal])
+          : abortController.signal;
         let timedOut = false;
         const timeout = setTimeout(() => {
           timedOut = true;
@@ -879,7 +1527,7 @@ export function createSwarmRuntime({
               model: modelWithOptions.model,
               providerOptions: modelWithOptions.providerOptions,
               headers: modelWithOptions.headers,
-              abortSignal: abortController.signal,
+              abortSignal: workerAbortSignal,
               system: systemPrompt,
               messages: workerMessages,
               temperature: context.task.role === 'coder' ? 0.2 : 0.1,
@@ -937,6 +1585,9 @@ export function createSwarmRuntime({
             includeProviderOptions: boolean,
           ) => {
             const probeAbortController = new AbortController();
+            const probeAbortSignal = abortSignal
+              ? AbortSignal.any([probeAbortController.signal, abortSignal])
+              : probeAbortController.signal;
             const probeTimeout = setTimeout(
               () => probeAbortController.abort(),
               45_000,
@@ -949,7 +1600,7 @@ export function createSwarmRuntime({
                   ? modelWithOptions.providerOptions
                   : undefined,
                 headers: modelWithOptions.headers,
-                abortSignal: probeAbortController.signal,
+                abortSignal: probeAbortSignal,
                 system: [
                   systemPrompt,
                   'Diagnostic mode: do not call tools. If previous code-search context is present, use it. Return a concise critique for this worker task.',
@@ -968,6 +1619,7 @@ export function createSwarmRuntime({
           try {
             result = await runWorkerAttempt();
           } catch (error) {
+            if (abortSignal?.aborted) throw createAbortError(abortSignal);
             if (timedOut || abortController.signal.aborted) {
               throw new Error(
                 `${context.task.name} timed out after ${Math.round(workerTimeoutMs / 1000)}s while using ${resolvedModelId}.`,
@@ -1021,6 +1673,7 @@ export function createSwarmRuntime({
                   },
                 });
               } catch (probeError) {
+                throwIfAborted(abortSignal);
                 const probeDetail = getSwarmErrorSearchText(probeError);
                 logger.warn(
                   `[SwarmRun] Gemini no-tools probe with provider options failed for ${context.task.name}: ${probeDetail.slice(0, 1_500)}`,
@@ -1042,6 +1695,7 @@ export function createSwarmRuntime({
                     },
                   });
                 } catch (minimalProbeError) {
+                  throwIfAborted(abortSignal);
                   const minimalProbeDetail =
                     getSwarmErrorSearchText(minimalProbeError);
                   logger.warn(
@@ -1064,6 +1718,7 @@ export function createSwarmRuntime({
                 'gpt-5.5',
                 'claude-opus-4.8',
               ]) {
+                throwIfAborted(abortSignal);
                 context.emitProgress({
                   log: {
                     level: 'warn',
@@ -1101,6 +1756,7 @@ export function createSwarmRuntime({
                   result = await runWorkerAttempt();
                   break;
                 } catch (candidateError) {
+                  throwIfAborted(abortSignal);
                   fallbackError = candidateError;
                   logger.warn(
                     `[SwarmRun] Battle synthesizer fallback ${fallbackPreferredModelId} failed for ${context.task.name}`,
@@ -1127,6 +1783,7 @@ export function createSwarmRuntime({
             }
 
             if (!result) {
+              throwIfAborted(abortSignal);
               const fallback = await resolveSwarmModel({
                 agentInstanceId,
                 taskRole: context.modelTaskRole,
@@ -1175,10 +1832,12 @@ export function createSwarmRuntime({
                 },
               });
               logWorkerCall();
+              throwIfAborted(abortSignal);
               result = await runWorkerAttempt();
             }
           }
 
+          throwIfAborted(abortSignal);
           if (!result) {
             throw new Error(
               `Swarm worker ${context.task.name} did not return a result.`,
@@ -1206,7 +1865,7 @@ export function createSwarmRuntime({
               context,
               prompt,
               responseMessages: result.response.messages,
-              abortSignal: abortController.signal,
+              abortSignal: workerAbortSignal,
             });
             finalText = summary.text;
             finalFinishReason = `${result.finishReason}+summary:${summary.finishReason}`;
@@ -1217,6 +1876,7 @@ export function createSwarmRuntime({
           }
 
           context.emitProgress({ newTokens: tokenCount });
+          throwIfAborted(abortSignal);
           logger.debug(
             `[SwarmRun] LLM task completed: ${context.task.name} | finishReason=${finalFinishReason} | totalTokens=${tokenCount} | toolCalls=${result.steps.reduce((count, step) => count + step.toolCalls.length, 0)}`,
           );
@@ -1250,7 +1910,10 @@ export function createSwarmRuntime({
     });
 
     try {
-      const result = await orchestrator.execute(prompt);
+      const result = await orchestrator.execute(prompt, {
+        forceSwarmOnDirect: options.forceSwarmOnDirect,
+      });
+      throwIfAborted(abortSignal);
       if (result.type === 'swarm') {
         browserSwarmStore.completeRunFromResult(agentInstanceId, result.run);
       }
@@ -1258,12 +1921,15 @@ export function createSwarmRuntime({
         agentInstanceId,
         prompt,
         result,
+        abortSignal,
       }).catch((error) => {
+        throwIfAborted(abortSignal);
         logger.warn('[SwarmRun] Reporter failed; falling back to summary', {
           error,
         });
         return summarizeSwarmRun(result);
       });
+      throwIfAborted(abortSignal);
       appendSwarmMessage(
         agentInstanceId,
         createSwarmTextMessage('assistant', summary, {
@@ -1275,10 +1941,14 @@ export function createSwarmRuntime({
       logger.debug(`[SwarmRun] Completed workflow`);
       return result.type === 'swarm' ? result.run.runId : 'direct';
     } catch (error) {
+      if (abortSignal?.aborted || isAbortError(error)) {
+        throw createAbortError(abortSignal);
+      }
       const message =
         error instanceof Error
           ? error.message
           : 'Swarm workflow failed unexpectedly.';
+      throwIfAborted(abortSignal);
       appendSwarmMessage(
         agentInstanceId,
         createSwarmTextMessage(
@@ -1286,11 +1956,39 @@ export function createSwarmRuntime({
           `Swarm workflow failed.\n\n${message}`,
         ),
       );
+      if (options.rethrowFailure === false) return 'failed';
       throw error;
     }
   };
   agentManagerService.setSwarmSubmitHandler(
     createSwarmSubmitHandler({
+      logger,
+    }),
+  );
+  const getModelThinkingSubmitContext = (
+    requestedModelId: string,
+  ): ModelThinkingSubmitContext => {
+    const preferences = uiKarton.state.preferences;
+    return {
+      modelId: getThinkingOverrideModelId(requestedModelId),
+      override: getModelThinkingOverride(
+        preferences.agent.modelThinkingOverrides,
+        requestedModelId,
+      ),
+      providerMode: getActiveGptThinkingProviderMode(
+        requestedModelId,
+        preferences,
+      ),
+    };
+  };
+  agentManagerService.setAutomaticSwarmStepHandler(
+    createAdmittedSwarmStepHandler({
+      getAgentHistory: (agentInstanceId) =>
+        agentCoreSeam.store.get().agents.instances[agentInstanceId]?.state
+          .history ?? [],
+      getModelThinkingSubmitContext,
+      hasWorkspaceMounts: (agentInstanceId) =>
+        toolboxService.getWorkspaceSnapshot(agentInstanceId).mounts.length > 0,
       extractSwarmPromptFromMessage,
       runSwarmWorkflow,
       logger,

@@ -44,8 +44,10 @@ import {
 } from '@clodex/agent-core/host';
 import {
   createThinkingProviderOptionsPatch,
+  supportsNativeThinkingProviderProfile,
   type ThinkingCapableModel,
 } from '@shared/model-thinking-capabilities';
+import { getModelThinkingOverride } from '@shared/model-effort-routing';
 
 type ProviderOptions = Parameters<typeof streamText>[0]['providerOptions'];
 type BuiltInModelSettings = (typeof availableModels)[number];
@@ -74,21 +76,22 @@ export function parseQualifiedModelId(
   };
 }
 
-function getDynamicClodexThinkingModel(
-  model: ClodexAuthModel,
+function getDynamicGpt5ThinkingModel(
+  modelId: string,
   semanticProvider: ModelProvider,
 ): ThinkingModelSettings | undefined {
-  const bareModelId = getBareModelId(model.id).toLowerCase();
+  const bareModelId = getBareModelId(modelId).toLowerCase();
   if (semanticProvider !== 'openai' || !/^gpt-5(?:\.|$)/.test(bareModelId)) {
     return undefined;
   }
 
   return {
-    modelId: model.id,
+    modelId,
     officialProvider: 'openai',
     thinkingEnabled: true,
     providerOptions: {
       clodex: { reasoning: { effort: 'medium' } },
+      openai: { reasoningEffort: 'medium', reasoningSummary: 'auto' },
     },
   };
 }
@@ -1002,6 +1005,7 @@ export class ModelProviderService {
         qualified.providerProfileId,
         qualified.modelId,
         traceId,
+        otherPostHogProperties,
       );
     }
     const clodexModel = this.getClodexModel(modelId);
@@ -1115,6 +1119,7 @@ export class ModelProviderService {
     profileId: string,
     modelId: string,
     traceId: string,
+    requestMetadata?: Record<string, unknown>,
   ): ModelWithOptions {
     const profile = this.preferencesService
       .get()
@@ -1200,6 +1205,53 @@ export class ModelProviderService {
               : undefined,
             modelId,
           );
+    const supportsNativeThinking = supportsNativeThinkingProviderProfile(
+      profile.providerType,
+    );
+    const catalogModel = supportsNativeThinking
+      ? getAvailableModel(modelId)
+      : undefined;
+    const compatibleCatalogModel =
+      catalogModel &&
+      (profile.providerType === 'clodex' ||
+        catalogModel.officialProvider === semanticProvider)
+        ? catalogModel
+        : undefined;
+    const thinkingModelSettings = supportsNativeThinking
+      ? (compatibleCatalogModel ??
+        getDynamicGpt5ThinkingModel(modelId, semanticProvider))
+      : undefined;
+    const thinkingApiSpec =
+      profile.providerType === 'openai'
+        ? profile.protocol === 'openai-chat'
+          ? 'openai-chat-completions'
+          : profile.protocol === 'openai-responses'
+            ? 'openai-responses'
+            : undefined
+        : undefined;
+    const thinkingProviderMode =
+      profile.providerType === 'openai' && profile.protocol === 'openai-chat'
+        ? 'custom'
+        : providerMode;
+    const baseProviderOptions = (thinkingModelSettings?.providerOptions ??
+      {}) as Record<string, unknown>;
+    const thinkingOverride = thinkingModelSettings
+      ? getModelThinkingOverride(
+          this.preferencesService.get().agent.modelThinkingOverrides,
+          `${profileId}:${modelId}`,
+        )
+      : undefined;
+    const providerOptions = thinkingModelSettings
+      ? resolveThinkingProviderOptions({
+          baseProviderOptions,
+          modelSettings: thinkingModelSettings,
+          override: thinkingOverride,
+          providerMode: thinkingProviderMode,
+          semanticProvider,
+          customEndpointApiSpec: thinkingApiSpec,
+          requestMetadata,
+        })
+      : {};
     return {
       model: this.telemetryService.withTracing(model, {
         posthogTraceId: traceId,
@@ -1209,7 +1261,10 @@ export class ModelProviderService {
           providerType: profile.providerType,
         },
       }),
-      providerOptions: {},
+      providerOptions:
+        providerMode === 'clodex'
+          ? sanitizeClodexProviderOptions(providerOptions)
+          : providerOptions,
       headers: profile.customHeaders,
       contextWindowSize: 128_000,
       providerMode,
@@ -1255,7 +1310,7 @@ export class ModelProviderService {
     );
     const thinkingModelSettings =
       modelSettings ??
-      getDynamicClodexThinkingModel(clodexModel, semanticProvider);
+      getDynamicGpt5ThinkingModel(clodexModel.id, semanticProvider);
     const posthogProperties = omitModelRequestMetadata(otherPostHogProperties);
     const posthogConfig = {
       posthogTraceId: traceId,

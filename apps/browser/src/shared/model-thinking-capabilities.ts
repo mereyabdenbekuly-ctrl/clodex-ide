@@ -2,6 +2,7 @@ import type {
   ApiSpec,
   ModelProvider,
   ModelThinkingOverride,
+  ProviderProfile,
   ProviderEndpointMode,
 } from './karton-contracts/ui/shared-types';
 
@@ -39,6 +40,48 @@ export type ThinkingCapableModel = {
   thinkingEnabled?: boolean;
 };
 
+export function supportsNativeThinkingProviderProfile(
+  providerType: string,
+): boolean {
+  return (
+    providerType === 'openai' ||
+    providerType === 'anthropic' ||
+    providerType === 'clodex'
+  );
+}
+
+export function getProviderProfileModelThinkingSupport({
+  providerType,
+  protocol,
+  modelId,
+  discoveredReasoning,
+}: {
+  providerType: string;
+  protocol: ProviderProfile['protocol'];
+  modelId: string;
+  discoveredReasoning: boolean;
+}): { thinkingEnabled: boolean; editable: boolean } {
+  // The generic discovery adapter cannot infer reasoning from `/models` and
+  // therefore reports false. Exact model identity is safe to recognize
+  // locally: first-party Responses exposes Max/Ultra, first-party Chat stays
+  // on Low/Medium/High, and generic profiles only show a Reasoning label.
+  const inferredKnownReasoning =
+    ['openai', 'clodex', 'openrouter', 'ollama', 'openai-compatible'].includes(
+      providerType,
+    ) && isGpt56FrontierModel(modelId);
+  const thinkingEnabled = discoveredReasoning || inferredKnownReasoning;
+
+  return {
+    thinkingEnabled,
+    editable:
+      thinkingEnabled &&
+      supportsNativeThinkingProviderProfile(providerType) &&
+      (providerType !== 'openai' ||
+        protocol === 'openai-responses' ||
+        protocol === 'openai-chat'),
+  };
+}
+
 const CLODEX_OPTIONS = createOptions('clodex', [
   ['minimal', 'Minimal', true],
   ['low', 'Low', true],
@@ -47,12 +90,34 @@ const CLODEX_OPTIONS = createOptions('clodex', [
   ['xhigh', 'Extra high', true],
 ]);
 
+const CLODEX_GPT_56_FRONTIER_OPTIONS = createOptions('clodex', [
+  ['minimal', 'Minimal', true],
+  ['low', 'Low', true],
+  ['medium', 'Medium', true],
+  ['high', 'High', true],
+  ['xhigh', 'Extra high', true],
+  ['max', 'Max', true],
+  ['ultra', 'Ultra', true],
+]);
+
 const OPENAI_GPT_5_OPTIONS = createOptions('openai', [
   ['none', 'Off', false],
   ['low', 'Low', true],
   ['medium', 'Medium', true],
   ['high', 'High', true],
   ['xhigh', 'Extra high', true],
+]);
+
+const OPENAI_GPT_56_FRONTIER_OPTIONS = createOptions('openai', [
+  ['none', 'Off', false],
+  ['low', 'Low', true],
+  ['medium', 'Medium', true],
+  ['high', 'High', true],
+  ['xhigh', 'Extra high', true],
+  ['max', 'Max', true],
+  // Ultra is intentionally an IDE orchestration preset. The provider request
+  // is normalized to Max and the renderer routes the turn through Swarm.
+  ['ultra', 'Ultra', true],
 ]);
 
 const OPENAI_CONSERVATIVE_OPTIONS = createOptions('openai', [
@@ -196,8 +261,11 @@ export function getSupportedThinkingOptions(
 
   switch (provider) {
     case 'clodex':
-      return CLODEX_OPTIONS;
+      return getClodexOptions(modelId);
     case 'openai':
+      if (isGpt56FrontierModel(modelId)) {
+        return OPENAI_GPT_56_FRONTIER_OPTIONS;
+      }
       return isKnownOpenAiGpt5Model(modelId)
         ? OPENAI_GPT_5_OPTIONS
         : OPENAI_CONSERVATIVE_OPTIONS;
@@ -208,6 +276,21 @@ export function getSupportedThinkingOptions(
     case 'anthropic':
       return getAnthropicOptions(modelId);
   }
+}
+
+function getClodexOptions(modelId: string): ThinkingOption[] {
+  // Sol and Terra support provider-level Max. Ultra is an IDE orchestration
+  // preset layered on top of Max and is intentionally normalized before the
+  // provider request is sent.
+  if (isGpt56FrontierModel(modelId)) {
+    return CLODEX_GPT_56_FRONTIER_OPTIONS;
+  }
+  return CLODEX_OPTIONS;
+}
+
+export function isGpt56FrontierModel(modelId: string): boolean {
+  const bareModelId = modelId.split('/').pop()?.toLowerCase();
+  return bareModelId === 'gpt-5.6-sol' || bareModelId === 'gpt-5.6-terra';
 }
 
 export function getDefaultThinkingSelection(
@@ -287,6 +370,31 @@ export function isExplicitThinkingOverride(
   return hasExplicitThinkingOverride(override);
 }
 
+export function isGpt56UltraThinkingSelected({
+  modelId,
+  override,
+  providerMode,
+}: {
+  modelId: string | null | undefined;
+  override: ModelThinkingOverride | undefined;
+  providerMode: ProviderEndpointMode | undefined;
+}): boolean {
+  if (
+    !modelId ||
+    (providerMode !== 'clodex' && providerMode !== 'official') ||
+    !isGpt56FrontierModel(modelId) ||
+    override?.enabled === false ||
+    override?.value !== 'ultra'
+  ) {
+    return false;
+  }
+
+  const activeProvider = providerMode === 'clodex' ? 'clodex' : 'openai';
+  return (
+    override.provider === undefined || override.provider === activeProvider
+  );
+}
+
 export function getNextThinkingSelection(
   model: ThinkingCapableModel,
   current: ThinkingSelection,
@@ -326,16 +434,23 @@ export function createThinkingProviderOptionsPatch({
       return {
         clodex: {
           // The Clodex gateway accepts `reasoning.effort`, but rejects the
-          // OpenRouter-style `reasoning.enabled` field.
+          // OpenRouter-style `reasoning.enabled` field. Ultra is an IDE
+          // orchestration preset (Max reasoning + proactive Swarm), not a
+          // provider effort value, so the model request itself uses Max.
           reasoning: selection.enabled
-            ? { effort: selection.value }
+            ? {
+                effort: selection.value === 'ultra' ? 'max' : selection.value,
+              }
             : undefined,
         },
       };
     case 'openai':
       return {
         openai: selection.enabled
-          ? { reasoningEffort: selection.value }
+          ? {
+              reasoningEffort:
+                selection.value === 'ultra' ? 'max' : selection.value,
+            }
           : { reasoningEffort: 'none', reasoningSummary: undefined },
       };
     case 'openai-compatible':

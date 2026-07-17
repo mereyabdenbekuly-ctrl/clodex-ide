@@ -946,6 +946,7 @@ export interface ChatInputActionsProps {
   onToggleDictation?: () => void;
 
   swarmModeActive?: boolean;
+  automaticSwarmModeActive?: boolean;
   battleModeActive?: boolean;
   onToggleSwarmMode?: () => void;
   onToggleBattleMode?: () => void;
@@ -973,6 +974,7 @@ export const ChatInputActions = memo(function ChatInputActions({
   onToggleDictation,
 
   swarmModeActive = false,
+  automaticSwarmModeActive = false,
   battleModeActive = false,
   onToggleSwarmMode,
   onToggleBattleMode,
@@ -1082,10 +1084,26 @@ export const ChatInputActions = memo(function ChatInputActions({
               <Button
                 size="icon-sm"
                 variant="ghost"
-                disabled={swarmModeDisabled}
-                className="z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 disabled:opacity-50 data-[active=true]:bg-clodex-green-400/12 data-[active=true]:text-clodex-green-400 data-[active=true]:ring-1 data-[active=true]:ring-clodex-green-400/25"
-                data-active={swarmModeActive}
-                aria-label="Toggle Deep Think"
+                disabled={
+                  swarmModeDisabled ||
+                  (automaticSwarmModeActive && !swarmModeActive)
+                }
+                className={cn(
+                  'z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 disabled:opacity-50 data-[active=true]:bg-clodex-green-400/12 data-[active=true]:text-clodex-green-400 data-[active=true]:ring-1 data-[active=true]:ring-clodex-green-400/25',
+                  automaticSwarmModeActive &&
+                    !swarmModeActive &&
+                    'cursor-default disabled:opacity-100',
+                )}
+                data-active={swarmModeActive || automaticSwarmModeActive}
+                aria-label={
+                  automaticSwarmModeActive && battleModeActive
+                    ? 'Battle Agent overrides Ultra Deep Think'
+                    : automaticSwarmModeActive && swarmModeActive
+                      ? 'Clear manual Deep Think; Ultra remains active'
+                      : automaticSwarmModeActive
+                        ? 'Ultra automatically enables Deep Think'
+                        : 'Toggle Deep Think'
+                }
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -1096,9 +1114,15 @@ export const ChatInputActions = memo(function ChatInputActions({
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              {swarmModeActive
-                ? 'Deep Think enabled: route next message through Swarm'
-                : 'Enable Deep Think / Swarm'}
+              {automaticSwarmModeActive && battleModeActive
+                ? 'Battle Agent overrides Ultra: this turn uses Battle instead of automatic standard Swarm.'
+                : automaticSwarmModeActive && swarmModeActive
+                  ? 'Manual Deep Think is also enabled. Click to clear the manual flag; Ultra will remain active.'
+                  : automaticSwarmModeActive
+                    ? 'Ultra active: Max reasoning with automatic standard Swarm. Change model effort to disable it.'
+                    : swarmModeActive
+                      ? 'Deep Think enabled: route next message through Swarm'
+                      : 'Enable Deep Think / Swarm'}
             </TooltipContent>
           </Tooltip>
         )}
@@ -1122,9 +1146,11 @@ export const ChatInputActions = memo(function ChatInputActions({
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              {battleModeActive
-                ? 'Battle Agent enabled: models will debate before coding'
-                : 'Enable Battle Agent'}
+              {battleModeActive && automaticSwarmModeActive
+                ? 'Battle Agent overrides Ultra automatic standard Swarm for the next message.'
+                : battleModeActive
+                  ? 'Battle Agent enabled: models will debate before coding'
+                  : 'Enable Battle Agent'}
             </TooltipContent>
           </Tooltip>
         )}

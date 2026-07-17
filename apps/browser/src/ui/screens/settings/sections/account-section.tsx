@@ -69,7 +69,9 @@ export function AccountSection() {
       description={
         isAuthenticated
           ? 'Manage the optional Clodex Cloud provider and privacy preferences.'
-          : 'Clodex Cloud is optional. You can also use your own provider keys or local models.'
+          : __APP_AUTH_ENABLED__
+            ? 'Clodex Cloud is optional. You can also use your own provider keys or local models.'
+            : 'Configure your own provider keys or local models. Account authentication is unavailable in this distribution.'
       }
       toolbar={
         isAuthenticated ? (
@@ -89,7 +91,7 @@ export function AccountSection() {
           <div className="max-w-xs">
             <SettingsSummaryCard
               label="account status"
-              value="Signed out"
+              value={__APP_AUTH_ENABLED__ ? 'Signed out' : 'Unavailable'}
               icon={<UserRoundIcon className="size-4" />}
             />
           </div>
@@ -107,18 +109,18 @@ export function AccountSection() {
           models={userAccount.models ?? []}
           onLogout={() => void logout()}
         />
-      ) : (
+      ) : __APP_AUTH_ENABLED__ ? (
         <SettingsPanel className="mx-auto max-w-2xl p-5 sm:p-7">
           <div className="mb-6">
             <SettingsSectionHeader
               title="Sign in to Clodex"
-              description="Authentication opens in your browser and returns securely to the desktop app."
+              description="Browser sign-in is paused until the desktop callback enforces state and PKCE S256."
             />
           </div>
           <SignInOptionsPanel
             variant="section"
-            title="Authenticate"
-            description="Sign in only if you want to use the optional Clodex Cloud provider."
+            title="Вход в CLODEx"
+            description="Вход через сайт временно отключён fail-closed; Telegram остаётся отдельным способом входа."
             sendOtp={(email, token) => sendOtp(email, token ?? '')}
             verifyOtp={verifyOtp}
             signInSocial={signInSocial}
@@ -134,6 +136,21 @@ export function AccountSection() {
               void openSettings({ section: 'models-providers' })
             }
           />
+        </SettingsPanel>
+      ) : (
+        <SettingsPanel className="mx-auto max-w-2xl p-5 sm:p-7">
+          <SettingsSectionHeader
+            title="Account sign-in unavailable"
+            description="This distribution runs without CLODEx account authentication. Configure provider keys or a local model instead."
+          />
+          <Button
+            className="mt-5"
+            variant="secondary"
+            size="sm"
+            onClick={() => void openSettings({ section: 'models-providers' })}
+          >
+            Open model providers
+          </Button>
         </SettingsPanel>
       )}
     </SettingsPage>

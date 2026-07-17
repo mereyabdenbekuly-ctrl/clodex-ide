@@ -167,7 +167,19 @@ export async function runPlatformIntegrationServicesPhase(
     credentialsService,
     authService.modelAccessToken,
   );
+  // A persisted `clodex-account` provider can outlive the encrypted account
+  // session that issued it. Remove that orphan at startup so the UI does not
+  // claim a usable account relay credential while the user is signed out.
+  if (!authService.accessToken) {
+    await preferencesService.syncClodexAccountProfile(
+      credentialsService,
+      undefined,
+    );
+  }
   authService.registerAuthStateChangeCallback(() => {
+    // Keep the last short-lived relay credential during a temporary server
+    // outage. Delete it only after the account session is definitively gone.
+    if (authService.accessToken && !authService.modelAccessToken) return;
     void preferencesService
       .syncClodexAccountProfile(
         credentialsService,
