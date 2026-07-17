@@ -9,7 +9,7 @@
 
 [![Website](https://img.shields.io/badge/website-ide.clodex.xyz-00d88a?style=flat-square)](https://ide.clodex.xyz)
 ![Status](https://img.shields.io/badge/status-technical_preview-2563eb?style=flat-square)
-[![Community build](https://img.shields.io/badge/community_observed-1.16.0--observed6-00d88a?style=flat-square)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved6)
+[![Community build](https://img.shields.io/badge/community_observed-1.16.0--observed7-00d88a?style=flat-square)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved7)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-111827?style=flat-square)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-22.23.1-43853d?style=flat-square)
 ![pnpm](https://img.shields.io/badge/pnpm-10.30.3-f69220?style=flat-square)
@@ -39,37 +39,41 @@ evidence and manual sign-off are complete.
 
 ## Community test build
 
-The current public tester build is **`1.16.0-communityobserved6`**, produced from the
+The current public tester build is **`1.16.0-communityobserved7`**, produced from the
 canonical `main` commit
-[`31c3ac4a1119208158d140b937ae0b6c81ac7451`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/31c3ac4a1119208158d140b937ae0b6c81ac7451)
-by [GitHub Actions run `29591675705`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29591675705)
+[`981311304fb4c648ebbaa0b85fbed0602aab2c9f`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/981311304fb4c648ebbaa0b85fbed0602aab2c9f)
+by [GitHub Actions run `29615260553`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29615260553)
 and published as a clearly separated
-[GitHub community prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved6).
-It adds the **Русский (beta)** interface and an explicitly opt-in anonymous
-telemetry profile. The previous
+[GitHub community prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved7).
+It adds the **Русский (beta)** interface and a required first-launch privacy
+choice with **Allow anonymous statistics** as the primary action and a visible
+**Continue without statistics** path. The previous
 [community4 prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-community4)
 remains available as the telemetry-free predecessor.
 
 | Platform            | Package   | Download |
 | ------------------- | --------- | -------- |
-| macOS Apple Silicon | ARM64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/clodex-community-observed-1.16.0-communityobserved6-arm64.dmg) |
-| macOS Intel         | x64 DMG   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/clodex-community-observed-1.16.0-communityobserved6-x64.dmg) |
-| Windows             | x64 EXE   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/clodex-community-observed-1.16.0-communityobserved6-x64-setup.exe) |
-| Linux               | x64 DEB   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/clodex-community-observed_1.16.0-communityobserved6_amd64.deb) |
-| Linux               | x64 RPM   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/clodex-community-observed-1.16.0.communityobserved6-1.x86_64.rpm) |
+| macOS Apple Silicon | ARM64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/clodex-community-observed-1.16.0-communityobserved7-arm64.dmg) |
+| macOS Intel         | x64 DMG   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/clodex-community-observed-1.16.0-communityobserved7-x64.dmg) |
+| Windows             | x64 EXE   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/clodex-community-observed-1.16.0-communityobserved7-x64-setup.exe) |
+| Linux               | x64 DEB   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/clodex-community-observed_1.16.0-communityobserved7_amd64.deb) |
+| Linux               | x64 RPM   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/clodex-community-observed-1.16.0.communityobserved7-1.x86_64.rpm) |
 
-Download [`SHA256SUMS.txt`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/SHA256SUMS.txt)
+Download [`SHA256SUMS.txt`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/SHA256SUMS.txt)
 from the same prerelease and verify the installer before opening it. The exact
 source manifests, CycloneDX SBOMs, warnings, platform validation reports, and
 byte-level audit report are retained in the compact
-[evidence archive](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved6/clodex-community-observed-1.16.0-communityobserved6-evidence.zip).
+[evidence archive](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/clodex-community-observed-1.16.0-communityobserved7-evidence.zip).
 Do not use repackaged binaries from an unverified mirror.
 
-Telemetry is **off by default**. If the user explicitly selects anonymous
-telemetry, only the backend PostHog client may send allowlisted counters and
-enum metadata. Renderer capture, prompts, source code, commands, paths, URLs,
-tool arguments, feedback, exceptions, user identification, session recording,
-full telemetry, and AI tracing are disabled.
+Before onboarding, the build requires an explicit allow-or-decline choice. No
+PostHog client starts before that decision. If anonymous statistics are
+allowed, only the backend client may send allowlisted counters, bounded timing,
+enum metadata, app/platform metadata, and a pseudonymous installation ID.
+Renderer capture, person profiles, GeoIP enrichment, prompts, messages, source
+code, commands, paths, URLs, API keys, tool arguments, error or feedback text,
+exceptions, account identification, session recording, full telemetry, and AI
+tracing are disabled. The choice can be changed later in Settings.
 
 ### Verify and install
 
@@ -104,9 +108,9 @@ binary.
      or RPM (`rpm -i ./<file>.rpm`) for your distribution.
 
 The observed community build has a separate application identity. Account
-sign-in, auto-update, and default protocol registration are excluded. Anonymous
-telemetry remains disabled until the user explicitly enables it. Install newer
-community builds manually.
+sign-in, auto-update, and default protocol registration are excluded. The
+first-launch privacy choice must be completed before normal IDE use. Install
+newer community builds manually.
 
 ### First launch: connect a model
 
