@@ -9,14 +9,18 @@
 
 [![Website](https://img.shields.io/badge/website-ide.clodex.xyz-00d88a?style=flat-square)](https://ide.clodex.xyz)
 ![Status](https://img.shields.io/badge/status-technical_preview-2563eb?style=flat-square)
+[![Community build](https://img.shields.io/badge/community_build-1.16.0--community4-00d88a?style=flat-square)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-community4)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-111827?style=flat-square)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-22.23.1-43853d?style=flat-square)
 ![pnpm](https://img.shields.io/badge/pnpm-10.30.3-f69220?style=flat-square)
 [![X](https://img.shields.io/badge/X-@CLODEx__lab-111111?style=flat-square)](https://x.com/CLODEx_lab)
 
-Clodex is an open-source agentic development environment that combines
-persistent AI tasks, code, terminal, browser, Git, models, memory, and
-controlled execution in one Electron workspace.
+Clodex is an open-source, local-first agentic development environment for
+governed software work. It combines durable AI tasks, code and Git tools,
+terminal, browser, memory, model routing, and controlled execution in one
+Electron workspace. Local testing does not require a Clodex account: use your
+own provider API key, a custom OpenAI-compatible endpoint, or a local Ollama
+runtime.
 
 It is an early-stage, solo-led research and engineering project. The current
 Technical Preview is intended to validate architecture and real workflows; it
@@ -28,13 +32,91 @@ It is built around a simple principle:
 > isolated runtimes, and user-controlled review.
 
 **Current release status:** Technical Preview. The architectural core is
-implemented and tested locally. Advanced execution lanes remain feature-gated
-until their live promotion evidence and manual sign-off are complete.
+implemented and tested locally. The public desktop binaries described below
+are unsigned community test artifacts, not an official stable release.
+Advanced execution lanes remain feature-gated until their live promotion
+evidence and manual sign-off are complete.
+
+## Community test build
+
+The current public tester build is **`1.16.0-community4`**, produced from the
+canonical `main` commit
+[`a0031a61193108553b6357fc0ed1f8bad825bd9f`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/a0031a61193108553b6357fc0ed1f8bad825bd9f)
+by [GitHub Actions run `29547743973`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29547743973)
+and published as a clearly separated
+[GitHub community prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-community4).
+
+| Platform            | Package   | Download |
+| ------------------- | --------- | -------- |
+| macOS Apple Silicon | ARM64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-community4/clodex-community-unsigned-1.16.0-community4-macos-arm64.dmg) |
+| macOS Intel         | x64 DMG   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-community4/clodex-community-unsigned-1.16.0-community4-macos-x64.dmg) |
+| Windows             | x64 EXE   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-community4/clodex-community-unsigned-1.16.0-community4-windows-x64-setup.exe) |
+| Linux               | x64 DEB   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-community4/clodex-community-unsigned_1.16.0-community4_amd64.deb) |
+| Linux               | x64 RPM   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-community4/clodex-community-unsigned-1.16.0.community4-1.x86_64.rpm) |
+
+Download [`SHA256SUMS.txt`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-community4/SHA256SUMS.txt)
+from the same prerelease and verify the installer before opening it. The exact
+source manifests, CycloneDX SBOMs, warning, and platform validation reports are
+retained in the canonical Actions bundles. Do not use repackaged binaries from
+an unverified mirror.
+
+### Verify and install
+
+Community packages intentionally have no trusted publisher identity. macOS
+apps are ad-hoc signed and not notarized, Windows packages are not
+Authenticode-signed, and Linux packages have no CLODEx release signature.
+Open source makes the source inspectable; it does not authenticate a downloaded
+binary.
+
+1. Confirm that the bundle manifest records the expected version, platform,
+   architecture, and source commit.
+2. Verify every file before installation:
+
+   ```bash
+   # macOS
+   shasum -a 256 -c SHA256SUMS
+
+   # Linux
+   sha256sum -c SHA256SUMS
+   ```
+
+   On Windows, compare `Get-FileHash <installer.exe> -Algorithm SHA256` with
+   the installer entry in `SHA256SUMS`.
+3. Install for your platform:
+   - **macOS:** open the matching DMG and drag the app to `/Applications`. On
+     first launch, use Finder's per-app **Control-click -> Open** review only
+     after verifying the bundle. Do not disable Gatekeeper globally.
+   - **Windows:** run the x64 setup. SmartScreen may warn about an unknown
+     publisher; use only its per-file review path after verifying the bundle.
+     Do not disable SmartScreen or Defender globally.
+   - **Linux:** install either the downloaded DEB (`apt install ./<file>.deb`)
+     or RPM (`rpm -i ./<file>.rpm`) for your distribution.
+
+The community build has a separate application identity, account sign-in and
+telemetry are disabled, and auto-update is excluded. Install newer community
+builds manually.
+
+### First launch: connect a model
+
+1. Open a local project or workspace.
+2. In onboarding or **Settings -> Models & Providers**, choose one of:
+   - a BYOK API key for a supported provider such as OpenAI, Anthropic, or
+     Google;
+   - a custom OpenAI-compatible endpoint; or
+   - local Ollama, normally at `http://localhost:11434`.
+3. Test the connection, select a discovered model, and start a small task.
+
+Provider usage and billing remain between you and the provider. Never include
+API keys, tokens, private source, or unredacted logs in an issue or tester
+report. See the full
+[community unsigned build policy](./docs/community-unsigned-builds.md) and
+[support guide](./SUPPORT.md).
 
 ## Start here
 
 | Goal                                    | Document                                                                                      |
 | --------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Install the current community build     | [Community build above](#community-test-build) · [Build policy](./docs/community-unsigned-builds.md) |
 | Understand the product in a few minutes | [Product overview](./short_doc.en.md) · [Русский обзор](./short_doc.md)                       |
 | Run Clodex locally                      | [Developer handbook](./DEVELOPERS.md)                                                         |
 | Study the complete system               | [Full project documentation](./full_doc.md)                                                   |
@@ -43,6 +125,7 @@ until their live promotion evidence and manual sign-off are complete.
 | Review security and data handling       | [Security and data](./docs/developer/security-and-data.md) · [Security policy](./SECURITY.md) |
 | Understand project lineage              | [Clodex and Stagewise upstream](./CLODEX_VS_UPSTREAM.md)                                     |
 | Contribute or collaborate               | [Contributing](./CONTRIBUTING.md) · [Collaboration paths](./COLLABORATE.md)                   |
+| Get help or report a testing problem    | [Support and report channels](./SUPPORT.md)                                                   |
 | Understand project governance           | [Governance](./GOVERNANCE.md) · [Code of conduct](./CODE_OF_CONDUCT.md)                      |
 | Follow the independent-kernel migration | [Hybrid strangler plan](./docs/migration/README.md)                                           |
 | Explore the live project                | [ide.clodex.xyz](https://ide.clodex.xyz)                                                      |
@@ -179,7 +262,8 @@ public issue.
 | Guardian and managed network egress                  | **Preview**                     |
 | Signed extensions and generated apps                 | **Preview**                     |
 | Cloud Tasks and Session Teleport                     | **Labs / promotion-gated**      |
-| Stable cross-platform distribution                   | **Pending promotion evidence**  |
+| Unsigned macOS, Windows, and Linux community builds  | **Available for public testing** |
+| Official signed cross-platform distribution          | **Pending promotion evidence**  |
 
 The status labels are deliberate: implemented foundations are not presented as
 stable production capabilities until real installation evidence, monitoring,
