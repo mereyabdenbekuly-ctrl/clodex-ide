@@ -5,6 +5,7 @@ import type {
   WebContents,
   WebFrameMain,
 } from 'electron';
+import { fileURLToPath } from 'node:url';
 import { TRUSTED_UI_KARTON_CONNECT_CHANNEL } from '@shared/trusted-ui-karton';
 import type { Logger } from './logger';
 
@@ -92,13 +93,35 @@ function captureFrameRevision(frame: WebFrameMain): FrameRevision | null {
   }
 }
 
+function trustedUiUrlsEqual(leftValue: string, rightValue: string): boolean {
+  try {
+    const left = new URL(leftValue);
+    const right = new URL(rightValue);
+
+    if (left.protocol !== 'file:' || right.protocol !== 'file:') {
+      return leftValue === rightValue;
+    }
+
+    return (
+      left.username === right.username &&
+      left.password === right.password &&
+      left.host === right.host &&
+      left.search === right.search &&
+      left.hash === right.hash &&
+      fileURLToPath(left) === fileURLToPath(right)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function revisionsEqual(left: FrameRevision, right: FrameRevision): boolean {
   return (
     left.frameTreeNodeId === right.frameTreeNodeId &&
     left.processId === right.processId &&
     left.routingId === right.routingId &&
     left.frameToken === right.frameToken &&
-    left.url === right.url &&
+    trustedUiUrlsEqual(left.url, right.url) &&
     left.origin === right.origin
   );
 }
@@ -142,9 +165,9 @@ export function evaluateTrustedUiKartonConnect(
     }
 
     if (
-      senderRevision.url !== allowedLocation.url ||
+      !trustedUiUrlsEqual(senderRevision.url, allowedLocation.url) ||
       senderRevision.origin !== allowedLocation.origin ||
-      currentUi.getURL() !== allowedLocation.url
+      !trustedUiUrlsEqual(currentUi.getURL(), allowedLocation.url)
     ) {
       return { ok: false, reason: 'wrong-ui-location' };
     }

@@ -370,6 +370,47 @@ describe('trusted UI Karton boundary', () => {
     ).toEqual({ ok: false, reason: 'wrong-ui-location' });
   });
 
+  it('accepts the same packaged file when a DMG bracket is raw or encoded', () => {
+    const allowed = createTrustedUiLocation(
+      'file:///Volumes/CLODEx%20%5Barm64%5D/CLODEx.app/Contents/Resources/renderer/main_window/index.html',
+    );
+    const fixture = createFixture({
+      actualUrl:
+        'file:///Volumes/CLODEx%20[arm64]/CLODEx.app/Contents/Resources/renderer/main_window/index.html',
+      actualOrigin: 'file://',
+    });
+
+    expect(
+      evaluateTrustedUiKartonConnect(
+        fixture.event,
+        [null],
+        fixture.webContents.asElectronWebContents(),
+        allowed,
+      ),
+    ).toEqual({
+      ok: true,
+      port: fixture.ports[0]?.asElectronPort(),
+    });
+  });
+
+  it('rejects malformed packaged file URLs with an encoded separator', () => {
+    const malformedUrl = 'file:///opt/clodex/renderer%2Fmain_window/index.html';
+    const allowed = createTrustedUiLocation(malformedUrl);
+    const fixture = createFixture({
+      actualUrl: malformedUrl,
+      actualOrigin: 'file://',
+    });
+
+    expect(
+      evaluateTrustedUiKartonConnect(
+        fixture.event,
+        [null],
+        fixture.webContents.asElectronWebContents(),
+        allowed,
+      ),
+    ).toEqual({ ok: false, reason: 'subframe-or-stale-frame' });
+  });
+
   it('closes the port if trusted backend injection returns any ID but ui-main', () => {
     const fixture = createFixture();
     const { admission, acceptPort } = createAdmission(fixture, {
