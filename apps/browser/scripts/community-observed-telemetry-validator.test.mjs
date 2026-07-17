@@ -28,6 +28,10 @@ const TEST_PROJECT_KEY = [
   'phc',
   'community_observed_artifact_test_only_000000',
 ].join('_');
+const TEST_OTHER_PROJECT_KEY = [
+  'phc',
+  'community_observed_artifact_test_only_111111',
+].join('_');
 
 async function makeFixture(options = {}) {
   const root = mkdtempSync(
@@ -75,7 +79,14 @@ async function makeFixture(options = {}) {
           : TEST_PROJECT_KEY,
       )};`,
       options.duplicateBackendProjectKey
-        ? `const duplicateKey = ${JSON.stringify(TEST_PROJECT_KEY)};`
+        ? Array.from(
+            { length: 33 },
+            (_, index) =>
+              `const duplicateKey${index} = ${JSON.stringify(TEST_PROJECT_KEY)};`,
+          ).join('\n')
+        : '',
+      options.distinctBackendProjectKey
+        ? `const distinctKey = ${JSON.stringify(TEST_OTHER_PROJECT_KEY)};`
         : '',
       `const contract = ${JSON.stringify(COMMUNITY_OBSERVED_TELEMETRY_CONTRACT)};`,
       `const assertion = ${JSON.stringify(
@@ -532,12 +543,23 @@ test('allows a benign project-key regex marker without a concrete key', async ()
   }
 });
 
-test('rejects duplicate occurrences of the backend project key', async () => {
+test('accepts repeated occurrences of one unique backend project key', async () => {
   const fixture = await makeFixture({ duplicateBackendProjectKey: true });
+  try {
+    const evidence = inspectCommunityObservedTelemetryAsar(fixture.asarPath);
+    assert.equal(evidence.status, 'validated');
+    assert.equal(evidence.backendProjectKeyCount, 1);
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('rejects distinct backend project key values', async () => {
+  const fixture = await makeFixture({ distinctBackendProjectKey: true });
   try {
     assert.throws(
       () => inspectCommunityObservedTelemetryAsar(fixture.asarPath),
-      /must embed exactly one PostHog project key; found 2/,
+      /must embed exactly one unique PostHog project key; found 2 unique values across 2 occurrences/,
     );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
@@ -549,7 +571,7 @@ test('counts adjacent concrete project-key prefixes independently', async () => 
   try {
     assert.throws(
       () => inspectCommunityObservedTelemetryAsar(fixture.asarPath),
-      /must embed exactly one PostHog project key; found 2/,
+      /must embed exactly one unique PostHog project key; found 2 unique values across 2 occurrences/,
     );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
