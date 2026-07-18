@@ -22,6 +22,14 @@ const pagesViteSource = readFileSync(
   path.join(repositoryRoot, 'apps', 'browser', 'vite.pages.config.ts'),
   'utf8',
 );
+const forgeSource = readFileSync(
+  path.join(repositoryRoot, 'apps', 'browser', 'forge.config.mts'),
+  'utf8',
+);
+const backendViteSource = readFileSync(
+  path.join(repositoryRoot, 'apps', 'browser', 'vite.backend.config.ts'),
+  'utf8',
+);
 
 function expression(value) {
   return `\${{ ${value} }}`;
@@ -121,12 +129,12 @@ test('observed community workflow fails closed on one environment secret and map
   );
 });
 
-test('observed community workflow builds isolated unsigned artifacts and validates privacy metadata', () => {
+test('observed community workflow builds auth-enabled isolated unsigned artifacts and validates privacy metadata', () => {
   assert.equal(
     workflow.jobs.build.env.CLODEX_DISTRIBUTION_MODE,
     'community-observed',
   );
-  assert.equal(workflow.jobs.build.env.CLODEX_AUTH_ENABLED, 'false');
+  assert.equal(workflow.jobs.build.env.CLODEX_AUTH_ENABLED, 'true');
   assert.equal(workflow.jobs.build.env.RELEASE_CHANNEL, 'release');
   assert.equal(workflow.jobs.build.env.VITE_DISABLE_TELEMETRY, 'true');
   assert.equal(workflow.jobs.build.strategy.matrix.include.length, 4);
@@ -156,6 +164,24 @@ test('observed community workflow builds isolated unsigned artifacts and validat
     .map((entry) => entry.value)) {
     assert.match(action, /^[^@]+@[a-f0-9]{40}$/u);
   }
+});
+
+test('desktop protocol packaging remains gated by distribution policy', () => {
+  assert.match(
+    forgeSource,
+    /\.\.\.\(buildConstants\.__APP_REGISTER_DEFAULT_PROTOCOLS__\s*\?\s*\{[\s\S]*?protocols:\s*\[[\s\S]*?schemes:\s*desktopProtocolSchemes/u,
+  );
+});
+
+test('observed backend hard-enables auth with a non-overridable client identity', () => {
+  assert.match(
+    backendViteSource,
+    /CLODEX_IDE_CLIENT_ID:\s*buildConstants\.__APP_DISTRIBUTION_MODE__\s*===\s*'community-observed'\s*\?\s*'clodex-community-observed'/u,
+  );
+  assert.match(
+    backendViteSource,
+    /CLODEX_AUTH_ENABLED:\s*buildConstants\.__APP_DISTRIBUTION_MODE__\s*===\s*'community-observed'\s*\?\s*'true'/u,
+  );
 });
 
 test('all renderer builds replace PostHog with observed no-op modules', () => {

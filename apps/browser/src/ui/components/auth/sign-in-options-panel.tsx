@@ -26,11 +26,6 @@ const CLODEX_HOME_URL = (
   import.meta.env.VITE_CLODEX_ORIGIN || 'https://clodex.xyz'
 ).replace(/\/+$/, '');
 const CLODEX_REGISTER_URL = `${CLODEX_HOME_URL}/sign-up`;
-// Fail closed until the production desktop handoff binds every authorization
-// response to the initiating app instance with state + PKCE S256. Keep this
-// renderer guard in addition to the backend guard so the UI never advertises
-// the legacy callback as secure or opens it accidentally.
-const SECURE_BROWSER_HANDOFF_AVAILABLE = false;
 
 // This component is shared by both Electron renderer hosts: the main UI
 // preload exposes `window.electron`, while internal pages expose
@@ -75,9 +70,6 @@ export function SignInOptionsPanel({
 
   const panelTitle = title ?? t('auth.signIn.defaultTitle');
   const panelDescription = description ?? t('auth.signIn.defaultDescription');
-  const browserHandoffDisabledMessage = t(
-    'auth.signIn.browserHandoffDisabledMessage',
-  );
   const isCentered = variant === 'centered';
   const isLoading = activeAction !== null;
 
@@ -96,11 +88,6 @@ export function SignInOptionsPanel({
   const handleClodexHandoff = useCallback(
     async (action: AuthAction) => {
       if (isLoading) return;
-
-      if (action === 'login' && !SECURE_BROWSER_HANDOFF_AVAILABLE) {
-        setError(null);
-        return;
-      }
 
       setError(null);
       setActiveAction(action);
@@ -206,26 +193,15 @@ export function SignInOptionsPanel({
           <button
             type="submit"
             className="clodex-login-submit"
-            disabled={isLoading || !SECURE_BROWSER_HANDOFF_AVAILABLE}
-            aria-describedby="clodex-browser-handoff-status"
+            disabled={isLoading}
           >
             {activeAction === 'login' ? (
               <Loader2Icon className="clodex-login-spinner" />
             ) : (
               <LogInIcon aria-hidden="true" />
             )}
-            {t('auth.signIn.browserHandoffDisabledButton')}
+            {t('auth.signIn.browserHandoffButton')}
           </button>
-
-          {!SECURE_BROWSER_HANDOFF_AVAILABLE && (
-            <p
-              id="clodex-browser-handoff-status"
-              role="status"
-              className="clodex-login-error"
-            >
-              {browserHandoffDisabledMessage}
-            </p>
-          )}
 
           {error && (
             <p
@@ -251,7 +227,7 @@ export function SignInOptionsPanel({
         className={cn('clodex-login-section app-no-drag', className)}
       >
         {loginPanel}
-        <SecurityNote label={t('auth.signIn.unsafeCallbackBlocked')} />
+        <SecurityNote label={t('auth.signIn.secureCallbackBound')} />
       </div>
     );
   }
@@ -304,7 +280,7 @@ export function SignInOptionsPanel({
               </li>
               <li>
                 <span aria-hidden="true">!</span>
-                {t('auth.signIn.benefits.callbackClosed')}
+                {t('auth.signIn.benefits.callbackBound')}
               </li>
               <li>
                 <span aria-hidden="true">✓</span>
@@ -331,7 +307,7 @@ export function SignInOptionsPanel({
 
         <section className="clodex-login-form-region">
           {loginPanel}
-          <SecurityNote label={t('auth.signIn.unsafeCallbackBlocked')} />
+          <SecurityNote label={t('auth.signIn.secureCallbackBound')} />
         </section>
       </main>
     </div>

@@ -5,6 +5,8 @@ import * as buildConstants from './build-constants';
 const backendPostHogApiKey = buildConstants.__APP_TELEMETRY_ENABLED__
   ? process.env.POSTHOG_API_KEY?.trim()
   : undefined;
+const backendClodexApiUrl =
+  process.env.CLODEX_API_URL ?? process.env.API_URL ?? 'https://clodex.xyz/api';
 
 if (
   buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-observed' &&
@@ -68,10 +70,7 @@ export default defineConfig({
         process.env.CLODEX_CONSOLE_URL ??
         process.env.CLODEX_ORIGIN ??
         'https://clodex.xyz',
-      API_URL:
-        process.env.API_URL ??
-        process.env.CLODEX_API_URL ??
-        'https://clodex.xyz/api',
+      API_URL: backendClodexApiUrl,
       LLM_PROXY_URL:
         process.env.LLM_PROXY_URL ??
         process.env.CLODEX_LLM_RELAY_URL ??
@@ -79,7 +78,7 @@ export default defineConfig({
       CLODEX_ORIGIN: process.env.CLODEX_ORIGIN ?? 'https://clodex.xyz',
       CLODEX_LOGIN_URL:
         process.env.CLODEX_LOGIN_URL ?? 'https://clodex.xyz/login',
-      CLODEX_API_URL: process.env.CLODEX_API_URL ?? 'https://clodex.xyz/api',
+      CLODEX_API_URL: backendClodexApiUrl,
       CLODEX_LLM_RELAY_URL:
         process.env.CLODEX_LLM_RELAY_URL ?? 'https://clodex.xyz/v1',
       CLODEX_MCP_GATEWAY_URL:
@@ -87,10 +86,16 @@ export default defineConfig({
         'https://clodex.xyz/tools-gateway/mcp',
       CLODEX_AUTH_CALLBACK_SCHEME:
         process.env.CLODEX_AUTH_CALLBACK_SCHEME ?? 'clodex-ide',
-      CLODEX_IDE_CLIENT_ID: process.env.CLODEX_IDE_CLIENT_ID ?? 'clodex-ide',
-      CLODEX_AUTH_ENABLED: buildConstants.__APP_AUTH_ENABLED__
-        ? (process.env.CLODEX_AUTH_ENABLED ?? 'true')
-        : 'false',
+      CLODEX_IDE_CLIENT_ID:
+        buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-observed'
+          ? 'clodex-community-observed'
+          : (process.env.CLODEX_IDE_CLIENT_ID ?? 'clodex-ide'),
+      CLODEX_AUTH_ENABLED:
+        buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-observed'
+          ? 'true'
+          : buildConstants.__APP_AUTH_ENABLED__
+            ? (process.env.CLODEX_AUTH_ENABLED ?? 'true')
+            : 'false',
       CLODEX_DISABLE_ISOLATED_AGENT_RUNTIME:
         process.env.CLODEX_DISABLE_ISOLATED_AGENT_RUNTIME,
       UPDATE_SERVER_ORIGIN: buildConstants.__APP_AUTO_UPDATE_ENABLED__

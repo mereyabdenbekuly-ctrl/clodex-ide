@@ -50,7 +50,8 @@ export const onboardingRu = {
     },
     cloudSignIn: {
       title: 'С возвращением',
-      description: 'Войдите в CLODEx.xyz, чтобы подключить аккаунт к IDE.',
+      description:
+        'Безопасно войдите на CLODEx.xyz в системном браузере, чтобы подключить аккаунт к IDE.',
       quickStart: 'Быстрый старт с CLODEx Cloud',
     },
     apiKey: {

@@ -29,6 +29,7 @@ vi.hoisted(() => {
 });
 
 vi.mock('./server-interop', () => ({
+  CLODEX_DESKTOP_CLIENT_ID: 'clodex-test',
   createBetterAuthClient: vi.fn(() => ({
     emailOtp: {
       sendVerificationOtp: vi.fn(),
@@ -92,6 +93,7 @@ async function createTestAuthService() {
         },
       ],
       models: [],
+      ideToken: undefined,
     },
   };
   const uiKarton = {
@@ -119,11 +121,16 @@ async function createTestAuthService() {
     },
   );
 
+  const credentials = {
+    token: 'session-token',
+    protocolVersion: 2,
+    provenance: 'clodex-browser-pkce-s256-v1',
+    clientId: 'clodex-test',
+    activeKeyId: 'all-key',
+  } as const;
   Object.assign(authService as unknown as Record<string, unknown>, {
-    _credentials: {
-      token: 'session-token',
-      activeKeyId: 'all-key',
-    },
+    _credentials: credentials,
+    durableCredentials: credentials,
     clodexIdeKeys: state.userAccount.keys,
     clodexInterop: {
       createIdeToken: vi.fn(async (_accessToken: string, keyId?: string) => ({
@@ -350,6 +357,16 @@ describe('AuthService route-specific Clodex model tokens', () => {
     Object.assign(authService as unknown as Record<string, unknown>, {
       _credentials: {
         token: 'session-token',
+        protocolVersion: 2,
+        provenance: 'clodex-browser-pkce-s256-v1',
+        clientId: 'clodex-test',
+        activeKeyId: undefined,
+      },
+      durableCredentials: {
+        token: 'session-token',
+        protocolVersion: 2,
+        provenance: 'clodex-browser-pkce-s256-v1',
+        clientId: 'clodex-test',
         activeKeyId: undefined,
       },
       clodexIdeKeys: keys,
@@ -401,5 +418,36 @@ describe('AuthService route-specific Clodex model tokens', () => {
       'shared-all-token',
     ]);
     expect(createIdeToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not restore a model token when logout wins an in-flight refresh', async () => {
+    const { authService, uiKarton } = await createTestAuthService();
+    const createIdeToken = (
+      authService as unknown as {
+        clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+      }
+    ).clodexInterop.createIdeToken;
+    let resolveToken:
+      | ((value: { token: string; keyId: string; group: string }) => void)
+      | undefined;
+    createIdeToken.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveToken = resolve;
+        }),
+    );
+
+    const refresh = authService.ensureModelAccessToken();
+    expect(createIdeToken).toHaveBeenCalledOnce();
+    await authService.logout();
+    resolveToken?.({
+      token: 'stale-model-token',
+      keyId: 'all-key',
+      group: 'GPT',
+    });
+
+    await expect(refresh).resolves.toBeUndefined();
+    expect(authService.modelAccessToken).toBeUndefined();
+    expect(uiKarton.state.userAccount.ideToken).toBeUndefined();
   });
 });

@@ -2,6 +2,9 @@ import type { KartonContract } from '@shared/karton-contracts/ui';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import {
+  CLODEX_DESKTOP_CLIENT_ID,
+  createClodexBrowserAuthRequest,
+  createClodexBrowserAuthState,
   createBetterAuthClient,
   type BetterAuthClient,
 } from './server-interop';
@@ -17,7 +20,11 @@ import type {
   SocialAuthProvider,
 } from '@shared/karton-contracts/ui/shared-types';
 import { AUTH_CALLBACK_PROTOCOL } from './callback-scheme';
-import type { DevLoopbackAuthServer } from './dev-loopback-auth';
+import {
+  createLoopbackAuthServer,
+  type LoopbackAuthServer,
+  type LoopbackAuthCallback,
+} from './loopback-auth';
 import type { NotificationService } from '../notification';
 import type { IdentifierService } from '../identifier';
 import { DisposableService } from '../disposable';
@@ -45,6 +52,15 @@ const CREDENTIALS_STORAGE_OPTIONS = {
 const credentialsSchema = z
   .object({
     token: z.string(),
+    protocolVersion: z.literal(2).optional(),
+    provenance: z
+      .enum([
+        'clodex-browser-pkce-s256-v1',
+        'clodex-telegram-v1',
+        'better-auth-email-otp-v1',
+      ])
+      .optional(),
+    clientId: z.string().optional(),
     user: z
       .object({
         id: z.string(),
@@ -60,6 +76,21 @@ const credentialsSchema = z
   .nullable();
 
 type StoredCredentials = z.infer<typeof credentialsSchema>;
+type AuthSessionProvenance = NonNullable<
+  NonNullable<StoredCredentials>['provenance']
+>;
+
+function hasTrustedSessionProvenance(
+  credentials: NonNullable<StoredCredentials>,
+): boolean {
+  if (credentials.protocolVersion !== 2 || !credentials.provenance) {
+    return false;
+  }
+  if (credentials.provenance === 'clodex-browser-pkce-s256-v1') {
+    return credentials.clientId === CLODEX_DESKTOP_CLIENT_ID;
+  }
+  return credentials.clientId == null;
+}
 
 export type AuthState = KartonContract['state']['userAccount'];
 
@@ -74,8 +105,6 @@ const TELEGRAM_AUTH_POLL_INTERVAL_MS = 2 * 1000;
 const TELEGRAM_AUTH_TIMEOUT_MS = SOCIAL_AUTH_TIMEOUT_MS;
 const ACCOUNT_AUTH_DISABLED_ERROR =
   'Account sign-in is disabled in this distribution.';
-const LEGACY_BROWSER_HANDOFF_DISABLED_ERROR =
-  'CLODEx browser sign-in is temporarily disabled until a state-bound PKCE flow is available. Use BYOK or a local model.';
 const isAccountAuthEnabled = __APP_AUTH_ENABLED__;
 const IDE_MODEL_TOKEN_REFRESH_SKEW_MS = 60_000;
 const isClodexAuthEnabled =
@@ -94,6 +123,18 @@ type IdeModelTokenCacheEntry = {
 type ModelAccessRoute = {
   provider?: ModelProvider | string;
   modelId?: string;
+};
+
+type PendingHandoffAuth = {
+  abortController: AbortController;
+  clientId: string;
+  codeVerifier: string;
+  epoch: number;
+  redirectUri: string;
+  resolve: (result: { error?: string }) => void;
+  state: string;
+  status: 'awaiting-callback' | 'exchanging';
+  timeout: NodeJS.Timeout;
 };
 
 const MODEL_PROVIDER_ALIASES: Record<ModelProvider, string[]> = {
@@ -330,12 +371,16 @@ export class AuthService extends DisposableService {
   private clodexIdeKeys: ClodexIdeKey[] = [];
 
   private _refreshInterval: NodeJS.Timeout | null = null;
+  private betterAuthTokenRefreshRequests = 0;
+  private activeOtpAttemptEpoch: number | null = null;
+  private activeTelegramAttemptEpoch: number | null = null;
+  private authLifecycleEpoch = 0;
+  private durableCredentials: StoredCredentials = null;
+  private credentialsIntentVersion = 0;
+  private credentialsWriteQueue: Promise<void> = Promise.resolve();
   private authChangeCallbacks: ((newAuthState: AuthState) => void)[] = [];
-  private pendingHandoffAuth: {
-    resolve: (result: { error?: string }) => void;
-    timeout: NodeJS.Timeout;
-  } | null = null;
-  private activeLoopbackAuthServer: DevLoopbackAuthServer | null = null;
+  private pendingHandoffAuth: PendingHandoffAuth | null = null;
+  private activeLoopbackAuthServer: LoopbackAuthServer | null = null;
 
   private constructor(
     identifierService: IdentifierService,
@@ -350,34 +395,96 @@ export class AuthService extends DisposableService {
     this.logger = logger;
     this.clodexInterop = new ClodexAuthInterop();
     this.authClient = createBetterAuthClient(
-      () => this._credentials?.token ?? null,
+      () => this.getTrustedCredentials()?.token ?? null,
       (token) => {
-        this.persistCredentials({
-          ...this._credentials,
+        if (this.activeOtpAttemptEpoch !== null) {
+          if (this.activeOtpAttemptEpoch === this.authLifecycleEpoch) {
+            this._credentials = { token };
+            this.logger.debug('[AuthService] Captured provisional OTP token');
+          } else {
+            this.logger.warn('[AuthService] Ignored a stale OTP token');
+          }
+          return;
+        }
+        const trustedCredentials = this.getTrustedCredentials();
+        if (this.betterAuthTokenRefreshRequests === 0 || !trustedCredentials) {
+          this.logger.warn(
+            '[AuthService] Ignored an auth token outside an active trusted flow',
+          );
+          return;
+        }
+        const credentials: NonNullable<StoredCredentials> = {
+          ...trustedCredentials,
           token,
-        });
+        };
+        this._credentials = credentials;
+        // During initial OTP authentication the response token arrives before
+        // the flow can attach trusted provenance. Keep it main-process-only
+        // until verifyOtp durably stores the versioned session. Refreshes of an
+        // already trusted session may be persisted immediately.
+        if (credentials.provenance) {
+          void this.persistCredentials(credentials);
+        }
         this.logger.debug('[AuthService] Token captured/refreshed');
       },
     );
   }
 
-  private persistCredentials(credentials: StoredCredentials): void {
-    this._credentials = credentials;
-    void writePersistedData(
-      CREDENTIALS_KEY,
-      credentialsSchema,
-      credentials,
-      CREDENTIALS_STORAGE_OPTIONS,
-    ).catch((error) => {
+  private async writeCredentials(
+    credentials: StoredCredentials,
+  ): Promise<boolean> {
+    const writeOperation = this.credentialsWriteQueue.then(() =>
+      writePersistedData(
+        CREDENTIALS_KEY,
+        credentialsSchema,
+        credentials,
+        CREDENTIALS_STORAGE_OPTIONS,
+      ),
+    );
+    // Preserve ordering even after a failed write so a later logout/null write
+    // cannot be overtaken by an older session update and resurrect credentials.
+    this.credentialsWriteQueue = writeOperation.catch(() => undefined);
+    try {
+      await writeOperation;
+      return true;
+    } catch (error) {
       this.logger.error(
         `[AuthService] Failed to persist encrypted credentials: ${error}`,
       );
-    });
+      return false;
+    }
+  }
+
+  private async persistCredentials(
+    credentials: StoredCredentials,
+  ): Promise<boolean> {
+    const intentVersion = ++this.credentialsIntentVersion;
+    this._credentials = credentials;
+    const persisted = await this.writeCredentials(credentials);
+    if (persisted) {
+      this.durableCredentials = credentials;
+    } else if (intentVersion === this.credentialsIntentVersion) {
+      this._credentials = this.durableCredentials;
+    }
+    return persisted;
+  }
+
+  private getTrustedCredentials(): NonNullable<StoredCredentials> | null {
+    const credentials = this.durableCredentials;
+    if (
+      !credentials ||
+      !hasTrustedSessionProvenance(credentials) ||
+      this._credentials?.token !== credentials.token
+    ) {
+      return null;
+    }
+    return credentials;
   }
 
   private async initialize(): Promise<void> {
     if (!isAccountAuthEnabled) {
       this._credentials = null;
+      this.durableCredentials = null;
       this.updateAuthState((draft) => {
         draft.userAccount = {
           status: 'unauthenticated',
@@ -403,11 +510,10 @@ export class AuthService extends DisposableService {
       CREDENTIALS_STORAGE_OPTIONS,
     );
 
-    // Sessions issued by the legacy browser handoff have no state/PKCE
-    // provenance. Do not carry one across the emergency fail-closed upgrade:
-    // an authlocal3 session may have been delivered through a callback claimed
-    // by another application or swapped by an unbound login response.
-    if (persisted?.token) {
+    // Only explicitly versioned sessions may survive the legacy unbound
+    // browser-handoff migration. New PKCE, Telegram and OTP sessions persist
+    // their provenance at creation time and are restored normally.
+    if (persisted?.token && !hasTrustedSessionProvenance(persisted)) {
       persisted = null;
       await writePersistedData(
         CREDENTIALS_KEY,
@@ -416,18 +522,20 @@ export class AuthService extends DisposableService {
         CREDENTIALS_STORAGE_OPTIONS,
       );
       this.logger.warn(
-        '[AuthService] Purged persisted account session issued before state-bound PKCE handoff',
+        '[AuthService] Purged persisted account session without trusted provenance',
       );
     }
 
     if (persisted?.token) {
       this._credentials = persisted;
+      this.durableCredentials = persisted;
       this.logger.debug(
         '[AuthService] Restored persisted credentials, validating session...',
       );
 
       await this.refreshSession();
     } else {
+      this.durableCredentials = null;
       this.updateAuthState((draft) => {
         draft.userAccount = {
           status: 'unauthenticated',
@@ -442,7 +550,7 @@ export class AuthService extends DisposableService {
     }
 
     this._refreshInterval = setInterval(() => {
-      if (this._credentials?.token) {
+      if (this.getTrustedCredentials()?.token) {
         void this.refreshSession();
       }
     }, SESSION_REFRESH_INTERVAL_MS);
@@ -548,6 +656,9 @@ export class AuthService extends DisposableService {
   }
 
   protected async onTeardown(): Promise<void> {
+    this.authLifecycleEpoch += 1;
+    this.activeOtpAttemptEpoch = null;
+    this.activeTelegramAttemptEpoch = null;
     if (this._refreshInterval) {
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
@@ -608,11 +719,23 @@ export class AuthService extends DisposableService {
     code: string,
   ): Promise<{ error?: string }> {
     if (!isAccountAuthEnabled) return { error: ACCOUNT_AUTH_DISABLED_ERROR };
+    if (this.pendingHandoffAuth || this.hasActiveNonBrowserAuthAttempt()) {
+      return { error: 'Another CLODEx sign-in is already in progress.' };
+    }
+    const attemptEpoch = ++this.authLifecycleEpoch;
+    this.activeOtpAttemptEpoch = attemptEpoch;
     try {
       const { data, error } = await this.authClient.signIn.emailOtp({
         email,
         otp: code,
       });
+
+      if (
+        this.activeOtpAttemptEpoch !== attemptEpoch ||
+        this.authLifecycleEpoch !== attemptEpoch
+      ) {
+        return { error: 'Sign-in was cancelled.' };
+      }
 
       if (error) {
         this.logger.error(
@@ -621,42 +744,38 @@ export class AuthService extends DisposableService {
         return { error: error.message };
       }
 
-      // The global onSuccess handler already persisted the token.
-      // Now update auth state with the user info.
       const user = data?.user;
-      this.updateAuthState((draft) => {
-        draft.userAccount = {
-          ...draft.userAccount,
-          status: 'authenticated',
-          machineId: this.identifierService.getMachineId(),
-          user: user
-            ? {
-                id: user.id,
-                email: user.email ?? '',
-                name: user.name ?? undefined,
-              }
-            : undefined,
-        };
-      });
-
       const currentToken = this._credentials?.token;
-      if (user && currentToken) {
-        this.persistCredentials({
-          ...this._credentials,
+      if (!user || !currentToken) {
+        this._credentials = this.durableCredentials;
+        return { error: 'CLODEx did not return a complete session.' };
+      }
+
+      await this.persistAuthenticatedSession(
+        {
           token: currentToken,
+          provenance: 'better-auth-email-otp-v1',
           user: {
             id: user.id,
             email: user.email ?? undefined,
             name: user.name ?? undefined,
           },
-        });
-      }
+        },
+        () =>
+          this.activeOtpAttemptEpoch === attemptEpoch &&
+          this.authLifecycleEpoch === attemptEpoch,
+      );
 
       this.logger.debug('[AuthService] Signed in via OTP');
       return {};
     } catch (err) {
       this.logger.error(`[AuthService] Unexpected error verifying OTP: ${err}`);
       return { error: 'An unexpected error occurred.' };
+    } finally {
+      if (this.activeOtpAttemptEpoch === attemptEpoch) {
+        this.activeOtpAttemptEpoch = null;
+      }
+      this._credentials = this.durableCredentials;
     }
   }
 
@@ -673,10 +792,15 @@ export class AuthService extends DisposableService {
     error?: string;
   }): Promise<void> {
     if (!this.pendingHandoffAuth) return;
-    clearTimeout(this.pendingHandoffAuth.timeout);
-    const { resolve } = this.pendingHandoffAuth;
+    const pending = this.pendingHandoffAuth;
+    this.authLifecycleEpoch += 1;
+    clearTimeout(pending.timeout);
+    const { resolve } = pending;
     this.pendingHandoffAuth = null;
-    await this.disposeActiveLoopbackAuthServer();
+    pending.abortController.abort();
+    this._credentials = this.durableCredentials;
+    void this.writeCredentials(this.durableCredentials);
+    void this.disposeActiveLoopbackAuthServer();
     resolve(result);
   }
 
@@ -687,24 +811,56 @@ export class AuthService extends DisposableService {
     await server.dispose();
   }
 
-  private persistAuthenticatedSession(session: {
-    token: string;
-    user?: {
-      id: string;
-      email?: string;
-      name?: string;
-      username?: string;
-      displayName?: string;
-      group?: string;
-      balance?: AuthBalance;
-    };
-    activeKeyId?: string;
-  }): void {
-    this.persistCredentials({
+  private async persistAuthenticatedSession(
+    session: {
+      token: string;
+      provenance: AuthSessionProvenance;
+      clientId?: string;
+      user?: {
+        id: string;
+        email?: string;
+        name?: string;
+        username?: string;
+        displayName?: string;
+        group?: string;
+        balance?: AuthBalance;
+      };
+      activeKeyId?: string;
+    },
+    shouldCommit?: () => boolean,
+  ): Promise<void> {
+    if (shouldCommit && !shouldCommit()) {
+      throw new Error('Sign-in was cancelled.');
+    }
+    const intentVersion = ++this.credentialsIntentVersion;
+    const credentials: NonNullable<StoredCredentials> = {
       token: session.token,
+      protocolVersion: 2,
+      provenance: session.provenance,
+      clientId: session.clientId,
       user: session.user,
       activeKeyId: session.activeKeyId ?? this._credentials?.activeKeyId,
-    });
+    };
+    const persisted = await this.writeCredentials(credentials);
+    if (!persisted) {
+      if (intentVersion === this.credentialsIntentVersion) {
+        this._credentials = this.durableCredentials;
+      }
+      throw new Error('Failed to store the authenticated session.');
+    }
+    if (
+      intentVersion !== this.credentialsIntentVersion ||
+      (shouldCommit && !shouldCommit())
+    ) {
+      if (intentVersion === this.credentialsIntentVersion) {
+        this._credentials = this.durableCredentials;
+        await this.writeCredentials(this.durableCredentials);
+      }
+      throw new Error('Sign-in was cancelled.');
+    }
+    this.durableCredentials = credentials;
+    this._credentials = credentials;
+    this.authLifecycleEpoch += 1;
 
     this.updateAuthState((draft) => {
       draft.userAccount = {
@@ -737,37 +893,102 @@ export class AuthService extends DisposableService {
     };
   }
 
-  private async completeClodexSession(session: {
-    accessToken: string;
-    user?: {
-      id: string;
-      email?: string;
-      name?: string;
-      username?: string;
-      displayName?: string;
-      group?: string;
-      balance?: AuthBalance;
-    };
-  }): Promise<{ error?: string }> {
-    const keys = await this.refreshClodexKeys(session.accessToken);
+  private async completeClodexSession(
+    session: {
+      accessToken: string;
+      user?: {
+        id: string;
+        email?: string;
+        name?: string;
+        username?: string;
+        displayName?: string;
+        group?: string;
+        balance?: AuthBalance;
+      };
+    },
+    options: {
+      provenance: AuthSessionProvenance;
+      clientId?: string;
+      signal?: AbortSignal;
+      shouldCommit?: () => boolean;
+    },
+  ): Promise<{ error?: string }> {
+    let keys: ClodexIdeKey[] = [];
+    try {
+      keys = await this.clodexInterop.getIdeKeys(
+        session.accessToken,
+        options.signal,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `[AuthService] Could not preload Clodex keys during sign-in: ${
+          error instanceof Error ? error.name : 'unknown error'
+        }`,
+      );
+    }
     const activeKeyId = this.resolveActiveClodexKeyId(keys);
-    const ideModelToken = await this.refreshIdeModelToken(
-      session.accessToken,
-      activeKeyId,
-    );
-    if (!ideModelToken) {
+
+    let issuedToken: IdeModelTokenCacheEntry;
+    try {
+      const token = await this.clodexInterop.createIdeToken(
+        session.accessToken,
+        activeKeyId,
+        undefined,
+        options.signal,
+      );
+      const activeKey = keys.find(
+        (key) => String(key.id) === String(activeKeyId ?? token.keyId),
+      );
+      issuedToken = {
+        ...token,
+        expiresAt: normalizeIdeTokenExpiresAt(token.expiresAt),
+        keyId: activeKeyId ?? token.keyId,
+        keyName: activeKey?.name ?? token.keyName,
+        group: activeKey?.group ?? token.group,
+      };
+    } catch {
       const message = 'Clodex did not issue an IDE model token.';
       this.logger.error(`[AuthService] ${message}`);
       return { error: message };
     }
 
-    this.persistAuthenticatedSession({
-      token: session.accessToken,
-      user: session.user,
-      activeKeyId,
+    if (options.shouldCommit && !options.shouldCommit()) {
+      return { error: 'Sign-in was cancelled.' };
+    }
+
+    await this.persistAuthenticatedSession(
+      {
+        token: session.accessToken,
+        provenance: options.provenance,
+        clientId: options.clientId,
+        user: session.user,
+        activeKeyId: activeKeyId ?? issuedToken.keyId,
+      },
+      options.shouldCommit,
+    );
+
+    this.clodexIdeKeys = keys;
+    this.ideModelToken = issuedToken;
+    this.clearModelAccessTokenCache();
+    if (issuedToken.keyId) {
+      this.ideModelTokenByKeyId.set(String(issuedToken.keyId), {
+        ...issuedToken,
+      });
+    }
+    const visibleKeys =
+      keys.length > 0 ? keys : this.createFallbackClodexKeys();
+    this.clodexIdeKeys = visibleKeys;
+    this.setClodexKeys(visibleKeys, activeKeyId ?? issuedToken.keyId);
+    this.updateAuthState((draft) => {
+      draft.userAccount.ideToken = {
+        keyId: issuedToken.keyId,
+        keyName: issuedToken.keyName,
+        group: issuedToken.group,
+        expiresAt: issuedToken.expiresAt,
+      };
     });
 
-    void this.refreshClodexUserModels(activeKeyId);
+    void this.refreshClodexUserModels(activeKeyId ?? issuedToken.keyId);
     return {};
   }
 
@@ -808,20 +1029,23 @@ export class AuthService extends DisposableService {
   public get modelAccessToken(): string | undefined {
     this.assertNotDisposed();
     if (!isAccountAuthEnabled) return undefined;
+    const credentials = this.getTrustedCredentials();
     if (isClodexAuthEnabled) {
-      return this.isIdeModelTokenFresh()
+      return credentials?.token && this.isIdeModelTokenFresh()
         ? this.ideModelToken?.token
         : undefined;
     }
-    return this._credentials?.token ?? undefined;
+    return credentials?.token;
   }
 
   public async ensureModelAccessToken(): Promise<string | undefined> {
     this.assertNotDisposed();
     if (!isAccountAuthEnabled) return undefined;
+    const credentials = this.getTrustedCredentials();
     if (!isClodexAuthEnabled) {
-      return this._credentials?.token ?? undefined;
+      return credentials?.token;
     }
+    if (!credentials?.token) return undefined;
 
     const activeKeyId =
       this.uiKarton.state.userAccount.activeKeyId ?? this.ideModelToken?.keyId;
@@ -837,9 +1061,11 @@ export class AuthService extends DisposableService {
   ): Promise<string | undefined> {
     this.assertNotDisposed();
     if (!isAccountAuthEnabled) return undefined;
+    const credentials = this.getTrustedCredentials();
     if (!isClodexAuthEnabled) {
-      return this._credentials?.token ?? undefined;
+      return credentials?.token;
     }
+    if (!credentials?.token) return undefined;
 
     const provider = normalizeRouteProvider(route.provider, route.modelId);
     if (!provider) return this.ensureModelAccessToken();
@@ -850,7 +1076,7 @@ export class AuthService extends DisposableService {
         : await this.refreshClodexKeys();
     const activeKeyId =
       this.uiKarton.state.userAccount.activeKeyId ??
-      this._credentials?.activeKeyId ??
+      credentials.activeKeyId ??
       this.ideModelToken?.keyId;
 
     const ranked = keys
@@ -888,8 +1114,8 @@ export class AuthService extends DisposableService {
       return cached.token;
     }
 
-    const accessToken = this._credentials?.token;
-    if (!accessToken) return undefined;
+    const accessToken = credentials.token;
+    const authEpoch = this.authLifecycleEpoch;
 
     try {
       const runtimeGroup = clodexRuntimeGroupForProvider(provider);
@@ -904,6 +1130,12 @@ export class AuthService extends DisposableService {
             : {}),
         },
       );
+      if (
+        authEpoch !== this.authLifecycleEpoch ||
+        this.getTrustedCredentials()?.token !== accessToken
+      ) {
+        return undefined;
+      }
       const issuedGroup = issuedToken.group ?? selectedKey.group;
       if (
         clodexKeyIsUniversalAll(selectedKey) &&
@@ -951,7 +1183,8 @@ export class AuthService extends DisposableService {
       return this.ideModelToken?.token;
     }
 
-    const accessToken = accessTokenOverride ?? this._credentials?.token;
+    const accessToken =
+      accessTokenOverride ?? this.getTrustedCredentials()?.token;
     if (!accessToken) {
       this.ideModelToken = null;
       this.clearModelAccessTokenCache();
@@ -966,9 +1199,11 @@ export class AuthService extends DisposableService {
       this.pendingIdeModelTokenRefreshes.get(refreshCacheKey);
     if (pendingRefresh) return pendingRefresh;
 
+    const authEpoch = this.authLifecycleEpoch;
     const refresh = this.refreshIdeModelTokenUncached(
       accessToken,
       requestedKeyId,
+      authEpoch,
     ).finally(() => {
       this.pendingIdeModelTokenRefreshes.delete(refreshCacheKey);
     });
@@ -979,12 +1214,19 @@ export class AuthService extends DisposableService {
   private async refreshIdeModelTokenUncached(
     accessToken: string,
     requestedKeyId?: string,
+    authEpoch: number = this.authLifecycleEpoch,
   ): Promise<string | undefined> {
     try {
       const issuedToken = await this.clodexInterop.createIdeToken(
         accessToken,
         requestedKeyId,
       );
+      if (
+        authEpoch !== this.authLifecycleEpoch ||
+        this.getTrustedCredentials()?.token !== accessToken
+      ) {
+        return undefined;
+      }
       const activeKeyId = this.resolveIssuedIdeTokenSourceKeyId(
         requestedKeyId,
         issuedToken.keyId,
@@ -1032,7 +1274,9 @@ export class AuthService extends DisposableService {
   private async refreshClodexKeys(
     accessTokenOverride?: string,
   ): Promise<ClodexIdeKey[]> {
-    const accessToken = accessTokenOverride ?? this._credentials?.token;
+    const accessToken =
+      accessTokenOverride ?? this.getTrustedCredentials()?.token;
+    const authEpoch = this.authLifecycleEpoch;
     if (!accessToken) {
       this.clodexIdeKeys = [];
       this.setClodexKeys([], undefined);
@@ -1044,7 +1288,14 @@ export class AuthService extends DisposableService {
     }
 
     try {
-      this.clodexIdeKeys = await this.clodexInterop.getIdeKeys(accessToken);
+      const keys = await this.clodexInterop.getIdeKeys(accessToken);
+      if (
+        authEpoch !== this.authLifecycleEpoch ||
+        this.getTrustedCredentials()?.token !== accessToken
+      ) {
+        return [];
+      }
+      this.clodexIdeKeys = keys;
       const activeKeyId = this.resolveActiveClodexKeyId(this.clodexIdeKeys);
       this.setClodexKeys(this.clodexIdeKeys, activeKeyId);
       this.logger.debug(
@@ -1052,6 +1303,12 @@ export class AuthService extends DisposableService {
       );
       return this.clodexIdeKeys;
     } catch (err) {
+      if (
+        authEpoch !== this.authLifecycleEpoch ||
+        this.getTrustedCredentials()?.token !== accessToken
+      ) {
+        return [];
+      }
       this.logger.warn(`[AuthService] Failed to load Clodex IDE keys: ${err}`);
       const fallbackKeys = this.createFallbackClodexKeys();
       this.clodexIdeKeys = fallbackKeys;
@@ -1062,7 +1319,8 @@ export class AuthService extends DisposableService {
   }
 
   private async refreshClodexUserModels(keyId?: string): Promise<void> {
-    const accessToken = this._credentials?.token;
+    const accessToken = this.getTrustedCredentials()?.token;
+    const authEpoch = this.authLifecycleEpoch;
     if (!accessToken) {
       this.clodexUserModels = [];
       this.setClodexModels([]);
@@ -1079,12 +1337,24 @@ export class AuthService extends DisposableService {
         accessToken,
         activeKeyId,
       );
+      if (
+        authEpoch !== this.authLifecycleEpoch ||
+        this.getTrustedCredentials()?.token !== accessToken
+      ) {
+        return;
+      }
       this.clodexUserModels = models.filter((model) => model.enabled !== false);
       this.setClodexModels(this.clodexUserModels);
       this.logger.debug(
         `[AuthService] Loaded ${this.clodexUserModels.length} Clodex user models`,
       );
     } catch (err) {
+      if (
+        authEpoch !== this.authLifecycleEpoch ||
+        this.getTrustedCredentials()?.token !== accessToken
+      ) {
+        return;
+      }
       this.logger.warn(
         `[AuthService] Failed to load Clodex user models: ${err}`,
       );
@@ -1155,9 +1425,9 @@ export class AuthService extends DisposableService {
   }
 
   private persistActiveKeyId(activeKeyId?: string): void {
-    const credentials = this._credentials;
+    const credentials = this.getTrustedCredentials();
     if (!credentials || credentials.activeKeyId === activeKeyId) return;
-    this.persistCredentials({
+    void this.persistCredentials({
       ...credentials,
       activeKeyId,
     });
@@ -1170,7 +1440,7 @@ export class AuthService extends DisposableService {
       return {};
     }
 
-    if (!this._credentials?.token) {
+    if (!this.getTrustedCredentials()?.token) {
       return { error: 'Sign in to Clodex before selecting a key.' };
     }
 
@@ -1237,20 +1507,168 @@ export class AuthService extends DisposableService {
     this.logger.warn(
       '[AuthService] Rejected legacy browser auth callback without state-bound PKCE',
     );
-    this.completePendingHandoffAuth({
-      error: LEGACY_BROWSER_HANDOFF_DISABLED_ERROR,
-    });
     return true;
   }
 
+  private isCurrentHandoff(pending: PendingHandoffAuth): boolean {
+    return this.pendingHandoffAuth === pending;
+  }
+
+  private hasActiveNonBrowserAuthAttempt(): boolean {
+    return (
+      this.activeOtpAttemptEpoch !== null ||
+      this.activeTelegramAttemptEpoch !== null
+    );
+  }
+
+  private async handleLoopbackAuthCallback(
+    pending: PendingHandoffAuth,
+    callback: LoopbackAuthCallback,
+  ): Promise<boolean> {
+    if (
+      !this.isCurrentHandoff(pending) ||
+      pending.status !== 'awaiting-callback' ||
+      callback.state !== pending.state
+    ) {
+      return false;
+    }
+
+    if (callback.kind === 'error') {
+      await this.cancelPendingHandoffAuth({
+        error: 'CLODEx browser sign-in was cancelled or denied.',
+      });
+      return false;
+    }
+
+    pending.status = 'exchanging';
+    try {
+      const session = await this.clodexInterop.exchangePkceAuthorizationCode({
+        clientId: pending.clientId,
+        code: callback.code,
+        codeVerifier: pending.codeVerifier,
+        redirectUri: pending.redirectUri,
+        signal: pending.abortController.signal,
+      });
+      if (!this.isCurrentHandoff(pending)) return false;
+
+      const result = await this.completeClodexSession(session, {
+        provenance: 'clodex-browser-pkce-s256-v1',
+        clientId: pending.clientId,
+        signal: pending.abortController.signal,
+        shouldCommit: () =>
+          this.isCurrentHandoff(pending) &&
+          pending.status === 'exchanging' &&
+          this.authLifecycleEpoch === pending.epoch,
+      });
+      if (!this.isCurrentHandoff(pending)) return false;
+      if (result.error) {
+        await this.cancelPendingHandoffAuth(result);
+        return false;
+      }
+
+      this.completePendingHandoffAuth({});
+      this.logger.debug(
+        '[AuthService] Completed state-bound PKCE browser sign-in',
+      );
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `[AuthService] Secure browser sign-in exchange failed: ${
+          error instanceof ClodexRequestError
+            ? `HTTP ${error.status}`
+            : error instanceof Error
+              ? error.name
+              : 'unknown error'
+        }`,
+      );
+      if (this.isCurrentHandoff(pending)) {
+        await this.cancelPendingHandoffAuth({
+          error: 'Could not complete secure CLODEx browser sign-in.',
+        });
+      }
+      return false;
+    }
+  }
+
+  private async beginClodexBrowserSignIn(): Promise<{ error?: string }> {
+    if (!isClodexAuthEnabled) {
+      return { error: 'CLODEx account services are unavailable.' };
+    }
+
+    if (this.pendingHandoffAuth || this.hasActiveNonBrowserAuthAttempt()) {
+      return { error: 'Another CLODEx sign-in is already in progress.' };
+    }
+
+    const state = createClodexBrowserAuthState();
+    const epoch = ++this.authLifecycleEpoch;
+    const abortController = new AbortController();
+    let pending: PendingHandoffAuth | null = null;
+    let loopbackServer: LoopbackAuthServer;
+    try {
+      loopbackServer = await createLoopbackAuthServer({
+        expectedState: state,
+        onCallback: (callback) => {
+          if (!pending) return Promise.resolve(false);
+          return this.handleLoopbackAuthCallback(pending, callback);
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `[AuthService] Failed to start loopback auth receiver: ${
+          error instanceof Error ? error.name : 'unknown error'
+        }`,
+      );
+      return { error: 'Could not start secure CLODEx browser sign-in.' };
+    }
+
+    const request = createClodexBrowserAuthRequest({
+      redirectUri: loopbackServer.callbackUrl,
+      state,
+    });
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        if (pending && this.isCurrentHandoff(pending)) {
+          void this.cancelPendingHandoffAuth({
+            error: 'CLODEx browser sign-in timed out.',
+          });
+        }
+      }, SOCIAL_AUTH_TIMEOUT_MS);
+
+      pending = {
+        abortController,
+        clientId: request.clientId,
+        codeVerifier: request.codeVerifier,
+        epoch,
+        redirectUri: request.redirectUri,
+        resolve,
+        state: request.state,
+        status: 'awaiting-callback',
+        timeout,
+      };
+      this.pendingHandoffAuth = pending;
+      this.activeLoopbackAuthServer = loopbackServer;
+
+      void request.open().catch((error) => {
+        this.logger.error(
+          `[AuthService] Failed to open CLODEx browser sign-in: ${
+            error instanceof Error ? error.name : 'unknown error'
+          }`,
+        );
+        if (pending && this.isCurrentHandoff(pending)) {
+          void this.cancelPendingHandoffAuth({
+            error: 'Could not open CLODEx.xyz in the system browser.',
+          });
+        }
+      });
+    });
+  }
+
   public async signInSocial(
-    provider: SocialAuthProvider,
+    _provider: SocialAuthProvider,
   ): Promise<{ error?: string }> {
     if (!isAccountAuthEnabled) return { error: ACCOUNT_AUTH_DISABLED_ERROR };
-    this.logger.warn(
-      `[AuthService] Blocked legacy browser sign-in via ${provider}`,
-    );
-    return { error: LEGACY_BROWSER_HANDOFF_DISABLED_ERROR };
+    return this.beginClodexBrowserSignIn();
   }
 
   // ---------------------------------------------------------------------------
@@ -1259,25 +1677,27 @@ export class AuthService extends DisposableService {
 
   public async signInEmail(): Promise<{ error?: string }> {
     if (!isAccountAuthEnabled) return { error: ACCOUNT_AUTH_DISABLED_ERROR };
-    this.logger.warn('[AuthService] Blocked legacy browser email sign-in');
-    return { error: LEGACY_BROWSER_HANDOFF_DISABLED_ERROR };
+    return this.beginClodexBrowserSignIn();
   }
 
   public async signInTelegram(): Promise<{ error?: string }> {
     if (!isAccountAuthEnabled) return { error: ACCOUNT_AUTH_DISABLED_ERROR };
-    if (this.pendingHandoffAuth) {
-      this.logger.debug(
-        '[AuthService] Cancelling previous sign-in before starting Telegram sign-in',
-      );
-      await this.cancelPendingHandoffAuth({
-        error: 'Sign-in was cancelled.',
-      });
+    if (this.pendingHandoffAuth || this.hasActiveNonBrowserAuthAttempt()) {
+      return { error: 'Another CLODEx sign-in is already in progress.' };
     }
+
+    const attemptEpoch = ++this.authLifecycleEpoch;
+    this.activeTelegramAttemptEpoch = attemptEpoch;
+    const isCurrentAttempt = () =>
+      this.activeTelegramAttemptEpoch === attemptEpoch &&
+      this.authLifecycleEpoch === attemptEpoch;
 
     try {
       this.logger.debug('[AuthService] Starting Clodex sign-in via Telegram');
       const login = await this.clodexInterop.startTelegramLogin();
+      if (!isCurrentAttempt()) return { error: 'Sign-in was cancelled.' };
       await openClodexTelegramInSystemApp(login);
+      if (!isCurrentAttempt()) return { error: 'Sign-in was cancelled.' };
 
       const deadline = Math.min(
         login.expiresAt ? login.expiresAt * 1000 : Number.POSITIVE_INFINITY,
@@ -1288,10 +1708,12 @@ export class AuthService extends DisposableService {
         await new Promise((resolve) =>
           setTimeout(resolve, TELEGRAM_AUTH_POLL_INTERVAL_MS),
         );
+        if (!isCurrentAttempt()) return { error: 'Sign-in was cancelled.' };
 
         const status = await this.clodexInterop.getTelegramLoginStatus(
           login.token,
         );
+        if (!isCurrentAttempt()) return { error: 'Sign-in was cancelled.' };
 
         if (status.status === 'pending') continue;
 
@@ -1304,6 +1726,7 @@ export class AuthService extends DisposableService {
                   status.user?.id,
                 )
               : undefined);
+          if (!isCurrentAttempt()) return { error: 'Sign-in was cancelled.' };
 
           if (!accessToken) {
             return {
@@ -1312,10 +1735,16 @@ export class AuthService extends DisposableService {
             };
           }
 
-          const result = await this.completeClodexSession({
-            accessToken,
-            user: status.user,
-          });
+          const result = await this.completeClodexSession(
+            {
+              accessToken,
+              user: status.user,
+            },
+            {
+              provenance: 'clodex-telegram-v1',
+              shouldCommit: isCurrentAttempt,
+            },
+          );
           if (result.error) return result;
 
           this.logger.debug('[AuthService] Completed Clodex Telegram sign-in');
@@ -1337,6 +1766,10 @@ export class AuthService extends DisposableService {
         `[AuthService] Unexpected error during Telegram sign-in: ${err}`,
       );
       return { error: 'Failed to complete Telegram sign-in.' };
+    } finally {
+      if (this.activeTelegramAttemptEpoch === attemptEpoch) {
+        this.activeTelegramAttemptEpoch = null;
+      }
     }
   }
 
@@ -1365,7 +1798,12 @@ export class AuthService extends DisposableService {
       return;
     }
 
-    if (!this._credentials?.token) {
+    if (this.pendingHandoffAuth || this.hasActiveNonBrowserAuthAttempt()) {
+      return;
+    }
+
+    const trustedCredentials = this.getTrustedCredentials();
+    if (!trustedCredentials?.token) {
       this.ideModelToken = null;
       this.clearModelAccessTokenCache();
       this.clodexUserModels = [];
@@ -1384,15 +1822,23 @@ export class AuthService extends DisposableService {
       return;
     }
 
+    const refreshEpoch = this.authLifecycleEpoch;
+    const refreshAccessToken = trustedCredentials.token;
+    const isCurrentRefresh = () =>
+      refreshEpoch === this.authLifecycleEpoch &&
+      this.getTrustedCredentials()?.token === refreshAccessToken;
+
     try {
       if (isClodexAuthEnabled) {
-        const user = await this.clodexInterop.getSelf(this._credentials.token);
+        const user = await this.clodexInterop.getSelf(refreshAccessToken);
+        if (!isCurrentRefresh()) return;
         const credentials = this._credentials;
         if (user && credentials) {
-          this.persistCredentials({
+          await this.persistCredentials({
             ...credentials,
             user,
           });
+          if (!isCurrentRefresh()) return;
         }
 
         this.updateAuthState((draft) => {
@@ -1412,7 +1858,15 @@ export class AuthService extends DisposableService {
         return;
       }
 
-      const { data, error } = await this.authClient.getSession();
+      this.betterAuthTokenRefreshRequests += 1;
+      let sessionResult: Awaited<ReturnType<BetterAuthClient['getSession']>>;
+      try {
+        sessionResult = await this.authClient.getSession();
+      } finally {
+        this.betterAuthTokenRefreshRequests -= 1;
+      }
+      const { data, error } = sessionResult;
+      if (!isCurrentRefresh()) return;
 
       if (error || !data) {
         this.logger.warn(
@@ -1423,7 +1877,8 @@ export class AuthService extends DisposableService {
         // temporarily unavailable — keep credentials intact.
         const isAuthRejection = error?.status === 401 || error?.status === 403;
         if (isAuthRejection) {
-          this.persistCredentials(null);
+          this.authLifecycleEpoch += 1;
+          await this.persistCredentials(null);
           this.ideModelToken = null;
           this.clearModelAccessTokenCache();
           this.clodexUserModels = [];
@@ -1450,7 +1905,7 @@ export class AuthService extends DisposableService {
       const user = data.user;
       const credentials = this._credentials;
       if (user && credentials) {
-        this.persistCredentials({
+        await this.persistCredentials({
           ...credentials,
           user: {
             id: user.id,
@@ -1458,6 +1913,7 @@ export class AuthService extends DisposableService {
             name: user.name ?? undefined,
           },
         });
+        if (!isCurrentRefresh()) return;
       }
 
       this.updateAuthState((draft) => {
@@ -1475,16 +1931,18 @@ export class AuthService extends DisposableService {
         };
       });
 
-      const token = this._credentials?.token;
+      const token = this.getTrustedCredentials()?.token;
       if (token) {
         void this.refreshIdeModelToken();
       }
     } catch (err) {
+      if (!isCurrentRefresh()) return;
       if (
         err instanceof ClodexRequestError &&
         (err.status === 401 || err.status === 403)
       ) {
-        this.persistCredentials(null);
+        this.authLifecycleEpoch += 1;
+        await this.persistCredentials(null);
         this.ideModelToken = null;
         this.clearModelAccessTokenCache();
         this.clodexUserModels = [];
@@ -1515,6 +1973,10 @@ export class AuthService extends DisposableService {
   // ---------------------------------------------------------------------------
 
   public async logout(): Promise<void> {
+    this.authLifecycleEpoch += 1;
+    this.activeOtpAttemptEpoch = null;
+    this.activeTelegramAttemptEpoch = null;
+    await this.cancelPendingHandoffAuth({ error: 'Sign-in was cancelled.' });
     if (isAccountAuthEnabled) {
       try {
         await this.authClient.signOut();
@@ -1523,7 +1985,11 @@ export class AuthService extends DisposableService {
       }
     }
 
-    this.persistCredentials(null);
+    const credentialsCleared = await this.persistCredentials(null);
+    // Keep the current process signed out even if durable storage is
+    // temporarily unavailable. The error notification below makes it explicit
+    // that restart persistence could not be guaranteed.
+    this._credentials = null;
     this.ideModelToken = null;
     this.clearModelAccessTokenCache();
     this.clodexUserModels = [];
@@ -1542,14 +2008,22 @@ export class AuthService extends DisposableService {
     });
 
     this.notificationService.showNotification({
-      title: 'Logged out',
-      message: 'You have been logged out of Clodex.',
-      type: 'info',
+      title: credentialsCleared ? 'Logged out' : 'Logout storage error',
+      message: credentialsCleared
+        ? 'You have been logged out of Clodex.'
+        : 'CLODEx signed out locally, but could not durably clear the stored session. Quit after retrying logout.',
+      type: credentialsCleared ? 'info' : 'error',
       duration: 5000,
       actions: [],
     });
 
-    this.logger.debug('[AuthService] Logged out');
+    if (credentialsCleared) {
+      this.logger.debug('[AuthService] Logged out');
+    } else {
+      this.logger.error(
+        '[AuthService] Logout could not durably clear encrypted credentials',
+      );
+    }
   }
 
   public get authState(): AuthState {
@@ -1560,7 +2034,7 @@ export class AuthService extends DisposableService {
   public get accessToken(): string | undefined {
     this.assertNotDisposed();
     if (!isAccountAuthEnabled) return undefined;
-    return this._credentials?.token ?? undefined;
+    return this.getTrustedCredentials()?.token;
   }
 
   public async refreshAuthState(): Promise<AuthState> {

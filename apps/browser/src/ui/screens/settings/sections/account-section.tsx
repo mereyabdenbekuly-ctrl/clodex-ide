@@ -116,13 +116,11 @@ export function AccountSection() {
           <div className="mb-6">
             <SettingsSectionHeader
               title="Sign in to Clodex"
-              description="Browser sign-in is paused until the desktop callback enforces state and PKCE S256."
+              description="Continue securely in your system browser. The IDE accepts only a state- and PKCE-bound one-time loopback callback."
             />
           </div>
           <SignInOptionsPanel
             variant="section"
-            title="Вход в CLODEx"
-            description="Вход через сайт временно отключён fail-closed; Telegram остаётся отдельным способом входа."
             sendOtp={(email, token) => sendOtp(email, token ?? '')}
             verifyOtp={verifyOtp}
             signInSocial={signInSocial}

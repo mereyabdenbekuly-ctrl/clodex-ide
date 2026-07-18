@@ -113,14 +113,14 @@ describe('build constants local package identity', () => {
     );
   });
 
-  it('keeps observed community builds unsigned while enabling only anonymous backend telemetry', () => {
+  it('keeps observed community builds unsigned while enabling secure account handoff and anonymous backend telemetry', () => {
     expect(
       resolveAppDistributionPolicy({
         distributionMode: 'community-observed',
         releaseChannel: 'release',
       }),
     ).toEqual({
-      authEnabled: false,
+      authEnabled: true,
       autoUpdateEnabled: false,
       buildIdentifier: 'community-observed',
       exceptionTelemetryEnabled: false,

@@ -102,7 +102,7 @@ export function resolveAppDistributionPolicy(options: {
     }
     if (options.distributionMode === 'community-observed') {
       return {
-        authEnabled: false,
+        authEnabled: true,
         autoUpdateEnabled: false,
         buildIdentifier: 'community-observed',
         exceptionTelemetryEnabled: false,

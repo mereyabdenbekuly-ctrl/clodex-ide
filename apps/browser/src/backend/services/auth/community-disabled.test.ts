@@ -42,6 +42,7 @@ vi.hoisted(() => {
 });
 
 vi.mock('./server-interop', () => ({
+  CLODEX_DESKTOP_CLIENT_ID: 'clodex-community-unsigned',
   createBetterAuthClient: vi.fn(() => ({
     emailOtp: { sendVerificationOtp: betterAuthCalls.sendOtp },
     getSession: betterAuthCalls.getSession,

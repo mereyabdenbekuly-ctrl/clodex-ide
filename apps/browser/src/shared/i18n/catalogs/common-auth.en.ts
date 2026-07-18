@@ -8,15 +8,12 @@ export const commonAuthEn = {
       eyebrow: 'Account access',
       noAccount: "Don't have an account?",
       register: 'Create account',
-      secureHandoffTitle: 'Secure desktop sign-in is in progress',
+      secureHandoffTitle: 'Secure desktop sign-in',
       secureHandoffDescription:
-        'The legacy callback is disabled until mandatory state and PKCE S256 validation is in place.',
+        'CLODEx.xyz opens in your system browser and returns through a state- and PKCE-bound one-time loopback callback.',
       chooseMethod: 'Choose a sign-in method',
       continueWithTelegram: 'Continue with Telegram',
-      browserHandoffDisabledButton:
-        'Sign-in through CLODEx.xyz is temporarily unavailable',
-      browserHandoffDisabledMessage:
-        'Sign-in through CLODEx.xyz is temporarily unavailable: the server-side desktop flow does not yet validate state + PKCE. Use Telegram or local API keys.',
+      browserHandoffButton: 'Sign in through CLODEx.xyz',
       genericFailure: 'Could not complete CLODEx sign-in. Please try again.',
       terms:
         'By continuing, you agree to the applicable CLODEx.xyz terms of use and privacy policy.',
@@ -33,17 +30,18 @@ export const commonAuthEn = {
       benefits: {
         systemBrowser:
           'Use the system browser without sending your password to the renderer process',
-        callbackClosed:
-          'The desktop callback stays closed until state + PKCE S256 is implemented',
+        callbackBound:
+          'Every loopback callback is bound to the initiating IDE with state + PKCE S256',
         passwordNotHandled: 'The renderer process never handles your password',
       },
       status: {
         browserHandoff: 'Browser handoff',
         systemBrowser: 'System browser',
-        ideCallback: 'IDE callback',
+        ideCallback: 'Loopback callback',
         accountAccess: 'Account access',
       },
-      unsafeCallbackBlocked: 'Unsafe callback is blocked fail-closed',
+      secureCallbackBound:
+        'The one-time loopback callback rejects mismatches and replay attempts',
     },
   },
 } as const;
