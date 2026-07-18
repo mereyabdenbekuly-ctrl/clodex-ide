@@ -5,6 +5,7 @@ import { PostHogProvider as PHProvider, usePostHog } from 'posthog-js/react';
 import { Suspense, useEffect, useRef } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { getCookieConsent } from '@/lib/cookie-consent-utils';
+import { useSession } from '@/lib/auth-client';
 
 // Module-level flag — set synchronously after posthog.init() returns.
 let posthogInitialized = false;
@@ -99,9 +100,30 @@ export function PostHogProvider({ children }: { children: React.ReactNode }) {
   return (
     <PHProvider client={posthog}>
       <SuspendedPostHogPageView />
+      <PostHogIdentify />
       {children}
     </PHProvider>
   );
+}
+
+function PostHogIdentify() {
+  const { data: session } = useSession();
+  const userId = session?.user?.id;
+  const prevUserIdRef = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!posthogInitialized) return;
+    const prevUserId = prevUserIdRef.current;
+    prevUserIdRef.current = userId;
+    if (userId) {
+      posthog.identify(userId);
+    } else if (prevUserId && !userId) {
+      // User just logged out — reset to unlink future events from this person.
+      posthog.reset();
+    }
+  }, [userId]);
+
+  return null;
 }
 
 function PostHogPageView() {

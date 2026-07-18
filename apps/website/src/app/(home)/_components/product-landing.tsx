@@ -1,3 +1,6 @@
+'use client';
+
+import posthog from 'posthog-js';
 import Image from 'next/image';
 import Link from 'next/link';
 import {
@@ -230,6 +233,9 @@ export function LandingHero({ locale }: { locale: LandingLocale }) {
                   buttonVariants({ size: 'lg', variant: 'secondary' }),
                   'w-full sm:w-auto',
                 )}
+                onClick={() =>
+                  posthog.capture('github-link-clicked', { source: 'hero' })
+                }
               >
                 <Github className="size-4" />
                 GitHub
@@ -903,6 +909,7 @@ export function SecuritySection({ locale }: { locale: LandingLocale }) {
                     buttonVariants({ size: 'lg', variant: 'primary' }),
                     'mt-8',
                   )}
+                  onClick={() => posthog.capture('security-report-cta-clicked')}
                 >
                   {copy.cta}
                   <ArrowRight className="size-4" />

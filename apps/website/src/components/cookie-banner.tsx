@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import posthog from 'posthog-js';
 import { Button } from '@clodex/stage-ui/components/button';
 import { getCookieConsent, setCookieConsent } from '@/lib/cookie-consent-utils';
 
@@ -16,6 +17,7 @@ export function CookieBanner() {
   const handleAccept = () => {
     setCookieConsent('accepted');
     setShowBanner(false);
+    posthog.capture('cookie-consent-accepted');
     // Notify the PostHogProvider to upgrade to cookie persistence — no page reload needed.
     window.dispatchEvent(new Event('posthog-consent-change'));
   };
@@ -23,6 +25,7 @@ export function CookieBanner() {
   const handleDeny = () => {
     setCookieConsent('denied');
     setShowBanner(false);
+    posthog.capture('cookie-consent-denied');
     // No posthog-consent-change event needed: cookieless mode is already active
     // and declining doesn't change the tracking mode — only acceptance does.
   };

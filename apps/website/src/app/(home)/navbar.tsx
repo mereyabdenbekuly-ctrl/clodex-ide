@@ -7,6 +7,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
+import posthog from 'posthog-js';
 import { useSession } from '@/lib/auth-client';
 import { DownloadUnavailableButton } from '@/components/download-unavailable-button';
 
@@ -25,6 +26,11 @@ function NavbarAuthLink({ locale }: { locale: Locale }) {
         buttonVariants({ size: 'sm', variant: 'ghost' }),
         'hidden sm:inline-flex',
       )}
+      onClick={() =>
+        posthog.capture('sign-in-cta-clicked', {
+          is_logged_in: !!session?.user,
+        })
+      }
     >
       {session?.user
         ? locale === 'ru'
@@ -62,6 +68,9 @@ function NavbarGitHubLink() {
         buttonVariants({ size: 'sm', variant: 'ghost' }),
         'hidden lg:inline-flex',
       )}
+      onClick={() =>
+        posthog.capture('github-link-clicked', { source: 'navbar' })
+      }
     >
       <Github className="size-4" />
       GitHub
@@ -212,7 +221,12 @@ export function Navbar() {
                 href="https://github.com/mereyabdenbekuly-ctrl/clodex-ide"
                 target="_blank"
                 rel="noreferrer"
-                onClick={() => setIsOpen(false)}
+                onClick={() => {
+                  setIsOpen(false);
+                  posthog.capture('github-link-clicked', {
+                    source: 'mobile-menu',
+                  });
+                }}
                 className={cn(
                   buttonVariants({ variant: 'ghost', size: 'md' }),
                   'justify-start',

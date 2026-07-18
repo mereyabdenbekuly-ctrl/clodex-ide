@@ -714,6 +714,13 @@ export interface EventProperties
   };
   'experience-founder-call-survey-opened': undefined;
   'experience-founder-call-survey-dismissed': undefined;
+
+  // Chat input feature interactions
+  'dictation-toggled': { active: boolean };
+  'swarm-mode-toggled': { active: boolean };
+  'battle-mode-toggled': { active: boolean };
+  'file-attachment-added': { source: 'upload-button' };
+  'file-attachment-pasted': { file_count: number };
 }
 
 export const UI_TELEMETRY_EVENT_NAMES = [
@@ -769,6 +776,11 @@ export const UI_TELEMETRY_EVENT_NAMES = [
   'experience-survey-feedback-submitted',
   'experience-founder-call-survey-opened',
   'experience-founder-call-survey-dismissed',
+  'dictation-toggled',
+  'swarm-mode-toggled',
+  'battle-mode-toggled',
+  'file-attachment-added',
+  'file-attachment-pasted',
 ] as const satisfies ReadonlyArray<keyof EventProperties>;
 
 export type UIEventName = (typeof UI_TELEMETRY_EVENT_NAMES)[number];
@@ -930,6 +942,13 @@ const UI_TELEMETRY_EVENT_SCHEMAS = {
   }),
   'experience-founder-call-survey-opened': z.undefined().optional(),
   'experience-founder-call-survey-dismissed': z.undefined().optional(),
+  'dictation-toggled': z.object({ active: z.boolean() }),
+  'swarm-mode-toggled': z.object({ active: z.boolean() }),
+  'battle-mode-toggled': z.object({ active: z.boolean() }),
+  'file-attachment-added': z.object({
+    source: z.literal('upload-button'),
+  }),
+  'file-attachment-pasted': z.object({ file_count: z.number() }),
 } satisfies {
   [K in UIEventName]: z.ZodType<UIEventProperties[K]>;
 };

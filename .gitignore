@@ -151,3 +151,4 @@ yarn-error.log*
 .vscode-test
 *storybook.log
 storybook-static
+.env.local

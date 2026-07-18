@@ -1441,8 +1441,9 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
   const handleAddFileAttachment = useCallback(
     (file: File) => {
       addFileAttachment(file);
+      track('file-attachment-added', { source: 'upload-button' });
     },
-    [addFileAttachment],
+    [addFileAttachment, track],
   );
 
   /**
@@ -1460,8 +1461,9 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
       files.forEach((file) => {
         addFileAttachment(file, insertPos);
       });
+      track('file-attachment-pasted', { file_count: files.length });
     },
-    [addFileAttachment],
+    [addFileAttachment, track],
   );
 
   /**
@@ -1826,6 +1828,31 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
 
   const handleWorkspaceChange = focusChatInputAfterWorkspaceChange;
 
+  const handleToggleSwarmMode = useCallback(() => {
+    toggleSwarmMode();
+    track('swarm-mode-toggled', { active: !swarmModeActive });
+  }, [toggleSwarmMode, swarmModeActive, track]);
+
+  const handleToggleBattleMode = useCallback(() => {
+    toggleBattleMode();
+    track('battle-mode-toggled', { active: swarmModeVariant !== 'battle' });
+  }, [toggleBattleMode, swarmModeVariant, track]);
+
+  const handleToggleDictation = useMemo(
+    () =>
+      dictation.visible
+        ? () => {
+            const wasActive =
+              dictation.state.status === 'recording' ||
+              dictation.state.status === 'requesting-permission' ||
+              dictation.state.status === 'transcribing';
+            dictation.toggle();
+            track('dictation-toggled', { active: !wasActive });
+          }
+        : undefined,
+    [dictation, track],
+  );
+
   if (!allowUserInput) return null;
 
   return (
@@ -1910,12 +1937,12 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
             swarmModeActive={swarmModeActive}
             automaticSwarmModeActive={submitSwarmRoute.automaticUltra}
             battleModeActive={swarmModeVariant === 'battle'}
-            onToggleSwarmMode={toggleSwarmMode}
-            onToggleBattleMode={toggleBattleMode}
+            onToggleSwarmMode={handleToggleSwarmMode}
+            onToggleBattleMode={handleToggleBattleMode}
             swarmModeDisabled={isWorking || hasPendingQuestion}
             dictationState={dictation.visible ? dictation.state : undefined}
             dictationDisabled={!dictation.available}
-            onToggleDictation={dictation.visible ? dictation.toggle : undefined}
+            onToggleDictation={handleToggleDictation}
             canSendMessage={effectiveCanSendMessage}
             onSubmit={handleSubmit}
           />
