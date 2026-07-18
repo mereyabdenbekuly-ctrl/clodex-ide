@@ -26,12 +26,21 @@ semantics:
 - macOS is ad-hoc signed and not notarized;
 - Windows executables are explicitly `NotSigned`;
 - Linux packages have no CLODEx vendor package signature;
-- authentication, auto-update, update payloads and default protocol
-  registration are disabled;
+- secure CLODEx.xyz account authentication is enabled through the system
+  browser; an RFC 8252 loopback callback is bound to the initiating IDE with
+  state and PKCE S256;
+- legacy query-code and unbound bearer callbacks remain rejected;
+- auto-update, update payloads, and default OS protocol registration remain
+  disabled;
 - the separate app/bundle identity creates a separate local profile.
 
 The artifact validators and bundle assembler fail closed unless these
 properties and the exact source commit are present.
+
+Authentication is part of the `community-observed` distribution policy, not a
+one-off workflow override. Future observed builds must keep
+`CLODEX_AUTH_ENABLED=true` while leaving default protocol registration off.
+The `community-unsigned` lane remains account-free.
 
 ## Telemetry contract
 

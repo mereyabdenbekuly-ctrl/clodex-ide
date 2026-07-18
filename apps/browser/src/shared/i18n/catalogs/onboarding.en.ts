@@ -45,7 +45,8 @@ export const onboardingEn = {
     },
     cloudSignIn: {
       title: 'Welcome back',
-      description: 'Sign in to CLODEx.xyz to connect your account to the IDE.',
+      description:
+        'Sign in securely on CLODEx.xyz in your system browser to connect your account to the IDE.',
       quickStart: 'Quick start with CLODEx Cloud',
     },
     apiKey: {

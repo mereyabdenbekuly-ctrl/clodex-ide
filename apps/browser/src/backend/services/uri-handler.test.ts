@@ -24,20 +24,32 @@ function logger() {
   };
 }
 
-describe('URIHandlerService distribution isolation', () => {
+describe('URIHandlerService distribution policy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubGlobal('__APP_DISTRIBUTION_MODE__', 'community-unsigned');
     vi.stubGlobal('__APP_REGISTER_DEFAULT_PROTOCOLS__', false);
   });
 
-  it('returns no official protocol schemes for community distributions', () => {
+  it('returns no protocol schemes when distribution policy disables them', () => {
     expect(
       resolveDefaultProtocolSchemes({
         authCallbackScheme: 'clodex-ide',
         registerDefaultProtocols: false,
       }),
     ).toEqual([]);
+  });
+
+  it('does not claim OS protocols for the community-observed distribution', async () => {
+    vi.stubGlobal('__APP_DISTRIBUTION_MODE__', 'community-observed');
+    vi.stubGlobal('__APP_REGISTER_DEFAULT_PROTOCOLS__', false);
+
+    const service = await URIHandlerService.create(logger() as never);
+
+    expect(electronApp.setAsDefaultProtocolClient).not.toHaveBeenCalled();
+    expect(electronApp.isDefaultProtocolClient).not.toHaveBeenCalled();
+
+    await service.teardown();
   });
 
   it('does not attempt to claim an OS protocol association', async () => {

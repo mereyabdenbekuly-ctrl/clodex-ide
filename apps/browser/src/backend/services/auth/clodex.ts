@@ -1,11 +1,8 @@
 import { shell } from 'electron';
-import { AUTH_CALLBACK_SCHEME } from './callback-scheme';
 
 export const CLODEX_ORIGIN = process.env.CLODEX_ORIGIN || 'https://clodex.xyz';
-export const CLODEX_LOGIN_URL =
-  process.env.CLODEX_LOGIN_URL || `${CLODEX_ORIGIN}/login`;
 export const CLODEX_API_URL =
-  process.env.CLODEX_API_URL || `${CLODEX_ORIGIN}/api`;
+  process.env.CLODEX_API_URL || process.env.API_URL || `${CLODEX_ORIGIN}/api`;
 export const CLODEX_LLM_RELAY_URL =
   process.env.CLODEX_LLM_RELAY_URL || `${CLODEX_ORIGIN}/v1`;
 
@@ -597,15 +594,6 @@ function toCookieHeader(setCookieHeaders: string[]): string | undefined {
   return cookiePairs.length > 0 ? cookiePairs.join('; ') : undefined;
 }
 
-export async function openClodexLoginInSystemBrowser(): Promise<void> {
-  const redirect = `${AUTH_CALLBACK_SCHEME}://auth/callback`;
-  const url = new URL(CLODEX_LOGIN_URL);
-  url.searchParams.set('redirect', redirect);
-  url.searchParams.set('client_id', IDE_CLIENT_ID);
-
-  await shell.openExternal(url.toString(), { activate: true });
-}
-
 export async function openClodexTelegramInSystemApp(
   login: ClodexTelegramStart,
 ): Promise<void> {
@@ -625,15 +613,24 @@ export async function openClodexTelegramInSystemApp(
 }
 
 export class ClodexAuthInterop {
-  public async exchangeCode(code: string): Promise<ClodexSession> {
+  public async exchangePkceAuthorizationCode(options: {
+    clientId: string;
+    code: string;
+    codeVerifier: string;
+    redirectUri: string;
+    signal?: AbortSignal;
+  }): Promise<ClodexSession> {
     return requestJson(
-      joinUrl(CLODEX_API_URL, '/ide/auth/exchange'),
+      joinUrl(CLODEX_API_URL, '/v1/auth/electron/token'),
       {
         method: 'POST',
+        signal: options.signal,
         body: JSON.stringify({
-          code,
-          redirect: `${AUTH_CALLBACK_SCHEME}://auth/callback`,
-          client_id: IDE_CLIENT_ID,
+          grant_type: 'authorization_code',
+          client_id: options.clientId,
+          redirect_uri: options.redirectUri,
+          code: options.code,
+          code_verifier: options.codeVerifier,
         }),
       },
       readSession,
@@ -714,10 +711,13 @@ export class ClodexAuthInterop {
     );
   }
 
-  public async getIdeKeys(accessToken: string): Promise<ClodexIdeKey[]> {
+  public async getIdeKeys(
+    accessToken: string,
+    signal?: AbortSignal,
+  ): Promise<ClodexIdeKey[]> {
     return requestJson(
       joinUrl(CLODEX_API_URL, '/ide/keys'),
-      { method: 'GET', headers: bearerHeaders(accessToken) },
+      { method: 'GET', headers: bearerHeaders(accessToken), signal },
       readIdeKeys,
     );
   }
@@ -726,6 +726,7 @@ export class ClodexAuthInterop {
     accessToken: string,
     keyId?: string,
     route?: ClodexIdeTokenRequestRoute,
+    signal?: AbortSignal,
   ): Promise<ClodexIdeToken> {
     const url = new URL(joinUrl(CLODEX_API_URL, '/ide/token'));
     if (keyId) url.searchParams.set('keyId', keyId);
@@ -748,6 +749,7 @@ export class ClodexAuthInterop {
       {
         method: 'POST',
         headers: bearerHeaders(accessToken),
+        signal,
         ...(body ? { body: JSON.stringify(body) } : {}),
       },
       readIdeToken,

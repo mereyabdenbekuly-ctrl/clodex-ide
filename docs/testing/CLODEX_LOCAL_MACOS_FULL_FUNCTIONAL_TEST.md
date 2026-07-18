@@ -148,7 +148,7 @@ rm -rf "$TEST_ROOT"
 cd "$REPO_ROOT"
 
 pnpm --dir apps/browser exec vitest run \
-  src/backend/services/auth/legacy-browser-handoff-disabled.test.ts \
+  src/backend/services/auth/browser-pkce-handoff.test.ts \
   src/backend/services/auth/index.test.ts \
   src/backend/services/auth/token-expiry.test.ts \
   src/backend/startup/url-routing.test.ts \

@@ -107,10 +107,14 @@ binary.
    - **Linux:** install either the downloaded DEB (`apt install ./<file>.deb`)
      or RPM (`rpm -i ./<file>.rpm`) for your distribution.
 
-The observed community build has a separate application identity. Account
-sign-in, auto-update, and default protocol registration are excluded. The
-first-launch privacy choice must be completed before normal IDE use. Install
-newer community builds manually.
+The observed community build has a separate application identity. The
+currently published `communityobserved7` artifact remains unchanged and does
+not include account sign-in. Starting with the next observed build produced
+from the updated policy, secure CLODEx.xyz sign-in is enabled through the
+system browser with an RFC 8252 loopback callback bound by state and PKCE.
+Default OS protocol registration and auto-update remain excluded, the
+first-launch privacy choice must be completed before normal IDE use, and newer
+community builds must still be installed manually.
 
 ### First launch: connect a model
 

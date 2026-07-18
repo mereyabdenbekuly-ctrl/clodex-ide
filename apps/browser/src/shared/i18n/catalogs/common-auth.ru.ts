@@ -10,14 +10,12 @@ export const commonAuthRu = {
       eyebrow: 'Доступ к аккаунту',
       noAccount: 'Нет аккаунта?',
       register: 'Зарегистрироваться',
-      secureHandoffTitle: 'Защищённый desktop-вход готовится',
+      secureHandoffTitle: 'Защищённый вход в IDE',
       secureHandoffDescription:
-        'Legacy callback отключён до обязательной проверки state и PKCE S256.',
+        'CLODEx.xyz откроется в системном браузере и вернёт одноразовый loopback callback, привязанный через state и PKCE.',
       chooseMethod: 'Выберите способ входа',
       continueWithTelegram: 'Продолжить с Telegram',
-      browserHandoffDisabledButton: 'Вход через CLODEx.xyz временно отключён',
-      browserHandoffDisabledMessage:
-        'Вход через CLODEx.xyz временно отключён: серверный desktop-flow ещё не проверяет state + PKCE. Используйте Telegram или локальные API-ключи.',
+      browserHandoffButton: 'Войти через CLODEx.xyz',
       genericFailure:
         'Не удалось завершить вход через CLODEx. Попробуйте ещё раз.',
       terms:
@@ -35,17 +33,18 @@ export const commonAuthRu = {
       benefits: {
         systemBrowser:
           'Системный браузер без передачи пароля процессу рендерера',
-        callbackClosed:
-          'Desktop callback закрыт до внедрения state + PKCE S256',
+        callbackBound:
+          'Каждый loopback callback привязан к запустившей вход IDE через state + PKCE S256',
         passwordNotHandled: 'Пароль не обрабатывается процессом рендерера',
       },
       status: {
         browserHandoff: 'Передача входа в браузер',
         systemBrowser: 'Системный браузер',
-        ideCallback: 'Callback IDE',
+        ideCallback: 'Loopback callback',
         accountAccess: 'Доступ к аккаунту',
       },
-      unsafeCallbackBlocked: 'Небезопасный callback заблокирован fail-closed',
+      secureCallbackBound:
+        'Одноразовый loopback callback отклоняет несовпадения и повторы',
     },
   },
 } satisfies CommonAuthCatalog;

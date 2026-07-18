@@ -165,7 +165,7 @@ jobs:
     env:
       APP_VERSION_OVERRIDE: ${{ needs.preflight.outputs.version }}
       BUILD_MODE: production
-      CLODEX_AUTH_ENABLED: "false"
+      CLODEX_AUTH_ENABLED: "true"
       CLODEX_DISTRIBUTION_MODE: community-observed
       NODE_OPTIONS: "--max-old-space-size=8192"
       RELEASE_CHANNEL: release
