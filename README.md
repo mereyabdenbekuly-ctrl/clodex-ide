@@ -9,7 +9,7 @@
 
 [![Website](https://img.shields.io/badge/website-ide.clodex.xyz-00d88a?style=flat-square)](https://ide.clodex.xyz)
 ![Status](https://img.shields.io/badge/status-technical_preview-2563eb?style=flat-square)
-[![Community build](https://img.shields.io/badge/community_observed-1.16.0--observed7-00d88a?style=flat-square)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved7)
+[![Community build](https://img.shields.io/badge/community_observed-1.16.0--observed8-00d88a?style=flat-square)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved8)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-111827?style=flat-square)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-22.23.1-43853d?style=flat-square)
 ![pnpm](https://img.shields.io/badge/pnpm-10.30.3-f69220?style=flat-square)
@@ -39,31 +39,36 @@ evidence and manual sign-off are complete.
 
 ## Community test build
 
-The current public tester build is **`1.16.0-communityobserved7`**, produced from the
+The current public tester build is **`1.16.0-communityobserved8`**, produced from the
 canonical `main` commit
-[`981311304fb4c648ebbaa0b85fbed0602aab2c9f`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/981311304fb4c648ebbaa0b85fbed0602aab2c9f)
-by [GitHub Actions run `29615260553`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29615260553)
+[`a63fc5d79b3c6a3442e6e2a2116e575478cb96ae`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/a63fc5d79b3c6a3442e6e2a2116e575478cb96ae)
+by [GitHub Actions run `29655325372`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29655325372)
 and published as a clearly separated
-[GitHub community prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved7).
-It adds the **Русский (beta)** interface and a required first-launch privacy
-choice with **Allow anonymous statistics** as the primary action and a visible
-**Continue without statistics** path. The previous
-[community4 prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-community4)
+[GitHub community prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved8).
+It permanently enables secure CLODEx.xyz account sign-in for the observed
+distribution through the system browser and an RFC 8252 loopback callback
+bound by state and PKCE S256. It also includes the **Русский (beta)** interface
+and a required first-launch privacy choice with **Allow anonymous statistics**
+as the primary action and a visible **Continue without statistics** path. The
+[communityobserved7 prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved7)
+remains available as the immediate predecessor without account sign-in, while
+[community4](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-community4)
 remains available as the telemetry-free predecessor.
 
 | Platform            | Package   | Download |
 | ------------------- | --------- | -------- |
-| macOS Apple Silicon | ARM64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/clodex-community-observed-1.16.0-communityobserved7-arm64.dmg) |
-| macOS Intel         | x64 DMG   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/clodex-community-observed-1.16.0-communityobserved7-x64.dmg) |
-| Windows             | x64 EXE   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/clodex-community-observed-1.16.0-communityobserved7-x64-setup.exe) |
-| Linux               | x64 DEB   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/clodex-community-observed_1.16.0-communityobserved7_amd64.deb) |
-| Linux               | x64 RPM   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/clodex-community-observed-1.16.0.communityobserved7-1.x86_64.rpm) |
+| macOS Apple Silicon | ARM64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-arm64.dmg) |
+| macOS Intel         | x64 DMG   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-x64.dmg) |
+| Windows             | x64 EXE   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-x64-setup.exe) |
+| Linux               | x64 DEB   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed_1.16.0-communityobserved8_amd64.deb) |
+| Linux               | x64 RPM   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0.communityobserved8-1.x86_64.rpm) |
 
-Download [`SHA256SUMS.txt`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/SHA256SUMS.txt)
+Download [`SHA256SUMS.txt`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/SHA256SUMS.txt)
 from the same prerelease and verify the installer before opening it. The exact
-source manifests, CycloneDX SBOMs, warnings, platform validation reports, and
-byte-level audit report are retained in the compact
-[evidence archive](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved7/clodex-community-observed-1.16.0-communityobserved7-evidence.zip).
+source manifests, CycloneDX SBOMs, warnings, platform validation reports,
+byte-level audit report, and packaged authentication audit are retained in the
+compact
+[evidence archive](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-evidence.zip).
 Do not use repackaged binaries from an unverified mirror.
 
 Before onboarding, the build requires an explicit allow-or-decline choice. No
@@ -107,28 +112,31 @@ binary.
    - **Linux:** install either the downloaded DEB (`apt install ./<file>.deb`)
      or RPM (`rpm -i ./<file>.rpm`) for your distribution.
 
-The observed community build has a separate application identity. The
-currently published `communityobserved7` artifact remains unchanged and does
-not include account sign-in. Starting with the next observed build produced
-from the updated policy, secure CLODEx.xyz sign-in is enabled through the
-system browser with an RFC 8252 loopback callback bound by state and PKCE.
+The observed community build has a separate application identity. Starting
+with **communityobserved8**, secure CLODEx.xyz sign-in is permanently enabled
+by the observed distribution policy. The system-browser handoff uses an RFC
+8252 callback bound to exact **127.0.0.1**, a dynamic local port, state, and
+PKCE S256; the bearer session token is never placed in the callback URL.
 Default OS protocol registration and auto-update remain excluded, the
 first-launch privacy choice must be completed before normal IDE use, and newer
-community builds must still be installed manually.
+community builds must still be installed manually. The **community-unsigned**
+lane remains account-free.
 
 ### First launch: connect a model
 
 1. Choose **System**, **English**, or **Русский (beta)** in onboarding or
    **Settings -> General**, then restart once to verify persistence.
-2. Leave anonymous telemetry off, or explicitly opt in after reviewing the
-   description in onboarding or settings.
-3. Open a local project or workspace.
-4. In onboarding or **Settings -> Models & Providers**, choose one of:
+2. Complete the required privacy choice: **Allow anonymous statistics** or
+   **Continue without statistics**.
+3. Optionally open **Settings -> Account** and sign in through CLODEx.xyz to
+   load the keys and models available to that account.
+4. Open a local project or workspace.
+5. Alternatively, in onboarding or **Settings -> Models & Providers**, choose:
    - a BYOK API key for a supported provider such as OpenAI, Anthropic, or
      Google;
    - a custom OpenAI-compatible endpoint; or
-   - local Ollama, normally at `http://localhost:11434`.
-5. Test the connection, select a discovered model, and start a small task.
+   - local Ollama, normally at http://localhost:11434.
+6. Test the connection, select a discovered model, and start a small task.
 
 Provider usage and billing remain between you and the provider. Never include
 API keys, tokens, private source, or unredacted logs in an issue or tester
