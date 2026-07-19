@@ -28,7 +28,6 @@ import type {
   StageTrustedMcpApprovalInput,
 } from '@/services/mcp/approval-broker';
 
-const DEFAULT_CLODEX_MCP_GATEWAY_URL = 'https://clodex.xyz/tools-gateway/mcp';
 const READ_ONLY_TOOL_ALLOWLIST = new Set(['tcp_check']);
 const APPROVAL_REQUIRED_TOOL_ALLOWLIST = new Set(['ssh_exec']);
 const TOOL_LIST_CACHE_TTL_MS = 5 * 60_000;
@@ -129,11 +128,12 @@ export class ClodexMcpService {
   constructor(deps: ClodexMcpServiceDeps) {
     this.authService = deps.authService;
     this.logger = deps.logger;
-    this.gatewayUrl = requireSafeGatewayUrl(
-      deps.gatewayUrl?.trim() ||
-        process.env.CLODEX_MCP_GATEWAY_URL ||
-        DEFAULT_CLODEX_MCP_GATEWAY_URL,
-    );
+    const gatewayUrl =
+      deps.gatewayUrl?.trim() || process.env.CLODEX_MCP_GATEWAY_URL?.trim();
+    if (!gatewayUrl) {
+      throw new Error('Clodex MCP Gateway URL must be configured explicitly');
+    }
+    this.gatewayUrl = requireSafeGatewayUrl(gatewayUrl);
     this.isEnabled = deps.isEnabled ?? (() => true);
     this.recordPendingApproval = deps.recordPendingApproval;
     this.recordPendingApprovalAtEpoch = deps.recordPendingApprovalAtEpoch;

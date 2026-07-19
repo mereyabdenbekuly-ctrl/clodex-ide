@@ -43,8 +43,8 @@ export function Footer() {
             </Link>
             <p className="mt-4 max-w-md text-muted-foreground text-sm leading-6">
               {locale === 'ru'
-                ? 'Open-source Agentic IDE для полного цикла разработки — локально, на удалённых машинах и в управляемом cloud-контуре.'
-                : 'An open-source Agentic IDE for the complete development loop — local, remote, and controlled cloud execution.'}
+                ? 'Бесплатный open-source Technical Preview: постоянные задачи, код, Git, терминал, браузер, модели и MCP в одном локальном workspace.'
+                : 'A free, open-source Technical Preview for durable tasks, code, Git, terminal, browser, models, and MCP in one local workspace.'}
             </p>
           </div>
 
@@ -56,10 +56,10 @@ export function Footer() {
               {locale === 'ru' ? 'Возможности' : 'Capabilities'}
             </Link>
             <Link
-              href={`${homePrefix}#remote`}
+              href={`${homePrefix}#platform`}
               className="text-muted-foreground transition-colors hover:text-foreground"
             >
-              {locale === 'ru' ? 'Remote' : 'Remote'}
+              {locale === 'ru' ? 'Платформа' : 'Platform'}
             </Link>
             <Link
               href={`${homePrefix}#builder`}
@@ -74,10 +74,10 @@ export function Footer() {
               {locale === 'ru' ? 'Поддержать' : 'Support'}
             </Link>
             <Link
-              href="/download"
+              href={`/download?lang=${locale}`}
               className="text-muted-foreground transition-colors hover:text-foreground"
             >
-              {locale === 'ru' ? 'Скачать' : 'Download'}
+              {locale === 'ru' ? 'Статус сборки' : 'Build status'}
             </Link>
             <Link
               href="/privacy"

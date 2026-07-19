@@ -2,16 +2,19 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
 export const metadata: Metadata = {
-  title: 'Download Clodex · Agentic IDE',
-  description: 'Download clodex for macOS, Windows, and Linux.',
+  title: 'CLODEx Free Community Build Status',
+  description:
+    'Track verification and publication of the next CLODEx Free Community build for macOS, Windows, and Linux.',
   openGraph: {
-    title: 'Download Clodex · Agentic IDE',
-    description: 'Download clodex for macOS, Windows, and Linux.',
+    title: 'CLODEx Free Community Build Status',
+    description:
+      'Track verification and publication of the next CLODEx Free Community build for macOS, Windows, and Linux.',
     type: 'website',
   },
   twitter: {
-    title: 'Download Clodex · Agentic IDE',
-    description: 'Download clodex for macOS, Windows, and Linux.',
+    title: 'CLODEx Free Community Build Status',
+    description:
+      'Track verification and publication of the next CLODEx Free Community build for macOS, Windows, and Linux.',
     creator: '@CLODEx_lab',
   },
   category: 'technology',

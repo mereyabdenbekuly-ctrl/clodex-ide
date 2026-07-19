@@ -8,19 +8,25 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { useSession } from '@/lib/auth-client';
-import { DownloadUnavailableButton } from '@/components/download-unavailable-button';
 
 type Locale = 'ru' | 'en';
 
 function NavDownloadButton({ locale }: { locale: Locale }) {
-  return <DownloadUnavailableButton locale={locale} size="sm" />;
+  return (
+    <Link
+      href={`/download?lang=${locale}`}
+      className={buttonVariants({ size: 'sm', variant: 'primary' })}
+    >
+      {locale === 'ru' ? 'Статус сборки' : 'Build status'}
+    </Link>
+  );
 }
 
 function NavbarAuthLink({ locale }: { locale: Locale }) {
   const { data: session } = useSession();
   return (
     <Link
-      href="https://console.clodex.io"
+      href={session?.user ? 'https://clodex.xyz/' : 'https://clodex.xyz/login'}
       className={cn(
         buttonVariants({ size: 'sm', variant: 'ghost' }),
         'hidden sm:inline-flex',

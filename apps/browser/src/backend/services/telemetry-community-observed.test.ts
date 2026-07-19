@@ -91,7 +91,7 @@ function makeHarness(
 describe('TelemetryService community-observed privacy contract', () => {
   beforeEach(() => {
     process.env.POSTHOG_API_KEY = TEST_PROJECT_KEY;
-    process.env.POSTHOG_HOST = 'https://eu.i.posthog.com';
+    process.env.POSTHOG_HOST = 'https://us.i.posthog.com';
     posthogConstructor.mockClear();
     for (const mock of Object.values(posthogClient)) mock.mockClear();
     withTracingMock.mockClear();

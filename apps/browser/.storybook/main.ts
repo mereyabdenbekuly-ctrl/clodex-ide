@@ -77,9 +77,10 @@ const config: StorybookConfig = {
       },
       define: {
         'process.env.POSTHOG_API_KEY': JSON.stringify(undefined),
-        'process.env.POSTHOG_HOST': JSON.stringify('https://eu.i.posthog.com'),
+        'process.env.POSTHOG_HOST': JSON.stringify('https://us.i.posthog.com'),
         // Mock build constants for Storybook (normally injected from build-constants.ts)
         __APP_RELEASE_CHANNEL__: JSON.stringify('dev'),
+        __APP_MANAGED_SERVICES_ENABLED__: JSON.stringify(false),
         __APP_BASE_NAME__: JSON.stringify('clodex-dev'),
         __APP_NAME__: JSON.stringify('Clodex Agentic IDE (Storybook)'),
         __APP_BUNDLE_ID__: JSON.stringify('xyz.clodex.agentic-ide.dev'),

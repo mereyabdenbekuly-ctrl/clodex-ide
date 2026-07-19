@@ -26,8 +26,13 @@ const forgeSource = readFileSync(
   path.join(repositoryRoot, 'apps', 'browser', 'forge.config.mts'),
   'utf8',
 );
-const backendViteSource = readFileSync(
-  path.join(repositoryRoot, 'apps', 'browser', 'vite.backend.config.ts'),
+const communityFreePolicySource = readFileSync(
+  path.join(
+    repositoryRoot,
+    'apps',
+    'browser',
+    'community-free-build-policy.mjs',
+  ),
   'utf8',
 );
 
@@ -147,10 +152,26 @@ test('observed community workflow builds auth-enabled isolated unsigned artifact
   assert.match(validation, /release:validate:macos/u);
   assert.match(validation, /release:validate:artifacts/u);
 
-  const assembler = step(
+  const packagedBoundary = step(
+    'build',
+    'Enforce packaged Community Free byte boundary',
+  );
+  assert.match(packagedBoundary.run, /community:packaged-boundary:validate/u);
+  assert.match(packagedBoundary.run, /--distribution-mode=community-observed/u);
+  assert.match(
+    packagedBoundary.run,
+    /--validation-manifest=\$validation_manifest/u,
+  );
+  assert.match(
+    packagedBoundary.run,
+    /out\/community-observed\/validation\/\$\{COMMUNITY_PLATFORM\}-\$\{COMMUNITY_ARCH\}-\$\{COMMUNITY_VERSION\}\.json/u,
+  );
+
+  const assemblerStep = step(
     'build',
     'Assemble bounded observed community bundle',
-  ).run;
+  );
+  const assembler = assemblerStep.run;
   assert.match(assembler, /out\/community-observed\/validation/u);
   assert.match(assembler, /assemble-community-observed-bundle\.mjs/u);
 
@@ -158,6 +179,16 @@ test('observed community workflow builds auth-enabled isolated unsigned artifact
   assert.match(upload.with.name, /^clodex-community-observed-/u);
   assert.equal(upload.with['retention-days'], 14);
   assert.equal(upload.with['if-no-files-found'], 'error');
+  const buildSteps = workflow.jobs.build.steps;
+  assert.ok(
+    buildSteps.indexOf(
+      step('build', 'Validate exact observed community desktop artifacts'),
+    ) < buildSteps.indexOf(packagedBoundary),
+  );
+  assert.ok(
+    buildSteps.indexOf(packagedBoundary) < buildSteps.indexOf(assemblerStep),
+  );
+  assert.ok(buildSteps.indexOf(assemblerStep) < buildSteps.indexOf(upload));
 
   for (const action of visit(workflow)
     .filter((entry) => entry.key === 'uses')
@@ -175,12 +206,12 @@ test('desktop protocol packaging remains gated by distribution policy', () => {
 
 test('observed backend hard-enables auth with a non-overridable client identity', () => {
   assert.match(
-    backendViteSource,
-    /CLODEX_IDE_CLIENT_ID:\s*buildConstants\.__APP_DISTRIBUTION_MODE__\s*===\s*'community-observed'\s*\?\s*'clodex-community-observed'/u,
+    communityFreePolicySource,
+    /CLODEX_IDE_CLIENT_ID:\s*observed\s*\?\s*'clodex-community-observed'/u,
   );
   assert.match(
-    backendViteSource,
-    /CLODEX_AUTH_ENABLED:\s*buildConstants\.__APP_DISTRIBUTION_MODE__\s*===\s*'community-observed'\s*\?\s*'true'/u,
+    communityFreePolicySource,
+    /CLODEX_AUTH_ENABLED:\s*observed\s*\?\s*'true'/u,
   );
 });
 

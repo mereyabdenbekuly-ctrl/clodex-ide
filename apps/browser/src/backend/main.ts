@@ -468,13 +468,17 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     delegate: localExecutionTarget,
     getHandler: () => automaticSwarmStepHandler,
   });
-  const cloudTaskKillSwitchActive = isCloudTaskKillSwitchActive(
-    process.env.CLODEX_CLOUD_TASKS_KILL_SWITCH,
-  );
+  const cloudTaskKillSwitchActive =
+    !__APP_MANAGED_SERVICES_ENABLED__ ||
+    isCloudTaskKillSwitchActive(process.env.CLODEX_CLOUD_TASKS_KILL_SWITCH);
   const cloudTaskRuntime: CloudTaskRuntimeResult = createCloudTaskRuntime({
     logger,
-    baseUrl: process.env.CLODEX_CLOUD_TASKS_URL,
-    residency: process.env.CLODEX_CLOUD_TASKS_RESIDENCY,
+    baseUrl: __APP_MANAGED_SERVICES_ENABLED__
+      ? process.env.CLODEX_CLOUD_TASKS_URL
+      : undefined,
+    residency: __APP_MANAGED_SERVICES_ENABLED__
+      ? process.env.CLODEX_CLOUD_TASKS_RESIDENCY
+      : undefined,
     killSwitchActive: cloudTaskKillSwitchActive,
     artifactRootDirectory: path.join(
       app.getPath('userData'),
@@ -490,6 +494,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     ),
     getAccountAccessToken: () => authService.accessToken,
     isFeatureEnabled: () =>
+      __APP_MANAGED_SERVICES_ENABLED__ &&
       isClodexCloudEnabled() &&
       resolveFeatureGate(
         'cloud-tasks',
@@ -541,7 +546,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     await cloudTaskRuntime.artifactStore.initialize().catch((error) => {
       logger.warn('[CloudTasks] Artifact startup cleanup failed', error);
     });
-    if (isClodexCloudEnabled()) {
+    if (__APP_MANAGED_SERVICES_ENABLED__ && isClodexCloudEnabled()) {
       void cloudTaskRuntime.recovery.reconcile('startup').catch((error) => {
         logger.warn('[CloudTasks] Startup reconciliation failed', error);
       });
@@ -554,22 +559,24 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
         audit: cloudTaskRuntime.audit,
       })
     : null;
-  const cloudTaskGateAtStartup = resolveFeatureGate(
-    'cloud-tasks',
-    preferencesService.get().featureGates.overrides,
-    __APP_RELEASE_CHANNEL__,
-  );
-  telemetryService.capture('cloud-task-rollout-observed', {
-    rollout_stage: 'dogfood',
-    gate_enabled: cloudTaskGateAtStartup.enabled,
-    gate_source: cloudTaskGateAtStartup.source,
-    control_plane_configured: Boolean(
-      process.env.CLODEX_CLOUD_TASKS_URL?.trim(),
-    ),
-    adapter_available: Boolean(cloudTaskRuntime),
-    kill_switch_active: cloudTaskKillSwitchActive,
-    residency: cloudTaskRuntime?.residency,
-  });
+  if (__APP_MANAGED_SERVICES_ENABLED__) {
+    const cloudTaskGateAtStartup = resolveFeatureGate(
+      'cloud-tasks',
+      preferencesService.get().featureGates.overrides,
+      __APP_RELEASE_CHANNEL__,
+    );
+    telemetryService.capture('cloud-task-rollout-observed', {
+      rollout_stage: 'dogfood',
+      gate_enabled: cloudTaskGateAtStartup.enabled,
+      gate_source: cloudTaskGateAtStartup.source,
+      control_plane_configured: Boolean(
+        process.env.CLODEX_CLOUD_TASKS_URL?.trim(),
+      ),
+      adapter_available: Boolean(cloudTaskRuntime),
+      kill_switch_active: cloudTaskKillSwitchActive,
+      residency: cloudTaskRuntime?.residency,
+    });
+  }
   const executionTargetRouter = createExecutionTargetRouter({
     // Keep the execution-target router outermost so every admitted Swarm turn
     // receives the same task record, audit events and terminal classification
@@ -579,6 +586,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     snapshotPackager: cloudTaskRuntime?.snapshotPackager,
     isCloudEnabled: () =>
       hasCompletedRequiredFirstRunChoice() &&
+      __APP_MANAGED_SERVICES_ENABLED__ &&
       isClodexCloudEnabled() &&
       resolveFeatureGate(
         'cloud-tasks',
@@ -636,6 +644,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     karton: uiKarton,
     logger,
     isFeatureEnabled: () =>
+      __APP_MANAGED_SERVICES_ENABLED__ &&
       isClodexCloudEnabled() &&
       resolveFeatureGate(
         'cloud-tasks',
@@ -910,7 +919,9 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     artifactBridge: artifactBridgeService,
     logger,
   }).start();
-  const sessionSharingBaseUrl = process.env.CLODEX_SESSION_SHARING_URL?.trim();
+  const sessionSharingBaseUrl = __APP_MANAGED_SERVICES_ENABLED__
+    ? process.env.CLODEX_SESSION_SHARING_URL?.trim()
+    : undefined;
   const sessionSharingAdapter: SessionSharingAdapter | undefined =
     sessionSharingBaseUrl &&
     new URL(sessionSharingBaseUrl).protocol === 'https:'
@@ -995,6 +1006,7 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
         __APP_RELEASE_CHANNEL__,
       ).enabled,
     isCloudAvailable: () =>
+      __APP_MANAGED_SERVICES_ENABLED__ &&
       isClodexCloudEnabled() &&
       Boolean(cloudTaskRuntime) &&
       resolveFeatureGate(

@@ -1732,11 +1732,26 @@ test('website exposes no legacy preview.1 download URL', () => {
   for (const file of [
     'apps/website/src/app/download/page.tsx',
     'apps/website/src/app/(home)/_components/download-buttons.tsx',
+    'apps/website/src/lib/community-release.ts',
   ]) {
     const source = readFileSync(new URL(file, repositoryRoot), 'utf8');
     assert.doesNotMatch(source, /preview\.1|preview\.1-windows-x64/i);
-    assert.match(source, /temporarily unavailable/i);
   }
+
+  const manifest = readFileSync(
+    new URL('apps/website/src/lib/community-release.ts', repositoryRoot),
+    'utf8',
+  );
+  assert.match(manifest, /status:\s*'pending-verification'/u);
+  assert.match(manifest, /downloads:\s*\[\]/u);
+  assert.doesNotMatch(manifest, /releases\/download/u);
+
+  const downloadPage = readFileSync(
+    new URL('apps/website/src/app/download/page.tsx', repositoryRoot),
+    'utf8',
+  );
+  assert.match(downloadPage, /COMMUNITY_RELEASE\.status === 'verified'/u);
+  assert.match(downloadPage, /COMMUNITY_RELEASE\.downloads\.length > 0/u);
 });
 
 test('Squirrel packaging binds public and internal preview versions explicitly', () => {

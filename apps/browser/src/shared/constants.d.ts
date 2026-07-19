@@ -20,6 +20,7 @@ declare const __APP_REGISTER_DEFAULT_PROTOCOLS__: boolean;
 declare const __APP_TELEMETRY_ENABLED__: boolean;
 declare const __APP_RENDERER_TELEMETRY_ENABLED__: boolean;
 declare const __APP_EXCEPTION_TELEMETRY_ENABLED__: boolean;
+declare const __APP_MANAGED_SERVICES_ENABLED__: boolean;
 declare const __APP_MODEL_TRACING_ENABLED__: boolean;
 declare const __APP_TELEMETRY_MODE__:
   | 'standard'

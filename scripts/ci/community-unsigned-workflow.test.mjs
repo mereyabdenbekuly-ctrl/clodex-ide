@@ -293,7 +293,23 @@ test('community unsigned workflow builds and validates exactly four isolated tar
   assert.match(validation, /--skip-make/u);
   assert.match(validation, /--ui-launch/u);
 
-  const assembler = step('build', 'Assemble bounded community bundle').run;
+  const packagedBoundary = step(
+    'build',
+    'Enforce packaged Community Free byte boundary',
+  );
+  assert.match(packagedBoundary.run, /community:packaged-boundary:validate/u);
+  assert.match(packagedBoundary.run, /--distribution-mode=community-unsigned/u);
+  assert.match(
+    packagedBoundary.run,
+    /--validation-manifest=\$validation_manifest/u,
+  );
+  assert.match(
+    packagedBoundary.run,
+    /out\/community-unsigned\/validation\/\$\{COMMUNITY_PLATFORM\}-\$\{COMMUNITY_ARCH\}-\$\{COMMUNITY_VERSION\}\.json/u,
+  );
+
+  const assemblerStep = step('build', 'Assemble bounded community bundle');
+  const assembler = assemblerStep.run;
   assert.match(assembler, /assemble-community-unsigned-bundle\.mjs/u);
   assert.match(
     assembler,
@@ -302,6 +318,15 @@ test('community unsigned workflow builds and validates exactly four isolated tar
   assert.match(assembler, /--source-commit=\$COMMUNITY_SOURCE_SHA/u);
   assert.match(assembler, /--platform=\$COMMUNITY_PLATFORM/u);
   assert.match(assembler, /--arch=\$COMMUNITY_ARCH/u);
+  const buildSteps = workflow.jobs.build.steps;
+  assert.ok(
+    buildSteps.indexOf(
+      step('build', 'Validate exact community desktop artifacts'),
+    ) < buildSteps.indexOf(packagedBoundary),
+  );
+  assert.ok(
+    buildSteps.indexOf(packagedBoundary) < buildSteps.indexOf(assemblerStep),
+  );
 });
 
 test('hash-pinned dependency license evidence is byte-preserved on Windows', () => {

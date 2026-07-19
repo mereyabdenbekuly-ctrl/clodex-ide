@@ -2885,7 +2885,7 @@ export const defaultState: KartonContract['state'] = {
         __APP_RENDERER_TELEMETRY_ENABLED__
           ? import.meta.env.VITE_POSTHOG_API_KEY
           : undefined,
-      host: import.meta.env.VITE_POSTHOG_HOST ?? 'https://eu.i.posthog.com',
+      host: import.meta.env.VITE_POSTHOG_HOST ?? 'https://us.i.posthog.com',
     },
   },
   agents: { instances: {} },

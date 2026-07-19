@@ -135,6 +135,9 @@ jobs:
       - name: Require strict desktop attribution inputs
         run: pnpm --dir apps/browser release:attribution:check -- --channel=release
 
+      - name: Validate Community Free product boundary
+        run: pnpm check:community-free-boundary
+
   build:
     name: Build ${{ matrix.platform }} ${{ matrix.arch }} community artifact
     needs: [preflight, source-validation]
@@ -165,6 +168,7 @@ jobs:
       APP_VERSION_OVERRIDE: ${{ needs.preflight.outputs.version }}
       BUILD_MODE: production
       CLODEX_AUTH_ENABLED: "false"
+      CLODEX_CLOUD_TASKS_KILL_SWITCH: "true"
       CLODEX_DISTRIBUTION_MODE: community-unsigned
       NODE_OPTIONS: "--max-old-space-size=8192"
       RELEASE_CHANNEL: release
@@ -279,6 +283,21 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Enforce packaged Community Free byte boundary
+        shell: bash
+        env:
+          COMMUNITY_ARCH: ${{ matrix.arch }}
+          COMMUNITY_PLATFORM: ${{ matrix.platform }}
+          COMMUNITY_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          validation_manifest="apps/browser/out/community-unsigned/validation/${COMMUNITY_PLATFORM}-${COMMUNITY_ARCH}-${COMMUNITY_VERSION}.json"
+          pnpm --dir apps/browser community:packaged-boundary:validate -- \
+            --distribution-mode=community-unsigned \
+            "--platform=$COMMUNITY_PLATFORM" \
+            "--arch=$COMMUNITY_ARCH" \
+            "--validation-manifest=$validation_manifest"
 
       - name: Assemble bounded community bundle
         shell: bash

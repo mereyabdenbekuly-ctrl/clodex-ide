@@ -1,94 +1,86 @@
-# Clodex
+# CLODEx
 
-> Clodex is an open-source Agentic IDE for the complete development loop.
-> It combines persistent tasks, code, terminals, browser workflows, GitHub,
-> MCP, remote machines, agents, automations, and human review.
+> CLODEx is an open-source, local-first Agentic IDE for durable engineering
+> tasks. The Free Community source is public; publication of the next verified
+> cross-platform Technical Preview is pending.
 
-## Product
+## Free Community product
 
-Clodex is built around durable engineering tasks rather than isolated prompts.
-The task keeps its project context, workspaces, worktrees, shell sessions,
-browser state, Pending Edits, agents, artifacts, and review workflow while work
-moves from request to verified result.
+The Free Community build keeps the core engineering workflow in one desktop
+workspace:
 
-### Core capabilities
+- persistent tasks, searchable history, projects, and restart recovery;
+- multiple local workspaces and Git worktrees;
+- file editing, Pending Edits, line-level diffs, Git, and pull-request review;
+- local terminal sessions, local ports, embedded browser workflows, console
+  inspection, screenshots, and visual verification;
+- CLODEx account access, bring-your-own provider keys, custom
+  OpenAI-compatible endpoints, model selection, and local Ollama;
+- user-configured MCP servers using stdio, HTTP/SSE, and OAuth;
+- system-browser CLODEx.xyz sign-in bound with state and PKCE S256;
+- English and Russian beta interfaces;
+- an explicit first-launch allow-or-decline choice for optional product
+  statistics.
 
-- Persistent Tasks and Projects with search, grouping, resume, and worktrees.
-- Multi-file editing, terminal sessions, local services, browser/CDP, logs, and
-  visual verification.
-- Pending Edits and line-by-line diff review with accept or reject controls.
-- GitHub pull-request inspection, inline review, policy gates, and protected
-  merge.
-- Swarm orchestration and collaboration modes for scoped parallel work.
-- Encrypted SSH profiles, connection testing, persistent sessions, remote
-  execution, remote paths, and terminal handoff.
-- An isolated MCP runtime for stdio, Streamable HTTP, SSE, OAuth, tools,
-  resources, prompts, elicitation, timeouts, cancellation, and redaction.
-- Skills, signed plugins, publisher identities, pinned private marketplaces,
-  staged updates, rollback, integrity validation, and quarantine.
-- Generated Apps owned by their source task with preview, regeneration, and an
-  experimental capability bridge.
-- Agent OS features including memory, Guardian, Quick Task, dictation, desktop
-  automation preview, remote control, and protected task artifacts.
+Direct downloads are paused until a new build from canonical main passes the
+Free/managed boundary and packaged-byte verification. The next published
+installers must include checksums, SBOMs, validation manifests, and a release
+evidence archive. macOS preview packages are not trust-signed or notarized.
 
-## Remote and hybrid execution
+SSH runners and remote workspaces are Free-eligible Preview surfaces, not part
+of the baseline availability promise. Each build's release notes determine
+whether they are included and accepted for testing. Remote capabilities that
+depend on CLODEx-operated hosted infrastructure are not included in Free.
 
-Clodex can keep one task while work moves between the local machine, SSH
-environments, and controlled cloud execution targets. Cloud Tasks are a preview
-and use bounded snapshots, short-lived credentials, event streams, quotas, and
-verifiable artifacts. Session Teleport and expiring read-only share links are
-experimental.
+## Free and separately operated services
 
-## Clodex Labs
+The Free build does not include an entitlement to project-operated managed or
+organization services. Any hosted service, external model provider, remote MCP
+server, or other third-party integration has separate availability, terms, and
+charges. The Free build must remain useful with local tools, BYOK, compatible
+endpoints, Ollama, and user-configured MCP without a managed service.
 
-- Scheduled Tasks and Wake Scheduler: one-time, interval, and cron schedules,
-  wake recovery, missed-run policies, retries, capability grants, and
-  local/cloud targets.
-- Generated App Capability Bridge: explicitly granted read-only MCP calls,
-  bounded model questions, automation launch, rate limits, and output limits.
-- Executable Extensions: integrity-bound stdio MCP runtimes distributed through
-  signed plugins.
-- Spaces: encrypted persistent containers for workspaces, links, and
-  instructions.
-- Session Continuity: cloud readiness, session teleport, expiring share links,
-  and revocation.
+Source-tree experiments and feature-gated surfaces are not part of the current
+Free release promise. Their presence in source does not mean that a hosted
+service, production adapter, credential, or paid entitlement is bundled with
+the Community build.
 
-## Security
+## Security and privacy
 
-- Agent execution, MCP tools, and executable extensions use separate process and
-  policy boundaries.
-- Credentials use OS-backed encryption and are referenced by ID.
-- Sensitive attachments, shell logs, memory, Chronicle, diff history, and
-  caches can use AES-256-GCM protected storage.
-- Guardian and human approvals gate high-impact shell, browser, network, MCP,
-  sandbox, desktop, and remote actions.
-- Plugin trust combines catalog signing, publisher signing, package and tree
-  integrity, source provenance, rollback, and quarantine.
-- Audit events are designed to avoid prompts, code, audio, screenshots, and
-  secrets.
+- Repositories and task state are local by default.
+- Network access is used only by selected features and services such as model
+  providers, account access, remote MCP, browser navigation, or opted-in
+  statistics.
+- Account and provider credentials use the application's protected storage
+  path.
+- Permission prompts, Pending Edits, diffs, and Git review surfaces let users
+  inspect sensitive actions and changes.
+- When optional product statistics are allowed, events may include a
+  pseudonymous installation ID, counters, bounded timing, enum values, and
+  app/platform metadata. They exclude prompts, messages, source code, commands,
+  paths, URLs, credentials, tool arguments, error text, feedback text, session
+  recording, and AI tracing.
 
 ## Models
 
-Clodex supports cloud providers, BYOK, existing subscriptions,
-OpenAI-compatible endpoints, private infrastructure, and local or self-hosted
-inference inside one Agent OS.
+The Free build supports CLODEx account access, BYOK, custom OpenAI-compatible
+endpoints, and local Ollama. Provider availability, terms, and charges remain
+between the user and the selected provider.
 
-## In development
+## Build and download status
 
-- Task forks and lineage.
-- Real archive and restore.
-- Goals, token budgets, and time budgets.
-- Exact usage and provider rate-limit dashboards.
-- Unified permission profiles.
-- A task background-process manager.
-- Live steering of an active turn.
-- Configuration and session import from other agent clients.
-- A stronger trusted-hooks model.
-- Managed team plugin distribution.
+- Current verified Free build: pending
+- Planned platforms: macOS Apple Silicon, macOS Intel, Windows x64,
+  Debian/Ubuntu x64, and Fedora/RHEL x64
+- Status page: https://ide.clodex.xyz/download
+- Legacy note: Community Observed 8 predates the enforced Free/managed boundary
+  and is not verified against the current Free Product Contract. It is a
+  historical tester artifact, not the current recommended Free build.
 
 ## Pages
 
 - Homepage: https://ide.clodex.xyz/
 - Download: https://ide.clodex.xyz/download
-- Documentation: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/tree/main/docs
+- Source and documentation:
+  https://github.com/mereyabdenbekuly-ctrl/clodex-ide
 - Contact: support@clodex.xyz

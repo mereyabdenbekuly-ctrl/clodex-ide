@@ -18,6 +18,7 @@ export interface AppDistributionPolicy {
     | 'community-unsigned'
     | 'community-observed';
   exceptionTelemetryEnabled: boolean;
+  managedServicesEnabled: boolean;
   modelTracingEnabled: boolean;
   registerDefaultProtocols: boolean;
   rendererTelemetryEnabled: boolean;
@@ -92,9 +93,15 @@ export function resolveAppDistributionMode(
 
 export function resolveAppDistributionPolicy(options: {
   distributionMode: AppDistributionMode;
+  managedServicesEnabled?: boolean;
   releaseChannel: AppReleaseChannel;
 }): AppDistributionPolicy {
   if (isCommunityDistributionMode(options.distributionMode)) {
+    if (options.managedServicesEnabled) {
+      throw new Error(
+        `${options.distributionMode} distribution cannot enable managed services`,
+      );
+    }
     if (options.releaseChannel !== 'release') {
       throw new Error(
         `${options.distributionMode} distribution requires RELEASE_CHANNEL=release`,
@@ -106,6 +113,7 @@ export function resolveAppDistributionPolicy(options: {
         autoUpdateEnabled: false,
         buildIdentifier: 'community-observed',
         exceptionTelemetryEnabled: false,
+        managedServicesEnabled: false,
         modelTracingEnabled: false,
         registerDefaultProtocols: false,
         rendererTelemetryEnabled: false,
@@ -119,6 +127,7 @@ export function resolveAppDistributionPolicy(options: {
       autoUpdateEnabled: false,
       buildIdentifier: 'community-unsigned',
       exceptionTelemetryEnabled: false,
+      managedServicesEnabled: false,
       modelTracingEnabled: false,
       registerDefaultProtocols: false,
       rendererTelemetryEnabled: false,
@@ -133,6 +142,7 @@ export function resolveAppDistributionPolicy(options: {
     autoUpdateEnabled: true,
     buildIdentifier: options.releaseChannel,
     exceptionTelemetryEnabled: true,
+    managedServicesEnabled: options.managedServicesEnabled === true,
     modelTracingEnabled: true,
     registerDefaultProtocols: true,
     rendererTelemetryEnabled: true,
