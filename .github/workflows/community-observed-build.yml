@@ -305,7 +305,7 @@ jobs:
           COMMUNITY_VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          validation_manifest="apps/browser/out/community-observed/validation/${COMMUNITY_PLATFORM}-${COMMUNITY_ARCH}-${COMMUNITY_VERSION}.json"
+          validation_manifest="$GITHUB_WORKSPACE/apps/browser/out/community-observed/validation/${COMMUNITY_PLATFORM}-${COMMUNITY_ARCH}-${COMMUNITY_VERSION}.json"
           pnpm --dir apps/browser community:packaged-boundary:validate -- \
             --distribution-mode=community-observed \
             "--platform=$COMMUNITY_PLATFORM" \
@@ -322,7 +322,7 @@ jobs:
           COMMUNITY_VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
-          validation_manifest="apps/browser/out/community-observed/validation/${COMMUNITY_PLATFORM}-${COMMUNITY_ARCH}-${COMMUNITY_VERSION}.json"
+          validation_manifest="$GITHUB_WORKSPACE/apps/browser/out/community-observed/validation/${COMMUNITY_PLATFORM}-${COMMUNITY_ARCH}-${COMMUNITY_VERSION}.json"
           node apps/browser/scripts/assemble-community-observed-bundle.mjs \
             "--manifest=$validation_manifest" \
             "--output=$COMMUNITY_BUNDLE" \

@@ -164,7 +164,7 @@ test('observed community workflow builds auth-enabled isolated unsigned artifact
   );
   assert.match(
     packagedBoundary.run,
-    /out\/community-observed\/validation\/\$\{COMMUNITY_PLATFORM\}-\$\{COMMUNITY_ARCH\}-\$\{COMMUNITY_VERSION\}\.json/u,
+    /validation_manifest="\$GITHUB_WORKSPACE\/apps\/browser\/out\/community-observed\/validation\/\$\{COMMUNITY_PLATFORM\}-\$\{COMMUNITY_ARCH\}-\$\{COMMUNITY_VERSION\}\.json"/u,
   );
 
   const assemblerStep = step(
@@ -172,7 +172,10 @@ test('observed community workflow builds auth-enabled isolated unsigned artifact
     'Assemble bounded observed community bundle',
   );
   const assembler = assemblerStep.run;
-  assert.match(assembler, /out\/community-observed\/validation/u);
+  assert.match(
+    assembler,
+    /validation_manifest="\$GITHUB_WORKSPACE\/apps\/browser\/out\/community-observed\/validation\//u,
+  );
   assert.match(assembler, /assemble-community-observed-bundle\.mjs/u);
 
   const upload = step('build', 'Upload observed community Actions artifact');

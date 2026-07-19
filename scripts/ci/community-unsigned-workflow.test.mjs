@@ -305,7 +305,7 @@ test('community unsigned workflow builds and validates exactly four isolated tar
   );
   assert.match(
     packagedBoundary.run,
-    /out\/community-unsigned\/validation\/\$\{COMMUNITY_PLATFORM\}-\$\{COMMUNITY_ARCH\}-\$\{COMMUNITY_VERSION\}\.json/u,
+    /validation_manifest="\$GITHUB_WORKSPACE\/apps\/browser\/out\/community-unsigned\/validation\/\$\{COMMUNITY_PLATFORM\}-\$\{COMMUNITY_ARCH\}-\$\{COMMUNITY_VERSION\}\.json"/u,
   );
 
   const assemblerStep = step('build', 'Assemble bounded community bundle');
@@ -313,7 +313,7 @@ test('community unsigned workflow builds and validates exactly four isolated tar
   assert.match(assembler, /assemble-community-unsigned-bundle\.mjs/u);
   assert.match(
     assembler,
-    /out\/community-unsigned\/validation\/\$\{COMMUNITY_PLATFORM\}-\$\{COMMUNITY_ARCH\}-\$\{COMMUNITY_VERSION\}\.json/u,
+    /validation_manifest="\$GITHUB_WORKSPACE\/apps\/browser\/out\/community-unsigned\/validation\/\$\{COMMUNITY_PLATFORM\}-\$\{COMMUNITY_ARCH\}-\$\{COMMUNITY_VERSION\}\.json"/u,
   );
   assert.match(assembler, /--source-commit=\$COMMUNITY_SOURCE_SHA/u);
   assert.match(assembler, /--platform=\$COMMUNITY_PLATFORM/u);
