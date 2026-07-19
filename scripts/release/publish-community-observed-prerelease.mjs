@@ -136,6 +136,40 @@ function assertExactReleaseAssets(release, expectedAssets, repository) {
   assert(observed.size === expected.size, 'GitHub Release asset set differs');
 }
 
+function assertReleaseHtmlUrl(value, repository, tag, state) {
+  assert(typeof value === 'string', 'GitHub Release HTML URL is missing');
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    fail('GitHub Release HTML URL is invalid');
+  }
+  assert(
+    parsed.origin === 'https://github.com' &&
+      parsed.username === '' &&
+      parsed.password === '' &&
+      parsed.search === '' &&
+      parsed.hash === '',
+    'GitHub Release HTML URL origin is invalid',
+  );
+  if (state === 'draft') {
+    const prefix = `/${repository}/releases/tag/untagged-`;
+    const suffix = parsed.pathname.startsWith(prefix)
+      ? parsed.pathname.slice(prefix.length)
+      : '';
+    assert(
+      /^[A-Za-z0-9_-]{8,128}$/u.test(suffix),
+      'GitHub draft Release HTML URL is invalid',
+    );
+  } else {
+    assert(
+      parsed.pathname === `/${repository}/releases/tag/${tag}`,
+      'GitHub published Release HTML URL is invalid',
+    );
+  }
+  return value;
+}
+
 function assertReleaseIdentity({
   body,
   expectedAssets,
@@ -151,14 +185,18 @@ function assertReleaseIdentity({
     release?.id === releaseId &&
       release?.url ===
         `${API_ORIGIN}/repos/${repository}/releases/${releaseId}` &&
-      release?.html_url ===
-        `https://github.com/${repository}/releases/tag/${manifest.release.tag}` &&
       release?.tag_name === manifest.release.tag &&
       release?.target_commitish === sourceCommit &&
       release?.name === manifest.release.name &&
       release?.body === body &&
       release?.prerelease === true,
     'GitHub Release identity differs from the validated publication',
+  );
+  assertReleaseHtmlUrl(
+    release.html_url,
+    repository,
+    manifest.release.tag,
+    state,
   );
   if (state === 'draft') {
     assert(
