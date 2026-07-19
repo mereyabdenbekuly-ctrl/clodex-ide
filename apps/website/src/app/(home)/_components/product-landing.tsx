@@ -5,31 +5,26 @@ import {
   ArrowRight,
   Blocks,
   Bot,
-  Box,
   Brain,
   Check,
   CheckCircle2,
   ChevronRight,
-  Clock3,
   Cloud,
   Code2,
   Cpu,
   Eye,
   FileLock2,
-  Files,
   GitFork,
   Github,
   GitPullRequest,
   Globe2,
   Goal,
-  Gauge,
   HardDrive,
   KeyRound,
   Laptop,
   Layers3,
   Link2,
   LockKeyhole,
-  Network,
   Orbit,
   Plug,
   Puzzle,
@@ -37,7 +32,6 @@ import {
   RefreshCcw,
   Server,
   ShieldCheck,
-  SlidersHorizontal,
   Sparkles,
   Terminal,
   TimerReset,
@@ -51,27 +45,15 @@ import { ScrollReveal } from '@/components/landing/scroll-reveal';
 import { DownloadButtons } from './download-buttons';
 import { landingCopy, type LandingLocale } from './landing-copy';
 
-type Status = 'shipped' | 'preview' | 'labs' | 'building';
+type Status = 'shipped' | 'preview' | 'labs' | 'notFree';
 
 const workflowIcons = [Goal, Brain, Code2, Terminal, GitPullRequest];
 const securityIcons = [Eye, ShieldCheck, FileLock2, Blocks, Link2, HardDrive];
-const roadmapIcons = [
-  GitFork,
-  Box,
-  Goal,
-  Gauge,
-  SlidersHorizontal,
-  Terminal,
-  Radio,
-  Files,
-  ShieldCheck,
-  Puzzle,
-];
 const platformIcons = {
   agent: Orbit,
   mcp: Plug,
   plugins: Puzzle,
-  apps: AppWindow,
+  managed: Cloud,
 } as const;
 
 function SectionHeading({
@@ -145,10 +127,10 @@ function StatusBadge({
           (inverse
             ? 'border-violet-300/20 bg-violet-300/10 text-violet-300'
             : 'border-violet-500/20 bg-violet-500/8 text-violet-600 dark:text-violet-400'),
-        status === 'building' &&
+        status === 'notFree' &&
           (inverse
-            ? 'border-amber-300/20 bg-amber-300/10 text-amber-300'
-            : 'border-amber-500/20 bg-amber-500/8 text-amber-600 dark:text-amber-400'),
+            ? 'border-rose-300/20 bg-rose-300/10 text-rose-200'
+            : 'border-rose-500/20 bg-rose-500/8 text-rose-600 dark:text-rose-400'),
       )}
     >
       {label}
@@ -501,8 +483,7 @@ export function RemoteSection({ locale }: { locale: LandingLocale }) {
           <div className="grid gap-3 sm:grid-cols-2">
             {copy.features.map(([title, text], index) => {
               const Icon = icons[index]!;
-              const status: Status =
-                index === 4 ? 'preview' : index === 5 ? 'labs' : 'shipped';
+              const status: Status = index < 4 ? 'preview' : 'notFree';
               return (
                 <ScrollReveal key={title} delay={index * 55}>
                   <article className="h-full rounded-2xl border border-white/10 bg-white/[0.035] p-5">
@@ -589,15 +570,13 @@ export function CapabilitySection({ locale }: { locale: LandingLocale }) {
               <div className="relative mt-auto pt-10">
                 <div className="space-y-3 rounded-2xl border border-white/10 bg-black/35 p-5 font-mono text-xs">
                   <p className="text-white/40">$ pnpm test</p>
-                  <p className="text-emerald-300">✓ 1,365 tests passed</p>
+                  <p className="text-emerald-300">checks completed</p>
                   <p className="text-white/40">$ clodex browser inspect</p>
                   <p className="text-cyan-300">
-                    ✓ UI verified · 0 console errors
+                    browser state ready for review
                   </p>
                   <p className="text-white/40">$ git diff --stat</p>
-                  <p className="text-white/65">
-                    8 files changed · review ready
-                  </p>
+                  <p className="text-white/65">changes ready for review</p>
                 </div>
               </div>
             </article>
@@ -758,21 +737,6 @@ export function PlatformSection({ locale }: { locale: LandingLocale }) {
             );
           })}
         </div>
-        <div className="mt-5 grid gap-5 lg:grid-cols-3">
-          {[
-            ['/product/current/agent-os.png', 'Agent OS'],
-            ['/product/current/mcp-runtime.png', 'MCP Runtime'],
-            ['/product/current/automations.png', 'Automations'],
-          ].map(([src, title], index) => (
-            <ScrollReveal key={title} delay={index * 70}>
-              <ProductScreenshot
-                src={src!}
-                alt={`${title} settings in Clodex`}
-                className="rounded-3xl"
-              />
-            </ScrollReveal>
-          ))}
-        </div>
       </div>
     </section>
   );
@@ -780,7 +744,7 @@ export function PlatformSection({ locale }: { locale: LandingLocale }) {
 
 export function LabsSection({ locale }: { locale: LandingLocale }) {
   const copy = landingCopy[locale].labs;
-  const icons = [Clock3, AppWindow, Cpu, Layers3, Radio];
+  const icons = [Zap, Brain, Bot, Radio, AppWindow];
   return (
     <section className="relative overflow-hidden bg-[#0c0e12] py-24 text-white md:py-36">
       <div className="clodex-labs-glow pointer-events-none absolute inset-0" />
@@ -898,7 +862,9 @@ export function SecuritySection({ locale }: { locale: LandingLocale }) {
                   {copy.description}
                 </p>
                 <a
-                  href="https://github.com/mereyabdenbekuly-ctrl/clodex-ide/security/advisories/new"
+                  href="https://github.com/mereyabdenbekuly-ctrl/clodex-ide/blob/main/docs/developer/security-and-data.md"
+                  target="_blank"
+                  rel="noreferrer"
                   className={cn(
                     buttonVariants({ size: 'lg', variant: 'primary' }),
                     'mt-8',
@@ -1001,52 +967,6 @@ export function ModelsSection({ locale }: { locale: LandingLocale }) {
   );
 }
 
-export function RoadmapSection({ locale }: { locale: LandingLocale }) {
-  const copy = landingCopy[locale].roadmap;
-  return (
-    <section
-      id="roadmap"
-      className="border-border-subtle border-y bg-surface-1/45 py-24 md:py-32"
-    >
-      <div className="mx-auto max-w-7xl px-4">
-        <ScrollReveal>
-          <div className="flex flex-col gap-7 md:flex-row md:items-end md:justify-between">
-            <SectionHeading
-              eyebrow={copy.eyebrow}
-              title={copy.title}
-              description={copy.description}
-            />
-            <span className="shrink-0 rounded-full border border-amber-500/20 bg-amber-500/8 px-3 py-2 font-mono text-[10px] text-amber-600 uppercase tracking-[0.14em] dark:text-amber-400">
-              {copy.notice}
-            </span>
-          </div>
-        </ScrollReveal>
-        <div className="mt-12 grid gap-3 md:grid-cols-2 lg:grid-cols-5">
-          {copy.items.map(([title, text], index) => {
-            const Icon = roadmapIcons[index]!;
-            return (
-              <ScrollReveal key={title} delay={index * 45}>
-                <article className="h-full rounded-2xl border border-border border-dashed bg-background p-6">
-                  <div className="flex items-center justify-between">
-                    <Icon className="size-5 text-primary-foreground" />
-                    <StatusBadge locale={locale} status="building" />
-                  </div>
-                  <h3 className="mt-7 font-medium text-lg tracking-tight">
-                    {title}
-                  </h3>
-                  <p className="mt-3 text-muted-foreground text-sm leading-6">
-                    {text}
-                  </p>
-                </article>
-              </ScrollReveal>
-            );
-          })}
-        </div>
-      </div>
-    </section>
-  );
-}
-
 export function FinalCta({ locale }: { locale: LandingLocale }) {
   const copy = landingCopy[locale].final;
   return (
@@ -1087,14 +1007,14 @@ export function FinalCta({ locale }: { locale: LandingLocale }) {
 
 export function SurfacesSection({ locale }: { locale: LandingLocale }) {
   const copy = landingCopy[locale].surfaces;
-  const icons = [Zap, Workflow, Brain, Radio, Network, AppWindow];
+  const icons = [Workflow, GitFork, Terminal, Zap, Brain, Bot];
   const statuses: Status[] = [
     'shipped',
     'shipped',
     'shipped',
     'preview',
-    'preview',
-    'preview',
+    'labs',
+    'labs',
   ];
 
   return (

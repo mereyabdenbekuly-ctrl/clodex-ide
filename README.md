@@ -8,7 +8,7 @@
 ### One task. One durable engineering workspace.
 
 [![Website](https://img.shields.io/badge/website-ide.clodex.xyz-00d88a?style=flat-square)](https://ide.clodex.xyz)
-[![Community build](https://img.shields.io/badge/community_observed-1.16.0--observed8-00d88a?style=flat-square)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved8)
+[![Free build status](https://img.shields.io/badge/free_build-verification_pending-f59e0b?style=flat-square)](https://ide.clodex.xyz/download)
 [![CI](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/workflows/monorepo-ci.yml/badge.svg?branch=main)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/workflows/monorepo-ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-111827?style=flat-square)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-22.23.1-43853d?style=flat-square)
@@ -19,13 +19,13 @@ work. It keeps code, Git, terminal, browser, models, and MCP tools inside one
 durable desktop workspace, with approval and review surfaces for sensitive
 actions.
 
-It is available today as a cross-platform **Technical Preview** for macOS,
-Windows, and Linux.
+The source is available today. Publication of the next verified cross-platform
+**Technical Preview** build for macOS, Windows, and Linux is pending.
 
 <p align="center">
-  <strong><a href="https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved8">Download the Technical Preview</a></strong>
+  <strong><a href="https://ide.clodex.xyz/download">Free build status</a></strong>
   ·
-  <a href="#what-works-today">See what works today</a>
+  <a href="#free-product-scope">See the Free product scope</a>
   ·
   <a href="#run-from-source">Build from source</a>
   ·
@@ -40,9 +40,11 @@ Windows, and Linux.
 | --- | --- | --- |
 | Keep task history and recover work after restarts instead of rebuilding context from scratch. | Move between files, diffs, Git, terminal, browser, and MCP without leaving the task. | Sign in with CLODEx, bring your own provider key, use a compatible endpoint, or connect local Ollama. |
 
-> **Technical Preview:** Community Observed 8 is a public testing build, not a
-> stable signed release. Its job is to expose real workflows to real testers,
-> collect failures, and turn them into focused fixes.
+> **Release status:** direct downloads are paused until a new artifact built
+> from canonical `main` passes the enforced Free/managed boundary and
+> packaged-byte verification. Community Observed 8 predates that boundary and
+> is a legacy tester artifact, not a build verified against the current
+> [Free Product Contract](./docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md).
 
 ## Why CLODEx
 
@@ -65,12 +67,13 @@ The product principle is simple:
 
 > **Model output is input, not authority.**
 
-## What works today
+## Free product scope
 
-The following capabilities are intended for hands-on testing in
-**Community Observed 8**.
+The following capabilities define the open, local Community product scope.
+Release notes remain the source of truth for what is present and accepted in a
+specific packaged artifact. The next verified cross-platform build is pending.
 
-| Area | Available now |
+| Area | Free product scope |
 | --- | --- |
 | **Durable tasks** | Searchable task history, workspace-aware context, cancellation, restart recovery, and continued work across sessions. |
 | **Code and review** | File editing, Pending Edits, line-level diffs, Git operations, worktrees, local commits, and pull-request review workflows. |
@@ -79,7 +82,7 @@ The following capabilities are intended for hands-on testing in
 | **MCP** | User-configured stdio and remote MCP servers, HTTP/SSE transports, OAuth flows, tools, resources, prompts, and approval-aware execution. |
 | **Account access** | Secure CLODEx.xyz sign-in through the system browser with an RFC 8252 loopback callback, state, and PKCE S256. |
 | **Language and privacy** | English and Русский (beta), plus a required first-launch allow-or-decline choice for optional product statistics. |
-| **Distribution** | macOS Apple Silicon, macOS Intel, Windows x64, Debian/Ubuntu x64, and Fedora/RHEL x64 tester packages. |
+| **Distribution** | macOS Apple Silicon, macOS Intel, Windows x64, Debian/Ubuntu x64, and Fedora/RHEL x64 are planned tester targets; direct packages remain unavailable until the new build passes verification. |
 
 ### A typical workflow
 
@@ -109,17 +112,17 @@ Local tool or integration executes
 Diffs, outputs, artifacts, and task history return for review
 ```
 
-The current public preview includes explicit permission, approval, diff, and
-review surfaces. Read [Security and data](./docs/developer/security-and-data.md)
-for the public security model and data-handling contract.
+The public source includes explicit permission, approval, diff, and review
+surfaces. Read [Security and data](./docs/developer/security-and-data.md) for
+the public security model and data-handling contract.
 
 ## Proof, not promises
 
 | Claim | Public evidence |
 | --- | --- |
-| The current tester binaries come from a pinned public source revision | [Source `a63fc5d7`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/a63fc5d79b3c6a3442e6e2a2116e575478cb96ae) · [Actions run 29655325372](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29655325372) |
-| Community Observed 8 contains the secure CLODEx browser sign-in flow | [Implementation PR #58](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/pull/58) · packaged authentication audit in the release evidence |
-| Published installers include checksums, SBOMs, and validation manifests | [Community Observed 8 release](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved8) · `SHA256SUMS.txt` · CycloneDX SBOMs · validation manifests |
+| The Free/managed product boundary is explicit and must fail closed for Community packaging | [Free Product Contract](./docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md) · boundary policy and CI checks in this repository |
+| The current verified Free binary is not yet published | The [build-status page](https://ide.clodex.xyz/download) remains pending until a new build from canonical `main` passes packaged-byte verification |
+| Community Observed 8 is not certified against the current Free contract | Its [legacy release page](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved8) is retained for historical tester context, not as the recommended current download |
 | The repository includes CI, provenance, contribution, and secret-scanning controls | [GitHub Actions](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions) · [DCO](./DCO) · [security policy](./SECURITY.md) |
 | The project documents its upstream lineage and redistribution obligations | [CLODEx vs Stagewise](./CLODEX_VS_UPSTREAM.md) · [Third-party notices](./THIRD-PARTY-NOTICES.md) |
 
@@ -127,36 +130,29 @@ The evidence archive intentionally distinguishes observed evidence from claims
 about external effects. A validation report proves what it actually checked;
 it does not turn a preview into a stable product.
 
-## Download Community Observed 8
+## Free build status
 
-| Platform | Package | Download |
-| --- | --- | --- |
-| macOS Apple Silicon | ARM64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-arm64.dmg) |
-| macOS Intel | x64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-x64.dmg) |
-| Windows | x64 EXE | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-x64-setup.exe) |
-| Debian / Ubuntu | x64 DEB | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed_1.16.0-communityobserved8_amd64.deb) |
-| Fedora / RHEL | x64 RPM | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0.communityobserved8-1.x86_64.rpm) |
+Direct downloads are temporarily unavailable. The next Community artifact
+will be linked only after all of the following are true:
 
-Verify the selected installer with
-[SHA256SUMS.txt](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/SHA256SUMS.txt).
-The
-[evidence archive](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-evidence.zip)
-contains manifests, validation reports, SBOMs, warnings, the byte audit, and the
-packaged authentication audit.
+1. it is built from the exact canonical `main` revision recorded in its release;
+2. the Free/managed boundary checks pass;
+3. the packaged application passes byte-level inspection;
+4. checksums, SBOMs, validation manifests, warnings, and release evidence are
+   published with it.
 
-Community packages intentionally do not have a trusted publisher identity:
-macOS builds are ad-hoc signed and not notarized, Windows builds are not
-Authenticode-signed, and Linux packages do not carry a CLODEx vendor
-signature. Verify the checksum and use only the operating system’s
-per-application review flow. Do not disable Gatekeeper, SmartScreen, Defender,
-or equivalent protections globally.
+Track publication on the [Free build-status page](https://ide.clodex.xyz/download).
+Community Observed 8 remains visible only as a **legacy tester artifact**. It
+predates the enforced boundary and must not be treated as satisfying the
+current Free Product Contract or as the recommended download.
 
-### Install
-
-- **macOS:** open the matching DMG and drag CLODEx to `/Applications`.
-- **Windows:** run the x64 setup after verifying its SHA-256.
-- **Debian / Ubuntu:** `sudo apt install ./<downloaded-file>.deb`
-- **Fedora / RHEL:** `sudo rpm -i <downloaded-file>.rpm`
+Unless a future release explicitly says otherwise, Technical Preview packages
+do not have a trusted publisher identity: macOS packages may be ad-hoc signed
+but are not signed with a trusted Developer ID and are not notarized, Windows
+packages are not Authenticode-signed, and Linux packages do not carry a CLODEx
+vendor signature. Verify the published checksum and use only the operating
+system's per-application review flow. Do not disable Gatekeeper, SmartScreen,
+Defender, or equivalent protections globally.
 
 Report installation or testing problems through
 [GitHub Issues](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/new/choose)
@@ -207,10 +203,11 @@ public issue.
 
 ## Preview scope
 
-The capabilities listed in [What works today](#what-works-today) define the
-public tester scope for Community Observed 8. Source-tree experiments and
-feature-gated surfaces are not part of that promise. The release page and its
-notes are the source of truth for each published build.
+The capabilities listed in [Free product scope](#free-product-scope) define the
+baseline Community product contract. Source-tree experiments and feature-gated
+surfaces are not part of that baseline promise. Release notes are the source of
+truth for each published build. Community Observed 8 predates the enforced
+Free/managed boundary and is not certified against the current contract.
 
 Contributors can start with the [repository map](./docs/developer/repository-map.md)
 and [architecture documentation](./docs/developer/architecture.md).
@@ -278,6 +275,7 @@ truth for published artifacts. Start with
 | Review architecture | [Architecture](./docs/developer/architecture.md) |
 | Review security and data handling | [Security and data](./docs/developer/security-and-data.md) · [Security policy](./SECURITY.md) |
 | Understand the current preview | [Community Observed builds](./docs/community-observed-builds.md) |
+| Understand what the Free build includes | [Community Free Product Contract](./docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md) |
 | Understand project lineage | [CLODEx and Stagewise](./CLODEX_VS_UPSTREAM.md) |
 | Contribute or collaborate | [Contributing](./CONTRIBUTING.md) · [Collaboration paths](./COLLABORATE.md) |
 

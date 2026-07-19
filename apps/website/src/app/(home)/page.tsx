@@ -10,7 +10,6 @@ import {
   PlatformSection,
   ProductProof,
   RemoteSection,
-  RoadmapSection,
   RuntimeSection,
   SecuritySection,
   SurfacesSection,
@@ -22,30 +21,30 @@ import { FounderSection, SupportSection } from './_components/founder-support';
 const softwareAppJsonLd = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
-  name: 'clodex',
+  name: 'CLODEx Community',
   applicationCategory: 'DeveloperApplication',
   operatingSystem: 'macOS, Windows, Linux',
+  isAccessibleForFree: true,
   description:
-    'Open-source Agentic IDE for persistent tasks, remote machines, Agent OS, MCP, review, and governed execution.',
+    'Free open-source local-first Agentic IDE for persistent tasks, code, Git, terminal, browser, models, MCP, and review. The next verified Technical Preview build is pending.',
   url: 'https://ide.clodex.xyz',
-  downloadUrl: 'https://ide.clodex.xyz/download',
-  publisher: { '@type': 'Organization', name: 'clodex' },
+  publisher: { '@type': 'Organization', name: 'CLODEx' },
 };
 
 export const metadata: Metadata = {
-  title: 'Clodex — Agentic IDE for local, remote, and cloud development',
+  title: 'CLODEx Community — Free local-first Agentic IDE',
   description:
-    'One persistent task connects code, terminals, browser, GitHub, MCP, remote machines, agents, automations, and review.',
+    'Free open-source local-first Agentic IDE. The next verified Community Technical Preview build is being prepared.',
   openGraph: {
-    title: 'Give agents the whole task · Clodex Agentic IDE',
+    title: 'One task. Your local engineering workspace. · CLODEx Community',
     description:
-      'A persistent environment for planning, coding, running, verifying, and completing real engineering work.',
+      'A free local-first Agentic IDE; publication of the next verified Community Technical Preview build is pending.',
     type: 'website',
   },
   twitter: {
-    title: 'Give agents the whole task · Clodex Agentic IDE',
+    title: 'One task. Your local engineering workspace. · CLODEx Community',
     description:
-      'A persistent environment for planning, coding, running, verifying, and completing real engineering work.',
+      'A free local-first Agentic IDE; publication of the next verified Community Technical Preview build is pending.',
     creator: '@CLODEx_lab',
   },
   category: 'technology',
@@ -81,7 +80,6 @@ export default async function Home({
         <RuntimeSection locale={locale} />
         <SecuritySection locale={locale} />
         <ModelsSection locale={locale} />
-        <RoadmapSection locale={locale} />
         <FounderSection locale={locale} />
         <SupportSection locale={locale} />
         <HomeFAQ locale={locale} />

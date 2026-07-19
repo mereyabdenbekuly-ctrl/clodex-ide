@@ -9,20 +9,20 @@ import { SystemThemeProvider } from '@/components/theme-switcher';
 const organizationJsonLd = {
   '@context': 'https://schema.org',
   '@type': 'Organization',
-  name: 'clodex',
+  name: 'CLODEx',
   url: 'https://ide.clodex.xyz',
   logo: 'https://ide.clodex.xyz/icon.png',
   description:
-    'The Agentic IDE for the complete development loop — plan, code, run, browse, review, and finish real engineering tasks.',
+    'Free open-source local-first Agentic IDE Technical Preview for durable engineering tasks.',
   sameAs: ['https://x.com/CLODEx_lab'],
 };
 
 const websiteJsonLd = {
   '@context': 'https://schema.org',
   '@type': 'WebSite',
-  name: 'clodex',
+  name: 'CLODEx',
   url: 'https://ide.clodex.xyz',
-  publisher: { '@type': 'Organization', name: 'clodex' },
+  publisher: { '@type': 'Organization', name: 'CLODEx' },
 };
 
 export const metadata: Metadata = {
@@ -32,20 +32,20 @@ export const metadata: Metadata = {
     apple: [{ url: '/apple-touch-icon.png', type: 'image/png' }],
   },
   metadataBase: new URL('https://ide.clodex.xyz'),
-  title: 'Clodex · Agentic IDE for the Complete Development Loop',
+  title: 'CLODEx Community · Free local-first Agentic IDE',
   description:
-    'Clodex gives coding agents the environment, tools, and boundaries to finish real software tasks.',
+    'Free open-source Technical Preview for persistent tasks, files, Git, terminal, browser, models, MCP, and review.',
   openGraph: {
-    title: 'Clodex · Agentic IDE for the Complete Development Loop',
+    title: 'CLODEx Community · Free local-first Agentic IDE',
     description:
-      'Clodex gives coding agents the environment, tools, and boundaries to finish real software tasks.',
+      'Free open-source Technical Preview for persistent tasks, files, Git, terminal, browser, models, MCP, and review.',
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Clodex · Agentic IDE for the Complete Development Loop',
+    title: 'CLODEx Community · Free local-first Agentic IDE',
     description:
-      'Clodex gives coding agents the environment, tools, and boundaries to finish real software tasks.',
+      'Free open-source Technical Preview for persistent tasks, files, Git, terminal, browser, models, MCP, and review.',
   },
 };
 
