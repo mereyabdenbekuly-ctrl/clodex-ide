@@ -1,4 +1,8 @@
 import type { Metadata } from 'next';
+import {
+  COMMUNITY_RELEASE,
+  getReadyCommunityRelease,
+} from '@/lib/community-release';
 import { HomeFAQ } from './_components/home-faq';
 import {
   CapabilitySection,
@@ -18,6 +22,8 @@ import {
 import type { LandingLocale } from './_components/landing-copy';
 import { FounderSection, SupportSection } from './_components/founder-support';
 
+const readyCommunityRelease = getReadyCommunityRelease(COMMUNITY_RELEASE);
+
 const softwareAppJsonLd = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
@@ -25,26 +31,39 @@ const softwareAppJsonLd = {
   applicationCategory: 'DeveloperApplication',
   operatingSystem: 'macOS, Windows, Linux',
   isAccessibleForFree: true,
-  description:
-    'Free open-source local-first Agentic IDE for persistent tasks, code, Git, terminal, browser, models, MCP, and review. The next verified Technical Preview build is pending.',
+  ...(readyCommunityRelease
+    ? {
+        softwareVersion: readyCommunityRelease.version,
+        downloadUrl: readyCommunityRelease.downloads.map(({ href }) => href),
+        releaseNotes: readyCommunityRelease.releaseUrl,
+      }
+    : {}),
+  description: readyCommunityRelease
+    ? 'Free open-source local-first Agentic IDE for persistent tasks, code, Git, terminal, browser, models, MCP, and review. Community Observed 11 is the current verified Technical Preview.'
+    : 'Free open-source local-first Agentic IDE for persistent tasks, code, Git, terminal, browser, models, MCP, and review.',
   url: 'https://ide.clodex.xyz',
   publisher: { '@type': 'Organization', name: 'CLODEx' },
+  offers: {
+    '@type': 'Offer',
+    price: '0',
+    priceCurrency: 'USD',
+  },
 };
 
 export const metadata: Metadata = {
   title: 'CLODEx Community — Free local-first Agentic IDE',
   description:
-    'Free open-source local-first Agentic IDE. The next verified Community Technical Preview build is being prepared.',
+    'Download the verified CLODEx Community Observed 11 Technical Preview for macOS, Windows, and Linux.',
   openGraph: {
     title: 'One task. Your local engineering workspace. · CLODEx Community',
     description:
-      'A free local-first Agentic IDE; publication of the next verified Community Technical Preview build is pending.',
+      'Free local-first Agentic IDE with the verified Community Observed 11 Technical Preview for macOS, Windows, and Linux.',
     type: 'website',
   },
   twitter: {
     title: 'One task. Your local engineering workspace. · CLODEx Community',
     description:
-      'A free local-first Agentic IDE; publication of the next verified Community Technical Preview build is pending.',
+      'Free local-first Agentic IDE with the verified Community Observed 11 Technical Preview for macOS, Windows, and Linux.',
     creator: '@CLODEx_lab',
   },
   category: 'technology',

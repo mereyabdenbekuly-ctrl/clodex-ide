@@ -2,19 +2,19 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
 export const metadata: Metadata = {
-  title: 'CLODEx Free Community Build Status',
+  title: 'Download CLODEx Community Observed 11',
   description:
-    'Track verification and publication of the next CLODEx Free Community build for macOS, Windows, and Linux.',
+    'Download the verified CLODEx Community Observed 11 Technical Preview for macOS, Windows, and Linux, with checksums and release evidence.',
   openGraph: {
-    title: 'CLODEx Free Community Build Status',
+    title: 'Download CLODEx Community Observed 11',
     description:
-      'Track verification and publication of the next CLODEx Free Community build for macOS, Windows, and Linux.',
+      'Verified Free Community Technical Preview for macOS, Windows, and Linux, with SHA-256 checksums and release evidence.',
     type: 'website',
   },
   twitter: {
-    title: 'CLODEx Free Community Build Status',
+    title: 'Download CLODEx Community Observed 11',
     description:
-      'Track verification and publication of the next CLODEx Free Community build for macOS, Windows, and Linux.',
+      'Verified Free Community Technical Preview for macOS, Windows, and Linux, with SHA-256 checksums and release evidence.',
     creator: '@CLODEx_lab',
   },
   category: 'technology',

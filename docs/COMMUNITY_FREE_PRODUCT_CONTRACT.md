@@ -1,15 +1,32 @@
 # CLODEx Community Free Product Contract
 
-**Status:** public Technical Preview contract for Community builds produced
-after the enforced Free/managed boundary lands on the canonical release
-branch.
+**Status:** current public Technical Preview contract for Community builds
+produced after the enforced Free/managed boundary landed on canonical `main`.
 
-This contract is prospective, not retroactive. **Community Observed 8 predates
-the enforced boundary and has not been verified against this contract.** It
-remains a legacy tester artifact. Direct downloads must not be presented as a
-current verified Free build until a new artifact is built from the canonical
-branch, its packaged bytes pass the boundary checks, and its release notes
-record that result.
+This contract is not retroactive. **Community Observed 8 predates the enforced
+boundary and has not been verified against this contract.** It remains a legacy
+tester artifact.
+
+## Current verified artifact
+
+**Community Observed 11** (`1.16.0-communityobserved11`) is the current Free
+Technical Preview verified against the packaging boundary defined below. It was
+built from exact canonical source
+[`a2645d0a948a6b2c782edce7b02f4bfde49718ce`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/a2645d0a948a6b2c782edce7b02f4bfde49718ce)
+by [Actions run `29677260054`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29677260054)
+and published as
+[`v1.16.0-communityobserved11`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved11).
+
+The release's Free/managed checks and packaged-byte audit passed. Its
+`SHA256SUMS.txt` covers five unchanged installers and the evidence archive; the
+evidence contains validation manifests, SBOMs, warnings, internal checksums,
+and the root byte-audit report. This verifies the documented packaging
+boundary, not complete hardening, absence of vulnerabilities, end-to-end
+acceptance of every source-tree feature, or stable-release readiness.
+
+The packages remain unsigned/ad-hoc and non-notarized: macOS is ad-hoc signed
+without a trusted Developer ID or notarization, Windows is not
+Authenticode-signed, and Linux packages have no CLODEx vendor signature.
 
 CLODEx Community is the free, local-first desktop IDE distributed from this
 repository. Its value does not depend on a hosted control plane, and local

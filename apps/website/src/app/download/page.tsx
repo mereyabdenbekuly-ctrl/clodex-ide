@@ -1,18 +1,12 @@
 import { buttonVariants } from '@clodex/stage-ui/components/button';
 import { cn } from '@clodex/stage-ui/lib/utils';
-import {
-  Clock3,
-  Download,
-  ExternalLink,
-  FileCheck2,
-  ShieldAlert,
-} from 'lucide-react';
+import { Clock3, Download, FileCheck2, ShieldAlert } from 'lucide-react';
 import { Suspense } from 'react';
 import { Footer } from '../(home)/_components/footer';
 import { Navbar } from '../(home)/navbar';
 import {
   COMMUNITY_RELEASE,
-  LEGACY_COMMUNITY_RELEASE,
+  getReadyCommunityRelease,
 } from '@/lib/community-release';
 
 export default async function DownloadPage({
@@ -22,67 +16,63 @@ export default async function DownloadPage({
 }) {
   const params = await searchParams;
   const isRussian = params.lang === 'ru';
-  const isDownloadReady =
-    COMMUNITY_RELEASE.status === 'verified' &&
-    COMMUNITY_RELEASE.downloads.length > 0;
+  const readyRelease = getReadyCommunityRelease(COMMUNITY_RELEASE);
   const copy = isRussian
     ? {
         readyBadge: 'Проверенный Free Community Technical Preview',
-        pendingBadge: 'Проверка новой Free-сборки',
-        readyTitle: 'Скачать CLODEx',
-        pendingTitle: 'Новая Free-сборка готовится',
+        unavailableBadge: 'Free Community download недоступен',
+        readyTitle: 'Скачать CLODEx Community Observed 11',
+        unavailableTitle: 'Ссылки на сборку недоступны',
         readyDescription:
-          'Выберите пакет для своей платформы и проверьте его перед установкой.',
-        pendingDescription:
-          'Прямые скачивания временно приостановлены. Следующая Community-сборка будет опубликована только после сборки из актуальной main, проверки packaged bytes и подтверждения границы Free/managed.',
-        pendingVersion: 'Статус релиза · проверка ещё не завершена',
+          'Community Observed 11 прошла проверку Free/managed boundary и packaged bytes. Выберите пакет для своей платформы и проверьте его перед установкой.',
+        unavailableDescription:
+          'Проверенный release manifest неполон, поэтому страница не показывает прямые ссылки. Не используйте случайные или старые installer-файлы.',
+        unavailableVersion: 'Release manifest unavailable',
         download: 'Скачать',
-        pendingCardTitle: 'Ссылки появятся после проверки',
-        pendingCardText:
-          'Мы не выдаём предыдущий артефакт за сборку, соответствующую новому Free Product Contract. После публикации здесь появятся пакеты для macOS, Windows и Linux, SHA-256 и evidence.',
+        unavailableCardTitle: 'Fail-closed download mapping',
+        unavailableCardText:
+          'Прямые installer URL скрыты, пока source commit, build run, tag, checksums, evidence и все пять имён файлов не образуют один полный проверенный mapping.',
         warningTitle: 'Без доверенной подписи и нотариализации',
         warning:
-          'Пока не появится доверенная platform signing identity, macOS-пакеты могут быть ad-hoc signed, но не подписаны trusted Developer ID и не нотарифицированы; Windows-пакеты не подписаны Authenticode. Проверяйте SHA-256 и используйте только штатную проверку отдельного приложения. Не отключайте Gatekeeper, SmartScreen, Defender или аналогичную защиту глобально.',
+          'macOS-пакеты подписаны ad-hoc, но не trusted Developer ID и не нотарифицированы; Windows-пакет не подписан Authenticode; Linux-пакеты не имеют vendor signature CLODEx. Проверяйте SHA-256 и используйте только штатную проверку отдельного приложения. Не отключайте Gatekeeper, SmartScreen, Defender или аналогичную защиту глобально.',
         readyVerifyTitle: 'Проверьте релиз',
-        pendingVerifyTitle: 'Что требуется до публикации',
+        unavailableVerifyTitle: 'Почему ссылки скрыты',
         readyVerify:
-          'Вместе со сборкой публикуются checksums, validation manifests, SBOM, предупреждения и evidence archive.',
-        pendingVerify:
-          'Нужны зелёные boundary-проверки, byte-level аудит готового пакета и привязанные к точному source commit release notes. Только после этого сборка станет текущим Free download.',
+          'SHA256SUMS покрывает пять installer-файлов и evidence archive. В evidence входят validation manifests, SBOM, предупреждения, внутренние checksums и byte-audit report.',
+        unavailableVerify:
+          'CLODEx не публикует частичную или неоднозначную release mapping. Используйте только точные ссылки, SHA-256 и evidence текущего release manifest.',
         release: 'GitHub-релиз',
-        legacyTitle: 'Предыдущий релиз — только legacy',
-        legacyDescription: `${LEGACY_COMMUNITY_RELEASE.name} (${LEGACY_COMMUNITY_RELEASE.version}) создан до enforced Free/managed boundary и не проверен на соответствие текущему Free Product Contract. Он остаётся историческим tester artifact и не является текущей рекомендуемой Free-сборкой.`,
-        legacyLink: 'Открыть legacy release notes',
-        help: 'Следить за статусом можно в',
+        source: 'Исходный код',
+        build: 'GitHub Actions',
+        help: 'Детали релиза и сообщения о проблемах:',
       }
     : {
         readyBadge: 'Verified Free Community Technical Preview',
-        pendingBadge: 'New Free build verification',
-        readyTitle: 'Download CLODEx',
-        pendingTitle: 'A new Free build is being prepared',
+        unavailableBadge: 'Free Community download unavailable',
+        readyTitle: 'Download CLODEx Community Observed 11',
+        unavailableTitle: 'Build links are unavailable',
         readyDescription:
-          'Choose the package that matches your platform and verify it before installation.',
-        pendingDescription:
-          'Direct downloads are temporarily paused. The next Community build will be published only after it is built from current main, its packaged bytes are inspected, and the Free/managed boundary is verified.',
-        pendingVersion: 'Release status · verification not yet complete',
+          'Community Observed 11 passed the Free/managed boundary and packaged-byte gates. Choose the package for your platform and verify it before installation.',
+        unavailableDescription:
+          'The verified release manifest is incomplete, so this page exposes no direct links. Do not use arbitrary or older installer files.',
+        unavailableVersion: 'Release manifest unavailable',
         download: 'Download',
-        pendingCardTitle: 'Links will appear after verification',
-        pendingCardText:
-          'We are not presenting an older artifact as compliant with the new Free Product Contract. Once published, this page will provide macOS, Windows, and Linux packages together with SHA-256 checksums and release evidence.',
+        unavailableCardTitle: 'Fail-closed download mapping',
+        unavailableCardText:
+          'Direct installer URLs remain hidden unless the source commit, build run, tag, checksums, evidence, and all five filenames form one complete verified mapping.',
         warningTitle: 'Not trust-signed or notarized',
         warning:
-          "Until a trusted platform-signing identity is available, macOS packages may be ad-hoc signed but are not signed with a trusted Developer ID and are not notarized; Windows packages are not Authenticode-signed. Verify SHA-256 and use only the operating system's per-application review flow. Do not disable Gatekeeper, SmartScreen, Defender, or equivalent protections globally.",
+          "The macOS packages are ad-hoc signed, not signed with a trusted Developer ID, and not notarized; the Windows package is not Authenticode-signed; the Linux packages have no CLODEx vendor signature. Verify SHA-256 and use only the operating system's per-application review flow. Do not disable Gatekeeper, SmartScreen, Defender, or equivalent protections globally.",
         readyVerifyTitle: 'Verify the release',
-        pendingVerifyTitle: 'What must pass before publication',
+        unavailableVerifyTitle: 'Why the links are hidden',
         readyVerify:
-          'Checksums, validation manifests, SBOMs, warnings, and packaged evidence are published with the build.',
-        pendingVerify:
-          'Boundary checks, a byte-level audit of the packaged application, and release notes pinned to the exact source commit must pass. Only then will the build become the current Free download.',
+          'SHA256SUMS covers five installer files and the evidence archive. The evidence includes validation manifests, SBOMs, warnings, internal checksums, and the byte-audit report.',
+        unavailableVerify:
+          'CLODEx does not expose a partial or ambiguous release mapping. Use only the exact URLs, SHA-256 checksums, and evidence from the current release manifest.',
         release: 'GitHub release',
-        legacyTitle: 'Previous release — legacy only',
-        legacyDescription: `${LEGACY_COMMUNITY_RELEASE.name} (${LEGACY_COMMUNITY_RELEASE.version}) was produced before the enforced Free/managed boundary and has not been verified against the current Free Product Contract. It remains a historical tester artifact, not the current recommended Free build.`,
-        legacyLink: 'Open legacy release notes',
-        help: 'Follow release status in',
+        source: 'Source',
+        build: 'GitHub Actions',
+        help: 'Release details and problem reports:',
       };
 
   return (
@@ -94,22 +84,22 @@ export default async function DownloadPage({
       <main className="mx-auto w-full max-w-6xl px-4 pt-32 pb-20 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-3xl text-center">
           <p className="mb-4 font-medium text-primary-foreground text-sm uppercase tracking-[0.18em]">
-            {isDownloadReady ? copy.readyBadge : copy.pendingBadge}
+            {readyRelease ? copy.readyBadge : copy.unavailableBadge}
           </p>
           <h1 className="font-medium text-4xl tracking-tight sm:text-6xl">
-            {isDownloadReady ? copy.readyTitle : copy.pendingTitle}
+            {readyRelease ? copy.readyTitle : copy.unavailableTitle}
           </h1>
           <p className="mt-6 text-lg text-muted-foreground">
-            {isDownloadReady ? copy.readyDescription : copy.pendingDescription}
+            {readyRelease ? copy.readyDescription : copy.unavailableDescription}
           </p>
           <p className="mt-3 font-mono text-muted-foreground text-sm">
-            {COMMUNITY_RELEASE.version ?? copy.pendingVersion}
+            {readyRelease?.version ?? copy.unavailableVersion}
           </p>
         </div>
 
-        {isDownloadReady ? (
+        {readyRelease ? (
           <section className="mt-12 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {COMMUNITY_RELEASE.downloads.map((download) => (
+            {readyRelease.downloads.map((download) => (
               <article
                 key={download.id}
                 className="rounded-2xl border border-border-subtle bg-surface-1 p-6 shadow-sm"
@@ -140,9 +130,11 @@ export default async function DownloadPage({
             <div className="flex gap-4">
               <Clock3 className="mt-0.5 size-6 shrink-0 text-primary-foreground" />
               <div>
-                <h2 className="font-medium text-xl">{copy.pendingCardTitle}</h2>
+                <h2 className="font-medium text-xl">
+                  {copy.unavailableCardTitle}
+                </h2>
                 <p className="mt-2 max-w-3xl text-muted-foreground">
-                  {copy.pendingCardText}
+                  {copy.unavailableCardText}
                 </p>
               </div>
             </div>
@@ -164,74 +156,65 @@ export default async function DownloadPage({
             <FileCheck2 className="mt-0.5 size-5 shrink-0 text-primary-foreground" />
             <div>
               <h2 className="font-medium">
-                {isDownloadReady
+                {readyRelease
                   ? copy.readyVerifyTitle
-                  : copy.pendingVerifyTitle}
+                  : copy.unavailableVerifyTitle}
               </h2>
               <p className="mt-1 text-muted-foreground text-sm">
-                {isDownloadReady ? copy.readyVerify : copy.pendingVerify}
+                {readyRelease ? copy.readyVerify : copy.unavailableVerify}
               </p>
+              {readyRelease && (
+                <p className="mt-2 text-muted-foreground text-xs">
+                  {copy.source}:{' '}
+                  <a
+                    href={readyRelease.sourceUrl}
+                    className="font-mono text-primary-foreground hover:underline"
+                  >
+                    {readyRelease.sourceCommit.slice(0, 12)}
+                  </a>{' '}
+                  · {copy.build}:{' '}
+                  <a
+                    href={readyRelease.buildRunUrl}
+                    className="font-mono text-primary-foreground hover:underline"
+                  >
+                    {readyRelease.buildRunId}
+                  </a>
+                </p>
+              )}
             </div>
           </div>
-          {isDownloadReady && (
+          {readyRelease && (
             <div className="flex flex-wrap gap-2">
-              {COMMUNITY_RELEASE.checksumsUrl && (
-                <a
-                  href={COMMUNITY_RELEASE.checksumsUrl}
-                  className={buttonVariants({
-                    size: 'sm',
-                    variant: 'secondary',
-                  })}
-                >
-                  SHA256SUMS
-                </a>
-              )}
-              {COMMUNITY_RELEASE.evidenceUrl && (
-                <a
-                  href={COMMUNITY_RELEASE.evidenceUrl}
-                  className={buttonVariants({
-                    size: 'sm',
-                    variant: 'secondary',
-                  })}
-                >
-                  Evidence
-                </a>
-              )}
-              {COMMUNITY_RELEASE.releaseUrl && (
-                <a
-                  href={COMMUNITY_RELEASE.releaseUrl}
-                  className={buttonVariants({
-                    size: 'sm',
-                    variant: 'ghost',
-                  })}
-                >
-                  {copy.release}
-                </a>
-              )}
+              <a
+                href={readyRelease.checksumsUrl}
+                className={buttonVariants({
+                  size: 'sm',
+                  variant: 'secondary',
+                })}
+              >
+                SHA256SUMS
+              </a>
+              <a
+                href={readyRelease.evidenceUrl}
+                className={buttonVariants({
+                  size: 'sm',
+                  variant: 'secondary',
+                })}
+              >
+                Evidence
+              </a>
+              <a
+                href={readyRelease.releaseUrl}
+                className={buttonVariants({
+                  size: 'sm',
+                  variant: 'ghost',
+                })}
+              >
+                {copy.release}
+              </a>
             </div>
           )}
         </section>
-
-        {!isDownloadReady && (
-          <section className="mt-8 rounded-2xl border border-border-subtle bg-surface-1 p-6">
-            <h2 className="font-medium text-lg">{copy.legacyTitle}</h2>
-            <p className="mt-2 max-w-4xl text-muted-foreground">
-              {copy.legacyDescription}
-            </p>
-            <a
-              href={LEGACY_COMMUNITY_RELEASE.releaseUrl}
-              target="_blank"
-              rel="noreferrer"
-              className={cn(
-                buttonVariants({ size: 'sm', variant: 'ghost' }),
-                'mt-4',
-              )}
-            >
-              {copy.legacyLink}
-              <ExternalLink className="size-4" />
-            </a>
-          </section>
-        )}
 
         <p className="mt-8 text-center text-muted-foreground text-sm">
           {copy.help}{' '}

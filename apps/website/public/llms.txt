@@ -1,8 +1,8 @@
 # CLODEx
 
 > CLODEx is an open-source, local-first Agentic IDE for durable engineering
-> tasks. The Free Community source is public; publication of the next verified
-> cross-platform Technical Preview is pending.
+> tasks. The Free Community source and the verified Community Observed 11
+> cross-platform Technical Preview are public.
 
 ## Free Community product
 
@@ -22,10 +22,13 @@ workspace:
 - an explicit first-launch allow-or-decline choice for optional product
   statistics.
 
-Direct downloads are paused until a new build from canonical main passes the
-Free/managed boundary and packaged-byte verification. The next published
-installers must include checksums, SBOMs, validation manifests, and a release
-evidence archive. macOS preview packages are not trust-signed or notarized.
+Community Observed 11 was built from exact canonical source
+`a2645d0a948a6b2c782edce7b02f4bfde49718ce` by Actions run `29677260054`.
+It passed the enforced Free/managed boundary and packaged-byte gates. Its
+release publishes five installers, SHA-256 checksums, SBOMs, validation
+manifests, warnings, and an evidence archive. The macOS packages are ad-hoc
+signed but not trust-signed or notarized; Windows is not Authenticode-signed;
+Linux packages have no CLODEx vendor signature.
 
 SSH runners and remote workspaces are Free-eligible Preview surfaces, not part
 of the baseline availability promise. Each build's release notes determine
@@ -69,13 +72,18 @@ between the user and the selected provider.
 
 ## Build and download status
 
-- Current verified Free build: pending
-- Planned platforms: macOS Apple Silicon, macOS Intel, Windows x64,
-  Debian/Ubuntu x64, and Fedora/RHEL x64
-- Status page: https://ide.clodex.xyz/download
-- Legacy note: Community Observed 8 predates the enforced Free/managed boundary
-  and is not verified against the current Free Product Contract. It is a
-  historical tester artifact, not the current recommended Free build.
+- Current verified Free Technical Preview: `1.16.0-communityobserved11`
+- Tag: `v1.16.0-communityobserved11`
+- Exact source: `a2645d0a948a6b2c782edce7b02f4bfde49718ce`
+- Build run: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29677260054
+- Immutable prerelease: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved11
+- Platforms: macOS Apple Silicon, macOS Intel, Windows x64, Debian/Ubuntu x64,
+  and Fedora/RHEL x64
+- Download page: https://ide.clodex.xyz/download
+- Checksums: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved11/SHA256SUMS.txt
+- Evidence: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved11/clodex-community-observed-1.16.0-communityobserved11-evidence.zip
+- Trust warning: this is an unsigned/ad-hoc, non-notarized Technical Preview,
+  not a stable signed release. Do not disable operating-system security globally.
 
 ## Pages
 

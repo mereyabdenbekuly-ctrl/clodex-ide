@@ -12,11 +12,30 @@ existing `community-unsigned` artifact, including `1.16.0-community4`.
 - bundle ID: `xyz.clodex.agentic-ide.community-observed`;
 - version: `<base>-communityobserved<workflow-run-number>`, for example
   `1.16.0-communityobserved42`;
-- output: short-lived GitHub Actions artifacts named
-  `clodex-community-observed-*`.
+- build output: short-lived GitHub Actions artifacts named
+  `clodex-community-observed-*`;
+- public output, when separately approved: one immutable prerelease containing
+  exactly five unchanged installers, one evidence ZIP, and `SHA256SUMS.txt`.
 
-The workflow creates no Git tag or GitHub Release, has read-only repository
-permissions, and cannot overwrite the `community4` release assets.
+The build workflow has read-only repository permissions and creates no tag or
+release. Publication is a separate protected workflow that pins one successful
+build run, exact source commit, version-derived tag, immutable-release
+attestation, and redistribution approval. It stages a draft, uploads and
+verifies all seven assets, then publishes once; updater and promotion assets are
+forbidden.
+
+## Current public Technical Preview
+
+Community Observed 11 (`1.16.0-communityobserved11`) is built from exact source
+[`a2645d0a948a6b2c782edce7b02f4bfde49718ce`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/a2645d0a948a6b2c782edce7b02f4bfde49718ce)
+by [Actions run `29677260054`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29677260054)
+and published under
+[`v1.16.0-communityobserved11`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved11).
+
+The packaged Free/managed boundary, byte-level audit, artifact identity, and
+metadata gates passed. This is still an unsigned/ad-hoc, non-notarized test
+prerelease and is excluded from auto-update and official preview/canary/stable
+acceptance.
 
 ## Unsigned community trust boundary
 
@@ -90,3 +109,13 @@ The job validates the secret before installing/building and maps it to
 `POSTHOG_API_KEY` only for the Electron packaging step. It is never mapped to a
 `VITE_*` renderer variable, committed to the repository, printed, used for
 source-map upload, or included in release authority workflows.
+
+## Protected publication
+
+The publication workflow is
+`.github/workflows/community-observed-publish.yml`. It must run from canonical
+`main` after immutable GitHub Releases are enabled and the protected `Release`
+environment approves the exact build identity. The publisher verifies the
+source SHA, run ID, run attempt, artifact names and digests, installer bytes,
+evidence contents, checksum coverage, draft asset set, and terminal immutable
+release before reporting success.

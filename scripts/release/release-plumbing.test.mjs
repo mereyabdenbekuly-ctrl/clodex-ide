@@ -28,6 +28,23 @@ import {
 } from './canary-observation-test-fixtures.mjs';
 
 const repositoryRoot = new URL('../../', import.meta.url);
+const communityObservedVersion = '1.16.0-communityobserved11';
+const communityObservedTag = `v${communityObservedVersion}`;
+const communityObservedSourceCommit =
+  'a2645d0a948a6b2c782edce7b02f4bfde49718ce';
+const communityObservedRunId = '29677260054';
+const communityObservedRepositoryUrl =
+  'https://github.com/mereyabdenbekuly-ctrl/clodex-ide';
+const communityObservedReleaseAssetBase = `${communityObservedRepositoryUrl}/releases/download/${communityObservedTag}`;
+const communityObservedAssetUrls = [
+  `${communityObservedReleaseAssetBase}/clodex-community-observed-${communityObservedVersion}-arm64.dmg`,
+  `${communityObservedReleaseAssetBase}/clodex-community-observed-${communityObservedVersion}-x64.dmg`,
+  `${communityObservedReleaseAssetBase}/clodex-community-observed-${communityObservedVersion}-x64-setup.exe`,
+  `${communityObservedReleaseAssetBase}/clodex-community-observed_${communityObservedVersion}_amd64.deb`,
+  `${communityObservedReleaseAssetBase}/clodex-community-observed-1.16.0.communityobserved11-1.x86_64.rpm`,
+  `${communityObservedReleaseAssetBase}/SHA256SUMS.txt`,
+  `${communityObservedReleaseAssetBase}/clodex-community-observed-${communityObservedVersion}-evidence.zip`,
+];
 
 test('technical preview retry accepts only an absent or exact-SHA tag', () => {
   const releaseRef = 'a'.repeat(40);
@@ -1826,7 +1843,7 @@ test('preview.2 documentation rejects preview.1 as a trusted target', () => {
   assert.match(plan, /distribution-stop-only/i);
 });
 
-test('website exposes no legacy preview.1 download URL', () => {
+test('website exposes the exact Community Observed 11 mapping and no legacy preview.1 URL', () => {
   for (const file of [
     'apps/website/src/app/download/page.tsx',
     'apps/website/src/app/(home)/_components/download-buttons.tsx',
@@ -1840,16 +1857,80 @@ test('website exposes no legacy preview.1 download URL', () => {
     new URL('apps/website/src/lib/community-release.ts', repositoryRoot),
     'utf8',
   );
-  assert.match(manifest, /status:\s*'pending-verification'/u);
-  assert.match(manifest, /downloads:\s*\[\]/u);
-  assert.doesNotMatch(manifest, /releases\/download/u);
+  const currentManifest = manifest.slice(
+    manifest.indexOf('export const COMMUNITY_RELEASE'),
+    manifest.indexOf('/**\n * Historical reference only'),
+  );
+  assert.match(currentManifest, /status:\s*'verified'/u);
+  assert.match(
+    currentManifest,
+    new RegExp(`version: '${communityObservedVersion}'`, 'u'),
+  );
+  assert.match(
+    currentManifest,
+    new RegExp(`tag: '${communityObservedTag}'`, 'u'),
+  );
+  assert.match(
+    currentManifest,
+    new RegExp(`sourceCommit: '${communityObservedSourceCommit}'`, 'u'),
+  );
+  assert.match(
+    currentManifest,
+    new RegExp(`buildRunId: '${communityObservedRunId}'`, 'u'),
+  );
+  assert.ok(
+    currentManifest.includes(
+      `${communityObservedRepositoryUrl}/releases/tag/${communityObservedTag}`,
+    ),
+  );
+  assert.ok(
+    currentManifest.includes(
+      `${communityObservedRepositoryUrl}/commit/${communityObservedSourceCommit}`,
+    ),
+  );
+  assert.ok(
+    currentManifest.includes(
+      `${communityObservedRepositoryUrl}/actions/runs/${communityObservedRunId}`,
+    ),
+  );
+  const manifestAssetUrls = [
+    ...currentManifest.matchAll(
+      /https:\/\/github\.com\/mereyabdenbekuly-ctrl\/clodex-ide\/releases\/download\/[^'\n]+/gu,
+    ),
+  ].map((match) => match[0]);
+  assert.deepEqual(
+    [...manifestAssetUrls].sort(),
+    [...communityObservedAssetUrls].sort(),
+  );
 
   const downloadPage = readFileSync(
     new URL('apps/website/src/app/download/page.tsx', repositoryRoot),
     'utf8',
   );
-  assert.match(downloadPage, /COMMUNITY_RELEASE\.status === 'verified'/u);
-  assert.match(downloadPage, /COMMUNITY_RELEASE\.downloads\.length > 0/u);
+  assert.match(downloadPage, /getReadyCommunityRelease\(COMMUNITY_RELEASE\)/u);
+  assert.doesNotMatch(downloadPage, /COMMUNITY_RELEASE\.status/u);
+  assert.doesNotMatch(downloadPage, /COMMUNITY_RELEASE\.downloads/u);
+  assert.match(downloadPage, /readyRelease\.sourceUrl/u);
+  assert.match(downloadPage, /readyRelease\.buildRunId/u);
+  assert.match(downloadPage, /readyRelease\.buildRunUrl/u);
+  assert.match(downloadPage, /Not trust-signed or notarized/u);
+
+  const homePage = readFileSync(
+    new URL('apps/website/src/app/(home)/page.tsx', repositoryRoot),
+    'utf8',
+  );
+  assert.match(homePage, /getReadyCommunityRelease\(COMMUNITY_RELEASE\)/u);
+  assert.match(homePage, /softwareVersion:\s*readyCommunityRelease\.version/u);
+  assert.match(
+    homePage,
+    /downloadUrl:\s*readyCommunityRelease\.downloads\.map/u,
+  );
+  assert.match(homePage, /releaseNotes:\s*readyCommunityRelease\.releaseUrl/u);
+  assert.match(homePage, /readyCommunityRelease\s*\?\s*\{/u);
+  assert.doesNotMatch(
+    homePage,
+    /next verified|being prepared|publication[^.]*pending/iu,
+  );
 });
 
 test('Squirrel packaging binds public and internal preview versions explicitly', () => {

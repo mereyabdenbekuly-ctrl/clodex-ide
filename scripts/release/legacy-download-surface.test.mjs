@@ -3,9 +3,41 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import {
+  COMMUNITY_RELEASE,
+  getReadyCommunityRelease,
+} from '../../apps/website/src/lib/community-release.ts';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const websiteDirectory = path.join(repositoryRoot, 'apps', 'website');
+
+const communityVersion = '1.16.0-communityobserved11';
+const communityTag = `v${communityVersion}`;
+const communitySourceCommit = 'a2645d0a948a6b2c782edce7b02f4bfde49718ce';
+const communityRunId = '29677260054';
+const repositoryUrl = 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide';
+const releaseUrl = `${repositoryUrl}/releases/tag/${communityTag}`;
+const releaseAssetBase = `${repositoryUrl}/releases/download/${communityTag}`;
+const sourceUrl = `${repositoryUrl}/commit/${communitySourceCommit}`;
+const buildRunUrl = `${repositoryUrl}/actions/runs/${communityRunId}`;
+const installerFileNames = [
+  `clodex-community-observed-${communityVersion}-arm64.dmg`,
+  `clodex-community-observed-${communityVersion}-x64.dmg`,
+  `clodex-community-observed-${communityVersion}-x64-setup.exe`,
+  `clodex-community-observed_${communityVersion}_amd64.deb`,
+  'clodex-community-observed-1.16.0.communityobserved11-1.x86_64.rpm',
+];
+const evidenceFileName = `clodex-community-observed-${communityVersion}-evidence.zip`;
+const installerUrls = installerFileNames.map(
+  (fileName) => `${releaseAssetBase}/${fileName}`,
+);
+const checksumsUrl = `${releaseAssetBase}/SHA256SUMS.txt`;
+const evidenceUrl = `${releaseAssetBase}/${evidenceFileName}`;
+const allowedReleaseAssetUrls = new Set([
+  ...installerUrls,
+  checksumsUrl,
+  evidenceUrl,
+]);
 
 function collectWebsiteTextFiles() {
   const excludedDirectories = new Set([
@@ -57,7 +89,48 @@ function collectWebsiteTextFiles() {
   return files;
 }
 
-test('website source and config fail closed on every public artifact download', () => {
+test('Community release readiness fails closed on every incomplete mapping', () => {
+  assert.equal(getReadyCommunityRelease(COMMUNITY_RELEASE), COMMUNITY_RELEASE);
+
+  const incompleteManifests = [
+    ['unverified status', (manifest) => (manifest.status = 'unavailable')],
+    ['missing name', (manifest) => (manifest.name = '')],
+    ['missing version', (manifest) => (manifest.version = null)],
+    ['missing tag', (manifest) => (manifest.tag = null)],
+    ['missing release URL', (manifest) => (manifest.releaseUrl = null)],
+    ['missing checksums URL', (manifest) => (manifest.checksumsUrl = null)],
+    ['missing evidence URL', (manifest) => (manifest.evidenceUrl = null)],
+    ['missing source commit', (manifest) => (manifest.sourceCommit = null)],
+    ['missing source URL', (manifest) => (manifest.sourceUrl = null)],
+    ['missing build run ID', (manifest) => (manifest.buildRunId = null)],
+    ['missing build run URL', (manifest) => (manifest.buildRunUrl = null)],
+    ['four installers', (manifest) => manifest.downloads.pop()],
+    [
+      'six installers',
+      (manifest) => manifest.downloads.push({ ...manifest.downloads[0] }),
+    ],
+    [
+      'installer metadata drift',
+      (manifest) => (manifest.downloads[0].architecture = 'x64'),
+    ],
+    [
+      'installer URL drift',
+      (manifest) => (manifest.downloads[0].href += '.partial'),
+    ],
+  ];
+
+  for (const [label, mutate] of incompleteManifests) {
+    const manifest = structuredClone(COMMUNITY_RELEASE);
+    mutate(manifest);
+    assert.equal(
+      getReadyCommunityRelease(manifest),
+      null,
+      `${label} must not be download-ready`,
+    );
+  }
+});
+
+test('website exposes only the exact verified Community Observed release assets', () => {
   const files = collectWebsiteTextFiles();
   assert.ok(files.length > 0, 'website source/config scan found no text files');
 
@@ -84,12 +157,13 @@ test('website source and config fail closed on every public artifact download', 
       pattern: /(?:https?:)?\/\/dl\.clodex\.io(?:\/|$)/iu,
     },
     {
-      label: 'active GitHub release asset URL',
+      label: 'stale pre-publication download copy',
       pattern:
-        /(?:https?:)?\/\/github\.com\/mereyabdenbekuly-ctrl\/clodex-ide\/releases\/download(?:\/|$)/iu,
+        /next verified|being prepared|publication[^.]*pending|direct downloads are temporarily paused|downloads remain temporarily unavailable|new verified free build|новая Free-сборка готовится|новая проверенная Free-сборка|прямые скачивания временно|загрузка временно недоступна/iu,
     },
   ];
   const violations = [];
+  const observedReleaseAssetUrls = new Set();
   for (const file of files) {
     const relativePath = path.relative(websiteDirectory, file);
     const source = readFileSync(file, 'utf8');
@@ -105,32 +179,92 @@ test('website source and config fail closed on every public artifact download', 
         violations.push(`${relativePath}: ${rule.label}`);
       }
     }
+    for (const match of scannedSource.matchAll(
+      /https:\/\/github\.com\/mereyabdenbekuly-ctrl\/clodex-ide\/releases\/download\/[^\s'"`)]+/gu,
+    )) {
+      observedReleaseAssetUrls.add(match[0]);
+      if (!allowedReleaseAssetUrls.has(match[0])) {
+        violations.push(
+          `${relativePath}: unexpected GitHub release asset URL ${match[0]}`,
+        );
+      }
+    }
   }
   assert.deepEqual(
     violations,
     [],
-    `legacy website download references found:\n${violations.join('\n')}`,
+    `unexpected website download references found:\n${violations.join('\n')}`,
+  );
+  assert.deepEqual(
+    [...observedReleaseAssetUrls].sort(),
+    [...allowedReleaseAssetUrls].sort(),
+    'website release-asset URL allowlist is incomplete',
   );
 
   const releaseManifest = readFileSync(
     path.join(websiteDirectory, 'src/lib/community-release.ts'),
     'utf8',
   );
-  assert.match(releaseManifest, /status:\s*'pending-verification'/u);
-  assert.match(releaseManifest, /downloads:\s*\[\]/u);
-  assert.doesNotMatch(releaseManifest, /releases\/download/u);
+  const currentManifest = releaseManifest.slice(
+    releaseManifest.indexOf('export const COMMUNITY_RELEASE'),
+    releaseManifest.indexOf('/**\n * Historical reference only'),
+  );
+  assert.match(currentManifest, /status:\s*'verified'/u);
+  assert.match(
+    currentManifest,
+    new RegExp(`version: '${communityVersion}'`, 'u'),
+  );
+  assert.match(currentManifest, new RegExp(`tag: '${communityTag}'`, 'u'));
+  assert.match(
+    currentManifest,
+    new RegExp(`sourceCommit: '${communitySourceCommit}'`, 'u'),
+  );
+  assert.match(
+    currentManifest,
+    new RegExp(`buildRunId: '${communityRunId}'`, 'u'),
+  );
+  for (const exactUrl of [releaseUrl, sourceUrl, buildRunUrl]) {
+    assert.ok(
+      currentManifest.includes(`'${exactUrl}'`),
+      `release manifest is missing ${exactUrl}`,
+    );
+  }
+
+  const manifestAssetUrls = [
+    ...currentManifest.matchAll(
+      /https:\/\/github\.com\/mereyabdenbekuly-ctrl\/clodex-ide\/releases\/download\/[^'\n]+/gu,
+    ),
+  ].map((match) => match[0]);
+  assert.deepEqual(
+    [...manifestAssetUrls].sort(),
+    [...allowedReleaseAssetUrls].sort(),
+    'release manifest asset mapping is not exact',
+  );
+  const manifestInstallerHrefs = [
+    ...currentManifest.matchAll(/href:\s*'([^']+)'/gu),
+  ].map((match) => match[1]);
+  assert.deepEqual(
+    manifestInstallerHrefs,
+    installerUrls,
+    'release manifest must expose exactly five ordered installers',
+  );
 
   const downloadPage = readFileSync(
     path.join(websiteDirectory, 'src/app/download/page.tsx'),
     'utf8',
   );
-  assert.match(downloadPage, /COMMUNITY_RELEASE\.status === 'verified'/u);
-  assert.match(downloadPage, /COMMUNITY_RELEASE\.downloads\.length > 0/u);
-  assert.match(downloadPage, /\{isDownloadReady \?/u);
+  assert.match(downloadPage, /getReadyCommunityRelease\(COMMUNITY_RELEASE\)/u);
+  assert.doesNotMatch(downloadPage, /COMMUNITY_RELEASE\.status/u);
+  assert.doesNotMatch(downloadPage, /COMMUNITY_RELEASE\.downloads/u);
+  assert.match(downloadPage, /readyRelease\.sourceUrl/u);
+  assert.match(downloadPage, /readyRelease\.buildRunId/u);
+  assert.match(downloadPage, /readyRelease\.buildRunUrl/u);
+  assert.match(downloadPage, /Not trust-signed or notarized/u);
 
   for (const relativePath of [
     'src/app/(home)/_components/download-buttons.tsx',
     'src/app/(home)/navbar.tsx',
+    'src/app/(home)/_components/footer.tsx',
   ]) {
     const source = readFileSync(
       path.join(websiteDirectory, relativePath),
@@ -151,24 +285,107 @@ test('website source and config fail closed on every public artifact download', 
       path.join(websiteDirectory, relativePath),
       'utf8',
     );
-    assert.match(source, /DownloadUnavailableButton/);
-    assert.doesNotMatch(
-      source,
-      /href=\{downloadUrl\}|setDownloadUrl|isDownloadAvailable/,
+    assert.match(source, /href="\/download\?lang=en"/u);
+    assert.match(source, /Download Community Observed 11/u);
+    assert.doesNotMatch(source, /DownloadUnavailableButton/u);
+  }
+});
+
+test('post-release documentation stays coherent with the exact observed build', () => {
+  const surfaces = [
+    'README.md',
+    'docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md',
+    'docs/community-observed-builds.md',
+    'apps/website/public/llms.txt',
+  ];
+  for (const relativePath of surfaces) {
+    const source = readFileSync(
+      path.join(repositoryRoot, relativePath),
+      'utf8',
     );
+    assert.match(source, new RegExp(communityVersion, 'u'), relativePath);
+    assert.match(source, new RegExp(communitySourceCommit, 'u'), relativePath);
+    assert.match(source, new RegExp(communityRunId, 'u'), relativePath);
+    assert.ok(
+      source.includes(releaseUrl),
+      `${relativePath}: release URL missing`,
+    );
+    assert.match(source, /unsigned|ad-hoc/iu, relativePath);
+    assert.match(source, /notariz/iu, relativePath);
   }
 
-  const unavailableUi = readFileSync(
+  const readme = readFileSync(path.join(repositoryRoot, 'README.md'), 'utf8');
+  for (const exactUrl of [
+    ...installerUrls,
+    checksumsUrl,
+    evidenceUrl,
+    sourceUrl,
+    buildRunUrl,
+  ]) {
+    assert.ok(readme.includes(exactUrl), `README is missing ${exactUrl}`);
+  }
+  assert.doesNotMatch(readme, /free_build-verification_pending/u);
+
+  const llms = readFileSync(
+    path.join(websiteDirectory, 'public', 'llms.txt'),
+    'utf8',
+  );
+  assert.doesNotMatch(llms, /Current verified Free build:\s*pending/iu);
+
+  const landingCopy = readFileSync(
     path.join(
       websiteDirectory,
       'src',
-      'components',
-      'download-unavailable-button.tsx',
+      'app',
+      '(home)',
+      '_components',
+      'landing-copy.ts',
     ),
     'utf8',
   );
-  assert.match(unavailableUi, /Download temporarily unavailable/);
-  assert.match(unavailableUi, /Загрузка временно недоступна/);
+  assert.match(landingCopy, /Community Observed 11/gu);
+  assert.doesNotMatch(
+    landingCopy,
+    /next verified Free build is being prepared|новая проверенная Free-сборка[^.]*готовится/iu,
+  );
+
+  const homePage = readFileSync(
+    path.join(websiteDirectory, 'src', 'app', '(home)', 'page.tsx'),
+    'utf8',
+  );
+  assert.match(homePage, /getReadyCommunityRelease\(COMMUNITY_RELEASE\)/u);
+  assert.match(homePage, /softwareVersion:\s*readyCommunityRelease\.version/u);
+  assert.match(
+    homePage,
+    /downloadUrl:\s*readyCommunityRelease\.downloads\.map/u,
+  );
+  assert.match(homePage, /releaseNotes:\s*readyCommunityRelease\.releaseUrl/u);
+  assert.match(homePage, /readyCommunityRelease\s*\?\s*\{/u);
+  assert.match(homePage, /Community Observed 11/u);
+
+  const downloadLayout = readFileSync(
+    path.join(websiteDirectory, 'src', 'app', 'download', 'layout.tsx'),
+    'utf8',
+  );
+  assert.match(downloadLayout, /Download CLODEx Community Observed 11/u);
+
+  for (const [relativePath, source] of [
+    ['src/app/(home)/page.tsx', homePage],
+    ['src/app/download/layout.tsx', downloadLayout],
+    [
+      'src/app/download/page.tsx',
+      readFileSync(
+        path.join(websiteDirectory, 'src', 'app', 'download', 'page.tsx'),
+        'utf8',
+      ),
+    ],
+  ]) {
+    assert.doesNotMatch(
+      source,
+      /next verified|being prepared|publication[^.]*pending|direct downloads are temporarily paused|новая Free-сборка готовится|прямые скачивания временно приостановлены/iu,
+      `${relativePath}: stale pre-publication copy`,
+    );
+  }
 });
 
 test('website temporarily redirects the legacy DMG route to download status', async () => {

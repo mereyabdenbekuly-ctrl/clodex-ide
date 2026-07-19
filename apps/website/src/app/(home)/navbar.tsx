@@ -17,7 +17,7 @@ function NavDownloadButton({ locale }: { locale: Locale }) {
       href={`/download?lang=${locale}`}
       className={buttonVariants({ size: 'sm', variant: 'primary' })}
     >
-      {locale === 'ru' ? 'Статус сборки' : 'Build status'}
+      {locale === 'ru' ? 'Скачать' : 'Download'}
     </Link>
   );
 }
