@@ -60,7 +60,7 @@ jobs:
           COMMUNITY_RUN_ID: ${{ inputs.run_id }}
           COMMUNITY_SOURCE_SHA: ${{ inputs.source_commit }}
           COMMUNITY_TAG: ${{ inputs.tag }}
-          REPOSITORY_IMMUTABILITY_ENABLED: ${{ vars.GITHUB_IMMUTABLE_RELEASES_ENABLED }}
+          REPOSITORY_IMMUTABILITY_ENABLED: ${{ vars.CLODEX_IMMUTABLE_RELEASES_ENABLED }}
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
@@ -151,7 +151,7 @@ jobs:
           COMMUNITY_REDISTRIBUTION_CONFIRMATION: ${{ inputs.redistribution_confirm }}
           COMMUNITY_SOURCE_SHA: ${{ inputs.source_commit }}
           COMMUNITY_TAG: ${{ inputs.tag }}
-          REPOSITORY_IMMUTABILITY_ENABLED: ${{ vars.GITHUB_IMMUTABLE_RELEASES_ENABLED }}
+          REPOSITORY_IMMUTABILITY_ENABLED: ${{ vars.CLODEX_IMMUTABLE_RELEASES_ENABLED }}
           VERIFIED_TAG: ${{ needs.verify-stage.outputs.release_tag }}
         run: |
           set -euo pipefail
@@ -245,7 +245,7 @@ jobs:
             --candidate="$RUNNER_TEMP/community-observed-publication" \
             --confirm="${{ inputs.confirm }}" \
             --immutability-confirm="${{ inputs.immutability_confirm }}" \
-            --immutability-enabled="${{ vars.GITHUB_IMMUTABLE_RELEASES_ENABLED }}" \
+            --immutability-enabled="${{ vars.CLODEX_IMMUTABLE_RELEASES_ENABLED }}" \
             --redistribution-confirm="${{ inputs.redistribution_confirm }}" \
             --github-output="$GITHUB_OUTPUT"
 

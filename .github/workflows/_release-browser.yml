@@ -1393,7 +1393,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          IMMUTABLE_RELEASES_ENABLED: ${{ vars.GITHUB_IMMUTABLE_RELEASES_ENABLED }}
+          IMMUTABLE_RELEASES_ENABLED: ${{ vars.CLODEX_IMMUTABLE_RELEASES_ENABLED }}
           RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
           RELEASE_ID: ${{ steps.protected-draft.outputs.release_id }}
           RELEASE_REF: ${{ inputs.ref }}
@@ -1413,7 +1413,7 @@ jobs:
             exit 1
           fi
           if [ "$IMMUTABLE_RELEASES_ENABLED" != "true" ]; then
-            echo "::error::Set repository variable GITHUB_IMMUTABLE_RELEASES_ENABLED=true only after enabling immutable releases"
+            echo "::error::Set repository variable CLODEX_IMMUTABLE_RELEASES_ENABLED=true only after enabling immutable releases"
             exit 1
           fi
           gh api --include \
