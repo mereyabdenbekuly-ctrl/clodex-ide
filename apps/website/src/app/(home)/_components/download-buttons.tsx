@@ -18,7 +18,7 @@ export function DownloadButtons({
         className,
       )}
     >
-      {isRussian ? 'Статус Free-сборки' : 'Free build status'}
+      {isRussian ? 'Скачать Free-сборку' : 'Download Free build'}
     </Link>
   );
 }

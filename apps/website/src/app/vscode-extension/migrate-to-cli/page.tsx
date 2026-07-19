@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Button } from '@clodex/stage-ui/components/button';
+import Link from 'next/link';
+import { Button, buttonVariants } from '@clodex/stage-ui/components/button';
 import { ScrollReveal } from '@/components/landing/scroll-reveal';
 import { Logo } from '@/components/landing/logo';
 import { AnimatedGradientBackground } from '@/components/landing/animated-gradient-background';
-import { DownloadUnavailableButton } from '@/components/download-unavailable-button';
 
 export default function MigrateToCLI() {
   const [isMobile, setIsMobile] = useState(false);
@@ -48,12 +48,13 @@ export default function MigrateToCLI() {
                 Your clodex setup needs an upgrade
               </p>
               <h1 className="mb-6 font-bold text-2xl tracking-tight md:text-4xl">
-                <span className="text-foreground">Meet the clodex browser</span>
+                <span className="text-foreground">
+                  Meet the CLODEx desktop IDE
+                </span>
               </h1>
               <p className="mx-auto mb-10 max-w-md text-muted-foreground">
-                The standalone desktop browser is being prepared for its next
-                verified release. Downloads remain temporarily unavailable while
-                signing and acceptance complete.
+                Community Observed 11 is the current verified Free Technical
+                Preview for macOS, Windows, and Linux.
               </p>
 
               <div className="flex flex-col items-center gap-3">
@@ -66,10 +67,22 @@ export default function MigrateToCLI() {
                     Download on Desktop
                   </Button>
                 ) : (
-                  <DownloadUnavailableButton size="lg" />
+                  <Link
+                    href="/download?lang=en"
+                    className={buttonVariants({
+                      size: 'lg',
+                      variant: 'primary',
+                    })}
+                  >
+                    Download Community Observed 11
+                  </Link>
                 )}
                 <p className="text-sm text-subtle-foreground">
                   Free to start · macOS, Windows & Linux
+                </p>
+                <p className="max-w-md text-center text-subtle-foreground text-xs">
+                  Unsigned/ad-hoc and not notarized. Verify SHA-256 and do not
+                  disable operating-system protections globally.
                 </p>
               </div>
             </div>

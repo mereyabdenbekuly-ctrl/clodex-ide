@@ -77,7 +77,7 @@ export function Footer() {
               href={`/download?lang=${locale}`}
               className="text-muted-foreground transition-colors hover:text-foreground"
             >
-              {locale === 'ru' ? 'Статус сборки' : 'Build status'}
+              {locale === 'ru' ? 'Скачать' : 'Download'}
             </Link>
             <Link
               href="/privacy"
