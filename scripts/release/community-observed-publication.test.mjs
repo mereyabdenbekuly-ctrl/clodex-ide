@@ -455,7 +455,7 @@ class FakeReleaseApi {
     this.release = {
       id: 77,
       url: `https://api.github.com/repos/${repo}/releases/77`,
-      html_url: `https://github.com/${repo}/releases/tag/${releaseTag}`,
+      html_url: `https://github.com/${repo}/releases/tag/untagged-1234567890abcdef1234`,
       upload_url: `https://uploads.github.com/repos/${repo}/releases/77/assets{?name,label}`,
       tag_name: releaseTag,
       target_commitish: targetCommitish,
@@ -499,6 +499,7 @@ class FakeReleaseApi {
     this.release = {
       ...this.release,
       draft: false,
+      html_url: `https://github.com/${repository}/releases/tag/${tag}`,
       immutable: true,
       published_at: '2026-07-19T12:00:00Z',
     };
