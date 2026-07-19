@@ -112,10 +112,38 @@ test('website source and config fail closed on every public artifact download', 
     `legacy website download references found:\n${violations.join('\n')}`,
   );
 
+  const releaseManifest = readFileSync(
+    path.join(websiteDirectory, 'src/lib/community-release.ts'),
+    'utf8',
+  );
+  assert.match(releaseManifest, /status:\s*'pending-verification'/u);
+  assert.match(releaseManifest, /downloads:\s*\[\]/u);
+  assert.doesNotMatch(releaseManifest, /releases\/download/u);
+
+  const downloadPage = readFileSync(
+    path.join(websiteDirectory, 'src/app/download/page.tsx'),
+    'utf8',
+  );
+  assert.match(downloadPage, /COMMUNITY_RELEASE\.status === 'verified'/u);
+  assert.match(downloadPage, /COMMUNITY_RELEASE\.downloads\.length > 0/u);
+  assert.match(downloadPage, /\{isDownloadReady \?/u);
+
   for (const relativePath of [
-    'src/app/download/page.tsx',
     'src/app/(home)/_components/download-buttons.tsx',
     'src/app/(home)/navbar.tsx',
+  ]) {
+    const source = readFileSync(
+      path.join(websiteDirectory, relativePath),
+      'utf8',
+    );
+    assert.match(source, /href=\{`\/download\?lang=\$\{locale\}`\}/u);
+    assert.doesNotMatch(
+      source,
+      /href=\{downloadUrl\}|setDownloadUrl|isDownloadAvailable/u,
+    );
+  }
+
+  for (const relativePath of [
     'src/app/vscode-extension/migrate-to-cli/page.tsx',
     'src/app/vscode-extension/welcome/page.tsx',
   ]) {
