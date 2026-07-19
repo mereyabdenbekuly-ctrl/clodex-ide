@@ -1,305 +1,219 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./apps/website/public/clodex-logo-on-dark.png">
-  <img src="./apps/website/public/clodex-logo-on-light.png" alt="Clodex" height="72">
+  <img src="./apps/website/public/clodex-logo-on-light.png" alt="CLODEx" height="72">
 </picture>
 
-# Clodex
+# CLODEx
 
-### Local-first agentic IDE with governed execution
+### One task. One durable engineering workspace.
 
 [![Website](https://img.shields.io/badge/website-ide.clodex.xyz-00d88a?style=flat-square)](https://ide.clodex.xyz)
-![Status](https://img.shields.io/badge/status-technical_preview-2563eb?style=flat-square)
 [![Community build](https://img.shields.io/badge/community_observed-1.16.0--observed8-00d88a?style=flat-square)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved8)
+[![CI](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/workflows/monorepo-ci.yml/badge.svg?branch=main)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/workflows/monorepo-ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-111827?style=flat-square)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-22.23.1-43853d?style=flat-square)
 ![pnpm](https://img.shields.io/badge/pnpm-10.30.3-f69220?style=flat-square)
-[![X](https://img.shields.io/badge/X-@CLODEx__lab-111111?style=flat-square)](https://x.com/CLODEx_lab)
 
-Clodex is an open-source, local-first agentic development environment for
-governed software work. It combines durable AI tasks, code and Git tools,
-terminal, browser, memory, model routing, and controlled execution in one
-Electron workspace. Local testing does not require a Clodex account: use your
-own provider API key, a custom OpenAI-compatible endpoint, or a local Ollama
-runtime.
+CLODEx is an open-source, local-first agentic IDE for long-running engineering
+work. It keeps code, Git, terminal, browser, models, and MCP tools inside one
+durable desktop workspace, with approval and review surfaces for sensitive
+actions.
 
-It is an early-stage, solo-led research and engineering project. The current
-Technical Preview is intended to validate architecture and real workflows; it
-is not presented as a production-mature IDE or an established community.
-
-It is built around a simple principle:
-
-> Model output is untrusted input. Authority comes from explicit policy,
-> isolated runtimes, and user-controlled review.
-
-**Current release status:** Technical Preview. The architectural core is
-implemented and tested locally. The public desktop binaries described below
-are unsigned community test artifacts, not an official stable release.
-Advanced execution lanes remain feature-gated until their live promotion
-evidence and manual sign-off are complete.
-
-## Community test build
-
-The current public tester build is **`1.16.0-communityobserved8`**, produced from the
-canonical `main` commit
-[`a63fc5d79b3c6a3442e6e2a2116e575478cb96ae`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/a63fc5d79b3c6a3442e6e2a2116e575478cb96ae)
-by [GitHub Actions run `29655325372`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29655325372)
-and published as a clearly separated
-[GitHub community prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved8).
-It permanently enables secure CLODEx.xyz account sign-in for the observed
-distribution through the system browser and an RFC 8252 loopback callback
-bound by state and PKCE S256. It also includes the **Русский (beta)** interface
-and a required first-launch privacy choice with **Allow anonymous statistics**
-as the primary action and a visible **Continue without statistics** path. The
-[communityobserved7 prerelease](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved7)
-remains available as the immediate predecessor without account sign-in, while
-[community4](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-community4)
-remains available as the telemetry-free predecessor.
-
-| Platform            | Package   | Download |
-| ------------------- | --------- | -------- |
-| macOS Apple Silicon | ARM64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-arm64.dmg) |
-| macOS Intel         | x64 DMG   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-x64.dmg) |
-| Windows             | x64 EXE   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-x64-setup.exe) |
-| Linux               | x64 DEB   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed_1.16.0-communityobserved8_amd64.deb) |
-| Linux               | x64 RPM   | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0.communityobserved8-1.x86_64.rpm) |
-
-Download [`SHA256SUMS.txt`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/SHA256SUMS.txt)
-from the same prerelease and verify the installer before opening it. The exact
-source manifests, CycloneDX SBOMs, warnings, platform validation reports,
-byte-level audit report, and packaged authentication audit are retained in the
-compact
-[evidence archive](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-evidence.zip).
-Do not use repackaged binaries from an unverified mirror.
-
-Before onboarding, the build requires an explicit allow-or-decline choice. No
-PostHog client starts before that decision. If anonymous statistics are
-allowed, only the backend client may send allowlisted counters, bounded timing,
-enum metadata, app/platform metadata, and a pseudonymous installation ID.
-Renderer capture, person profiles, GeoIP enrichment, prompts, messages, source
-code, commands, paths, URLs, API keys, tool arguments, error or feedback text,
-exceptions, account identification, session recording, full telemetry, and AI
-tracing are disabled. The choice can be changed later in Settings.
-
-### Verify and install
-
-Community packages intentionally have no trusted publisher identity. macOS
-apps are ad-hoc signed and not notarized, Windows packages are not
-Authenticode-signed, and Linux packages have no CLODEx release signature.
-Open source makes the source inspectable; it does not authenticate a downloaded
-binary.
-
-1. Confirm that the bundle manifest records the expected version, platform,
-   architecture, and source commit.
-2. Verify the selected file before installation. For example:
-
-   ```bash
-   # macOS: replace FILE with the downloaded DMG name
-   grep "  FILE$" SHA256SUMS.txt | shasum -a 256 -c -
-
-   # Linux: replace FILE with the downloaded DEB or RPM name
-   grep "  FILE$" SHA256SUMS.txt | sha256sum -c -
-   ```
-
-   On Windows, compare `Get-FileHash <installer.exe> -Algorithm SHA256` with
-   the installer entry in `SHA256SUMS`.
-3. Install for your platform:
-   - **macOS:** open the matching DMG and drag the app to `/Applications`. On
-     first launch, use Finder's per-app **Control-click -> Open** review only
-     after verifying the bundle. Do not disable Gatekeeper globally.
-   - **Windows:** run the x64 setup. SmartScreen may warn about an unknown
-     publisher; use only its per-file review path after verifying the bundle.
-     Do not disable SmartScreen or Defender globally.
-   - **Linux:** install either the downloaded DEB (`apt install ./<file>.deb`)
-     or RPM (`rpm -i ./<file>.rpm`) for your distribution.
-
-The observed community build has a separate application identity. Starting
-with **communityobserved8**, secure CLODEx.xyz sign-in is permanently enabled
-by the observed distribution policy. The system-browser handoff uses an RFC
-8252 callback bound to exact **127.0.0.1**, a dynamic local port, state, and
-PKCE S256; the bearer session token is never placed in the callback URL.
-Default OS protocol registration and auto-update remain excluded, the
-first-launch privacy choice must be completed before normal IDE use, and newer
-community builds must still be installed manually. The **community-unsigned**
-lane remains account-free.
-
-### First launch: connect a model
-
-1. Choose **System**, **English**, or **Русский (beta)** in onboarding or
-   **Settings -> General**, then restart once to verify persistence.
-2. Complete the required privacy choice: **Allow anonymous statistics** or
-   **Continue without statistics**.
-3. Optionally open **Settings -> Account** and sign in through CLODEx.xyz to
-   load the keys and models available to that account.
-4. Open a local project or workspace.
-5. Alternatively, in onboarding or **Settings -> Models & Providers**, choose:
-   - a BYOK API key for a supported provider such as OpenAI, Anthropic, or
-     Google;
-   - a custom OpenAI-compatible endpoint; or
-   - local Ollama, normally at http://localhost:11434.
-6. Test the connection, select a discovered model, and start a small task.
-
-Provider usage and billing remain between you and the provider. Never include
-API keys, tokens, private source, or unredacted logs in an issue or tester
-report. See the full
-[community unsigned build policy](./docs/community-unsigned-builds.md) and
-[support guide](./SUPPORT.md).
-
-## Start here
-
-| Goal                                    | Document                                                                                      |
-| --------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Install the current community build     | [Community build above](#community-test-build) · [Build policy](./docs/community-unsigned-builds.md) |
-| Understand the product in a few minutes | [Product overview](./short_doc.en.md) · [Русский обзор](./short_doc.md)                       |
-| Run Clodex locally                      | [Developer handbook](./DEVELOPERS.md)                                                         |
-| Study the complete system               | [Full project documentation](./full_doc.md)                                                   |
-| Navigate the engineering documentation  | [Developer documentation index](./docs/developer/README.md)                                   |
-| Review the architecture                 | [Architecture](./docs/developer/architecture.md)                                              |
-| Review security and data handling       | [Security and data](./docs/developer/security-and-data.md) · [Security policy](./SECURITY.md) |
-| Understand project lineage              | [Clodex and Stagewise upstream](./CLODEX_VS_UPSTREAM.md)                                     |
-| Contribute or collaborate               | [Contributing](./CONTRIBUTING.md) · [Collaboration paths](./COLLABORATE.md)                   |
-| Get help or report a testing problem    | [Support and report channels](./SUPPORT.md)                                                   |
-| Understand project governance           | [Governance](./GOVERNANCE.md) · [Code of conduct](./CODE_OF_CONDUCT.md)                      |
-| Follow the independent-kernel migration | [Hybrid strangler plan](./docs/migration/README.md)                                           |
-| Explore the live project                | [ide.clodex.xyz](https://ide.clodex.xyz)                                                      |
+It is available today as a cross-platform **Technical Preview** for macOS,
+Windows, and Linux.
 
 <p align="center">
-  <img src="./apps/website/public/product/current/workspace.png" alt="Clodex persistent task workspace" width="100%">
+  <strong><a href="https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved8">Download the Technical Preview</a></strong>
+  ·
+  <a href="#what-works-today">See what works today</a>
+  ·
+  <a href="#run-from-source">Build from source</a>
+  ·
+  <a href="./short_doc.md">Русский обзор</a>
 </p>
 
-## Project lineage
+<p align="center">
+  <img src="./apps/website/public/product/current/workspace.png" alt="CLODEx durable agent task workspace" width="100%">
+</p>
 
-Clodex began as a modified version of the open-source Stagewise codebase and
-has since diverged into an independently maintained project focused on
-governed execution, evidence, policy enforcement, model routing, runner
-isolation, and session continuity.
+| Durable work | One engineering workspace | Models on your terms |
+| --- | --- | --- |
+| Keep task history and recover work after restarts instead of rebuilding context from scratch. | Move between files, diffs, Git, terminal, browser, and MCP without leaving the task. | Sign in with CLODEx, bring your own provider key, use a compatible endpoint, or connect local Ollama. |
 
-The exact upstream base commit, reproducible diff method, Clodex-specific
-systems, and continuing upstream-derived areas are documented in
-[`CLODEX_VS_UPSTREAM.md`](./CLODEX_VS_UPSTREAM.md). Upstream copyright and
-license notices are preserved in
-[`THIRD-PARTY-NOTICES.md`](./THIRD-PARTY-NOTICES.md). Clodex is not affiliated
-with or endorsed by Stagewise.
+> **Technical Preview:** Community Observed 8 is a public testing build, not a
+> stable signed release. Its job is to expose real workflows to real testers,
+> collect failures, and turn them into focused fixes.
 
-## Why Clodex
+## Why CLODEx
 
-A conventional coding assistant produces the next answer or patch. Clodex
-models engineering work as a durable task with its own state, workspaces,
-processes, permissions, evidence, and review lifecycle.
+Most AI coding interfaces are optimized for the next message. Real engineering
+work is longer: understand a repository, plan a change, edit multiple files,
+run commands, inspect the application, review the diff, recover from failure,
+and continue tomorrow.
 
-A task can:
+CLODEx treats that work as a durable task rather than a disposable chat.
 
-1. retain context across long-running work and application restarts;
-2. operate across files, Git, terminals, browser tabs, MCP tools, and runners;
-3. route work between models without changing the surrounding workflow;
-4. request approval before high-impact shell, network, browser, or remote
-   actions;
-5. execute locally or move to Docker, SSH, or cloud-backed environments;
-6. return diffs, receipts, artifacts, and a self-contained final result.
+| A chat-first workflow | CLODEx |
+| --- | --- |
+| Context is rebuilt from messages | The task retains its workspace and history |
+| Tools feel like separate integrations | Files, Git, terminal, browser, and MCP share one workspace |
+| A patch is the end of the interaction | Pending edits, diffs, command output, and review remain part of the task |
+| One provider defines the workflow | Account-backed models, BYOK, compatible endpoints, and local models coexist |
+| Automation is difficult to inspect | Sensitive operations can require explicit approval and remain reviewable |
 
-## Core capabilities
+The product principle is simple:
 
-| Area                       | What Clodex provides                                                                                                         |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| **Persistent tasks**       | Searchable task history, projects, workspaces, forks, goals, progress, token budgets, and time budgets.                      |
-| **Agent runtime**          | Managed turns, cancellation, recovery, collaboration modes, tool execution, and supervised lifecycle handling.               |
-| **Code workspace**         | File editing, pending edits, line-level diffs, Git operations, worktrees, pull-request review, and protected merge flows.    |
-| **Terminal and browser**   | Persistent shell sessions, local ports, browser/CDP context, console output, screenshots, and visual verification.           |
-| **Evidence-backed memory** | Scoped memory, append-only evidence records, retrieval, provenance, checkpoints, and bounded context injection.              |
-| **Model Fabric**           | Provider-neutral model routing, endpoint health, fallbacks, budget controls, usage accounting, and policy publication.       |
-| **Execution Fabric**       | Local execution, SSH sessions, Docker runners, custom runner contracts, cloud-task foundations, and portable snapshots.      |
-| **Guardian**               | Independent authorization decisions for sensitive capabilities, fail-closed outcomes, approval escalation, and audit events. |
-| **Network Policy**         | Destination grants, DNS validation, controlled browser access, MCP egress enforcement, and an audit ledger.                  |
-| **Extensions**             | MCP servers, skills, signed plugins, private marketplaces, runner SDKs, and capability-bounded generated apps.               |
-| **Continuity**             | Session checkpoints, crash recovery, memory synchronization, artifact capture, and experimental session teleportation.       |
+> **Model output is input, not authority.**
 
-## Architecture
+## What works today
 
-Clodex separates user interface, agent execution, tools, secrets, and policy
-into explicit process and trust boundaries.
+The following capabilities are intended for hands-on testing in
+**Community Observed 8**.
 
-```mermaid
-flowchart TB
-    USER["Developer"] --> UI["Electron renderer"]
-    UI <--> IPC["Karton typed IPC"]
-    IPC <--> MAIN["Electron main process"]
+| Area | Available now |
+| --- | --- |
+| **Durable tasks** | Searchable task history, workspace-aware context, cancellation, restart recovery, and continued work across sessions. |
+| **Code and review** | File editing, Pending Edits, line-level diffs, Git operations, worktrees, local commits, and pull-request review workflows. |
+| **Terminal and browser** | Persistent local shell sessions, local ports, embedded browsing, console inspection, screenshots, and visual verification. |
+| **Models** | CLODEx account integration, provider API keys, custom OpenAI-compatible endpoints, model selection, and local Ollama. |
+| **MCP** | User-configured stdio and remote MCP servers, HTTP/SSE transports, OAuth flows, tools, resources, prompts, and approval-aware execution. |
+| **Account access** | Secure CLODEx.xyz sign-in through the system browser with an RFC 8252 loopback callback, state, and PKCE S256. |
+| **Language and privacy** | English and Русский (beta), plus a required first-launch allow-or-decline choice for optional product statistics. |
+| **Distribution** | macOS Apple Silicon, macOS Intel, Windows x64, Debian/Ubuntu x64, and Fedora/RHEL x64 tester packages. |
 
-    MAIN <--> AGENT_HOST["Agent Host process"]
-    MAIN <--> MCP_HOST["MCP Host process"]
-    MAIN <--> SANDBOX["Sandbox workers"]
+### A typical workflow
 
-    AGENT_HOST --> CORE["Agent Core"]
-    CORE --> TASKS["Task lifecycle and goals"]
-    CORE --> MEMORY["Evidence memory and context ledger"]
-    CORE --> FABRIC["Model Fabric"]
-    CORE --> POLICY["Guardian and Zero-Trust policy"]
+1. Open a repository and start a task.
+2. Ask CLODEx to explain, plan, implement, or review a change.
+3. Let the agent inspect files and use approved local tools.
+4. Review Pending Edits, line-level diffs, terminal output, browser state, and
+   any permission requests.
+5. Accept, revise, commit, or continue the same task later.
 
-    POLICY --> EXECUTION["Local, SSH, Docker, or cloud execution"]
-    EXECUTION --> ARTIFACTS["Artifacts, receipts, and checkpoints"]
-    ARTIFACTS --> MEMORY
-```
+CLODEx is designed to keep the core engineering loop in one place, not to
+hide it behind a single “done” message.
 
-### Important packages
+## Built for review
+
+CLODEx keeps user control visible throughout the task.
 
 ```text
-apps/browser/                 Electron desktop application
-apps/website/                 Public project website
-agent/runtime-node/           Isolated Node.js agent runtime
-packages/agent-core/          Agent lifecycle, memory, routing, and policy
-packages/agent-shell/         Shell and execution contracts
-packages/clodex-contracts/    Shell-independent Stage 0 kernel contracts
-packages/mcp-runtime/         MCP transport and protocol runtime
-packages/runner-sdk/          External runner integration SDK
-packages/karton/              Typed state and RPC transport
-packages/stage-ui/            Shared interface components
+Developer request
+      ↓
+Agent proposes a plan or action
+      ↓
+Permission and approval checks
+      ↓
+Local tool or integration executes
+      ↓
+Diffs, outputs, artifacts, and task history return for review
 ```
 
-For a complete map, see
-[`docs/developer/repository-map.md`](./docs/developer/repository-map.md).
+The current public preview includes explicit permission, approval, diff, and
+review surfaces. Read [Security and data](./docs/developer/security-and-data.md)
+for the public security model and data-handling contract.
 
-## Security model
+## Proof, not promises
 
-Clodex does not rely on a prompt asking the model to behave safely. Sensitive
-operations pass through deterministic controls outside the model runtime.
+| Claim | Public evidence |
+| --- | --- |
+| The current tester binaries come from a pinned public source revision | [Source `a63fc5d7`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/a63fc5d79b3c6a3442e6e2a2116e575478cb96ae) · [Actions run 29655325372](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29655325372) |
+| Community Observed 8 contains the secure CLODEx browser sign-in flow | [Implementation PR #58](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/pull/58) · packaged authentication audit in the release evidence |
+| Published installers include checksums, SBOMs, and validation manifests | [Community Observed 8 release](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved8) · `SHA256SUMS.txt` · CycloneDX SBOMs · validation manifests |
+| The repository includes CI, provenance, contribution, and secret-scanning controls | [GitHub Actions](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions) · [DCO](./DCO) · [security policy](./SECURITY.md) |
+| The project documents its upstream lineage and redistribution obligations | [CLODEx vs Stagewise](./CLODEX_VS_UPSTREAM.md) · [Third-party notices](./THIRD-PARTY-NOTICES.md) |
 
-- **Fail closed:** ambiguous or invalid authorization results do not execute.
-- **Isolated hosts:** agent turns, MCP servers, and sandboxed workloads run
-  outside the renderer.
-- **Explicit capabilities:** possessing a tool does not automatically grant
-  authority to use it.
-- **Controlled egress:** network destinations are evaluated independently of
-  model intent.
-- **Protected storage:** credentials use OS-backed storage; sensitive task
-  artifacts use context-bound authenticated encryption.
-- **Human review:** pending edits, permission prompts, protected merge flows,
-  and high-impact approvals keep final authority with the user.
-- **Supply-chain checks:** extension identity, signatures, integrity,
-  compatibility, rollback, and quarantine are verified before activation.
-- **Privacy-aware audit:** operational events avoid storing prompts, source
-  code, audio, credentials, or other unnecessary sensitive content.
+The evidence archive intentionally distinguishes observed evidence from claims
+about external effects. A validation report proves what it actually checked;
+it does not turn a preview into a stable product.
 
-Read the detailed model in
-[`docs/developer/security-and-data.md`](./docs/developer/security-and-data.md).
-Report vulnerabilities through [`SECURITY.md`](./SECURITY.md), not through a
+## Download Community Observed 8
+
+| Platform | Package | Download |
+| --- | --- | --- |
+| macOS Apple Silicon | ARM64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-arm64.dmg) |
+| macOS Intel | x64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-x64.dmg) |
+| Windows | x64 EXE | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-x64-setup.exe) |
+| Debian / Ubuntu | x64 DEB | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed_1.16.0-communityobserved8_amd64.deb) |
+| Fedora / RHEL | x64 RPM | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0.communityobserved8-1.x86_64.rpm) |
+
+Verify the selected installer with
+[SHA256SUMS.txt](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/SHA256SUMS.txt).
+The
+[evidence archive](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved8/clodex-community-observed-1.16.0-communityobserved8-evidence.zip)
+contains manifests, validation reports, SBOMs, warnings, the byte audit, and the
+packaged authentication audit.
+
+Community packages intentionally do not have a trusted publisher identity:
+macOS builds are ad-hoc signed and not notarized, Windows builds are not
+Authenticode-signed, and Linux packages do not carry a CLODEx vendor
+signature. Verify the checksum and use only the operating system’s
+per-application review flow. Do not disable Gatekeeper, SmartScreen, Defender,
+or equivalent protections globally.
+
+### Install
+
+- **macOS:** open the matching DMG and drag CLODEx to `/Applications`.
+- **Windows:** run the x64 setup after verifying its SHA-256.
+- **Debian / Ubuntu:** `sudo apt install ./<downloaded-file>.deb`
+- **Fedora / RHEL:** `sudo rpm -i <downloaded-file>.rpm`
+
+Report installation or testing problems through
+[GitHub Issues](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/new/choose)
+or the [support guide](./SUPPORT.md).
+
+## Connect your models
+
+CLODEx supports four practical connection paths:
+
+1. **CLODEx account:** sign in through CLODEx.xyz and use the keys and models
+   available to that account.
+2. **Bring your own key:** connect supported model providers directly.
+3. **Compatible endpoint:** use a custom OpenAI-compatible API.
+4. **Local inference:** connect Ollama, normally at
+   `http://localhost:11434`.
+
+For BYOK and custom endpoints, provider terms, availability, and charges remain
+between the user and the selected provider. Never include API keys, tokens,
+private source, or unredacted logs in a public issue.
+
+## Security and privacy
+
+The Technical Preview is built around inspectable boundaries rather than
+invisible trust.
+
+- **Local-first workspace:** task state and desktop tooling are local by
+  default. Network access is used only by features and services the user
+  selects, such as hosted models, account access, remote MCP, browser
+  navigation, or opted-in statistics.
+- **System-browser authentication:** CLODEx.xyz login uses state, PKCE S256, a
+  one-time opaque code, and an exact loopback callback. Bearer tokens are not
+  returned in the callback URL.
+- **Protected credentials:** account and provider credentials use the
+  application’s protected storage path rather than renderer-local storage.
+- **Reviewable actions:** permission prompts, Pending Edits, diffs, and Git
+  review surfaces let users inspect changes before commit or merge.
+- **Explicit statistics choice:** Community Observed telemetry starts only
+  after the user chooses allow or decline.
+- **Bounded pseudonymous events:** when allowed, product statistics may include
+  a pseudonymous installation ID, counters, bounded timing, enum values, and
+  app/platform metadata. The Community Observed contract excludes prompts,
+  messages, source code, commands, paths, URLs, API keys, tool arguments, error
+  text, feedback text, session recording, and AI tracing.
+
+Read [Security and data](./docs/developer/security-and-data.md). Report
+vulnerabilities privately through [SECURITY.md](./SECURITY.md), not through a
 public issue.
 
-## Capability status
+## Preview scope
 
-| Capability                                           | Status                          |
-| ---------------------------------------------------- | ------------------------------- |
-| Desktop workspace, files, Git, terminal, and browser | **Available for local testing** |
-| Task lifecycle, goals, scoped memory, and recovery   | **Available for local testing** |
-| MCP runtime and isolated Agent Host                  | **Available for local testing** |
-| Local and SSH execution                              | **Available for local testing** |
-| Docker and external runner control plane             | **Preview**                     |
-| Guardian and managed network egress                  | **Preview**                     |
-| Signed extensions and generated apps                 | **Preview**                     |
-| Cloud Tasks and Session Teleport                     | **Labs / promotion-gated**      |
-| Unsigned macOS, Windows, and Linux community builds  | **Available for public testing** |
-| Official signed cross-platform distribution          | **Pending promotion evidence**  |
+The capabilities listed in [What works today](#what-works-today) define the
+public tester scope for Community Observed 8. Source-tree experiments and
+feature-gated surfaces are not part of that promise. The release page and its
+notes are the source of truth for each published build.
 
-The status labels are deliberate: implemented foundations are not presented as
-stable production capabilities until real installation evidence, monitoring,
-rollback, and manual promotion checks are complete.
+Contributors can start with the [repository map](./docs/developer/repository-map.md)
+and [architecture documentation](./docs/developer/architecture.md).
 
 ## Run from source
 
@@ -308,8 +222,7 @@ rollback, and manual promotion checks are complete.
 - Node.js `22.23.1`
 - pnpm `10.30.3`
 - Git
-- macOS, Linux, or Windows for development
-- macOS for DMG packaging and notarization
+- macOS, Linux, or Windows
 
 ### Setup
 
@@ -328,20 +241,20 @@ pnpm build:packages
 pnpm --dir apps/browser start:fast
 ```
 
-Use the checked development command when you want type checking to run in
-parallel with Electron:
+Use the checked development command when type checking should run in parallel
+with Electron:
 
 ```bash
 pnpm --dir apps/browser start
 ```
 
 Environment and provider configuration are documented in
-[`docs/developer/local-development.md`](./docs/developer/local-development.md).
-Never commit `.env`, credentials, signing keys, or local runtime state.
+[local development](./docs/developer/local-development.md). Never commit
+`.env` files, credentials, signing keys, or local runtime state.
 
 ## Validation
 
-Run the complete local validation suite before opening a pull request:
+Before opening a pull request:
 
 ```bash
 pnpm check
@@ -350,77 +263,79 @@ pnpm test
 pnpm security:secrets
 ```
 
-Validated baseline on **July 12, 2026**:
+GitHub CI, release manifests, checksums, and attestations are the source of
+truth for published artifacts. Start with
+[testing and release](./docs/developer/testing-and-release.md) and
+[VERSIONING.md](./VERSIONING.md).
 
-| Gate                     |           Result |
-| ------------------------ | ---------------: |
-| Package builds           |          `7 / 7` |
-| Typecheck tasks          |        `14 / 14` |
-| Test tasks               |        `16 / 16` |
-| Automated tests          |   `3,322 passed` |
-| Working-tree secret scan |     `0 findings` |
-| Website production build |         `passed` |
-| Desktop startup smoke    |         `passed` |
-| Main-plan readiness      |     `ready=true` |
-| Stable promotion         | `evidence-gated` |
+## Documentation
 
-CI and signed release evidence remain the source of truth for a published
-artifact. See
-[`docs/developer/testing-and-release.md`](./docs/developer/testing-and-release.md)
-and [`VERSIONING.md`](./VERSIONING.md).
+| Goal | Document |
+| --- | --- |
+| Understand the product quickly | [Product overview](./short_doc.en.md) · [Русский обзор](./short_doc.md) |
+| Run and develop locally | [Developer handbook](./DEVELOPERS.md) · [Local development](./docs/developer/local-development.md) |
+| Navigate the repository | [Repository map](./docs/developer/repository-map.md) |
+| Review architecture | [Architecture](./docs/developer/architecture.md) |
+| Review security and data handling | [Security and data](./docs/developer/security-and-data.md) · [Security policy](./SECURITY.md) |
+| Understand the current preview | [Community Observed builds](./docs/community-observed-builds.md) |
+| Understand project lineage | [CLODEx and Stagewise](./CLODEX_VS_UPSTREAM.md) |
+| Contribute or collaborate | [Contributing](./CONTRIBUTING.md) · [Collaboration paths](./COLLABORATE.md) |
 
-## Extending Clodex
+## Extending CLODEx
 
-Clodex exposes several integration surfaces:
+The repository contains integration surfaces for:
 
-- **MCP:** connect local stdio or remote Streamable HTTP/SSE servers;
-- **Skills:** package reusable agent instructions and workflows;
-- **Plugins:** distribute signed capabilities and optional executable runtimes;
-- **Runner SDK:** integrate Docker, SSH, cluster, or custom execution backends;
-- **Generated Apps:** create task-owned interactive tools with explicit grants;
-- **Automations:** schedule bounded tasks with declared capabilities.
+- MCP servers and OAuth-enabled remote MCP connections;
+- reusable skills and context files;
+- plugins and extension metadata.
 
-Start with
-[`docs/developer/extensions-and-integrations.md`](./docs/developer/extensions-and-integrations.md).
+Availability depends on the release channel. Review
+[extensions and integrations](./docs/developer/extensions-and-integrations.md)
+and the current release notes before presenting an integration as generally
+available.
+
+## Project lineage
+
+CLODEx began as a modified version of the open-source Stagewise codebase and
+has diverged into an independently maintained project focused on durable agent
+work, governed execution, model choice, integration boundaries, and release
+evidence.
+
+The exact upstream base commit, reproducible diff method, CLODEx-specific
+systems, and continuing upstream-derived areas are documented in
+[CLODEx vs Stagewise](./CLODEX_VS_UPSTREAM.md). Upstream copyright and license
+notices are preserved in [Third-party notices](./THIRD-PARTY-NOTICES.md).
+CLODEx is not affiliated with or endorsed by Stagewise.
 
 ## Contributing
 
 Contributions should be scoped, testable, and reviewable.
 
-1. Read [`CONTRIBUTING.md`](./CONTRIBUTING.md).
-2. Follow the commit and versioning rules in [`VERSIONING.md`](./VERSIONING.md).
-3. Sign commits according to the repository [`DCO`](./DCO).
+1. Read [CONTRIBUTING.md](./CONTRIBUTING.md).
+2. Follow [VERSIONING.md](./VERSIONING.md).
+3. Sign commits according to the repository [DCO](./DCO).
 4. Run formatting, type checking, tests, and secret scanning.
 5. Include focused tests for changed behavior.
 
-Use the repository issue templates for bugs, feature proposals, documentation,
-installation and provider problems, security questions, and independent tester
-reports. Use GitHub Discussions for design questions and community proposals.
+Bug reports, installation feedback, provider problems, documentation fixes,
+security reviews, and focused pull requests are welcome.
 
-The contributor trust ladder, maintainer responsibilities, and access policy
-are defined in [`GOVERNANCE.md`](./GOVERNANCE.md). Scoped compute grants and
-longer-term collaboration paths are described in
-[`COLLABORATE.md`](./COLLABORATE.md).
+## Maintainer and community
 
-## Maintainers and community
+CLODEx is independently maintained by
+[Merey Abdenbekuly](https://github.com/mereyabdenbekuly-ctrl).
 
-Clodex is currently maintained independently by
-[Merey Abdenbekuly](https://github.com/mereyabdenbekuly-ctrl) and welcomes
-external contributors, testers, security reviewers, research collaborators,
-and integration partners. Current roles and upstream credits are listed in
-[`CONTRIBUTORS.md`](./CONTRIBUTORS.md).
+- Website: [ide.clodex.xyz](https://ide.clodex.xyz)
+- Updates: [X · @CLODEx_lab](https://x.com/CLODEx_lab)
+- Testing and support: [SUPPORT.md](./SUPPORT.md)
+- Governance: [GOVERNANCE.md](./GOVERNANCE.md)
+- Code of conduct: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
 
-Follow project updates on [X · @CLODEx_lab](https://x.com/CLODEx_lab).
-
-## Support independent development
-
-If Clodex is useful to you, the current support options and their terms are
-listed on the [Clodex website](https://ide.clodex.xyz/#support). Financial
-support does not buy roadmap priority, repository access, or merge decisions.
+If CLODEx is useful, support options are listed on the
+[project website](https://ide.clodex.xyz/#support).
 
 ## License
 
-Clodex is distributed under the
-[GNU Affero General Public License v3.0](./LICENSE).
-Third-party components and notices are listed in
-[`THIRD-PARTY-NOTICES.md`](./THIRD-PARTY-NOTICES.md).
+CLODEx is distributed under the
+[GNU Affero General Public License v3.0](./LICENSE). Third-party components
+retain their original licenses and notices.
