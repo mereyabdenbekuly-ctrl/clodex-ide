@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  COMMUNITY_US_POSTHOG_ASSET_ORIGIN,
   COMMUNITY_US_POSTHOG_INGESTION_ORIGIN,
   attachCommunityPackagedBoundaryEvidence,
   inspectCommunityPackagedBoundary,
@@ -150,7 +151,9 @@ test('accepts a Free unsigned package with no configured managed service', () =>
 test('requires the US ingestion origin in the observed backend bundle', () => {
   const fixture = makeFixture({
     '.vite/build/main.js': {
-      contents: `const posthogHost = ${JSON.stringify(COMMUNITY_US_POSTHOG_INGESTION_ORIGIN)};`,
+      contents:
+        `const posthogHost = ${JSON.stringify(COMMUNITY_US_POSTHOG_INGESTION_ORIGIN)};` +
+        ` const posthogAssets = ${JSON.stringify(COMMUNITY_US_POSTHOG_ASSET_ORIGIN)};`,
     },
     '.vite/renderer/main.js': {
       contents: 'export const rendererTelemetry = false;',
@@ -267,6 +270,23 @@ test('rejects an EU PostHog ingestion host in app.asar.unpacked', () => {
     );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('allows only the exact US PostHog ingestion and asset hosts', () => {
+  for (const forbiddenHost of [
+    'https://eu-assets.i.posthog.com',
+    'https://ap.i.posthog.com',
+    'https://preview-assets.i.posthog.com',
+  ]) {
+    assertRejected(
+      {
+        '.vite/build/main.js': {
+          contents: `const posthogHost = ${JSON.stringify(forbiddenHost)};`,
+        },
+      },
+      'non-us-posthog-ingestion-host',
+    );
   }
 });
 

@@ -10,8 +10,16 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import {
+  COMMUNITY_US_POSTHOG_ASSET_ORIGIN,
+  COMMUNITY_US_POSTHOG_INGESTION_ORIGIN,
+  findDisallowedCommunityPostHogHosts,
+} from './community-posthog-us-only.mjs';
 
-export const COMMUNITY_US_POSTHOG_INGESTION_ORIGIN = 'https://us.i.posthog.com';
+export {
+  COMMUNITY_US_POSTHOG_ASSET_ORIGIN,
+  COMMUNITY_US_POSTHOG_INGESTION_ORIGIN,
+};
 
 const COMMUNITY_DISTRIBUTIONS = Object.freeze({
   'community-observed': Object.freeze({
@@ -69,9 +77,6 @@ const JWT_PATTERN =
   /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/gu;
 const PRIVATE_KEY_PATTERN =
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/gu;
-const POSTHOG_INGESTION_ORIGIN_PATTERN =
-  /https:\/\/([a-z0-9.-]+\.i\.posthog\.com)(?=[/:?#]|[^A-Za-z0-9._~-]|$)/giu;
-
 function assertCommunityDistribution(distributionMode) {
   const distribution = COMMUNITY_DISTRIBUTIONS[distributionMode];
   if (!distribution) {
@@ -252,12 +257,8 @@ function inspectBuffer(contents, location, comparisonPath, state) {
     if (rule.pattern.test(source)) addFinding(state, rule.id, location);
   }
 
-  POSTHOG_INGESTION_ORIGIN_PATTERN.lastIndex = 0;
-  for (const match of source.matchAll(POSTHOG_INGESTION_ORIGIN_PATTERN)) {
-    if ((match[1] ?? '').toLowerCase() !== 'us.i.posthog.com') {
-      addFinding(state, 'non-us-posthog-ingestion-host', location);
-      break;
-    }
+  if (findDisallowedCommunityPostHogHosts(source).length > 0) {
+    addFinding(state, 'non-us-posthog-ingestion-host', location);
   }
 
   if (applicationOwned) {
