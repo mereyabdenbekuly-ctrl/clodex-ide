@@ -70,16 +70,6 @@ function assertSafeFileName(value) {
   return value;
 }
 
-function assertConditionalEtag(value) {
-  assert(
-    typeof value === 'string' &&
-      value.length <= 256 &&
-      /^(?:W\/)?"[^"\r\n]{1,220}"$/u.test(value),
-    'GitHub Release response is missing a bounded ETag',
-  );
-  return value;
-}
-
 function expectedAssetsByName(assets) {
   assert(
     Array.isArray(assets) && assets.length === 7,
@@ -323,12 +313,6 @@ export class CommunityObservedReleaseApi {
     ).body;
   }
 
-  getReleaseWithEtag(repository, releaseId) {
-    return this.request(
-      `${API_ORIGIN}/repos/${assertRepository(repository)}/releases/${assertPositiveInteger(releaseId, 'release ID')}`,
-    );
-  }
-
   async uploadAsset({ asset, uploadEndpoint }) {
     const endpoint = new URL(uploadEndpoint);
     assert(
@@ -372,15 +356,22 @@ export class CommunityObservedReleaseApi {
     ).body;
   }
 
-  publishRelease(repository, releaseId, etag) {
+  publishRelease({ body, name, repository, releaseId, sourceCommit, tag }) {
     return this.request(
       `${API_ORIGIN}/repos/${assertRepository(repository)}/releases/${assertPositiveInteger(releaseId, 'release ID')}`,
       {
-        body: JSON.stringify({ draft: false, make_latest: 'false' }),
-        expectedStatuses: [200, 412],
+        body: JSON.stringify({
+          body,
+          draft: false,
+          make_latest: 'false',
+          name,
+          prerelease: true,
+          tag_name: tag,
+          target_commitish: assertSourceCommit(sourceCommit),
+        }),
+        expectedStatuses: [200],
         headers: {
           'Content-Type': 'application/json',
-          'If-Match': assertConditionalEtag(etag),
         },
         method: 'PATCH',
       },
@@ -562,14 +553,14 @@ export async function publishCommunityObservedPrerelease({
     targetCommitish: sourceCommit,
   });
   const releaseId = staged.releaseId;
-  const draftResponse = await api.getReleaseWithEtag(repository, releaseId);
+  const draftRelease = await api.getRelease(repository, releaseId);
   assertProtectedDraftState({
-    assets: draftResponse.body?.assets,
+    assets: draftRelease?.assets,
     body: candidate.notes,
     expectedAssets: assets,
     name: manifest.release.name,
     prerelease: true,
-    release: draftResponse.body,
+    release: draftRelease,
     releaseId,
     tag,
     targetCommitish: sourceCommit,
@@ -578,29 +569,61 @@ export async function publishCommunityObservedPrerelease({
     body: candidate.notes,
     expectedAssets: assets,
     manifest,
-    release: draftResponse.body,
+    release: draftRelease,
     releaseId,
     repository,
     sourceCommit,
     state: 'draft',
   });
-  const etag = assertConditionalEtag(draftResponse.etag);
 
-  // These are deliberately the final awaited authorization checks before the
-  // single conditional publication effect.
+  // GitHub's Update Release endpoint rejects conditional request headers on
+  // PATCH. Keep every automated publication path behind repository concurrency
+  // and the protected Release environment. GitHub's immutable-release settings
+  // endpoint requires Administration:read, which GITHUB_TOKEN cannot receive,
+  // so the typed confirmation plus repository variable are the trusted operator
+  // attestation. Privileged repository administrators remain trusted writers.
   assertImmutabilityEnabled(immutabilityEnabled);
-  await assertSourceRefs(api, repository, sourceCommit, publisherCommit, tag, {
-    requireTag: false,
-  });
   const finalMatches = await exactTagReleases(api, repository, tag);
   assert(
     finalMatches.length === 1 && finalMatches[0]?.id === releaseId,
     'concurrent release appeared before publication',
   );
+  await assertSourceRefs(api, repository, sourceCommit, publisherCommit, tag, {
+    requireTag: false,
+  });
+  const finalDraft = await api.getRelease(repository, releaseId);
+  assertProtectedDraftState({
+    assets: finalDraft?.assets,
+    body: candidate.notes,
+    expectedAssets: assets,
+    name: manifest.release.name,
+    prerelease: true,
+    release: finalDraft,
+    releaseId,
+    tag,
+    targetCommitish: sourceCommit,
+  });
+  assertReleaseIdentity({
+    body: candidate.notes,
+    expectedAssets: assets,
+    manifest,
+    release: finalDraft,
+    releaseId,
+    repository,
+    sourceCommit,
+    state: 'draft',
+  });
 
   let effect;
   try {
-    effect = await api.publishRelease(repository, releaseId, etag);
+    effect = await api.publishRelease({
+      body: candidate.notes,
+      name: manifest.release.name,
+      releaseId,
+      repository,
+      sourceCommit,
+      tag,
+    });
   } catch (error) {
     try {
       const terminal = await validateTerminal({
@@ -620,31 +643,19 @@ export async function publishCommunityObservedPrerelease({
         status: 'published-after-uncertain-response',
       };
     } catch (recoveryError) {
+      const publicationMessage =
+        error instanceof Error ? error.message : String(error);
+      const recoveryMessage =
+        recoveryError instanceof Error
+          ? recoveryError.message
+          : String(recoveryError);
       fail(
-        'Community Observed publication outcome is uncertain; inspect the exact release ID',
+        `Community Observed publication outcome is uncertain; publication error: ${publicationMessage}; terminal recovery error: ${recoveryMessage}; inspect the exact release ID`,
         {
-          cause: recoveryError ?? error,
+          cause: error,
         },
       );
     }
-  }
-  if (effect.status === 412) {
-    const terminal = await validateTerminal({
-      api,
-      body: candidate.notes,
-      expectedAssets: assets,
-      manifest,
-      releaseId,
-      repository,
-      sourceCommit,
-      publisherCommit,
-    });
-    return {
-      patched: false,
-      release: terminal,
-      releaseId,
-      status: 'published-after-precondition-race',
-    };
   }
   assert(
     effect.status === 200,

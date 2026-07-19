@@ -474,10 +474,6 @@ class FakeReleaseApi {
     return this.release;
   }
 
-  getReleaseWithEtag() {
-    return { body: this.release, etag: 'W/"draft-etag"', status: 200 };
-  }
-
   uploadAsset({ asset }) {
     this.writes.push(`upload:${asset.name}`);
     const uploaded = {
@@ -492,8 +488,20 @@ class FakeReleaseApi {
     return uploaded;
   }
 
-  publishRelease(_repository, _releaseId, etag) {
-    assert.equal(etag, 'W/"draft-etag"');
+  publishRelease({
+    body,
+    name,
+    releaseId,
+    repository: repo,
+    sourceCommit: releaseSource,
+    tag: releaseTag,
+  }) {
+    assert.equal(body, this.release.body);
+    assert.equal(name, this.release.name);
+    assert.equal(releaseId, this.release.id);
+    assert.equal(repo, repository);
+    assert.equal(releaseSource, sourceCommit);
+    assert.equal(releaseTag, tag);
     this.writes.push('patch');
     this.tagPublished = true;
     this.release = {
@@ -530,7 +538,7 @@ test('publisher fails before writes when immutable releases are disabled', async
   }
 });
 
-test('publisher stages seven assets then performs one conditional immutable publication', async () => {
+test('publisher stages seven assets then performs one exact immutable publication', async () => {
   const fixture = createCandidateFixture();
   const api = new FakeReleaseApi();
   try {
