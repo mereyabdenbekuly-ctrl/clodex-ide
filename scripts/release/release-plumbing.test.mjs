@@ -1272,7 +1272,9 @@ test('protected publisher structurally forbids automatic release deletion', () =
   );
   const protectedReleaseSection = workflow
     .split('Create a new isolated protected draft by exact release ID')[1]
-    .split('Finalize exact non-trusted prerelease after complete draft upload')[0];
+    .split(
+      'Finalize exact non-trusted prerelease after complete draft upload',
+    )[0];
 
   assert.doesNotMatch(
     protectedPublisher,
@@ -1352,7 +1354,9 @@ test('browser release builds and publishes only the immutable input SHA', () => 
   )[1];
   const protectedDraftEffectSection = releaseSection
     .split('Create a new isolated protected draft by exact release ID')[1]
-    .split('Finalize exact non-trusted prerelease after complete draft upload')[0];
+    .split(
+      'Finalize exact non-trusted prerelease after complete draft upload',
+    )[0];
 
   assert.match(workflow, /Immutable 40-character commit SHA/);
   assert.match(workflow, /Validate immutable canonical-main inputs/);
@@ -1485,7 +1489,9 @@ test('browser release builds and publishes only the immutable input SHA', () => 
   );
   assert.match(protectedDraftEffectSection, /RELEASE_ASSETS_DIRECTORY/);
   const publicReleaseSection = releaseSection
-    .split('Finalize exact non-trusted prerelease after complete draft upload')[1]
+    .split(
+      'Finalize exact non-trusted prerelease after complete draft upload',
+    )[1]
     .split('Query and assert exact live release state')[0];
   assert.doesNotMatch(publicReleaseSection, /softprops\/action-gh-release@/);
   assert.match(
@@ -1496,10 +1502,7 @@ test('browser release builds and publishes only the immutable input SHA', () => 
   assert.match(publicReleaseSection, /"draft":false/);
   assert.match(publicReleaseSection, /"prerelease":true/);
   assert.match(publicReleaseSection, /"make_latest":"false"/);
-  assert.match(
-    publicReleaseSection,
-    /vars\.GITHUB_IMMUTABLE_RELEASES_ENABLED/,
-  );
+  assert.match(publicReleaseSection, /vars\.GITHUB_IMMUTABLE_RELEASES_ENABLED/);
   assert.match(
     publicReleaseSection,
     /Set repository variable GITHUB_IMMUTABLE_RELEASES_ENABLED=true/,
@@ -1512,7 +1515,10 @@ test('browser release builds and publishes only the immutable input SHA', () => 
   assert.match(publicReleaseSection, /release\.body/);
   assert.match(publicReleaseSection, /release\.immutable !== true/);
   assert.match(publicReleaseSection, /patch_status=0/);
-  assert.match(publicReleaseSection, /recovered the exact published prerelease/);
+  assert.match(
+    publicReleaseSection,
+    /recovered the exact published prerelease/,
+  );
   assert.match(
     publicReleaseSection,
     /releases\/\$\{RELEASE_ID\}[\s\S]*--input/,
@@ -1532,7 +1538,9 @@ test('browser release builds and publishes only the immutable input SHA', () => 
   assert.doesNotMatch(
     releaseSection
       .split('Create a new isolated protected draft')[1]
-      .split('Finalize exact non-trusted prerelease after complete draft upload')[0],
+      .split(
+        'Finalize exact non-trusted prerelease after complete draft upload',
+      )[0],
     /softprops\/action-gh-release/,
   );
   assert.match(releaseSection, /release-candidate\/manifest\.json/);
