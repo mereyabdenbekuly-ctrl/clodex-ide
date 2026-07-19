@@ -1158,6 +1158,10 @@ jobs:
     name: Publish exact release candidate from a fresh effect runner
     needs: [source-gate, tag, release-authorization, release-candidate]
     runs-on: ubuntu-latest
+    concurrency:
+      group: github-release-publication-${{ github.repository }}
+      cancel-in-progress: false
+    environment: Release
     permissions:
       actions: read
       contents: write
@@ -1416,31 +1420,14 @@ jobs:
             echo "::error::Set repository variable CLODEX_IMMUTABLE_RELEASES_ENABLED=true only after enabling immutable releases"
             exit 1
           fi
-          gh api --include \
+          # GitHub rejects If-Match on Update Release PATCH requests. This
+          # exact-ID GET and verification run under the shared automation mutex
+          # and protected Release environment. Privileged repository admins are
+          # explicit trusted writers because this endpoint offers no CAS header.
+          gh api \
             -H "X-GitHub-Api-Version: 2026-03-10" \
             "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
-            > "${RUNNER_TEMP}/protected-draft-response.txt"
-          node - "${RUNNER_TEMP}/protected-draft-response.txt" \
-            "${RUNNER_TEMP}/protected-draft-etag.txt" \
-            "${RUNNER_TEMP}/protected-draft.json" <<'NODE'
-          const fs = require('node:fs');
-          const [responsePath, etagPath, bodyPath] = process.argv.slice(2);
-          const response = fs.readFileSync(responsePath, 'utf8');
-          const separator = response.includes('\r\n\r\n') ? '\r\n\r\n' : '\n\n';
-          const separatorIndex = response.indexOf(separator);
-          if (separatorIndex <= 0) throw new Error('GitHub release response is missing HTTP headers');
-          const headers = response.slice(0, separatorIndex).split(/\r?\n/u);
-          const etags = headers
-            .filter((line) => /^etag:/iu.test(line))
-            .map((line) => line.replace(/^etag:\s*/iu, '').trim());
-          if (etags.length !== 1 || !/^(?:W\/)?"[^"\r\n]+"$/u.test(etags[0])) {
-            throw new Error('GitHub release response is missing one valid ETag');
-          }
-          const body = response.slice(separatorIndex + separator.length);
-          JSON.parse(body);
-          fs.writeFileSync(etagPath, `${etags[0]}\n`, { mode: 0o600 });
-          fs.writeFileSync(bodyPath, body, { mode: 0o600 });
-          NODE
+            > "${RUNNER_TEMP}/protected-draft.json"
           cat > "${RUNNER_TEMP}/verify-exact-prerelease.cjs" <<'NODE'
           const fs = require('node:fs');
           const [releasePath, expectedState] = process.argv.slice(2);
@@ -1495,29 +1482,124 @@ jobs:
           NODE
           node "${RUNNER_TEMP}/verify-exact-prerelease.cjs" \
             "${RUNNER_TEMP}/protected-draft.json" draft
-          etag=$(tr -d '\r\n' < "${RUNNER_TEMP}/protected-draft-etag.txt")
-          printf '%s\n' '{"draft":false,"prerelease":true,"make_latest":"false"}' \
-            > "${RUNNER_TEMP}/finalize-prerelease.json"
+          node - \
+            "${RUNNER_TEMP}/release-notes.md" \
+            "${RUNNER_TEMP}/finalize-prerelease.json" <<'NODE'
+          const fs = require('node:fs');
+          const [notesPath, outputPath] = process.argv.slice(2);
+          fs.writeFileSync(
+            outputPath,
+            `${JSON.stringify({
+              body: fs.readFileSync(notesPath, 'utf8'),
+              draft: false,
+              make_latest: 'false',
+              name: `Clodex Agentic IDE ${process.env.RELEASE_VERSION}`,
+              prerelease: true,
+              tag_name: process.env.RELEASE_TAG,
+              target_commitish: process.env.RELEASE_REF,
+            })}\n`,
+            { mode: 0o600 },
+          );
+          NODE
+          emit_stderr_file() {
+            local label="$1"
+            local path="$2"
+            if [ -s "$path" ]; then
+              printf '%s\n' "$label" >&2
+              cat "$path" >&2
+            fi
+          }
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          pre_effect_tag_commit=$(git rev-parse --verify \
+            "refs/tags/${RELEASE_TAG}^{commit}")
+          if ! test "$pre_effect_tag_commit" = "$RELEASE_REF"; then
+            echo "::error::Tag $RELEASE_TAG moved before publication: expected $RELEASE_REF, got $pre_effect_tag_commit"
+            exit 1
+          fi
+          # GitHub's immutable-release settings endpoint requires
+          # Administration:read, which GITHUB_TOKEN cannot receive. The
+          # repository variable and protected Release approval are therefore
+          # the explicit trusted-operator attestation; no privileged PAT is
+          # introduced into this public release workflow.
           patch_status=0
           gh api --method PATCH \
-            -H "If-Match: ${etag}" \
             -H "X-GitHub-Api-Version: 2026-03-10" \
             "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
             --input "${RUNNER_TEMP}/finalize-prerelease.json" \
             > "${RUNNER_TEMP}/finalized-prerelease-response.json" \
             2> "${RUNNER_TEMP}/finalized-prerelease-error.txt" || patch_status=$?
+          response_verify_status=0
           if [ "$patch_status" -eq 0 ]; then
             node "${RUNNER_TEMP}/verify-exact-prerelease.cjs" \
-              "${RUNNER_TEMP}/finalized-prerelease-response.json" published
+              "${RUNNER_TEMP}/finalized-prerelease-response.json" published \
+              2> "${RUNNER_TEMP}/finalized-prerelease-response-error.txt" || response_verify_status=$?
           fi
+          terminal_get_status=0
           gh api \
             -H "X-GitHub-Api-Version: 2026-03-10" \
             "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
-            > "${RUNNER_TEMP}/finalized-prerelease.json"
-          node "${RUNNER_TEMP}/verify-exact-prerelease.cjs" \
-            "${RUNNER_TEMP}/finalized-prerelease.json" published
-          if [ "$patch_status" -ne 0 ]; then
-            echo "::warning::Finalization response was uncertain; recovered the exact published prerelease by release ID"
+            > "${RUNNER_TEMP}/finalized-prerelease.json" \
+            2> "${RUNNER_TEMP}/finalized-prerelease-get-error.txt" || terminal_get_status=$?
+          terminal_verify_status=0
+          if [ "$terminal_get_status" -eq 0 ]; then
+            node "${RUNNER_TEMP}/verify-exact-prerelease.cjs" \
+              "${RUNNER_TEMP}/finalized-prerelease.json" published \
+              2> "${RUNNER_TEMP}/finalized-prerelease-verify-error.txt" || terminal_verify_status=$?
+          fi
+          if [ "$terminal_get_status" -ne 0 ] || [ "$terminal_verify_status" -ne 0 ]; then
+            emit_stderr_file \
+              "GitHub Release PATCH stderr:" \
+              "${RUNNER_TEMP}/finalized-prerelease-error.txt"
+            emit_stderr_file \
+              "GitHub Release PATCH response verification stderr:" \
+              "${RUNNER_TEMP}/finalized-prerelease-response-error.txt"
+            emit_stderr_file \
+              "Terminal GitHub Release GET stderr:" \
+              "${RUNNER_TEMP}/finalized-prerelease-get-error.txt"
+            emit_stderr_file \
+              "Terminal GitHub Release verification stderr:" \
+              "${RUNNER_TEMP}/finalized-prerelease-verify-error.txt"
+            echo "::error::Prerelease publication outcome is uncertain; no second PATCH was attempted"
+            exit 1
+          fi
+          terminal_tag_fetch_status=0
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" \
+            2> "${RUNNER_TEMP}/finalized-prerelease-tag-fetch-error.txt" || terminal_tag_fetch_status=$?
+          terminal_tag_resolve_status=0
+          terminal_tag_commit=""
+          if [ "$terminal_tag_fetch_status" -eq 0 ]; then
+            terminal_tag_commit=$(git rev-parse --verify \
+              "refs/tags/${RELEASE_TAG}^{commit}" \
+              2> "${RUNNER_TEMP}/finalized-prerelease-tag-resolve-error.txt") || terminal_tag_resolve_status=$?
+          fi
+          if [ "$terminal_tag_fetch_status" -ne 0 ] || \
+            [ "$terminal_tag_resolve_status" -ne 0 ] || \
+            [ "$terminal_tag_commit" != "$RELEASE_REF" ]; then
+            emit_stderr_file \
+              "GitHub Release PATCH stderr:" \
+              "${RUNNER_TEMP}/finalized-prerelease-error.txt"
+            emit_stderr_file \
+              "GitHub Release PATCH response verification stderr:" \
+              "${RUNNER_TEMP}/finalized-prerelease-response-error.txt"
+            emit_stderr_file \
+              "Terminal tag fetch stderr:" \
+              "${RUNNER_TEMP}/finalized-prerelease-tag-fetch-error.txt"
+            emit_stderr_file \
+              "Terminal tag resolution stderr:" \
+              "${RUNNER_TEMP}/finalized-prerelease-tag-resolve-error.txt"
+            echo "::error::Published tag $RELEASE_TAG does not resolve to exact source SHA $RELEASE_REF (got ${terminal_tag_commit:-missing})"
+            exit 1
+          fi
+          if [ "$patch_status" -ne 0 ] || [ "$response_verify_status" -ne 0 ]; then
+            emit_stderr_file \
+              "GitHub Release PATCH stderr:" \
+              "${RUNNER_TEMP}/finalized-prerelease-error.txt"
+            emit_stderr_file \
+              "GitHub Release PATCH response verification stderr:" \
+              "${RUNNER_TEMP}/finalized-prerelease-response-error.txt"
+            echo "::warning::Finalization response was uncertain; recovered the exact published prerelease and tag SHA by release ID"
           fi
           echo "id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 

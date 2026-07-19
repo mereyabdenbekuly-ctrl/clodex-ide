@@ -30,10 +30,6 @@ on:
 
 run-name: "Publish observed run ${{ inputs.run_id }} as ${{ inputs.tag }}"
 
-concurrency:
-  group: community-observed-publication-effect
-  cancel-in-progress: false
-
 permissions:
   actions: read
   contents: read
@@ -137,6 +133,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: Release
+    concurrency:
+      # Serialize every GitHub Release publication path, including the
+      # reusable browser release workflow, around one repository-wide effect.
+      group: github-release-publication-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       actions: read
       contents: write

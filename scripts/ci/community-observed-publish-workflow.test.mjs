@@ -41,6 +41,14 @@ test('publisher workflow is manual and separates read-only verification from Rel
   assert.match(publishSection, /environment: Release/u);
   assert.match(
     publishSection,
+    /concurrency:\n\s+#[^\n]+\n\s+#[^\n]+\n\s+group: github-release-publication-\$\{\{ github\.repository \}\}\n\s+cancel-in-progress: false/u,
+  );
+  assert.doesNotMatch(
+    verifySection,
+    /group: github-release-publication-\$\{\{ github\.repository \}\}/u,
+  );
+  assert.match(
+    publishSection,
     /permissions:\n {6}actions: read\n {6}contents: write/u,
   );
 });
@@ -106,14 +114,24 @@ test('publication is draft-first, immutable-gated, digest-verified and single-PA
     /repository immutable-release attestation is not enabled/u,
   );
   assert.match(publisher, /2026-03-10/u);
-  assert.doesNotMatch(publisher, /\/immutable-releases/u);
+  assert.doesNotMatch(publisher, /\/immutable-releases|Administration:write/u);
+  assert.match(publisher, /Administration:read/u);
+  assert.match(publisher, /typed confirmation plus repository variable/u);
   assert.match(publisher, /stageProtectedReleaseDraft/u);
   assert.match(publisher, /release\.assets\.length === 7/u);
   assert.match(publisher, /asset\.digest === `sha256:\$\{record\.sha256\}`/u);
-  assert.match(publisher, /'If-Match': assertConditionalEtag\(etag\)/u);
+  assert.doesNotMatch(
+    publisher,
+    /If-Match|assertConditionalEtag|getReleaseWithEtag|status === 412/u,
+  );
   assert.match(
     publisher,
-    /body: JSON\.stringify\(\{ draft: false, make_latest: 'false' \}\)/u,
+    /body: JSON\.stringify\(\{[\s\S]*draft: false,[\s\S]*make_latest: 'false',[\s\S]*target_commitish:/u,
+  );
+  assert.match(publisher, /const finalDraft = await api\.getRelease/u);
+  assert.ok(
+    publisher.indexOf('const finalDraft = await api.getRelease') <
+      publisher.indexOf('effect = await api.publishRelease'),
   );
   assert.match(publisher, /release\.immutable === true/u);
   assert.equal((publisher.match(/method: 'PATCH'/gu) ?? []).length, 1);

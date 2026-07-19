@@ -414,7 +414,11 @@ test('browser privilege boundary depends on the unprivileged identity gate', () 
     actions: 'read',
     contents: 'write',
   });
-  assert.equal(workflow.jobs.release.environment, undefined);
+  assert.equal(workflow.jobs.release.environment, 'Release');
+  assert.deepEqual(workflow.jobs.release.concurrency, {
+    group: `github-release-publication-\${{ github.repository }}`,
+    'cancel-in-progress': false,
+  });
   const releaseHandoff = workflow.jobs.release.steps.find(
     (step) =>
       step.name ===

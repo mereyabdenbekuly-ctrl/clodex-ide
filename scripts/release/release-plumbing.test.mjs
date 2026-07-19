@@ -1441,8 +1441,12 @@ test('browser release builds and publishes only the immutable input SHA', () => 
     releaseSection,
     /needs: \[source-gate, tag, release-authorization, release-candidate\]/,
   );
+  assert.match(
+    releaseSection,
+    /concurrency:\n\s+group: github-release-publication-\$\{\{ github\.repository \}\}\n\s+cancel-in-progress: false/,
+  );
   assert.match(releaseSection, /actions: read\n\s+contents: write/);
-  assert.doesNotMatch(releaseSection, /environment: Release/);
+  assert.match(releaseSection, /environment: Release/);
   assert.doesNotMatch(releaseSection, /verify-release-promotion\.mjs/);
   assert.doesNotMatch(releaseSection, /release-publication\.mjs/);
   assert.match(
@@ -1499,37 +1503,80 @@ test('browser release builds and publishes only the immutable input SHA', () => 
     /if: needs\.source-gate\.outputs\.trusted_promotion != 'true' && inputs\.draft == false/,
   );
   assert.match(publicReleaseSection, /alpha\|beta\|nightly/);
-  assert.match(publicReleaseSection, /"draft":false/);
-  assert.match(publicReleaseSection, /"prerelease":true/);
-  assert.match(publicReleaseSection, /"make_latest":"false"/);
+  assert.match(publicReleaseSection, /draft: false/);
+  assert.match(publicReleaseSection, /prerelease: true/);
+  assert.match(publicReleaseSection, /make_latest: 'false'/);
   assert.match(publicReleaseSection, /vars\.CLODEX_IMMUTABLE_RELEASES_ENABLED/);
   assert.match(
     publicReleaseSection,
     /Set repository variable CLODEX_IMMUTABLE_RELEASES_ENABLED=true/,
   );
   assert.match(publicReleaseSection, /X-GitHub-Api-Version: 2026-03-10/);
-  assert.match(publicReleaseSection, /gh api --include/);
-  assert.match(publicReleaseSection, /If-Match: \$\{etag\}/);
+  assert.doesNotMatch(publicReleaseSection, /\/immutable-releases/);
+  assert.match(publicReleaseSection, /Administration:read/);
+  assert.match(publicReleaseSection, /no privileged PAT/);
+  assert.doesNotMatch(
+    publicReleaseSection,
+    /CLODEX_RELEASE_ADMIN|secrets\.[A-Z0-9_]*ADMIN/u,
+  );
+  assert.doesNotMatch(
+    publicReleaseSection,
+    /If-Match:|protected-draft-etag|gh api --include/,
+  );
   assert.match(publicReleaseSection, /release\.target_commitish/);
   assert.match(publicReleaseSection, /release\.name/);
   assert.match(publicReleaseSection, /release\.body/);
-  assert.match(publicReleaseSection, /release\.immutable !== true/);
-  assert.match(publicReleaseSection, /patch_status=0/);
+  assert.match(publicReleaseSection, /tag_name: process\.env\.RELEASE_TAG/);
   assert.match(
     publicReleaseSection,
-    /recovered the exact published prerelease/,
+    /target_commitish: process\.env\.RELEASE_REF/,
+  );
+  assert.match(publicReleaseSection, /release\.immutable !== true/);
+  assert.match(publicReleaseSection, /patch_status=0/);
+  assert.match(publicReleaseSection, /response_verify_status=0/);
+  assert.match(publicReleaseSection, /terminal_get_status=0/);
+  assert.match(publicReleaseSection, /terminal_verify_status=0/);
+  assert.match(publicReleaseSection, /pre_effect_tag_commit/);
+  assert.match(
+    publicReleaseSection,
+    /Tag \$RELEASE_TAG moved before publication/,
+  );
+  assert.match(publicReleaseSection, /terminal_tag_fetch_status=0/);
+  assert.match(publicReleaseSection, /terminal_tag_resolve_status=0/);
+  assert.match(publicReleaseSection, /emit_stderr_file/);
+  assert.match(publicReleaseSection, /cat "\$path" >&2/);
+  assert.match(publicReleaseSection, /no second PATCH was attempted/);
+  assert.match(publicReleaseSection, /terminal_tag_commit/);
+  assert.match(
+    publicReleaseSection,
+    /Published tag \$RELEASE_TAG does not resolve to exact source SHA \$RELEASE_REF/,
+  );
+  assert.match(
+    publicReleaseSection,
+    /recovered the exact published prerelease and tag SHA/,
   );
   assert.match(
     publicReleaseSection,
     /releases\/\$\{RELEASE_ID\}[\s\S]*--input/,
   );
   assert.ok(
-    publicReleaseSection.indexOf('gh api --include') <
+    publicReleaseSection.indexOf('protected-draft.json" draft') <
       publicReleaseSection.indexOf('gh api --method PATCH'),
   );
   assert.ok(
     publicReleaseSection.indexOf('GitHub Release assets differ') <
       publicReleaseSection.indexOf('gh api --method PATCH'),
+  );
+  const preEffectTagIndex = publicReleaseSection.indexOf(
+    'pre_effect_tag_commit=',
+  );
+  const publicationPatchIndex = publicReleaseSection.indexOf(
+    'gh api --method PATCH',
+  );
+  assert.ok(preEffectTagIndex < publicationPatchIndex);
+  assert.ok(
+    publicReleaseSection.indexOf('terminal_tag_commit=') >
+      publicationPatchIndex,
   );
   assert.match(
     releaseSection,
