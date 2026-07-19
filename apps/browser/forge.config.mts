@@ -28,6 +28,7 @@ import {
   verifyBundledComponentFixedArtifactBytes,
   verifyBundledComponentSourceBytes,
 } from './scripts/release-attribution.mjs';
+import { enforceCommunityPostHogUsOnlyInBackend } from './scripts/community-posthog-us-only.mjs';
 
 const isCommunityDistribution =
   buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-unsigned' ||
@@ -598,6 +599,32 @@ const uploadSourceMapsAndCleanup = (
   }
 };
 
+const enforceCommunityPostHogRegionalBoundary = (
+  buildPath: string,
+  _electronVersion: string,
+  _platform: string,
+  _arch: string,
+  callback: (error?: Error) => void,
+) => {
+  if (!isCommunityDistribution) {
+    callback();
+    return;
+  }
+
+  try {
+    const evidence = enforceCommunityPostHogUsOnlyInBackend(buildPath);
+    console.log(
+      '[forge.config] Enforced US-only Community PostHog boundary across ' +
+        `${evidence.filesScanned} backend files ` +
+        `(${formatBytes(evidence.bytesScanned)}); rewrote ` +
+        `${evidence.replacements.length} known EU origin(s)`,
+    );
+    callback();
+  } catch (error) {
+    callback(error instanceof Error ? error : new Error(String(error)));
+  }
+};
+
 const config: ForgeConfig = {
   buildIdentifier: buildConstants.__APP_BUILD_IDENTIFIER__,
   packagerConfig: {
@@ -619,6 +646,7 @@ const config: ForgeConfig = {
       copyNativeDependencies,
       pruneNonPlatformPrebuilds,
       uploadSourceMapsAndCleanup,
+      enforceCommunityPostHogRegionalBoundary,
     ],
     afterComplete: [copyVcRedist, signAdhocMacApplication],
     icon: packagerIconPath,
