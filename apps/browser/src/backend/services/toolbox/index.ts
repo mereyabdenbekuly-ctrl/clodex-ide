@@ -201,7 +201,7 @@ export class ToolboxService
   private terminalService: TerminalService | null = null;
   private remoteConnectionsService: RemoteConnectionsService | null = null;
   private desktopAutomationService: DesktopAutomationService | null = null;
-  private readonly clodexMcpService: ClodexMcpService;
+  private readonly clodexMcpService: ClodexMcpService | null;
   /**
    * Injected lazily via `setModelProviderService` because `ModelProviderService`
    * is constructed later in `main.ts` (after `preferencesService`) and has a
@@ -629,43 +629,48 @@ export class ToolboxService
     this.mcpApprovalBroker = mcpApprovalBroker;
     this.gitService = gitService;
     this.preferencesService = preferencesService;
-    this.clodexMcpService = new ClodexMcpService({
-      authService,
-      logger,
-      gatewayUrl: process.env.CLODEX_MCP_GATEWAY_URL,
-      isEnabled: () =>
-        isClodexCloudSelected(
-          this.preferencesService.get(),
-          Boolean(this.authService.accessToken),
-        ),
-      recordPendingApprovalAtEpoch: (
-        agentInstanceId,
-        toolCallId,
-        explanation,
-        approvalLifecycleEpoch,
-      ) => {
-        this.recordPendingToolApprovalAtEpoch(
+    if (__APP_MANAGED_SERVICES_ENABLED__) {
+      this.clodexMcpService = new ClodexMcpService({
+        authService,
+        logger,
+        gatewayUrl: process.env.CLODEX_MCP_GATEWAY_URL,
+        isEnabled: () =>
+          __APP_MANAGED_SERVICES_ENABLED__ &&
+          isClodexCloudSelected(
+            this.preferencesService.get(),
+            Boolean(this.authService.accessToken),
+          ),
+        recordPendingApprovalAtEpoch: (
           agentInstanceId,
           toolCallId,
           explanation,
           approvalLifecycleEpoch,
-        );
-      },
-      assessGuardian: async (request) =>
-        (await this.guardianPolicyChecker?.(request)) ?? null,
-      stageApprovalAtEpoch: (input, approvalLifecycleEpoch) =>
-        this.stageMcpApprovalAtEpoch(input, approvalLifecycleEpoch),
-      claimApprovalAuthority: (input, approvalLifecycleEpoch) =>
-        this.claimMcpApprovalAtEpoch(input, approvalLifecycleEpoch),
-      assertApprovalLifecycleCurrent: (
-        agentInstanceId,
-        approvalLifecycleEpoch,
-      ) =>
-        this.assertToolApprovalLifecycleEpoch(
+        ) => {
+          this.recordPendingToolApprovalAtEpoch(
+            agentInstanceId,
+            toolCallId,
+            explanation,
+            approvalLifecycleEpoch,
+          );
+        },
+        assessGuardian: async (request) =>
+          (await this.guardianPolicyChecker?.(request)) ?? null,
+        stageApprovalAtEpoch: (input, approvalLifecycleEpoch) =>
+          this.stageMcpApprovalAtEpoch(input, approvalLifecycleEpoch),
+        claimApprovalAuthority: (input, approvalLifecycleEpoch) =>
+          this.claimMcpApprovalAtEpoch(input, approvalLifecycleEpoch),
+        assertApprovalLifecycleCurrent: (
           agentInstanceId,
           approvalLifecycleEpoch,
-        ),
-    });
+        ) =>
+          this.assertToolApprovalLifecycleEpoch(
+            agentInstanceId,
+            approvalLifecycleEpoch,
+          ),
+      });
+    } else {
+      this.clodexMcpService = null;
+    }
     this.detectedShell = detectedShell;
     this.resolvedEnvPromise = resolvedEnvPromise;
     this.agentStore = agentStore;
@@ -1149,7 +1154,10 @@ export class ToolboxService
     const approvalLifecycleEpoch =
       this.getToolApprovalLifecycleEpoch(agentInstanceId);
     const [cloudTools, registryTools, remoteTools] = await Promise.all([
-      this.clodexMcpService.getTools(agentInstanceId, approvalLifecycleEpoch),
+      this.clodexMcpService?.getTools(
+        agentInstanceId,
+        approvalLifecycleEpoch,
+      ) ?? Promise.resolve<Record<string, Tool>>({}),
       createRegistryMcpTools({
         registry: this.mcpRegistryService,
         agentInstanceId,
@@ -2252,7 +2260,16 @@ export class ToolboxService
     this.uiKarton.registerServerProcedureHandler(
       'toolbox.getClodexMcpStatus',
       async (_callingClientId: string, refresh = false) => {
-        return await this.clodexMcpService.getCapabilityStatus(refresh);
+        return (
+          (await this.clodexMcpService?.getCapabilityStatus(refresh)) ?? {
+            state: 'unavailable' as const,
+            gatewayUrl: '',
+            checkedAt: new Date(),
+            cacheExpiresAt: null,
+            tools: [],
+            error: 'Managed tools are not included in this build.',
+          }
+        );
       },
     );
   }
@@ -2479,7 +2496,7 @@ export class ToolboxService
     await this.logIngestService?.teardown();
     this.logIngestService = null;
 
-    await this.clodexMcpService.teardown();
+    await this.clodexMcpService?.teardown();
     this.remoteConnectionsService = null;
 
     await this.mountManagerService?.teardown();

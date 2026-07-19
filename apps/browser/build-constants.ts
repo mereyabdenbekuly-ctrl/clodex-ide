@@ -37,6 +37,8 @@ export const __APP_DISTRIBUTION_MODE__ = resolveAppDistributionMode(
 
 const distributionPolicy = resolveAppDistributionPolicy({
   distributionMode: __APP_DISTRIBUTION_MODE__,
+  managedServicesEnabled:
+    process.env.CLODEX_MANAGED_SERVICES_ENABLED === 'true',
   releaseChannel: __APP_RELEASE_CHANNEL__,
 });
 
@@ -62,6 +64,8 @@ export const __APP_RENDERER_TELEMETRY_ENABLED__ =
   distributionPolicy.rendererTelemetryEnabled;
 export const __APP_EXCEPTION_TELEMETRY_ENABLED__ =
   distributionPolicy.exceptionTelemetryEnabled;
+export const __APP_MANAGED_SERVICES_ENABLED__ =
+  distributionPolicy.managedServicesEnabled;
 export const __APP_MODEL_TRACING_ENABLED__ =
   distributionPolicy.modelTracingEnabled;
 export const __APP_TELEMETRY_MODE__ = distributionPolicy.telemetryMode;

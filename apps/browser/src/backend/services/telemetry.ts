@@ -1241,7 +1241,7 @@ export class TelemetryService extends DisposableService {
     }
 
     this.posthogClient = new PostHog(this.posthogApiKey, {
-      host: process.env.POSTHOG_HOST || 'https://eu.i.posthog.com',
+      host: process.env.POSTHOG_HOST || 'https://us.i.posthog.com',
       flushAt: 1,
       flushInterval: 0,
       ...(this.telemetryMode === 'anonymous-backend-only'

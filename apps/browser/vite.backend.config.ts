@@ -1,12 +1,21 @@
 import path from 'node:path';
 import { defineConfig } from 'vite';
 import * as buildConstants from './build-constants';
+import { resolveBackendBuildEnvironment } from './community-free-build-policy.mjs';
 
-const backendPostHogApiKey = buildConstants.__APP_TELEMETRY_ENABLED__
-  ? process.env.POSTHOG_API_KEY?.trim()
-  : undefined;
-const backendClodexApiUrl =
-  process.env.CLODEX_API_URL ?? process.env.API_URL ?? 'https://clodex.xyz/api';
+const backendBuildEnvironment = resolveBackendBuildEnvironment({
+  authEnabled: buildConstants.__APP_AUTH_ENABLED__,
+  autoUpdateEnabled: buildConstants.__APP_AUTO_UPDATE_ENABLED__,
+  distributionMode: buildConstants.__APP_DISTRIBUTION_MODE__,
+  environment: process.env,
+  managedServicesEnabled: buildConstants.__APP_MANAGED_SERVICES_ENABLED__,
+  telemetryEnabled: buildConstants.__APP_TELEMETRY_ENABLED__,
+});
+const backendPostHogApiKey = backendBuildEnvironment.POSTHOG_API_KEY;
+const disabledManagedMcpService = path.resolve(
+  __dirname,
+  './src/backend/services/toolbox/services/clodex-mcp/community-disabled.ts',
+);
 
 if (
   buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-observed' &&
@@ -50,60 +59,26 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src/backend'),
-      '@shared': path.resolve(__dirname, './src/shared'),
-    },
+    alias: [
+      ...(!buildConstants.__APP_MANAGED_SERVICES_ENABLED__
+        ? [
+            {
+              find: /^\.\/services\/clodex-mcp$/u,
+              replacement: disabledManagedMcpService,
+            },
+          ]
+        : []),
+      { find: '@', replacement: path.resolve(__dirname, './src/backend') },
+      {
+        find: '@shared',
+        replacement: path.resolve(__dirname, './src/shared'),
+      },
+    ],
     conditions: ['node'],
     mainFields: ['module', 'main'],
   },
   define: {
-    'process.env': JSON.stringify({
-      BUILD_MODE: process.env.BUILD_MODE ?? 'production',
-      NODE_ENV: process.env.NODE_ENV ?? 'production',
-      POSTHOG_API_KEY: backendPostHogApiKey,
-      POSTHOG_HOST:
-        buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-observed'
-          ? 'https://eu.i.posthog.com'
-          : (process.env.POSTHOG_HOST ?? 'https://eu.i.posthog.com'),
-      CLODEX_CONSOLE_URL:
-        process.env.CLODEX_CONSOLE_URL ??
-        process.env.CLODEX_ORIGIN ??
-        'https://clodex.xyz',
-      API_URL: backendClodexApiUrl,
-      LLM_PROXY_URL:
-        process.env.LLM_PROXY_URL ??
-        process.env.CLODEX_LLM_RELAY_URL ??
-        'https://clodex.xyz/v1',
-      CLODEX_ORIGIN: process.env.CLODEX_ORIGIN ?? 'https://clodex.xyz',
-      CLODEX_LOGIN_URL:
-        process.env.CLODEX_LOGIN_URL ?? 'https://clodex.xyz/login',
-      CLODEX_API_URL: backendClodexApiUrl,
-      CLODEX_LLM_RELAY_URL:
-        process.env.CLODEX_LLM_RELAY_URL ?? 'https://clodex.xyz/v1',
-      CLODEX_MCP_GATEWAY_URL:
-        process.env.CLODEX_MCP_GATEWAY_URL ??
-        'https://clodex.xyz/tools-gateway/mcp',
-      CLODEX_AUTH_CALLBACK_SCHEME:
-        process.env.CLODEX_AUTH_CALLBACK_SCHEME ?? 'clodex-ide',
-      CLODEX_IDE_CLIENT_ID:
-        buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-observed'
-          ? 'clodex-community-observed'
-          : (process.env.CLODEX_IDE_CLIENT_ID ?? 'clodex-ide'),
-      CLODEX_AUTH_ENABLED:
-        buildConstants.__APP_DISTRIBUTION_MODE__ === 'community-observed'
-          ? 'true'
-          : buildConstants.__APP_AUTH_ENABLED__
-            ? (process.env.CLODEX_AUTH_ENABLED ?? 'true')
-            : 'false',
-      CLODEX_DISABLE_ISOLATED_AGENT_RUNTIME:
-        process.env.CLODEX_DISABLE_ISOLATED_AGENT_RUNTIME,
-      UPDATE_SERVER_ORIGIN: buildConstants.__APP_AUTO_UPDATE_ENABLED__
-        ? process.env.UPDATE_SERVER_ORIGIN
-        : undefined,
-      SUPABASE_URL: process.env.SUPABASE_URL,
-      SUPABASE_PUBLISHABLE_KEY: process.env.SUPABASE_PUBLISHABLE_KEY,
-    }),
+    'process.env': JSON.stringify(backendBuildEnvironment),
     ...Object.fromEntries(
       Object.entries(buildConstants).map(([key, value]) => [
         key,

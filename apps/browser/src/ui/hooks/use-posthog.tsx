@@ -61,7 +61,7 @@ export function PostHogProvider({ children }: PostHogProviderProps) {
         disable_session_recording: true,
         autocapture: true,
         api_host: apiHost,
-        ui_host: 'https://eu.posthog.com',
+        ui_host: 'https://us.posthog.com',
         capture_pageview: false, // We capture pageviews manually
         capture_pageleave: true, // Enable pageleave capture
         debug: import.meta.env.NODE_ENV === 'development',

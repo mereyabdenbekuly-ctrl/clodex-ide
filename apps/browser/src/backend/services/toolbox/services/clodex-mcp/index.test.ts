@@ -11,6 +11,7 @@ const connectMock = vi.fn();
 const listToolsMock = vi.fn();
 const callToolMock = vi.fn();
 const closeMock = vi.fn();
+const TEST_GATEWAY_URL = 'https://managed.example/mcp';
 
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: vi.fn().mockImplementation(() => ({
@@ -66,12 +67,22 @@ describe('ClodexMcpService', () => {
     closeMock.mockReset();
   });
 
+  it('requires an explicit managed gateway endpoint', () => {
+    expect(
+      () =>
+        new ClodexMcpService({
+          authService: makeAuthService(),
+          logger: makeLogger(),
+        }),
+    ).toThrow('Clodex MCP Gateway URL must be configured explicitly');
+  });
+
   it('does not request a token or connect before Clodex is selected', async () => {
     const authService = makeAuthService();
     const service = new ClodexMcpService({
       authService,
       logger: makeLogger(),
-      gatewayUrl: 'https://clodex.xyz/tools-gateway/mcp',
+      gatewayUrl: TEST_GATEWAY_URL,
       isEnabled: () => false,
     });
 
@@ -107,7 +118,7 @@ describe('ClodexMcpService', () => {
     const service = new ClodexMcpService({
       authService: makeAuthService(),
       logger: makeLogger(),
-      gatewayUrl: 'https://clodex.xyz/tools-gateway/mcp',
+      gatewayUrl: TEST_GATEWAY_URL,
     });
 
     const tools = await service.getTools('agent-1');
@@ -133,7 +144,7 @@ describe('ClodexMcpService', () => {
     const service = new ClodexMcpService({
       authService: makeAuthService(),
       logger: makeLogger(),
-      gatewayUrl: 'https://clodex.xyz/tools-gateway/mcp',
+      gatewayUrl: TEST_GATEWAY_URL,
       recordPendingApproval,
     });
 
@@ -158,7 +169,7 @@ describe('ClodexMcpService', () => {
     const service = new ClodexMcpService({
       authService: makeAuthService(),
       logger: makeLogger(),
-      gatewayUrl: 'https://clodex.xyz/tools-gateway/mcp',
+      gatewayUrl: TEST_GATEWAY_URL,
       recordPendingApproval,
     });
 
@@ -196,6 +207,7 @@ describe('ClodexMcpService', () => {
     const service = new ClodexMcpService({
       authService: makeAuthService(),
       logger: makeLogger(),
+      gatewayUrl: TEST_GATEWAY_URL,
       assessGuardian,
       recordPendingApproval,
       stageApproval,
@@ -263,6 +275,7 @@ describe('ClodexMcpService', () => {
     const service = new ClodexMcpService({
       authService: makeAuthService(),
       logger: makeLogger(),
+      gatewayUrl: TEST_GATEWAY_URL,
       assessGuardian: vi.fn(async () => deniedAssessment),
     });
 
@@ -291,7 +304,7 @@ describe('ClodexMcpService', () => {
     const service = new ClodexMcpService({
       authService: makeAuthService(),
       logger: makeLogger(),
-      gatewayUrl: 'https://clodex.xyz/tools-gateway/mcp',
+      gatewayUrl: TEST_GATEWAY_URL,
     });
 
     const tools = await service.getTools('agent-1');
@@ -341,7 +354,7 @@ describe('ClodexMcpService', () => {
     const service = new ClodexMcpService({
       authService: makeAuthService(),
       logger: makeLogger(),
-      gatewayUrl: 'https://clodex.xyz/tools-gateway/mcp',
+      gatewayUrl: TEST_GATEWAY_URL,
       claimApprovalAuthority,
       assertApprovalLifecycleCurrent: assertCurrent,
     });
@@ -379,6 +392,7 @@ describe('ClodexMcpService', () => {
     const service = new ClodexMcpService({
       authService: makeAuthService('token-a'),
       logger: makeLogger(),
+      gatewayUrl: TEST_GATEWAY_URL,
     });
 
     await service.getTools('agent-1');
@@ -391,6 +405,7 @@ describe('ClodexMcpService', () => {
     const service = new ClodexMcpService({
       authService: makeAuthServiceWithoutToken(),
       logger: makeLogger(),
+      gatewayUrl: TEST_GATEWAY_URL,
     });
 
     await expect(service.getTools('agent-1')).resolves.toEqual({});
@@ -401,13 +416,13 @@ describe('ClodexMcpService', () => {
     const service = new ClodexMcpService({
       authService: makeAuthServiceWithoutToken(),
       logger: makeLogger(),
-      gatewayUrl: 'https://clodex.xyz/tools-gateway/mcp',
+      gatewayUrl: TEST_GATEWAY_URL,
     });
 
     const status = await service.getCapabilityStatus();
 
     expect(status.state).toBe('signed-out');
-    expect(status.gatewayUrl).toBe('https://clodex.xyz/tools-gateway/mcp');
+    expect(status.gatewayUrl).toBe(TEST_GATEWAY_URL);
     expect(status.tools).toEqual([]);
     expect(connectMock).not.toHaveBeenCalled();
   });
@@ -437,6 +452,7 @@ describe('ClodexMcpService', () => {
     const service = new ClodexMcpService({
       authService: makeAuthService(),
       logger: makeLogger(),
+      gatewayUrl: TEST_GATEWAY_URL,
     });
 
     const status = await service.getCapabilityStatus();

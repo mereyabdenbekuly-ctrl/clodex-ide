@@ -96,6 +96,7 @@ describe('build constants local package identity', () => {
       autoUpdateEnabled: false,
       buildIdentifier: 'community-unsigned',
       exceptionTelemetryEnabled: false,
+      managedServicesEnabled: false,
       modelTracingEnabled: false,
       registerDefaultProtocols: false,
       rendererTelemetryEnabled: false,
@@ -124,6 +125,7 @@ describe('build constants local package identity', () => {
       autoUpdateEnabled: false,
       buildIdentifier: 'community-observed',
       exceptionTelemetryEnabled: false,
+      managedServicesEnabled: false,
       modelTracingEnabled: false,
       registerDefaultProtocols: false,
       rendererTelemetryEnabled: false,
@@ -154,6 +156,41 @@ describe('build constants local package identity', () => {
     expect(() => resolveAppDistributionMode('community')).toThrow(
       'Unsupported CLODEX_DISTRIBUTION_MODE: community',
     );
+  });
+
+  it('keeps managed service connectors outside community distributions', () => {
+    for (const distributionMode of [
+      'community-unsigned',
+      'community-observed',
+    ] as const) {
+      expect(
+        resolveAppDistributionPolicy({
+          distributionMode,
+          releaseChannel: 'release',
+        }).managedServicesEnabled,
+      ).toBe(false);
+    }
+
+    expect(
+      resolveAppDistributionPolicy({
+        distributionMode: 'official',
+        releaseChannel: 'release',
+      }).managedServicesEnabled,
+    ).toBe(false);
+    expect(
+      resolveAppDistributionPolicy({
+        distributionMode: 'official',
+        managedServicesEnabled: true,
+        releaseChannel: 'release',
+      }).managedServicesEnabled,
+    ).toBe(true);
+    expect(() =>
+      resolveAppDistributionPolicy({
+        distributionMode: 'community-observed',
+        managedServicesEnabled: true,
+        releaseChannel: 'release',
+      }),
+    ).toThrow('community-observed distribution cannot enable managed services');
   });
 
   it('rejects mixing community and local unsigned identities', () => {

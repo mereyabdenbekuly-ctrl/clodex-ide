@@ -1729,17 +1729,19 @@ export function McpSettingsSection() {
       setLoading(true);
       const [nextSnapshot, nextGateway] = await Promise.all([
         listMcp(),
-        getGatewayStatus(forceGateway).catch(
-          () =>
-            ({
-              state: 'unavailable',
-              gatewayUrl: 'Configured MCP gateway',
-              checkedAt: new Date(),
-              cacheExpiresAt: null,
-              tools: [],
-              error: 'Clodex could not inspect the cloud MCP gateway.',
-            }) satisfies ClodexMcpCapabilityStatus,
-        ),
+        __APP_MANAGED_SERVICES_ENABLED__
+          ? getGatewayStatus(forceGateway).catch(
+              () =>
+                ({
+                  state: 'unavailable',
+                  gatewayUrl: 'Configured MCP gateway',
+                  checkedAt: new Date(),
+                  cacheExpiresAt: null,
+                  tools: [],
+                  error: 'Clodex could not inspect the cloud MCP gateway.',
+                }) satisfies ClodexMcpCapabilityStatus,
+            )
+          : Promise.resolve(null),
       ]);
       setSnapshot(nextSnapshot);
       setGatewayStatus(nextGateway);
@@ -2034,17 +2036,23 @@ export function McpSettingsSection() {
     importing,
   ]);
 
-  const localServers =
-    snapshot?.servers.filter((server) => server.group === 'local-custom') ?? [];
-  const pluginServers =
+  const visibleServers =
     snapshot?.servers.filter(
-      (server) => server.group === 'installed-plugins',
+      (server) =>
+        __APP_MANAGED_SERVICES_ENABLED__ || server.group !== 'clodex-cloud',
     ) ?? [];
-  const cloudRegistryServers =
-    snapshot?.servers.filter((server) => server.group === 'clodex-cloud') ?? [];
-  const connectedCount =
-    snapshot?.servers.filter((server) => server.runtime.status === 'connected')
-      .length ?? 0;
+  const localServers = visibleServers.filter(
+    (server) => server.group === 'local-custom',
+  );
+  const pluginServers = visibleServers.filter(
+    (server) => server.group === 'installed-plugins',
+  );
+  const cloudRegistryServers = visibleServers.filter(
+    (server) => server.group === 'clodex-cloud',
+  );
+  const connectedCount = visibleServers.filter(
+    (server) => server.runtime.status === 'connected',
+  ).length;
   const cloudTools = useMemo(() => {
     const normalized = cloudQuery.trim().toLowerCase();
     if (!normalized) return gatewayStatus?.tools ?? [];
@@ -2157,7 +2165,11 @@ export function McpSettingsSection() {
     <SettingsPage
       eyebrow="Capabilities"
       title="MCP runtime"
-      description="Manage the built-in Clodex cloud gateway, local and remote custom servers, and MCP capabilities delivered by signed plugins."
+      description={
+        __APP_MANAGED_SERVICES_ENABLED__
+          ? 'Manage the built-in Clodex cloud gateway, local and remote custom servers, and MCP capabilities delivered by signed plugins.'
+          : 'Manage local and remote custom servers and MCP capabilities delivered by signed plugins.'
+      }
       actions={
         <div className="flex flex-wrap gap-2">
           <Button
@@ -2194,11 +2206,18 @@ export function McpSettingsSection() {
         </div>
       }
       toolbar={
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div
+          className={cn(
+            'grid grid-cols-1 gap-3',
+            __APP_MANAGED_SERVICES_ENABLED__
+              ? 'sm:grid-cols-3'
+              : 'sm:grid-cols-2',
+          )}
+        >
           <SettingsSummaryCard
             accent
             label="configured servers"
-            value={snapshot?.servers.length ?? 0}
+            value={visibleServers.length}
             icon={<ServerCogIcon className="size-4" />}
           />
           <SettingsSummaryCard
@@ -2206,11 +2225,13 @@ export function McpSettingsSection() {
             value={connectedCount}
             icon={<PlugIcon className="size-4" />}
           />
-          <SettingsSummaryCard
-            label="Clodex cloud tools"
-            value={gatewayStatus?.tools.length ?? 0}
-            icon={<CloudCogIcon className="size-4" />}
-          />
+          {__APP_MANAGED_SERVICES_ENABLED__ && (
+            <SettingsSummaryCard
+              label="Clodex cloud tools"
+              value={gatewayStatus?.tools.length ?? 0}
+              icon={<CloudCogIcon className="size-4" />}
+            />
+          )}
         </div>
       }
     >
@@ -2289,85 +2310,89 @@ export function McpSettingsSection() {
               />
             )}
 
-            <section className="space-y-4">
-              <SettingsSectionHeader
-                title="Clodex Cloud"
-                description="The authenticated Clodex Tools Gateway remains isolated from user-installed MCP servers and keeps its existing Guardian boundary."
-              />
-              {gatewayStatus && (
-                <GatewayStatusBanner
-                  status={gatewayStatus}
-                  onOpenAccount={() => setSettingsRoute({ section: 'account' })}
+            {__APP_MANAGED_SERVICES_ENABLED__ && (
+              <section className="space-y-4">
+                <SettingsSectionHeader
+                  title="Clodex Cloud"
+                  description="The authenticated Clodex Tools Gateway remains isolated from user-installed MCP servers and keeps its existing Guardian boundary."
                 />
-              )}
-              <SettingsPanel className="overflow-hidden">
-                <div className="p-4">
-                  <SettingsSectionHeader
-                    title="Gateway endpoint"
-                    description="Credentials and query parameters are never displayed."
-                    trailing={
-                      gatewayStatus?.state === 'connected' ? (
-                        <StatusBadge status="connected" />
-                      ) : (
-                        <StatusBadge status="disconnected" />
-                      )
+                {gatewayStatus && (
+                  <GatewayStatusBanner
+                    status={gatewayStatus}
+                    onOpenAccount={() =>
+                      setSettingsRoute({ section: 'account' })
                     }
                   />
-                </div>
-                <div className="border-token-border-light border-t bg-token-bg-secondary/35 px-4 py-3">
-                  <code className="block truncate text-[11px] text-token-text-secondary">
-                    {gatewayStatus?.gatewayUrl ??
-                      'Loading gateway configuration…'}
-                  </code>
-                </div>
-              </SettingsPanel>
-
-              {cloudRegistryServers.map(renderServer)}
-
-              <div className="space-y-3">
-                <SettingsSectionHeader
-                  title="Cloud tools"
-                  description="Read-only tools can run automatically; destructive tools retain the established approval flow."
-                  trailing={
-                    gatewayStatus?.tools.length ? (
-                      <div className="relative w-56">
-                        <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-token-text-tertiary" />
-                        <Input
-                          aria-label="Search Clodex cloud MCP tools"
-                          placeholder="Search cloud tools…"
-                          value={cloudQuery}
-                          onValueChange={setCloudQuery}
-                          className="h-8 max-w-none rounded-lg pr-8 pl-8 text-xs"
-                        />
-                        {cloudQuery && (
-                          <button
-                            type="button"
-                            aria-label="Clear cloud MCP tool search"
-                            className="absolute top-1/2 right-1.5 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-token-text-tertiary hover:bg-token-list-hover-background"
-                            onClick={() => setCloudQuery('')}
-                          >
-                            <XIcon className="size-3" />
-                          </button>
-                        )}
-                      </div>
-                    ) : undefined
-                  }
-                />
-                {cloudTools.length > 0 ? (
-                  <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                    {cloudTools.map((tool) => (
-                      <CloudToolCard key={tool.id} tool={tool} />
-                    ))}
-                  </div>
-                ) : (
-                  <SettingsPanel className="px-5 py-8 text-center text-token-text-tertiary text-xs">
-                    {cloudQuery
-                      ? 'No cloud tools match this search.'
-                      : 'No Clodex cloud tools are currently available.'}
-                  </SettingsPanel>
                 )}
-              </div>
-            </section>
+                <SettingsPanel className="overflow-hidden">
+                  <div className="p-4">
+                    <SettingsSectionHeader
+                      title="Gateway endpoint"
+                      description="Credentials and query parameters are never displayed."
+                      trailing={
+                        gatewayStatus?.state === 'connected' ? (
+                          <StatusBadge status="connected" />
+                        ) : (
+                          <StatusBadge status="disconnected" />
+                        )
+                      }
+                    />
+                  </div>
+                  <div className="border-token-border-light border-t bg-token-bg-secondary/35 px-4 py-3">
+                    <code className="block truncate text-[11px] text-token-text-secondary">
+                      {gatewayStatus?.gatewayUrl ??
+                        'Loading gateway configuration…'}
+                    </code>
+                  </div>
+                </SettingsPanel>
+
+                {cloudRegistryServers.map(renderServer)}
+
+                <div className="space-y-3">
+                  <SettingsSectionHeader
+                    title="Cloud tools"
+                    description="Read-only tools can run automatically; destructive tools retain the established approval flow."
+                    trailing={
+                      gatewayStatus?.tools.length ? (
+                        <div className="relative w-56">
+                          <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-token-text-tertiary" />
+                          <Input
+                            aria-label="Search Clodex cloud MCP tools"
+                            placeholder="Search cloud tools…"
+                            value={cloudQuery}
+                            onValueChange={setCloudQuery}
+                            className="h-8 max-w-none rounded-lg pr-8 pl-8 text-xs"
+                          />
+                          {cloudQuery && (
+                            <button
+                              type="button"
+                              aria-label="Clear cloud MCP tool search"
+                              className="absolute top-1/2 right-1.5 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-token-text-tertiary hover:bg-token-list-hover-background"
+                              onClick={() => setCloudQuery('')}
+                            >
+                              <XIcon className="size-3" />
+                            </button>
+                          )}
+                        </div>
+                      ) : undefined
+                    }
+                  />
+                  {cloudTools.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                      {cloudTools.map((tool) => (
+                        <CloudToolCard key={tool.id} tool={tool} />
+                      ))}
+                    </div>
+                  ) : (
+                    <SettingsPanel className="px-5 py-8 text-center text-token-text-tertiary text-xs">
+                      {cloudQuery
+                        ? 'No cloud tools match this search.'
+                        : 'No Clodex cloud tools are currently available.'}
+                    </SettingsPanel>
+                  )}
+                </div>
+              </section>
+            )}
 
             <ServerGroup
               title="Local & Custom"
