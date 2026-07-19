@@ -414,6 +414,9 @@ importers:
       '@electron-forge/plugin-vite':
         specifier: 7.11.2
         version: 7.11.2
+      '@electron/asar':
+        specifier: 3.4.1
+        version: 3.4.1
       '@electron/fuses':
         specifier: ^1.8.0
         version: 1.8.0
