@@ -686,7 +686,7 @@ async function main() {
   );
   assert(
     options['immutability-enabled'] === 'true',
-    'repository variable GITHUB_IMMUTABLE_RELEASES_ENABLED must be exactly true',
+    'repository variable CLODEX_IMMUTABLE_RELEASES_ENABLED must be exactly true',
   );
   assert(
     options['immutability-confirm'] ===

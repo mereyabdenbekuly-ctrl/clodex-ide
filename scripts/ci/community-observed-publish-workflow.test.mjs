@@ -78,7 +78,7 @@ test('candidate and effect are bound to exact artifact IDs and digests', () => {
   assert.match(workflow, /--publisher-commit="\$GITHUB_SHA"/u);
   assert.match(
     workflow,
-    /--immutability-enabled="\$\{\{ vars\.GITHUB_IMMUTABLE_RELEASES_ENABLED \}\}"/u,
+    /--immutability-enabled="\$\{\{ vars\.CLODEX_IMMUTABLE_RELEASES_ENABLED \}\}"/u,
   );
   assert.match(
     workflow,
@@ -99,7 +99,7 @@ test('release contract is exactly five unchanged installers, evidence, and self-
 });
 
 test('publication is draft-first, immutable-gated, digest-verified and single-PATCH', () => {
-  assert.match(workflow, /vars\.GITHUB_IMMUTABLE_RELEASES_ENABLED/u);
+  assert.match(workflow, /vars\.CLODEX_IMMUTABLE_RELEASES_ENABLED/u);
   assert.match(workflow, /test "\$REPOSITORY_IMMUTABILITY_ENABLED" = "true"/u);
   assert.match(
     publisher,

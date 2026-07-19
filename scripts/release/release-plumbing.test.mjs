@@ -1502,10 +1502,10 @@ test('browser release builds and publishes only the immutable input SHA', () => 
   assert.match(publicReleaseSection, /"draft":false/);
   assert.match(publicReleaseSection, /"prerelease":true/);
   assert.match(publicReleaseSection, /"make_latest":"false"/);
-  assert.match(publicReleaseSection, /vars\.GITHUB_IMMUTABLE_RELEASES_ENABLED/);
+  assert.match(publicReleaseSection, /vars\.CLODEX_IMMUTABLE_RELEASES_ENABLED/);
   assert.match(
     publicReleaseSection,
-    /Set repository variable GITHUB_IMMUTABLE_RELEASES_ENABLED=true/,
+    /Set repository variable CLODEX_IMMUTABLE_RELEASES_ENABLED=true/,
   );
   assert.match(publicReleaseSection, /X-GitHub-Api-Version: 2026-03-10/);
   assert.match(publicReleaseSection, /gh api --include/);
