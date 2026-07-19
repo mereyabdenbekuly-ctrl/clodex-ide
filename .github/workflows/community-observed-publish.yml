@@ -1,0 +1,273 @@
+name: "Publish Community Observed Prerelease"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Exact successful Community Observed Build run ID"
+        required: true
+        type: number
+      source_commit:
+        description: "Exact lowercase 40-character source SHA"
+        required: true
+        type: string
+      tag:
+        description: "Exact vX.Y.Z-communityobservedN tag derived from the run number"
+        required: true
+        type: string
+      confirm:
+        description: "Type PUBLISH_COMMUNITY_OBSERVED_PRERELEASE"
+        required: true
+        type: string
+      immutability_confirm:
+        description: "Type RELEASE_IMMUTABILITY_ENABLED after checking repository settings"
+        required: true
+        type: string
+      redistribution_confirm:
+        description: "Type COMMUNITY_OBSERVED_REDISTRIBUTION_APPROVED"
+        required: true
+        type: string
+
+run-name: "Publish observed run ${{ inputs.run_id }} as ${{ inputs.tag }}"
+
+concurrency:
+  group: community-observed-publication-effect
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  verify-stage:
+    name: Verify exact run and stage seven-asset candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      candidate_artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      candidate_artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      candidate_artifact_name: ${{ steps.identity.outputs.candidate_artifact_name }}
+      release_name: ${{ steps.prepare.outputs.release_name }}
+      release_tag: ${{ steps.prepare.outputs.release_tag }}
+      version: ${{ steps.prepare.outputs.version }}
+
+    steps:
+      - name: Require canonical main and exact publication authorization
+        env:
+          COMMUNITY_CONFIRMATION: ${{ inputs.confirm }}
+          COMMUNITY_IMMUTABILITY_CONFIRMATION: ${{ inputs.immutability_confirm }}
+          COMMUNITY_REDISTRIBUTION_CONFIRMATION: ${{ inputs.redistribution_confirm }}
+          COMMUNITY_RUN_ID: ${{ inputs.run_id }}
+          COMMUNITY_SOURCE_SHA: ${{ inputs.source_commit }}
+          COMMUNITY_TAG: ${{ inputs.tag }}
+          REPOSITORY_IMMUTABILITY_ENABLED: ${{ vars.GITHUB_IMMUTABLE_RELEASES_ENABLED }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$COMMUNITY_CONFIRMATION" = "PUBLISH_COMMUNITY_OBSERVED_PRERELEASE"
+          test "$COMMUNITY_IMMUTABILITY_CONFIRMATION" = "RELEASE_IMMUTABILITY_ENABLED"
+          test "$COMMUNITY_REDISTRIBUTION_CONFIRMATION" = "COMMUNITY_OBSERVED_REDISTRIBUTION_APPROVED"
+          test "$REPOSITORY_IMMUTABILITY_ENABLED" = "true"
+          [[ "$COMMUNITY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$COMMUNITY_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$COMMUNITY_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-communityobserved[1-9][0-9]*$ ]]
+
+      - name: Checkout exact canonical publisher source without credentials or tags
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Require publisher main and observed source ancestry
+        env:
+          COMMUNITY_SOURCE_SHA: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$(git rev-parse HEAD)" = "$remote_main"
+          test "$GITHUB_SHA" = "$remote_main"
+          test "$GITHUB_WORKFLOW_SHA" = "$remote_main"
+          git cat-file -e "$COMMUNITY_SOURCE_SHA^{commit}"
+          git merge-base --is-ancestor "$COMMUNITY_SOURCE_SHA" "$remote_main"
+
+      - name: Derive exact candidate artifact identity
+        id: identity
+        env:
+          COMMUNITY_RUN_ID: ${{ inputs.run_id }}
+          COMMUNITY_SOURCE_SHA: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          candidate="clodex-community-observed-publication-${COMMUNITY_RUN_ID}-${COMMUNITY_SOURCE_SHA:0:12}"
+          echo "candidate_artifact_name=$candidate" >> "$GITHUB_OUTPUT"
+
+      - name: Download, verify, and assemble exact server-side candidate
+        id: prepare
+        env:
+          COMMUNITY_RUN_ID: ${{ inputs.run_id }}
+          COMMUNITY_SOURCE_SHA: ${{ inputs.source_commit }}
+          COMMUNITY_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/release/community-observed-publication.mjs prepare \
+            --repository="$GITHUB_REPOSITORY" \
+            --run-id="$COMMUNITY_RUN_ID" \
+            --source-commit="$COMMUNITY_SOURCE_SHA" \
+            --tag="$COMMUNITY_TAG" \
+            --output="$RUNNER_TEMP/community-observed-publication" \
+            --github-output="$GITHUB_OUTPUT"
+
+      - name: Upload exact seven-asset publication candidate
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.identity.outputs.candidate_artifact_name }}
+          path: ${{ runner.temp }}/community-observed-publication/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  publish:
+    name: Publish one exact immutable Community Observed prerelease
+    needs: verify-stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: Release
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Re-authorize exact publication inputs
+        env:
+          CANDIDATE_DIGEST: ${{ needs.verify-stage.outputs.candidate_artifact_digest }}
+          CANDIDATE_ID: ${{ needs.verify-stage.outputs.candidate_artifact_id }}
+          COMMUNITY_CONFIRMATION: ${{ inputs.confirm }}
+          COMMUNITY_IMMUTABILITY_CONFIRMATION: ${{ inputs.immutability_confirm }}
+          COMMUNITY_REDISTRIBUTION_CONFIRMATION: ${{ inputs.redistribution_confirm }}
+          COMMUNITY_SOURCE_SHA: ${{ inputs.source_commit }}
+          COMMUNITY_TAG: ${{ inputs.tag }}
+          REPOSITORY_IMMUTABILITY_ENABLED: ${{ vars.GITHUB_IMMUTABLE_RELEASES_ENABLED }}
+          VERIFIED_TAG: ${{ needs.verify-stage.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "mereyabdenbekuly-ctrl/clodex-ide"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$COMMUNITY_CONFIRMATION" = "PUBLISH_COMMUNITY_OBSERVED_PRERELEASE"
+          test "$COMMUNITY_IMMUTABILITY_CONFIRMATION" = "RELEASE_IMMUTABILITY_ENABLED"
+          test "$COMMUNITY_REDISTRIBUTION_CONFIRMATION" = "COMMUNITY_OBSERVED_REDISTRIBUTION_APPROVED"
+          test "$REPOSITORY_IMMUTABILITY_ENABLED" = "true"
+          test "$COMMUNITY_TAG" = "$VERIFIED_TAG"
+          [[ "$COMMUNITY_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$CANDIDATE_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CANDIDATE_DIGEST" =~ ^[a-f0-9]{64}$ ]]
+
+      - name: Checkout exact canonical publisher source without credentials or tags
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Re-require protected publisher main and source ancestry before any write
+        env:
+          COMMUNITY_SOURCE_SHA: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          remote_main=$(git ls-remote origin refs/heads/main | awk 'NR == 1 {print $1}')
+          test -n "$remote_main"
+          test "$(git rev-parse HEAD)" = "$remote_main"
+          test "$GITHUB_SHA" = "$remote_main"
+          test "$GITHUB_WORKFLOW_SHA" = "$remote_main"
+          git cat-file -e "$COMMUNITY_SOURCE_SHA^{commit}"
+          git merge-base --is-ancestor "$COMMUNITY_SOURCE_SHA" "$remote_main"
+
+      - name: Verify exact same-workflow candidate artifact metadata
+        env:
+          CANDIDATE_DIGEST: ${{ needs.verify-stage.outputs.candidate_artifact_digest }}
+          CANDIDATE_ID: ${{ needs.verify-stage.outputs.candidate_artifact_id }}
+          CANDIDATE_NAME: ${{ needs.verify-stage.outputs.candidate_artifact_name }}
+          PUBLISHER_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          metadata=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$CANDIDATE_ID")
+          test "$(jq -r '.id' <<<"$metadata")" = "$CANDIDATE_ID"
+          test "$(jq -r '.name' <<<"$metadata")" = "$CANDIDATE_NAME"
+          test "$(jq -r '.expired' <<<"$metadata")" = "false"
+          test "$(jq -r '.digest' <<<"$metadata")" = "sha256:$CANDIDATE_DIGEST"
+          test "$(jq -r '.workflow_run.id' <<<"$metadata")" = "$GITHUB_RUN_ID"
+          test "$(jq -r '.workflow_run.head_sha' <<<"$metadata")" = "$PUBLISHER_SHA"
+          test "$(jq -r '.workflow_run.head_branch' <<<"$metadata")" = "main"
+          test "$(jq -r '.size_in_bytes' <<<"$metadata")" -gt 0
+
+      - name: Download exact candidate by immutable artifact ID
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.verify-stage.outputs.candidate_artifact_id }}
+          path: ${{ runner.temp }}/community-observed-publication
+          merge-multiple: true
+
+      - name: Re-verify exact seven assets before publication
+        env:
+          COMMUNITY_RUN_ID: ${{ inputs.run_id }}
+          COMMUNITY_SOURCE_SHA: ${{ inputs.source_commit }}
+          COMMUNITY_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          node scripts/release/community-observed-publication.mjs verify \
+            --repository="$GITHUB_REPOSITORY" \
+            --run-id="$COMMUNITY_RUN_ID" \
+            --source-commit="$COMMUNITY_SOURCE_SHA" \
+            --tag="$COMMUNITY_TAG" \
+            --candidate="$RUNNER_TEMP/community-observed-publication"
+
+      - name: Stage draft, verify digests, and publish conditionally
+        id: publication
+        env:
+          COMMUNITY_RUN_ID: ${{ inputs.run_id }}
+          COMMUNITY_SOURCE_SHA: ${{ inputs.source_commit }}
+          COMMUNITY_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/release/publish-community-observed-prerelease.mjs \
+            --repository="$GITHUB_REPOSITORY" \
+            --run-id="$COMMUNITY_RUN_ID" \
+            --source-commit="$COMMUNITY_SOURCE_SHA" \
+            --publisher-commit="$GITHUB_SHA" \
+            --tag="$COMMUNITY_TAG" \
+            --candidate="$RUNNER_TEMP/community-observed-publication" \
+            --confirm="${{ inputs.confirm }}" \
+            --immutability-confirm="${{ inputs.immutability_confirm }}" \
+            --immutability-enabled="${{ vars.GITHUB_IMMUTABLE_RELEASES_ENABLED }}" \
+            --redistribution-confirm="${{ inputs.redistribution_confirm }}" \
+            --github-output="$GITHUB_OUTPUT"
+
+      - name: Record terminal immutable publication
+        env:
+          RELEASE_ID: ${{ steps.publication.outputs.release_id }}
+          RELEASE_STATUS: ${{ steps.publication.outputs.status }}
+          RELEASE_TAG: ${{ steps.publication.outputs.release_tag }}
+          RELEASE_URL: ${{ steps.publication.outputs.release_url }}
+          SOURCE_SHA: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_ID"
+          test -n "$RELEASE_URL"
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Community Observed immutable prerelease
+
+          - Release ID: \`$RELEASE_ID\`
+          - Tag: \`$RELEASE_TAG\`
+          - Source: \`$SOURCE_SHA\`
+          - State: \`$RELEASE_STATUS\`
+          - URL: $RELEASE_URL
+          - Assets: exactly five unchanged installers, one evidence ZIP, and SHA256SUMS.txt
+          - Updater/promotion assets: excluded
+          EOF

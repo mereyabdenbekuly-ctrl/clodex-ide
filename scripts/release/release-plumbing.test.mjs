@@ -1272,7 +1272,9 @@ test('protected publisher structurally forbids automatic release deletion', () =
   );
   const protectedReleaseSection = workflow
     .split('Create a new isolated protected draft by exact release ID')[1]
-    .split('Publish explicitly non-draft, non-trusted GitHub Release')[0];
+    .split(
+      'Finalize exact non-trusted prerelease after complete draft upload',
+    )[0];
 
   assert.doesNotMatch(
     protectedPublisher,
@@ -1352,7 +1354,9 @@ test('browser release builds and publishes only the immutable input SHA', () => 
   )[1];
   const protectedDraftEffectSection = releaseSection
     .split('Create a new isolated protected draft by exact release ID')[1]
-    .split('Publish explicitly non-draft, non-trusted GitHub Release')[0];
+    .split(
+      'Finalize exact non-trusted prerelease after complete draft upload',
+    )[0];
 
   assert.match(workflow, /Immutable 40-character commit SHA/);
   assert.match(workflow, /Validate immutable canonical-main inputs/);
@@ -1461,7 +1465,10 @@ test('browser release builds and publishes only the immutable input SHA', () => 
   assert.ok(
     releaseSection.indexOf(
       'Reauthorize exact write target before publication',
-    ) < releaseSection.indexOf('softprops/action-gh-release'),
+    ) <
+      releaseSection.indexOf(
+        'Finalize exact non-trusted prerelease after complete draft upload',
+      ),
   );
   assert.match(releaseSection, /artifact-ids:/);
   assert.match(releaseSection, /terminal_tag_commit/);
@@ -1481,29 +1488,69 @@ test('browser release builds and publishes only the immutable input SHA', () => 
     /GH_TOKEN: \$\{\{ github\.token \}\}/,
   );
   assert.match(protectedDraftEffectSection, /RELEASE_ASSETS_DIRECTORY/);
-  assert.match(
-    releaseSection,
-    /if: needs\.source-gate\.outputs\.trusted_promotion == 'true' \|\| inputs\.draft/,
-  );
   const publicReleaseSection = releaseSection
-    .split('Publish explicitly non-draft, non-trusted GitHub Release')[1]
+    .split(
+      'Finalize exact non-trusted prerelease after complete draft upload',
+    )[1]
     .split('Query and assert exact live release state')[0];
-  assert.match(publicReleaseSection, /softprops\/action-gh-release@/);
+  assert.doesNotMatch(publicReleaseSection, /softprops\/action-gh-release@/);
   assert.match(
     publicReleaseSection,
     /if: needs\.source-gate\.outputs\.trusted_promotion != 'true' && inputs\.draft == false/,
   );
-  assert.match(publicReleaseSection, /draft: false/);
+  assert.match(publicReleaseSection, /alpha\|beta\|nightly/);
+  assert.match(publicReleaseSection, /"draft":false/);
+  assert.match(publicReleaseSection, /"prerelease":true/);
+  assert.match(publicReleaseSection, /"make_latest":"false"/);
+  assert.match(publicReleaseSection, /vars\.GITHUB_IMMUTABLE_RELEASES_ENABLED/);
+  assert.match(
+    publicReleaseSection,
+    /Set repository variable GITHUB_IMMUTABLE_RELEASES_ENABLED=true/,
+  );
+  assert.match(publicReleaseSection, /X-GitHub-Api-Version: 2026-03-10/);
+  assert.match(publicReleaseSection, /gh api --include/);
+  assert.match(publicReleaseSection, /If-Match: \$\{etag\}/);
+  assert.match(publicReleaseSection, /release\.target_commitish/);
+  assert.match(publicReleaseSection, /release\.name/);
+  assert.match(publicReleaseSection, /release\.body/);
+  assert.match(publicReleaseSection, /release\.immutable !== true/);
+  assert.match(publicReleaseSection, /patch_status=0/);
+  assert.match(
+    publicReleaseSection,
+    /recovered the exact published prerelease/,
+  );
+  assert.match(
+    publicReleaseSection,
+    /releases\/\$\{RELEASE_ID\}[\s\S]*--input/,
+  );
+  assert.ok(
+    publicReleaseSection.indexOf('gh api --include') <
+      publicReleaseSection.indexOf('gh api --method PATCH'),
+  );
+  assert.ok(
+    publicReleaseSection.indexOf('GitHub Release assets differ') <
+      publicReleaseSection.indexOf('gh api --method PATCH'),
+  );
   assert.match(
     releaseSection,
-    /RELEASE_ID: \$\{\{ steps\.protected-draft\.outputs\.release_id \|\| steps\.public-release\.outputs\.id \}\}/,
+    /RELEASE_ID: \$\{\{ steps\.protected-draft\.outputs\.release_id \}\}/,
   );
   assert.doesNotMatch(
     releaseSection
       .split('Create a new isolated protected draft')[1]
-      .split('Publish explicitly non-draft, non-trusted GitHub Release')[0],
+      .split(
+        'Finalize exact non-trusted prerelease after complete draft upload',
+      )[0],
     /softprops\/action-gh-release/,
   );
+  assert.match(releaseSection, /release-candidate\/manifest\.json/);
+  assert.match(
+    releaseSection,
+    /asset\.digest !== `sha256:\$\{expected\.sha256\}`/,
+  );
+  assert.match(releaseSection, /release\.immutable !== false/);
+  assert.match(releaseSection, /release\.immutable !== true/);
+  assert.match(releaseSection, /release\.url !== expectedApiUrl/);
   assert.match(releaseSection, /releases\/\$\{RELEASE_ID\}/);
   assert.doesNotMatch(releaseSection, /releases\/tags\/\$\{RELEASE_TAG\}/);
   assert.match(
@@ -1566,9 +1613,13 @@ test('technical preview workflow stages protected drafts from schema-v2 plans', 
   );
   assert.doesNotMatch(workflow, /release-publication-attestation\.yml@main/);
   assert.match(workflow, /create-protected-release-draft\.mjs/);
-  assert.match(
-    workflow,
-    /if: needs\.source-gate\.outputs\.trusted_promotion == 'true' \|\| inputs\.draft/,
+  assert.doesNotMatch(
+    workflow
+      .split('Create a new isolated protected draft by exact release ID')[1]
+      .split(
+        'Finalize exact non-trusted prerelease after complete draft upload',
+      )[0],
+    /\n\s+if:/,
   );
   assert.match(workflow, /--target-commitish="\$RELEASE_REF"/);
   assert.match(workflow, /environment: Release/);

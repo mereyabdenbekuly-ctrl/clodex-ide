@@ -1321,7 +1321,6 @@ jobs:
 
       - name: Create a new isolated protected draft by exact release ID
         id: protected-draft
-        if: needs.source-gate.outputs.trusted_promotion == 'true' || inputs.draft
         shell: bash
         env:
           AUTHORIZED_REF: ${{ needs.release-authorization.outputs.authorized_ref }}
@@ -1388,21 +1387,139 @@ jobs:
           grep -Eq '^report_name=([A-Za-z0-9._-]+)?$' "$publisher_output"
           cat "$publisher_output" >> "$step_output"
 
-      - name: Publish explicitly non-draft, non-trusted GitHub Release
+      - name: Finalize exact non-trusted prerelease after complete draft upload
         id: public-release
         if: needs.source-gate.outputs.trusted_promotion != 'true' && inputs.draft == false
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: ${{ inputs.tag }}
-          target_commitish: ${{ inputs.ref }}
-          name: "Clodex Agentic IDE ${{ inputs.version }}"
-          body: ${{ needs.tag.outputs.notes }}
-          prerelease: ${{ inputs.channel != 'release' }}
-          draft: false
-          files: ${{ runner.temp }}/release-candidate/release/*
-          fail_on_unmatched_files: true
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          IMMUTABLE_RELEASES_ENABLED: ${{ vars.GITHUB_IMMUTABLE_RELEASES_ENABLED }}
+          RELEASE_CHANNEL_INPUT: ${{ inputs.channel }}
+          RELEASE_ID: ${{ steps.protected-draft.outputs.release_id }}
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          case "$RELEASE_CHANNEL_INPUT" in
+            alpha|beta|nightly) ;;
+            *)
+              echo "::error::Only alpha, beta, and nightly may use automatic prerelease finalization"
+              exit 1
+              ;;
+          esac
+          if [[ ! "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Protected draft publisher did not return an exact GitHub Release ID"
+            exit 1
+          fi
+          if [ "$IMMUTABLE_RELEASES_ENABLED" != "true" ]; then
+            echo "::error::Set repository variable GITHUB_IMMUTABLE_RELEASES_ENABLED=true only after enabling immutable releases"
+            exit 1
+          fi
+          gh api --include \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            > "${RUNNER_TEMP}/protected-draft-response.txt"
+          node - "${RUNNER_TEMP}/protected-draft-response.txt" \
+            "${RUNNER_TEMP}/protected-draft-etag.txt" \
+            "${RUNNER_TEMP}/protected-draft.json" <<'NODE'
+          const fs = require('node:fs');
+          const [responsePath, etagPath, bodyPath] = process.argv.slice(2);
+          const response = fs.readFileSync(responsePath, 'utf8');
+          const separator = response.includes('\r\n\r\n') ? '\r\n\r\n' : '\n\n';
+          const separatorIndex = response.indexOf(separator);
+          if (separatorIndex <= 0) throw new Error('GitHub release response is missing HTTP headers');
+          const headers = response.slice(0, separatorIndex).split(/\r?\n/u);
+          const etags = headers
+            .filter((line) => /^etag:/iu.test(line))
+            .map((line) => line.replace(/^etag:\s*/iu, '').trim());
+          if (etags.length !== 1 || !/^(?:W\/)?"[^"\r\n]+"$/u.test(etags[0])) {
+            throw new Error('GitHub release response is missing one valid ETag');
+          }
+          const body = response.slice(separatorIndex + separator.length);
+          JSON.parse(body);
+          fs.writeFileSync(etagPath, `${etags[0]}\n`, { mode: 0o600 });
+          fs.writeFileSync(bodyPath, body, { mode: 0o600 });
+          NODE
+          cat > "${RUNNER_TEMP}/verify-exact-prerelease.cjs" <<'NODE'
+          const fs = require('node:fs');
+          const [releasePath, expectedState] = process.argv.slice(2);
+          const release = JSON.parse(fs.readFileSync(releasePath, 'utf8'));
+          const candidate = JSON.parse(
+            fs.readFileSync(`${process.env.RUNNER_TEMP}/release-candidate/manifest.json`, 'utf8'),
+          );
+          const expectedBody = fs.readFileSync(`${process.env.RUNNER_TEMP}/release-notes.md`, 'utf8');
+          const expectedId = Number.parseInt(process.env.RELEASE_ID, 10);
+          const expectedDraft = expectedState === 'draft';
+          const expectedApiUrl = `https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/releases/${expectedId}`;
+          if (
+            !Number.isSafeInteger(release.id) ||
+            release.id !== expectedId ||
+            release.url !== expectedApiUrl ||
+            release.tag_name !== process.env.RELEASE_TAG ||
+            release.target_commitish !== process.env.RELEASE_REF ||
+            release.name !== `Clodex Agentic IDE ${process.env.RELEASE_VERSION}` ||
+            release.body !== expectedBody ||
+            release.draft !== expectedDraft ||
+            release.prerelease !== true ||
+            (expectedDraft
+              ? release.published_at !== null || release.immutable !== false
+              : !Number.isFinite(Date.parse(release.published_at)) || release.immutable !== true)
+          ) {
+            throw new Error(`GitHub Release does not match the exact ${expectedState} prerelease identity`);
+          }
+          const expectedAssets = new Map(
+            candidate.files.map((file) => [file.fileName, file]),
+          );
+          if (expectedAssets.size !== candidate.files.length) {
+            throw new Error('exact prerelease candidate contains duplicate asset names');
+          }
+          if (!Array.isArray(release.assets) || release.assets.length !== expectedAssets.size) {
+            throw new Error('GitHub Release asset count differs from the exact prerelease candidate');
+          }
+          for (const asset of release.assets) {
+            const expected = expectedAssets.get(asset.name);
+            if (
+              !expected ||
+              asset.state !== 'uploaded' ||
+              asset.size !== expected.bytes ||
+              asset.digest !== `sha256:${expected.sha256}`
+            ) {
+              throw new Error('GitHub Release assets differ from the exact prerelease candidate');
+            }
+            expectedAssets.delete(asset.name);
+          }
+          if (expectedAssets.size !== 0) {
+            throw new Error('GitHub Release is missing exact prerelease candidate assets');
+          }
+          NODE
+          node "${RUNNER_TEMP}/verify-exact-prerelease.cjs" \
+            "${RUNNER_TEMP}/protected-draft.json" draft
+          etag=$(tr -d '\r\n' < "${RUNNER_TEMP}/protected-draft-etag.txt")
+          printf '%s\n' '{"draft":false,"prerelease":true,"make_latest":"false"}' \
+            > "${RUNNER_TEMP}/finalize-prerelease.json"
+          patch_status=0
+          gh api --method PATCH \
+            -H "If-Match: ${etag}" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            --input "${RUNNER_TEMP}/finalize-prerelease.json" \
+            > "${RUNNER_TEMP}/finalized-prerelease-response.json" \
+            2> "${RUNNER_TEMP}/finalized-prerelease-error.txt" || patch_status=$?
+          if [ "$patch_status" -eq 0 ]; then
+            node "${RUNNER_TEMP}/verify-exact-prerelease.cjs" \
+              "${RUNNER_TEMP}/finalized-prerelease-response.json" published
+          fi
+          gh api \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            > "${RUNNER_TEMP}/finalized-prerelease.json"
+          node "${RUNNER_TEMP}/verify-exact-prerelease.cjs" \
+            "${RUNNER_TEMP}/finalized-prerelease.json" published
+          if [ "$patch_status" -ne 0 ]; then
+            echo "::warning::Finalization response was uncertain; recovered the exact published prerelease by release ID"
+          fi
+          echo "id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 
       - name: Query and assert exact live release state
         id: release-state
@@ -1411,9 +1528,11 @@ jobs:
           EXPECTED_DRAFT: ${{ needs.source-gate.outputs.trusted_promotion == 'true' || inputs.draft }}
           EXPECTED_PRERELEASE: ${{ inputs.channel != 'release' }}
           GH_TOKEN: ${{ github.token }}
-          RELEASE_ID: ${{ steps.protected-draft.outputs.release_id || steps.public-release.outputs.id }}
+          RELEASE_ID: ${{ steps.protected-draft.outputs.release_id }}
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/release-notes.md
           RELEASE_REF: ${{ inputs.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
           TRUSTED_PROMOTION: ${{ needs.source-gate.outputs.trusted_promotion }}
         run: |
           if [[ ! "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]]; then
@@ -1421,6 +1540,7 @@ jobs:
             exit 1
           fi
           gh api --method GET \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
             "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
             > "${RUNNER_TEMP}/created-release.json"
           git fetch --force --no-tags origin \
@@ -1430,21 +1550,49 @@ jobs:
           node - <<'NODE'
           const fs = require('node:fs');
           const release = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/created-release.json`, 'utf8'));
+          const candidate = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/release-candidate/manifest.json`, 'utf8'));
           const expectedId = Number.parseInt(process.env.RELEASE_ID, 10);
           const expectedDraft = process.env.EXPECTED_DRAFT === 'true';
           const expectedPrerelease = process.env.EXPECTED_PRERELEASE === 'true';
+          const expectedBody = fs.readFileSync(process.env.RELEASE_NOTES_FILE, 'utf8');
+          const expectedApiUrl = `https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/releases/${expectedId}`;
           if (
             !Number.isSafeInteger(release.id) ||
             release.id <= 0 ||
             release.id !== expectedId ||
+            release.url !== expectedApiUrl ||
             release.tag_name !== process.env.RELEASE_TAG ||
-            (process.env.TRUSTED_PROMOTION === 'true' &&
-              release.target_commitish !== process.env.RELEASE_REF) ||
+            release.target_commitish !== process.env.RELEASE_REF ||
+            release.name !== `Clodex Agentic IDE ${process.env.RELEASE_VERSION}` ||
+            release.body !== expectedBody ||
             release.draft !== expectedDraft ||
             release.prerelease !== expectedPrerelease ||
-            (expectedDraft ? release.published_at !== null : typeof release.published_at !== 'string')
+            (expectedDraft
+              ? release.published_at !== null || release.immutable !== false
+              : !Number.isFinite(Date.parse(release.published_at)) || release.immutable !== true)
           ) {
             throw new Error('created GitHub Release does not match the manifest-derived state');
+          }
+          const expectedAssets = new Map(
+            candidate.files.map((file) => [file.fileName, file]),
+          );
+          if (!Array.isArray(release.assets) || release.assets.length !== expectedAssets.size) {
+            throw new Error('created GitHub Release asset count differs from the exact candidate');
+          }
+          for (const asset of release.assets) {
+            const expected = expectedAssets.get(asset.name);
+            if (
+              !expected ||
+              asset.state !== 'uploaded' ||
+              asset.size !== expected.bytes ||
+              asset.digest !== `sha256:${expected.sha256}`
+            ) {
+              throw new Error('created GitHub Release assets differ from the exact candidate');
+            }
+            expectedAssets.delete(asset.name);
+          }
+          if (expectedAssets.size !== 0) {
+            throw new Error('created GitHub Release is missing exact candidate assets');
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `release_id=${release.id}\n`);
           fs.appendFileSync(
