@@ -20,6 +20,12 @@ based on managed scale, coordination, enterprise administration, operations,
 integrations, compliance, and responsibly governed operational data—not on a
 deliberately unsafe free edition.
 
+Any capability implemented entirely in the public AGPL client is treated as
+Community-available at source level. Client-side flags, build identity,
+packaging differences, obfuscation, or local license checks are not a durable
+commercial boundary. Paid authorization, metering, and billing must be
+enforced by a separately operated managed service.
+
 The shorthand rule is:
 
 > **Open:** how the decision is made and verified.

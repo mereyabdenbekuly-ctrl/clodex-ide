@@ -32,6 +32,28 @@ CLODEx Community is the free, local-first desktop IDE distributed from this
 repository. Its value does not depend on a hosted control plane, and local
 security must not be weakened to create a paid tier.
 
+## Commercial product invariant
+
+Any capability that can operate entirely in the public desktop client and is
+merged into the public AGPL `main` branch is treated as Community-available at
+source level. Distribution identity, signing, packaging omissions, local
+license keys, renderer checks, obfuscation, or client-side feature flags are
+not accepted as a durable paid boundary because the public client can be built
+and modified independently.
+
+CLODEx may charge for official distribution, support, hosted access, managed
+operations, enterprise administration, integrations, compliance, and service
+levels. Access to those separately operated services must be authorized,
+metered, and billed by the service. The public IDE may present reviewed
+entitlement UX and fail-closed connectors, but it must not make the
+value-bearing entitlement decision or contain a client-side bypass that grants
+managed access.
+
+If a proposed capability must remain commercially exclusive but can function
+fully offline or entirely inside the public client, it requires a new explicit
+product-boundary and licensing decision before implementation. It must not be
+quietly added as a disabled "premium" feature in the Community source tree.
+
 ## Included in the Free build
 
 - persistent local tasks and recovery after an application restart;

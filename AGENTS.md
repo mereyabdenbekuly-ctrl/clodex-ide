@@ -12,6 +12,35 @@ CLODEx uses this product model:
 > **Closed:** how the same contract is operated for many tenants, agents, and
 > organizations.
 
+### Commercial product invariant
+
+- Treat every local or client-side capability merged into the public AGPL
+  `main` branch as permanently available to Community users at source level.
+  Never design it as a durable paid entitlement or rely on client feature
+  flags, obfuscation, license keys, renderer checks, distribution identity, or
+  packaging omissions to keep it paid.
+- Assume users can compile and patch the public client and remove UI gates.
+  Paid entitlements, authorization, metering, and billing must be enforced by
+  the separately operated service, never trusted to the public IDE.
+- Paid-only capabilities must be implemented and authorized server-side in a
+  separately secured private managed service. The public client may contain
+  only reviewed public contracts, thin connectors, and fail-closed entitlement
+  UX; it must not contain a client-side bypass that grants managed access.
+- Never place managed Gateway, enterprise administration, cloud control-plane,
+  fleet, SSO/SCIM, RBAC/ABAC, billing/metering, compliance/SIEM, or premium
+  managed-service implementation in a public CLODEx repository.
+- Keep the public Community product secure and useful on its own. Do not weaken
+  local Guardian, authorization, approvals, evidence, MCP isolation, or other
+  local protections to manufacture a paid tier.
+- Protocol v0 schemas, governance, reviews, and future conformance artifacts
+  define a public interoperability boundary only. They do not authorize
+  paid/private implementation in public `main`, SDK publication, or Gateway
+  implementation before all documented gates and explicit maintainer/legal
+  approval.
+- If a requested feature must remain commercially exclusive but can operate
+  entirely in the public client or locally, stop and require a product-boundary
+  decision before editing or staging it.
+
 The public repository may contain:
 
 - the IDE and local-first user experience;
