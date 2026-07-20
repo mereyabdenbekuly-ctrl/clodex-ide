@@ -1,0 +1,291 @@
+{
+  "schemaVersion": 1,
+  "featureGates": [
+    {
+      "featureGateId": "collaboration-presets",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "mascot-overlay",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "memory-notes",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "global-dictation",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "realtime-dictation",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "chronicle-visual-memory",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "codex-micro-controller",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "browser-use-policy-engine",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "desktop-automation-macos-preview",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "agent-os-debug-inspector",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "native-skill-install",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "agent-hooks",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "remote-control-pairing",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "isolated-agent-runtime",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "multi-agent-guardian",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "guardian-model-shadow",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "shell-capability-security",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "egress-policy-engine",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "egress-transparent-proxy",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "egress-controlled-browser",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "egress-control-center",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "runner-abstraction",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "ssh-runner",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "ssh-heavyweight-cache",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "ssh-multiplexed-protocol",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "ssh-artifact-manifest-fast-path",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "docker-runner",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "runner-shadow-routing",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "runner-paired-replay",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "runner-automatic-routing",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "byo-runner-sdk",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "plugin-marketplace",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "cloud-tasks",
+      "classification": "managed-connector"
+    },
+    {
+      "featureGateId": "automations",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "artifact-bridge",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "artifact-bridge-writes",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "artifact-bridge-runtime-quotas",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "artifact-bridge-lifecycle-events",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "artifact-bridge-ephemeral-grants",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "artifact-bridge-sensitive-egress",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "artifact-bridge-async-operations",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "artifact-bridge-runtime-inspector",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "generated-app-packages",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "generated-app-package-capabilities",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "executable-extensions",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "spaces",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "session-continuity",
+      "classification": "managed-connector"
+    },
+    {
+      "featureGateId": "evidence-memory-shadow",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "evidence-memory-inspector",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "evidence-memory-prompt-injection",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "evidence-memory-hybrid-retrieval",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "evidence-memory-model-summaries",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "model-fabric-usage-ledger",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "model-fabric-shadow-routing",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "model-fabric-active-routing",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "model-fabric-budget-policy",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "model-fabric-evaluation-priors",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "model-fabric-control-plane-refresh",
+      "classification": "community-local"
+    },
+    {
+      "featureGateId": "model-fabric-inspector",
+      "classification": "community-local"
+    }
+  ],
+  "managedConnectors": [
+    {
+      "id": "cloud-task-control-plane",
+      "buildGate": "__APP_MANAGED_SERVICES_ENABLED__",
+      "authorization": "bearer",
+      "entitlementAuthority": "server-authoritative",
+      "featureGateIds": ["cloud-tasks"],
+      "endpointEnvironmentKeys": ["CLODEX_CLOUD_TASKS_URL"],
+      "implementationPaths": [
+        "apps/browser/src/backend/agent-host/cloud-task-control-plane.ts",
+        "apps/browser/src/backend/startup/phases/cloud-task-runtime.ts",
+        "apps/browser/src/backend/main.ts",
+        "apps/browser/community-free-build-policy.mjs"
+      ],
+      "entitlementContract": "apps/browser/public-managed-service-entitlement-contract.v1.json",
+      "managedConfigurationKeys": ["CLODEX_CLOUD_TASKS_RESIDENCY"]
+    },
+    {
+      "id": "session-sharing",
+      "buildGate": "__APP_MANAGED_SERVICES_ENABLED__",
+      "authorization": "bearer",
+      "entitlementAuthority": "server-authoritative",
+      "featureGateIds": ["session-continuity"],
+      "endpointEnvironmentKeys": ["CLODEX_SESSION_SHARING_URL"],
+      "implementationPaths": [
+        "apps/browser/src/backend/services/session-continuity/index.ts",
+        "apps/browser/src/backend/main.ts",
+        "apps/browser/community-free-build-policy.mjs"
+      ],
+      "entitlementContract": "apps/browser/public-managed-service-entitlement-contract.v1.json",
+      "managedConfigurationKeys": []
+    },
+    {
+      "id": "clodex-hosted-mcp",
+      "buildGate": "__APP_MANAGED_SERVICES_ENABLED__",
+      "authorization": "bearer",
+      "entitlementAuthority": "server-authoritative",
+      "featureGateIds": [],
+      "endpointEnvironmentKeys": ["CLODEX_MCP_GATEWAY_URL"],
+      "implementationPaths": [
+        "apps/browser/src/backend/services/toolbox/services/clodex-mcp/index.ts",
+        "apps/browser/src/backend/services/toolbox/index.ts",
+        "apps/browser/vite.backend.config.ts",
+        "apps/browser/src/backend/services/toolbox/services/clodex-mcp/community-disabled.ts",
+        "apps/browser/community-free-build-policy.mjs"
+      ],
+      "entitlementContract": "apps/browser/public-managed-service-entitlement-contract.v1.json",
+      "managedConfigurationKeys": []
+    }
+  ]
+}
