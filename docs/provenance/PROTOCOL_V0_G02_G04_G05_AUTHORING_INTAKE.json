@@ -1,0 +1,554 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "PV0_G02_G04_G05_CONSTRAINED_AUTHORING_SETUP_INTAKE",
+  "status": "SETUP_ONLY_EXECUTION_BLOCKED",
+  "issue": {
+    "repository": "mereyabdenbekuly-ctrl/clodex-ide",
+    "number": 77,
+    "url": "https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/77",
+    "title": "Protocol v0: constrained authoring plan for PV0-G02/G04/G05",
+    "createdAt": "2026-07-20T03:30:58Z",
+    "updatedAt": "2026-07-20T03:30:58Z",
+    "bodySha256": "f422c8187e1a9b1cb8975ecc513acb3a33fa2095651bef4a93c550522cb3a1fc"
+  },
+  "gateScope": ["PV0-G02", "PV0-G04", "PV0-G05"],
+  "protocolGateState": {
+    "allGatesRemainOpen": true,
+    "openGates": [
+      "PV0-G01",
+      "PV0-G02",
+      "PV0-G03",
+      "PV0-G04",
+      "PV0-G05",
+      "PV0-G06",
+      "PV0-G07",
+      "PV0-G08",
+      "PV0-G09",
+      "PV0-G10"
+    ],
+    "closedGates": []
+  },
+  "frozenBindings": {
+    "policy": "ISSUE_AND_CONTAMINATED_INCUBATOR_BASELINE_PINNED",
+    "contaminatedIncubator": {
+      "classification": "DENY_FOR_AUTHOR_AND_REVIEWER_CONTEXT",
+      "pullRequest": {
+        "repository": "mereyabdenbekuly-ctrl/clodex-ide",
+        "number": 74,
+        "url": "https://github.com/mereyabdenbekuly-ctrl/clodex-ide/pull/74",
+        "baseCommit": "8d2618a91a541607944fb7eb7bad30001d5b4aeb",
+        "headCommit": "c0e0c6d4fb66b98806a2a80884b8f034b2e860b1",
+        "mergeCommit": "374539f98dba20d1aade6208c2834928bf7fa09a"
+      },
+      "protocolTree": {
+        "path": "docs/protocol/agent-gateway-v0",
+        "gitTree": "d36c03eab98cd249a2b52fa1bd662869e7a494b3"
+      },
+      "traceabilityBinding": {
+        "path": "docs/protocol/agent-gateway-v0/traceability.json",
+        "gitBlob": "a8857d64eb0a5a6891d45937dff5a6692e26b45c",
+        "sha256": "e08704376b6955b894b6b0d6ae61de22d3ede1306695a4de96dc567b324b610d"
+      },
+      "allRepositoryRevisionsDenied": true,
+      "warning": "This binding identifies prohibited repository-exposed history. It is not an approved author input."
+    },
+    "pv0G01ReviewTarget": {
+      "gateId": "PV0-G01",
+      "status": "OPEN",
+      "issue": {
+        "number": 75,
+        "url": "https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/75",
+        "createdAt": "2026-07-20T03:30:54Z",
+        "updatedAt": "2026-07-20T03:30:54Z",
+        "bodySha256": "3394dd728b9d3e3d16efe8b6d3e1a0eb7d91990f9e31dec0cbc6827c69b8082f"
+      },
+      "frozenMainCommit": "374539f98dba20d1aade6208c2834928bf7fa09a",
+      "reviewInputs": [
+        {
+          "path": "docs/provenance/PROTOCOL_V0_INPUT_MANIFEST.json",
+          "gitBlob": "5000ec24b5c90c0c0296f0d72076b1710518c1f3",
+          "sha256": "73d1b87194605704037162cb7cc5b47ac5fd2dc56dd6c0860d3757f34fd0b1b2"
+        },
+        {
+          "path": "docs/provenance/PROTOCOL_EXTRACTION_AUDIT.md",
+          "gitBlob": "880bea15455756120a6ddd3ea8eab9a7d4571107",
+          "sha256": "04f8e2b28c2dd9071af8a5be6bf97f3d19ce380b2a16e887c2d40086feba4334"
+        },
+        {
+          "path": "docs/protocol/agent-gateway-v0/traceability.json",
+          "gitBlob": "a8857d64eb0a5a6891d45937dff5a6692e26b45c",
+          "sha256": "e08704376b6955b894b6b0d6ae61de22d3ede1306695a4de96dc567b324b610d"
+        },
+        {
+          "path": "docs/governance/OPEN_CLOSED_BOUNDARY.md",
+          "gitBlob": "53067da80054014fa0179d2bcfce125c3b8f292a",
+          "sha256": "25aac2097baf2f5dc9c336074c0ddd8286f9247cce9878d3e6aabfbb69e9b6c3"
+        }
+      ],
+      "closureEvidence": {
+        "path": null,
+        "reviewedCommit": null,
+        "gitBlob": null,
+        "sha256": null,
+        "signedBy": null,
+        "signedAt": null
+      }
+    },
+    "pv0G03ReviewTarget": {
+      "gateId": "PV0-G03",
+      "status": "OPEN",
+      "issue": {
+        "number": 76,
+        "url": "https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/76",
+        "createdAt": "2026-07-20T03:30:56Z",
+        "updatedAt": "2026-07-20T03:30:56Z",
+        "bodySha256": "4688df7067b30271abca89a0929c5ebe828dc85b2a34f9769f05c5386190a709"
+      },
+      "frozenMainCommit": "374539f98dba20d1aade6208c2834928bf7fa09a",
+      "reviewInputs": [
+        {
+          "path": "docs/protocol/agent-gateway-v0/REQUIREMENTS.md",
+          "gitBlob": "2a1768411bbf7c78c3c2eca09e86c4a5052477d1",
+          "sha256": "e670ea4af006602d304f92b13d977067a7201e185d8db028010c101450958d52"
+        },
+        {
+          "path": "docs/provenance/PROTOCOL_V0_INPUT_MANIFEST.json",
+          "gitBlob": "5000ec24b5c90c0c0296f0d72076b1710518c1f3",
+          "sha256": "73d1b87194605704037162cb7cc5b47ac5fd2dc56dd6c0860d3757f34fd0b1b2"
+        },
+        {
+          "path": "docs/protocol/agent-gateway-v0/traceability.json",
+          "gitBlob": "a8857d64eb0a5a6891d45937dff5a6692e26b45c",
+          "sha256": "e08704376b6955b894b6b0d6ae61de22d3ede1306695a4de96dc567b324b610d"
+        }
+      ],
+      "closureEvidence": {
+        "path": null,
+        "approvedCataloguePath": null,
+        "reviewedCommit": null,
+        "gitBlob": null,
+        "sha256": null,
+        "signedBy": null,
+        "signedAt": null
+      }
+    },
+    "approvedAuthorInputPacket": {
+      "status": "UNBOUND",
+      "path": null,
+      "sourceManifestSha256": null,
+      "packetSha256": null,
+      "createdBy": null,
+      "createdAt": null,
+      "approvedBy": null,
+      "approvedAt": null
+    },
+    "cleanAuthoringWorkspace": {
+      "status": "UNBOUND",
+      "repositoryIdentifier": null,
+      "initialEmptyCommit": null,
+      "initialTree": null,
+      "artifactRoot": null,
+      "environmentAttestationSha256": null
+    }
+  },
+  "participantSlots": {
+    "authors": [
+      {
+        "slotId": "PV0-AUTHOR-01",
+        "role": "CONSTRAINED_SCHEMA_AUTHOR",
+        "identity": null,
+        "affiliation": null,
+        "selectedAt": null,
+        "independenceDeclaration": null,
+        "conflictOfInterestDeclaration": null,
+        "eligibility": "PENDING",
+        "sourceExposure": {
+          "overallStatus": "UNKNOWN",
+          "clodexIdeRepositorySource": "UNKNOWN",
+          "protocolIncubatorPr74": "UNKNOWN",
+          "implementationTypesValidatorsTestsFixtures": "UNKNOWN",
+          "distinctiveLiteralsAndModuleStructure": "UNKNOWN",
+          "priorAiContextOrMemory": "UNKNOWN",
+          "privateCustomerProductionMaterial": "UNKNOWN",
+          "declaration": null,
+          "declaredAt": null,
+          "evidenceReferences": []
+        },
+        "signOff": {
+          "statement": null,
+          "signedAt": null,
+          "evidenceReference": null
+        }
+      }
+    ],
+    "reviewers": [
+      {
+        "slotId": "PV0-REVIEWER-01",
+        "role": "INDEPENDENT_SCHEMA_REVIEWER",
+        "identity": null,
+        "affiliation": null,
+        "selectedAt": null,
+        "independenceDeclaration": null,
+        "conflictOfInterestDeclaration": null,
+        "eligibility": "PENDING",
+        "sourceExposure": {
+          "overallStatus": "UNKNOWN",
+          "clodexIdeRepositorySource": "UNKNOWN",
+          "protocolIncubatorPr74": "UNKNOWN",
+          "implementationTypesValidatorsTestsFixtures": "UNKNOWN",
+          "distinctiveLiteralsAndModuleStructure": "UNKNOWN",
+          "priorAiContextOrMemory": "UNKNOWN",
+          "privateCustomerProductionMaterial": "UNKNOWN",
+          "declaration": null,
+          "declaredAt": null,
+          "evidenceReferences": []
+        },
+        "signOff": {
+          "statement": null,
+          "signedAt": null,
+          "evidenceReference": null
+        }
+      }
+    ],
+    "environmentCustodian": {
+      "slotId": "PV0-CUSTODIAN-01",
+      "role": "SOURCE_CONSTRAINT_ENVIRONMENT_CUSTODIAN",
+      "identity": null,
+      "affiliation": null,
+      "selectedAt": null,
+      "repositoryExposureAllowedForCustodyOnly": true,
+      "mayAuthorSchemas": false,
+      "mayPerformNormativeSchemaReview": false,
+      "attestation": null,
+      "attestedAt": null,
+      "evidenceReference": null
+    },
+    "separationPolicy": {
+      "minimumNamedAuthors": 1,
+      "minimumNamedReviewers": 1,
+      "authorsAndReviewersMustBeDisjoint": true,
+      "authorsMayNotReviewOwnArtifacts": true,
+      "reviewersMayNotModifyAuthoredArtifacts": true,
+      "custodianMayNotAuthorOrSemanticallyApprove": true,
+      "aiSystemsAreToolsNotAccountableSignatories": true
+    }
+  },
+  "sourceExposurePolicy": {
+    "unknownExposureDefault": "DISQUALIFY_UNTIL_RESOLVED",
+    "authorAndReviewerRequiredState": "DECLARED_NO_PROHIBITED_CONTEXT_EXPOSURE",
+    "prohibitedContextClasses": [
+      "CLODEX_IDE_IMPLEMENTATION_SOURCE_ANY_REVISION",
+      "PROTOCOL_V0_INCUBATOR_PR74_AND_DESCENDANTS",
+      "IMPLEMENTATION_TYPES_VALIDATORS_TESTS_FIXTURES_CONSTANTS_COMMENTS",
+      "DISTINCTIVE_LITERALS_AND_CURRENT_MODULE_STRUCTURE",
+      "STAGEWISE_DERIVED_AGENT_SHELL_AGENT_CORE_KARTON_BROWSER_IPC_UI_RUNTIME",
+      "RUNNER_SDK_SOURCE_OR_EXPORTS",
+      "PRIOR_AI_SESSION_MEMORY_SUMMARY_OR_FORK_WITH_PROHIBITED_CONTEXT",
+      "PRIVATE_REPOSITORY_CUSTOMER_PRODUCTION_OR_RESTRICTED_MATERIAL",
+      "UNKNOWN_OR_UNRECORDED_INPUT"
+    ],
+    "trainingDataClaim": "No claim is made about unknowable model pretraining. Evidence covers supplied runtime context, retrieval, tools, memory, mounts, prompts, and sessions.",
+    "selfDeclarationAloneClosesGate": false,
+    "humanAndEnvironmentEvidenceRequired": true
+  },
+  "inputPolicy": {
+    "unknownInputsDefaultTo": "RED",
+    "currentlyAllowedForSchemaAuthoring": [],
+    "currentlyBoundAuthorPacketEntries": [],
+    "conditionallyEligibleAfterGateClosure": [
+      {
+        "sourceClass": "APPROVED_PV0_G03_REQUIREMENTS_CATALOGUE",
+        "requiredGate": "PV0-G03",
+        "directAuthorExposure": true,
+        "conditions": [
+          "The exact approved catalogue path, commit, Git blob, and SHA-256 are bound.",
+          "Every unresolved requirement and implementation-derived normative dependency is closed.",
+          "The catalogue is delivered through the approved author input packet."
+        ]
+      },
+      {
+        "sourceClass": "APPROVED_EXTERNAL_STANDARDS",
+        "inputIds": [
+          "PV0-IN-002",
+          "PV0-IN-003",
+          "PV0-IN-004",
+          "PV0-IN-005",
+          "PV0-IN-006"
+        ],
+        "requiredGate": "PV0-G01",
+        "directAuthorExposure": true,
+        "conditions": [
+          "The exact official revision and content SHA-256 are approved.",
+          "Terms, notice, prose, example-code, and test-vector use are explicitly decided.",
+          "The decided permitted use explicitly covers constrained schema authoring.",
+          "All conditions and residual blockers are resolved before packet inclusion."
+        ]
+      }
+    ],
+    "repositoryDerivedInputsRoute": {
+      "inputIds": [
+        "PV0-IN-001",
+        "PV0-IN-007",
+        "PV0-IN-009",
+        "PV0-IN-010",
+        "PV0-IN-011"
+      ],
+      "directAuthorExposure": false,
+      "permittedRoute": "APPROVED_PV0_G03_REQUIREMENTS_CATALOGUE_ONLY"
+    },
+    "alwaysDenied": [
+      {
+        "id": "PV0-IN-008",
+        "scope": "ALL_REVISIONS",
+        "reason": "Repository implementation exposure remains RED for Protocol v0 authoring."
+      },
+      {
+        "id": "CURRENT_PROTOCOL_INCUBATOR",
+        "scope": "docs/protocol/agent-gateway-v0/** at PR #74 and descendants",
+        "reason": "The existing draft and its structure are repository-exposed review-only evidence."
+      },
+      {
+        "id": "IMPLEMENTATION_ARTIFACT_CLASSES",
+        "scope": "types, validators, tests, fixtures, constants, comments, distinctive literals, and module structure",
+        "reason": "These may not be copied, translated, summarized into schema shapes, or used as a structural blueprint."
+      },
+      {
+        "id": "LEGACY_AND_TRANSITIVE_SOURCE",
+        "scope": "@stagewise/*, agent-shell, agent-core, Karton, browser IPC/UI/runtime, runner-sdk source or exports",
+        "reason": "These are prohibited implementation or provenance-pending inputs."
+      },
+      {
+        "id": "PRIOR_AI_CONTEXT",
+        "scope": "sessions, memory, summaries, forks, retrieval indexes, or prompts containing prohibited context",
+        "reason": "A new constrained session cannot inherit repository-exposed context."
+      },
+      {
+        "id": "PRIVATE_OR_RESTRICTED_MATERIAL",
+        "scope": "private repositories, customer data, production data, credentials, topology, private threat intelligence, and holdouts",
+        "reason": "Restricted material is never an authoring input."
+      },
+      {
+        "id": "UNKNOWN_INPUT",
+        "scope": "any unlisted or unbound source",
+        "reason": "Unknown inputs default to RED."
+      }
+    ],
+    "authorPacketRules": {
+      "exactBytesAndSha256Required": true,
+      "dynamicOrMutableUrlsForbidden": true,
+      "symlinksForbidden": true,
+      "unrecordedAttachmentsForbidden": true,
+      "packetChangesRequireNewDigestAndApproval": true
+    }
+  },
+  "toolingAndEnvironment": {
+    "status": "UNBOUND",
+    "toolRuns": [],
+    "aiContextRuns": [],
+    "toolPolicy": {
+      "allowedAuthoringModes": ["NO_AI", "FRESH_CONTEXT_AI_SESSION"],
+      "selectedAuthoringMode": null,
+      "freshSessionRequiredWhenAiUsed": true,
+      "persistentMemoryMustBeDisabled": true,
+      "priorConversationImportForbidden": true,
+      "repositoryRetrievalForbidden": true,
+      "githubCodeSearchForbidden": true,
+      "codeGraphOrRepositoryIndexForbidden": true,
+      "unapprovedMcpServersForbidden": true,
+      "mcpServerAllowlist": [],
+      "repositoryToolAllowlist": [],
+      "networkDefaultDeny": true,
+      "allowedEgressModes": ["OFFLINE", "AI_PROVIDER_ONLY"],
+      "selectedEgressMode": null,
+      "requiredRunFields": [
+        "toolRunId",
+        "provider",
+        "product",
+        "modelOrVersion",
+        "build",
+        "freshSession",
+        "memoryEnabled",
+        "historyImported",
+        "retrievalEnabled",
+        "repositoryMounts",
+        "mcpServers",
+        "networkPolicy",
+        "systemInstructionsSha256",
+        "taskPromptSha256",
+        "approvedPacketSha256",
+        "transcriptSha256",
+        "generatedOutputBindings"
+      ]
+    },
+    "workspace": {
+      "requiredType": "FRESH_SOURCE_CONSTRAINED_REPOSITORY",
+      "repositoryIdentifier": null,
+      "createdAt": null,
+      "initialEmptyCommit": null,
+      "initialTree": null,
+      "artifactRoot": null,
+      "mustStartEmpty": true,
+      "mustNotContainClodexIdeHistory": true,
+      "importedCommitsOrPatchesForbidden": true,
+      "repositoryMounts": [],
+      "filesystemManifestSha256": null,
+      "toolchainLockSha256": null,
+      "environmentAttestationSha256": null,
+      "egressLogSha256": null
+    },
+    "dependencyPolicy": {
+      "runtimeDependenciesAllowed": false,
+      "forbiddenDependencySources": [
+        "workspace:",
+        "file:",
+        "link:",
+        "git",
+        "github"
+      ],
+      "forbiddenPackageScopes": ["@clodex/*", "@stagewise/*"],
+      "installOrBuildLifecycleFetchScriptsForbidden": true,
+      "developmentToolsMustBePinnedAndReviewed": true,
+      "dependencyManifestBindings": [],
+      "lockfileBindings": []
+    },
+    "attestation": {
+      "status": "MISSING",
+      "attestedBy": null,
+      "attestedAt": null,
+      "evidenceReference": null
+    }
+  },
+  "provenancePlan": {
+    "schemaHistory": {
+      "status": "NOT_STARTED",
+      "repositoryIdentifier": null,
+      "initialEmptyCommit": null,
+      "firstAuthoringCommit": null,
+      "reviewedHeadCommit": null,
+      "commitRange": null,
+      "historyImported": false,
+      "historyRewrittenAfterReview": null,
+      "evidenceReference": null
+    },
+    "perFileRecords": [],
+    "generatedArtifacts": [],
+    "requiredPerFileFields": [
+      "path",
+      "sha256",
+      "gitBlob",
+      "creationCommit",
+      "authorParticipantIds",
+      "reviewerParticipantIds",
+      "approvedInputBindings",
+      "requirementIds",
+      "toolRunIds",
+      "generationMethod",
+      "manualEditEvidence",
+      "reviewDecision",
+      "reviewRationale"
+    ],
+    "semanticCompletenessReview": {
+      "status": "NOT_STARTED",
+      "normativeComparisonSource": "APPROVED_PV0_G03_REQUIREMENTS_ONLY",
+      "reviewer": null,
+      "reviewedCommit": null,
+      "coverageEvidenceSha256": null,
+      "decision": null
+    },
+    "redSourceWarningScan": {
+      "status": "NOT_STARTED",
+      "mode": "POST_FREEZE_WARNING_ONLY_BY_NON_AUTHORING_CUSTODIAN",
+      "prohibitedCorpusBinding": "frozenBindings.contaminatedIncubator",
+      "mayReturnSourceExcerptsToAuthorsOrReviewers": false,
+      "mayModifyAuthoredArtifacts": false,
+      "dispositiveProofOfCleanProvenance": false,
+      "scannerBinding": null,
+      "resultDigest": null,
+      "reviewedBy": null
+    },
+    "runtimeDependencyEvidence": {
+      "status": "NOT_STARTED",
+      "runtimeDependencyCount": null,
+      "monorepoDependencyCount": null,
+      "forbiddenDependencyFindings": null,
+      "manifestSha256": null,
+      "lockfileSha256": null,
+      "scanEvidenceSha256": null,
+      "reviewedBy": null
+    }
+  },
+  "executionGate": {
+    "status": "BLOCKED",
+    "requiredPrerequisiteGateIds": ["PV0-G01", "PV0-G03"],
+    "satisfiedPrerequisiteGateIds": [],
+    "checks": {
+      "pv0G01Approved": false,
+      "pv0G03Approved": false,
+      "namedAuthorSelected": false,
+      "namedReviewerSelected": false,
+      "authorExposureCleared": false,
+      "reviewerExposureCleared": false,
+      "approvedAuthorPacketBound": false,
+      "freshWorkspaceBound": false,
+      "toolContextBound": false,
+      "environmentAttested": false
+    },
+    "blockers": [
+      "PV0_G01_OPEN",
+      "PV0_G03_OPEN",
+      "NAMED_CLEAN_AUTHOR_MISSING",
+      "NAMED_CLEAN_REVIEWER_MISSING",
+      "SOURCE_EXPOSURE_UNRESOLVED",
+      "APPROVED_AUTHOR_PACKET_UNBOUND",
+      "FRESH_WORKSPACE_UNBOUND",
+      "TOOL_CONTEXT_UNBOUND",
+      "ENVIRONMENT_ATTESTATION_MISSING"
+    ],
+    "authoringMayBegin": false,
+    "schemaEditsAuthorized": false,
+    "reason": "Setup-only intake. PV0-G01 and PV0-G03 are open and no named clean participants, approved input packet, constrained workspace, tool context, or environment attestation are bound."
+  },
+  "gateClosure": [
+    {
+      "gateId": "PV0-G02",
+      "eligible": false,
+      "gateRemainsOpen": true,
+      "evidenceReferences": [],
+      "reason": "No named independently constrained author/reviewer context or exposure evidence exists."
+    },
+    {
+      "gateId": "PV0-G04",
+      "eligible": false,
+      "gateRemainsOpen": true,
+      "evidenceReferences": [],
+      "reason": "Fresh schema history and complete per-file provenance do not exist."
+    },
+    {
+      "gateId": "PV0-G05",
+      "eligible": false,
+      "gateRemainsOpen": true,
+      "evidenceReferences": [],
+      "reason": "No authored artifact or reviewed runtime-dependency evidence exists."
+    }
+  ],
+  "scopeNonAuthorization": {
+    "schemaAuthoringAuthorized": false,
+    "schemaEditsAuthorized": false,
+    "conformancePayloadsAuthorized": false,
+    "conformanceRunnersAuthorized": false,
+    "codeGenerationAuthorized": false,
+    "sdkPublicationAuthorized": false,
+    "gatewayImplementationAuthorized": false,
+    "enterpriseOrCloudImplementationAuthorized": false,
+    "privateImplementationAuthorized": false,
+    "protocolPublicationAuthorized": false,
+    "relicensingAuthorized": false,
+    "otherGateClosuresAuthorized": []
+  },
+  "signOff": {
+    "statement": null,
+    "signedBy": null,
+    "signedAt": null,
+    "evidenceReference": null
+  }
+}

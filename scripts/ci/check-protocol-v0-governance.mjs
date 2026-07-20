@@ -12,6 +12,10 @@ const g03ReviewIntakePath =
   'docs/provenance/PROTOCOL_V0_G03_REQUIREMENTS_REVIEW_INTAKE.json';
 const g03ReviewGuidePath =
   'docs/provenance/PROTOCOL_V0_G03_REQUIREMENTS_REVIEW_INTAKE.md';
+const authoringIntakePath =
+  'docs/provenance/PROTOCOL_V0_G02_G04_G05_AUTHORING_INTAKE.json';
+const authoringGuidePath =
+  'docs/provenance/PROTOCOL_V0_G02_G04_G05_AUTHORING_INTAKE.md';
 const tracePath = protocolPath + '/traceability.json';
 const allowedFiles = new Set([
   'README.md',
@@ -146,6 +150,87 @@ const g03FrozenRequirementIds = [
   'PV0-PROV-001',
   'PV0-PROV-002',
 ];
+const authoringIntakeSha256 =
+  'ff14d0b97c9601bb8f028ba557ff9f6d86543996b0954100ad8574f9375de43d';
+const authoringGuideSha256 =
+  '1a3b55a0345984d68a2c064a565900f8d12a16110f442af7fd53daa53be65f54';
+const authoringIssueBodySha256 =
+  'f422c8187e1a9b1cb8975ecc513acb3a33fa2095651bef4a93c550522cb3a1fc';
+const authoringG01IssueBodySha256 =
+  '3394dd728b9d3e3d16efe8b6d3e1a0eb7d91990f9e31dec0cbc6827c69b8082f';
+const authoringG03IssueBodySha256 =
+  '4688df7067b30271abca89a0929c5ebe828dc85b2a34f9769f05c5386190a709';
+const authoringGateScope = ['PV0-G02', 'PV0-G04', 'PV0-G05'];
+const authoringExternalInputIds = [
+  'PV0-IN-002',
+  'PV0-IN-003',
+  'PV0-IN-004',
+  'PV0-IN-005',
+  'PV0-IN-006',
+];
+const authoringRepositoryDerivedInputIds = [
+  'PV0-IN-001',
+  'PV0-IN-007',
+  'PV0-IN-009',
+  'PV0-IN-010',
+  'PV0-IN-011',
+];
+const authoringProhibitedContextClasses = [
+  'CLODEX_IDE_IMPLEMENTATION_SOURCE_ANY_REVISION',
+  'PROTOCOL_V0_INCUBATOR_PR74_AND_DESCENDANTS',
+  'IMPLEMENTATION_TYPES_VALIDATORS_TESTS_FIXTURES_CONSTANTS_COMMENTS',
+  'DISTINCTIVE_LITERALS_AND_CURRENT_MODULE_STRUCTURE',
+  'STAGEWISE_DERIVED_AGENT_SHELL_AGENT_CORE_KARTON_BROWSER_IPC_UI_RUNTIME',
+  'RUNNER_SDK_SOURCE_OR_EXPORTS',
+  'PRIOR_AI_SESSION_MEMORY_SUMMARY_OR_FORK_WITH_PROHIBITED_CONTEXT',
+  'PRIVATE_REPOSITORY_CUSTOMER_PRODUCTION_OR_RESTRICTED_MATERIAL',
+  'UNKNOWN_OR_UNRECORDED_INPUT',
+];
+const authoringBlockers = [
+  'PV0_G01_OPEN',
+  'PV0_G03_OPEN',
+  'NAMED_CLEAN_AUTHOR_MISSING',
+  'NAMED_CLEAN_REVIEWER_MISSING',
+  'SOURCE_EXPOSURE_UNRESOLVED',
+  'APPROVED_AUTHOR_PACKET_UNBOUND',
+  'FRESH_WORKSPACE_UNBOUND',
+  'TOOL_CONTEXT_UNBOUND',
+  'ENVIRONMENT_ATTESTATION_MISSING',
+];
+const authoringRequiredRunFields = [
+  'toolRunId',
+  'provider',
+  'product',
+  'modelOrVersion',
+  'build',
+  'freshSession',
+  'memoryEnabled',
+  'historyImported',
+  'retrievalEnabled',
+  'repositoryMounts',
+  'mcpServers',
+  'networkPolicy',
+  'systemInstructionsSha256',
+  'taskPromptSha256',
+  'approvedPacketSha256',
+  'transcriptSha256',
+  'generatedOutputBindings',
+];
+const authoringRequiredPerFileFields = [
+  'path',
+  'sha256',
+  'gitBlob',
+  'creationCommit',
+  'authorParticipantIds',
+  'reviewerParticipantIds',
+  'approvedInputBindings',
+  'requirementIds',
+  'toolRunIds',
+  'generationMethod',
+  'manualEditEvidence',
+  'reviewDecision',
+  'reviewRationale',
+];
 
 function parseJson(path, label, errors) {
   try {
@@ -185,6 +270,9 @@ function checkSetupOnlyGuideClaims(source, path, errors) {
     /\bPV0-G\d{2}\s+is\s+(?:CLOSED|GREEN|APPROVED)\b/iu,
     /\b(?:all\s+)?Protocol v0 gates?\s+(?:is|are)\s+(?:CLOSED|GREEN|APPROVED)\b/iu,
     /\b(?:Gateway implementation|private implementation|SDK publication|schema edits?|conformance payloads?|relicensing|enterprise(?:\/cloud)? implementation)\s+(?:is|are)\s+authorized\b/iu,
+    /\b(?:fresh\s+)?schema\s+(?:authorship|authoring|changes?|edits?)\s+(?:is|are)\s+authorized\b/iu,
+    /\bauthoringMayBegin\s*[:=]\s*true\b/iu,
+    /\bexecution\s+(?:is\s+)?(?:UNBLOCKED|AUTHORIZED|APPROVED)\b/iu,
     /\bthis intake authorizes\b[^\n]*(?:Gateway|private implementation|SDK|schema|conformance|relicensing|enterprise|cloud)\b/iu,
   ]) {
     if (claim.test(source)) {
@@ -1148,6 +1236,1086 @@ function checkG03RequirementsReviewIntake(root, errors) {
   }
 }
 
+function checkConstrainedAuthoringIntake(root, errors) {
+  const intake = join(root, authoringIntakePath);
+  if (!existsSync(intake)) {
+    errors.push(authoringIntakePath + ': required intake missing');
+    return;
+  }
+  const document = parseJson(intake, authoringIntakePath, errors);
+  if (!document) return;
+  if (digest(intake) !== authoringIntakeSha256) {
+    errors.push(
+      authoringIntakePath + ': exact setup-only intake content drift',
+    );
+  }
+  if (
+    !checkExactFields(
+      document,
+      [
+        'artifactType',
+        'executionGate',
+        'frozenBindings',
+        'gateClosure',
+        'gateScope',
+        'inputPolicy',
+        'issue',
+        'participantSlots',
+        'protocolGateState',
+        'provenancePlan',
+        'schemaVersion',
+        'scopeNonAuthorization',
+        'signOff',
+        'sourceExposurePolicy',
+        'status',
+        'toolingAndEnvironment',
+      ],
+      authoringIntakePath,
+      errors,
+    )
+  ) {
+    return;
+  }
+  if (
+    document.schemaVersion !== 1 ||
+    document.artifactType !==
+      'PV0_G02_G04_G05_CONSTRAINED_AUTHORING_SETUP_INTAKE' ||
+    document.status !== 'SETUP_ONLY_EXECUTION_BLOCKED'
+  ) {
+    errors.push(authoringIntakePath + ': invalid setup-only intake status');
+  }
+
+  const expectedIssue = {
+    repository: 'mereyabdenbekuly-ctrl/clodex-ide',
+    number: 77,
+    url: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/77',
+    title: 'Protocol v0: constrained authoring plan for PV0-G02/G04/G05',
+    createdAt: '2026-07-20T03:30:58Z',
+    updatedAt: '2026-07-20T03:30:58Z',
+    bodySha256: authoringIssueBodySha256,
+  };
+  if (
+    !checkExactFields(
+      document.issue,
+      [
+        'bodySha256',
+        'createdAt',
+        'number',
+        'repository',
+        'title',
+        'updatedAt',
+        'url',
+      ],
+      authoringIntakePath + '.issue',
+      errors,
+    ) ||
+    JSON.stringify(document.issue) !== JSON.stringify(expectedIssue)
+  ) {
+    errors.push(authoringIntakePath + ': issue #77 binding drift');
+  }
+  if (!sameValues(document.gateScope, authoringGateScope)) {
+    errors.push(authoringIntakePath + ': gate scope must remain G02/G04/G05');
+  }
+  if (
+    !checkExactFields(
+      document.protocolGateState,
+      ['allGatesRemainOpen', 'closedGates', 'openGates'],
+      authoringIntakePath + '.protocolGateState',
+      errors,
+    ) ||
+    document.protocolGateState.allGatesRemainOpen !== true ||
+    !sameValues(document.protocolGateState.openGates, openGates) ||
+    !sameValues(document.protocolGateState.closedGates, [])
+  ) {
+    errors.push(
+      authoringIntakePath + ': all Protocol v0 gates must remain open',
+    );
+  }
+
+  const bindings = document.frozenBindings;
+  if (
+    !checkExactFields(
+      bindings,
+      [
+        'approvedAuthorInputPacket',
+        'cleanAuthoringWorkspace',
+        'contaminatedIncubator',
+        'policy',
+        'pv0G01ReviewTarget',
+        'pv0G03ReviewTarget',
+      ],
+      authoringIntakePath + '.frozenBindings',
+      errors,
+    ) ||
+    bindings.policy !== 'ISSUE_AND_CONTAMINATED_INCUBATOR_BASELINE_PINNED'
+  ) {
+    errors.push(authoringIntakePath + ': frozen binding policy drift');
+  }
+  const contaminated = bindings?.contaminatedIncubator;
+  if (
+    !checkExactFields(
+      contaminated,
+      [
+        'allRepositoryRevisionsDenied',
+        'classification',
+        'protocolTree',
+        'pullRequest',
+        'traceabilityBinding',
+        'warning',
+      ],
+      authoringIntakePath + '.frozenBindings.contaminatedIncubator',
+      errors,
+    ) ||
+    contaminated.classification !== 'DENY_FOR_AUTHOR_AND_REVIEWER_CONTEXT' ||
+    contaminated.allRepositoryRevisionsDenied !== true ||
+    contaminated.warning !==
+      'This binding identifies prohibited repository-exposed history. It is not an approved author input.'
+  ) {
+    errors.push(
+      authoringIntakePath + ': contaminated baseline classification drift',
+    );
+  }
+  const expectedPullRequest = {
+    repository: 'mereyabdenbekuly-ctrl/clodex-ide',
+    number: 74,
+    url: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/pull/74',
+    baseCommit: '8d2618a91a541607944fb7eb7bad30001d5b4aeb',
+    headCommit: 'c0e0c6d4fb66b98806a2a80884b8f034b2e860b1',
+    mergeCommit: g01FrozenMainCommit,
+  };
+  if (
+    !checkExactFields(
+      contaminated?.pullRequest,
+      [
+        'baseCommit',
+        'headCommit',
+        'mergeCommit',
+        'number',
+        'repository',
+        'url',
+      ],
+      authoringIntakePath + '.frozenBindings.contaminatedIncubator.pullRequest',
+      errors,
+    ) ||
+    JSON.stringify(contaminated.pullRequest) !==
+      JSON.stringify(expectedPullRequest) ||
+    JSON.stringify(contaminated.protocolTree) !==
+      JSON.stringify({
+        path: protocolPath,
+        gitTree: 'd36c03eab98cd249a2b52fa1bd662869e7a494b3',
+      }) ||
+    JSON.stringify(contaminated.traceabilityBinding) !==
+      JSON.stringify(g01FrozenReviewInputs[2])
+  ) {
+    errors.push(authoringIntakePath + ': PR #74 frozen baseline drift');
+  }
+
+  const g01Target = bindings?.pv0G01ReviewTarget;
+  if (
+    !checkExactFields(
+      g01Target,
+      [
+        'closureEvidence',
+        'frozenMainCommit',
+        'gateId',
+        'issue',
+        'reviewInputs',
+        'status',
+      ],
+      authoringIntakePath + '.frozenBindings.pv0G01ReviewTarget',
+      errors,
+    ) ||
+    g01Target.gateId !== 'PV0-G01' ||
+    g01Target.status !== 'OPEN' ||
+    g01Target.frozenMainCommit !== g01FrozenMainCommit ||
+    JSON.stringify(g01Target.reviewInputs) !==
+      JSON.stringify(g01FrozenReviewInputs) ||
+    JSON.stringify(g01Target.issue) !==
+      JSON.stringify({
+        number: 75,
+        url: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/75',
+        createdAt: '2026-07-20T03:30:54Z',
+        updatedAt: '2026-07-20T03:30:54Z',
+        bodySha256: authoringG01IssueBodySha256,
+      }) ||
+    !isRecord(g01Target.closureEvidence) ||
+    Object.keys(g01Target.closureEvidence).some(
+      (field) => g01Target.closureEvidence[field] !== null,
+    )
+  ) {
+    errors.push(
+      authoringIntakePath +
+        ': PV0-G01 must remain open with no closure evidence',
+    );
+  }
+  const g03Target = bindings?.pv0G03ReviewTarget;
+  if (
+    !checkExactFields(
+      g03Target,
+      [
+        'closureEvidence',
+        'frozenMainCommit',
+        'gateId',
+        'issue',
+        'reviewInputs',
+        'status',
+      ],
+      authoringIntakePath + '.frozenBindings.pv0G03ReviewTarget',
+      errors,
+    ) ||
+    g03Target.gateId !== 'PV0-G03' ||
+    g03Target.status !== 'OPEN' ||
+    g03Target.frozenMainCommit !== g03FrozenMainCommit ||
+    JSON.stringify(g03Target.reviewInputs) !==
+      JSON.stringify(g03FrozenReviewInputs) ||
+    JSON.stringify(g03Target.issue) !==
+      JSON.stringify({
+        number: 76,
+        url: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/76',
+        createdAt: '2026-07-20T03:30:56Z',
+        updatedAt: '2026-07-20T03:30:56Z',
+        bodySha256: authoringG03IssueBodySha256,
+      }) ||
+    !isRecord(g03Target.closureEvidence) ||
+    Object.keys(g03Target.closureEvidence).some(
+      (field) => g03Target.closureEvidence[field] !== null,
+    )
+  ) {
+    errors.push(
+      authoringIntakePath +
+        ': PV0-G03 must remain open with no closure evidence',
+    );
+  }
+  const packet = bindings?.approvedAuthorInputPacket;
+  if (
+    !checkExactFields(
+      packet,
+      [
+        'approvedAt',
+        'approvedBy',
+        'createdAt',
+        'createdBy',
+        'packetSha256',
+        'path',
+        'sourceManifestSha256',
+        'status',
+      ],
+      authoringIntakePath + '.frozenBindings.approvedAuthorInputPacket',
+      errors,
+    ) ||
+    packet.status !== 'UNBOUND' ||
+    Object.keys(packet)
+      .filter((field) => field !== 'status')
+      .some((field) => packet[field] !== null)
+  ) {
+    errors.push(
+      authoringIntakePath + ': author input packet must remain unbound',
+    );
+  }
+  const cleanWorkspace = bindings?.cleanAuthoringWorkspace;
+  if (
+    !checkExactFields(
+      cleanWorkspace,
+      [
+        'artifactRoot',
+        'environmentAttestationSha256',
+        'initialEmptyCommit',
+        'initialTree',
+        'repositoryIdentifier',
+        'status',
+      ],
+      authoringIntakePath + '.frozenBindings.cleanAuthoringWorkspace',
+      errors,
+    ) ||
+    cleanWorkspace.status !== 'UNBOUND' ||
+    Object.keys(cleanWorkspace)
+      .filter((field) => field !== 'status')
+      .some((field) => cleanWorkspace[field] !== null)
+  ) {
+    errors.push(
+      authoringIntakePath + ': clean authoring workspace must remain unbound',
+    );
+  }
+
+  const participantSlots = document.participantSlots;
+  if (
+    !checkExactFields(
+      participantSlots,
+      ['authors', 'environmentCustodian', 'reviewers', 'separationPolicy'],
+      authoringIntakePath + '.participantSlots',
+      errors,
+    ) ||
+    !Array.isArray(participantSlots.authors) ||
+    participantSlots.authors.length !== 1 ||
+    !Array.isArray(participantSlots.reviewers) ||
+    participantSlots.reviewers.length !== 1
+  ) {
+    errors.push(
+      authoringIntakePath +
+        ': exactly one pending author and reviewer slot required',
+    );
+  }
+  const participantFields = [
+    'affiliation',
+    'conflictOfInterestDeclaration',
+    'eligibility',
+    'identity',
+    'independenceDeclaration',
+    'role',
+    'selectedAt',
+    'signOff',
+    'slotId',
+    'sourceExposure',
+  ];
+  const exposureFields = [
+    'clodexIdeRepositorySource',
+    'declaration',
+    'declaredAt',
+    'distinctiveLiteralsAndModuleStructure',
+    'evidenceReferences',
+    'implementationTypesValidatorsTestsFixtures',
+    'overallStatus',
+    'priorAiContextOrMemory',
+    'privateCustomerProductionMaterial',
+    'protocolIncubatorPr74',
+  ];
+  const expectedParticipants = [
+    [
+      participantSlots?.authors?.[0],
+      'PV0-AUTHOR-01',
+      'CONSTRAINED_SCHEMA_AUTHOR',
+    ],
+    [
+      participantSlots?.reviewers?.[0],
+      'PV0-REVIEWER-01',
+      'INDEPENDENT_SCHEMA_REVIEWER',
+    ],
+  ];
+  for (const [participant, slotId, role] of expectedParticipants) {
+    const label = authoringIntakePath + '.participantSlots.' + slotId;
+    if (
+      !checkExactFields(participant, participantFields, label, errors) ||
+      participant.slotId !== slotId ||
+      participant.role !== role ||
+      participant.identity !== null ||
+      participant.affiliation !== null ||
+      participant.selectedAt !== null ||
+      participant.independenceDeclaration !== null ||
+      participant.conflictOfInterestDeclaration !== null ||
+      participant.eligibility !== 'PENDING'
+    ) {
+      errors.push(label + ': participant attribution must remain pending');
+    }
+    const exposure = participant?.sourceExposure;
+    if (
+      !checkExactFields(
+        exposure,
+        exposureFields,
+        label + '.sourceExposure',
+        errors,
+      ) ||
+      exposureFields
+        .filter(
+          (field) =>
+            !['declaration', 'declaredAt', 'evidenceReferences'].includes(
+              field,
+            ),
+        )
+        .some((field) => exposure[field] !== 'UNKNOWN') ||
+      exposure.declaration !== null ||
+      exposure.declaredAt !== null ||
+      !sameValues(exposure.evidenceReferences, [])
+    ) {
+      errors.push(label + ': source exposure must remain unresolved');
+    }
+    if (
+      !checkExactFields(
+        participant?.signOff,
+        ['evidenceReference', 'signedAt', 'statement'],
+        label + '.signOff',
+        errors,
+      ) ||
+      Object.values(participant.signOff).some((value) => value !== null)
+    ) {
+      errors.push(label + ': participant slot must remain unsigned');
+    }
+  }
+  const expectedCustodian = {
+    slotId: 'PV0-CUSTODIAN-01',
+    role: 'SOURCE_CONSTRAINT_ENVIRONMENT_CUSTODIAN',
+    identity: null,
+    affiliation: null,
+    selectedAt: null,
+    repositoryExposureAllowedForCustodyOnly: true,
+    mayAuthorSchemas: false,
+    mayPerformNormativeSchemaReview: false,
+    attestation: null,
+    attestedAt: null,
+    evidenceReference: null,
+  };
+  if (
+    !checkExactFields(
+      participantSlots?.environmentCustodian,
+      Object.keys(expectedCustodian),
+      authoringIntakePath + '.participantSlots.environmentCustodian',
+      errors,
+    ) ||
+    JSON.stringify(participantSlots.environmentCustodian) !==
+      JSON.stringify(expectedCustodian)
+  ) {
+    errors.push(
+      authoringIntakePath +
+        ': custodian must remain non-authoring and unattributed',
+    );
+  }
+  const expectedSeparationPolicy = {
+    minimumNamedAuthors: 1,
+    minimumNamedReviewers: 1,
+    authorsAndReviewersMustBeDisjoint: true,
+    authorsMayNotReviewOwnArtifacts: true,
+    reviewersMayNotModifyAuthoredArtifacts: true,
+    custodianMayNotAuthorOrSemanticallyApprove: true,
+    aiSystemsAreToolsNotAccountableSignatories: true,
+  };
+  if (
+    !checkExactFields(
+      participantSlots?.separationPolicy,
+      Object.keys(expectedSeparationPolicy),
+      authoringIntakePath + '.participantSlots.separationPolicy',
+      errors,
+    ) ||
+    JSON.stringify(participantSlots.separationPolicy) !==
+      JSON.stringify(expectedSeparationPolicy)
+  ) {
+    errors.push(
+      authoringIntakePath + ': author/reviewer separation policy drift',
+    );
+  }
+
+  const sourcePolicy = document.sourceExposurePolicy;
+  if (
+    !checkExactFields(
+      sourcePolicy,
+      [
+        'authorAndReviewerRequiredState',
+        'humanAndEnvironmentEvidenceRequired',
+        'prohibitedContextClasses',
+        'selfDeclarationAloneClosesGate',
+        'trainingDataClaim',
+        'unknownExposureDefault',
+      ],
+      authoringIntakePath + '.sourceExposurePolicy',
+      errors,
+    ) ||
+    sourcePolicy.unknownExposureDefault !== 'DISQUALIFY_UNTIL_RESOLVED' ||
+    sourcePolicy.authorAndReviewerRequiredState !==
+      'DECLARED_NO_PROHIBITED_CONTEXT_EXPOSURE' ||
+    !sameValues(
+      sourcePolicy.prohibitedContextClasses,
+      authoringProhibitedContextClasses,
+    ) ||
+    sourcePolicy.trainingDataClaim !==
+      'No claim is made about unknowable model pretraining. Evidence covers supplied runtime context, retrieval, tools, memory, mounts, prompts, and sessions.' ||
+    sourcePolicy.selfDeclarationAloneClosesGate !== false ||
+    sourcePolicy.humanAndEnvironmentEvidenceRequired !== true
+  ) {
+    errors.push(
+      authoringIntakePath + ': fail-closed source exposure policy drift',
+    );
+  }
+
+  const inputPolicy = document.inputPolicy;
+  if (
+    !checkExactFields(
+      inputPolicy,
+      [
+        'alwaysDenied',
+        'authorPacketRules',
+        'conditionallyEligibleAfterGateClosure',
+        'currentlyAllowedForSchemaAuthoring',
+        'currentlyBoundAuthorPacketEntries',
+        'repositoryDerivedInputsRoute',
+        'unknownInputsDefaultTo',
+      ],
+      authoringIntakePath + '.inputPolicy',
+      errors,
+    ) ||
+    inputPolicy.unknownInputsDefaultTo !== 'RED' ||
+    !sameValues(inputPolicy.currentlyAllowedForSchemaAuthoring, []) ||
+    !sameValues(inputPolicy.currentlyBoundAuthorPacketEntries, [])
+  ) {
+    errors.push(
+      authoringIntakePath +
+        ': current author input allowlist must remain empty and default RED',
+    );
+  }
+  const eligible = inputPolicy?.conditionallyEligibleAfterGateClosure;
+  if (
+    !Array.isArray(eligible) ||
+    eligible.length !== 2 ||
+    eligible[0]?.sourceClass !== 'APPROVED_PV0_G03_REQUIREMENTS_CATALOGUE' ||
+    eligible[0]?.requiredGate !== 'PV0-G03' ||
+    eligible[0]?.directAuthorExposure !== true ||
+    eligible[1]?.sourceClass !== 'APPROVED_EXTERNAL_STANDARDS' ||
+    !sameValues(eligible[1]?.inputIds, authoringExternalInputIds) ||
+    eligible[1]?.requiredGate !== 'PV0-G01' ||
+    eligible[1]?.directAuthorExposure !== true ||
+    !Array.isArray(eligible[0]?.conditions) ||
+    eligible[0].conditions.length !== 3 ||
+    !Array.isArray(eligible[1]?.conditions) ||
+    eligible[1].conditions.length !== 4
+  ) {
+    errors.push(
+      authoringIntakePath + ': conditional approved-input policy drift',
+    );
+  }
+  const route = inputPolicy?.repositoryDerivedInputsRoute;
+  if (
+    !checkExactFields(
+      route,
+      ['directAuthorExposure', 'inputIds', 'permittedRoute'],
+      authoringIntakePath + '.inputPolicy.repositoryDerivedInputsRoute',
+      errors,
+    ) ||
+    !sameValues(route.inputIds, authoringRepositoryDerivedInputIds) ||
+    route.directAuthorExposure !== false ||
+    route.permittedRoute !== 'APPROVED_PV0_G03_REQUIREMENTS_CATALOGUE_ONLY'
+  ) {
+    errors.push(
+      authoringIntakePath +
+        ': repository-derived inputs may not reach authors directly',
+    );
+  }
+  const denied = Array.isArray(inputPolicy?.alwaysDenied)
+    ? inputPolicy.alwaysDenied
+    : [];
+  const expectedDeniedIds = [
+    'PV0-IN-008',
+    'CURRENT_PROTOCOL_INCUBATOR',
+    'IMPLEMENTATION_ARTIFACT_CLASSES',
+    'LEGACY_AND_TRANSITIVE_SOURCE',
+    'PRIOR_AI_CONTEXT',
+    'PRIVATE_OR_RESTRICTED_MATERIAL',
+    'UNKNOWN_INPUT',
+  ];
+  if (
+    !sameValues(
+      denied.map((entry) => entry?.id),
+      expectedDeniedIds,
+    ) ||
+    denied.some(
+      (entry) =>
+        !checkExactFields(
+          entry,
+          ['id', 'reason', 'scope'],
+          authoringIntakePath + '.inputPolicy.alwaysDenied.' + entry?.id,
+          errors,
+        ),
+    ) ||
+    denied[0]?.scope !== 'ALL_REVISIONS'
+  ) {
+    errors.push(
+      authoringIntakePath + ': permanent RED and deny input inventory drift',
+    );
+  }
+  const packetRules = inputPolicy?.authorPacketRules;
+  if (
+    !checkExactFields(
+      packetRules,
+      [
+        'dynamicOrMutableUrlsForbidden',
+        'exactBytesAndSha256Required',
+        'packetChangesRequireNewDigestAndApproval',
+        'symlinksForbidden',
+        'unrecordedAttachmentsForbidden',
+      ],
+      authoringIntakePath + '.inputPolicy.authorPacketRules',
+      errors,
+    ) ||
+    Object.values(packetRules).some((value) => value !== true)
+  ) {
+    errors.push(authoringIntakePath + ': exact author packet rules drift');
+  }
+
+  const environment = document.toolingAndEnvironment;
+  if (
+    !checkExactFields(
+      environment,
+      [
+        'aiContextRuns',
+        'attestation',
+        'dependencyPolicy',
+        'status',
+        'toolPolicy',
+        'toolRuns',
+        'workspace',
+      ],
+      authoringIntakePath + '.toolingAndEnvironment',
+      errors,
+    ) ||
+    environment.status !== 'UNBOUND' ||
+    !sameValues(environment.toolRuns, []) ||
+    !sameValues(environment.aiContextRuns, [])
+  ) {
+    errors.push(
+      authoringIntakePath + ': tool and AI run evidence must remain unbound',
+    );
+  }
+  const toolPolicy = environment?.toolPolicy;
+  if (
+    !checkExactFields(
+      toolPolicy,
+      [
+        'allowedAuthoringModes',
+        'allowedEgressModes',
+        'codeGraphOrRepositoryIndexForbidden',
+        'freshSessionRequiredWhenAiUsed',
+        'githubCodeSearchForbidden',
+        'mcpServerAllowlist',
+        'networkDefaultDeny',
+        'persistentMemoryMustBeDisabled',
+        'priorConversationImportForbidden',
+        'repositoryRetrievalForbidden',
+        'repositoryToolAllowlist',
+        'requiredRunFields',
+        'selectedAuthoringMode',
+        'selectedEgressMode',
+        'unapprovedMcpServersForbidden',
+      ],
+      authoringIntakePath + '.toolingAndEnvironment.toolPolicy',
+      errors,
+    ) ||
+    !sameValues(toolPolicy.allowedAuthoringModes, [
+      'NO_AI',
+      'FRESH_CONTEXT_AI_SESSION',
+    ]) ||
+    toolPolicy.selectedAuthoringMode !== null ||
+    toolPolicy.freshSessionRequiredWhenAiUsed !== true ||
+    toolPolicy.persistentMemoryMustBeDisabled !== true ||
+    toolPolicy.priorConversationImportForbidden !== true ||
+    toolPolicy.repositoryRetrievalForbidden !== true ||
+    toolPolicy.githubCodeSearchForbidden !== true ||
+    toolPolicy.codeGraphOrRepositoryIndexForbidden !== true ||
+    toolPolicy.unapprovedMcpServersForbidden !== true ||
+    !sameValues(toolPolicy.mcpServerAllowlist, []) ||
+    !sameValues(toolPolicy.repositoryToolAllowlist, []) ||
+    toolPolicy.networkDefaultDeny !== true ||
+    !sameValues(toolPolicy.allowedEgressModes, [
+      'OFFLINE',
+      'AI_PROVIDER_ONLY',
+    ]) ||
+    toolPolicy.selectedEgressMode !== null ||
+    !sameValues(toolPolicy.requiredRunFields, authoringRequiredRunFields)
+  ) {
+    errors.push(
+      authoringIntakePath + ': fail-closed tool and AI context policy drift',
+    );
+  }
+  const workspace = environment?.workspace;
+  if (
+    !checkExactFields(
+      workspace,
+      [
+        'artifactRoot',
+        'createdAt',
+        'egressLogSha256',
+        'environmentAttestationSha256',
+        'filesystemManifestSha256',
+        'importedCommitsOrPatchesForbidden',
+        'initialEmptyCommit',
+        'initialTree',
+        'mustNotContainClodexIdeHistory',
+        'mustStartEmpty',
+        'repositoryIdentifier',
+        'repositoryMounts',
+        'requiredType',
+        'toolchainLockSha256',
+      ],
+      authoringIntakePath + '.toolingAndEnvironment.workspace',
+      errors,
+    ) ||
+    workspace.requiredType !== 'FRESH_SOURCE_CONSTRAINED_REPOSITORY' ||
+    workspace.mustStartEmpty !== true ||
+    workspace.mustNotContainClodexIdeHistory !== true ||
+    workspace.importedCommitsOrPatchesForbidden !== true ||
+    !sameValues(workspace.repositoryMounts, []) ||
+    [
+      'repositoryIdentifier',
+      'createdAt',
+      'initialEmptyCommit',
+      'initialTree',
+      'artifactRoot',
+      'filesystemManifestSha256',
+      'toolchainLockSha256',
+      'environmentAttestationSha256',
+      'egressLogSha256',
+    ].some((field) => workspace[field] !== null)
+  ) {
+    errors.push(
+      authoringIntakePath + ': fresh workspace must remain empty and unbound',
+    );
+  }
+  const dependencies = environment?.dependencyPolicy;
+  if (
+    !checkExactFields(
+      dependencies,
+      [
+        'dependencyManifestBindings',
+        'developmentToolsMustBePinnedAndReviewed',
+        'forbiddenDependencySources',
+        'forbiddenPackageScopes',
+        'installOrBuildLifecycleFetchScriptsForbidden',
+        'lockfileBindings',
+        'runtimeDependenciesAllowed',
+      ],
+      authoringIntakePath + '.toolingAndEnvironment.dependencyPolicy',
+      errors,
+    ) ||
+    dependencies.runtimeDependenciesAllowed !== false ||
+    !sameValues(dependencies.forbiddenDependencySources, [
+      'workspace:',
+      'file:',
+      'link:',
+      'git',
+      'github',
+    ]) ||
+    !sameValues(dependencies.forbiddenPackageScopes, [
+      '@clodex/*',
+      '@stagewise/*',
+    ]) ||
+    dependencies.installOrBuildLifecycleFetchScriptsForbidden !== true ||
+    dependencies.developmentToolsMustBePinnedAndReviewed !== true ||
+    !sameValues(dependencies.dependencyManifestBindings, []) ||
+    !sameValues(dependencies.lockfileBindings, [])
+  ) {
+    errors.push(
+      authoringIntakePath +
+        ': zero-runtime and monorepo dependency policy drift',
+    );
+  }
+  const attestation = environment?.attestation;
+  if (
+    !checkExactFields(
+      attestation,
+      ['attestedAt', 'attestedBy', 'evidenceReference', 'status'],
+      authoringIntakePath + '.toolingAndEnvironment.attestation',
+      errors,
+    ) ||
+    attestation.status !== 'MISSING' ||
+    ['attestedBy', 'attestedAt', 'evidenceReference'].some(
+      (field) => attestation[field] !== null,
+    )
+  ) {
+    errors.push(
+      authoringIntakePath + ': environment attestation must remain missing',
+    );
+  }
+
+  const provenance = document.provenancePlan;
+  if (
+    !checkExactFields(
+      provenance,
+      [
+        'generatedArtifacts',
+        'perFileRecords',
+        'redSourceWarningScan',
+        'requiredPerFileFields',
+        'runtimeDependencyEvidence',
+        'schemaHistory',
+        'semanticCompletenessReview',
+      ],
+      authoringIntakePath + '.provenancePlan',
+      errors,
+    ) ||
+    !sameValues(provenance.perFileRecords, []) ||
+    !sameValues(provenance.generatedArtifacts, []) ||
+    !sameValues(
+      provenance.requiredPerFileFields,
+      authoringRequiredPerFileFields,
+    )
+  ) {
+    errors.push(
+      authoringIntakePath +
+        ': per-file and generated provenance must remain empty',
+    );
+  }
+  const schemaHistory = provenance?.schemaHistory;
+  if (
+    !checkExactFields(
+      schemaHistory,
+      [
+        'commitRange',
+        'evidenceReference',
+        'firstAuthoringCommit',
+        'historyImported',
+        'historyRewrittenAfterReview',
+        'initialEmptyCommit',
+        'repositoryIdentifier',
+        'reviewedHeadCommit',
+        'status',
+      ],
+      authoringIntakePath + '.provenancePlan.schemaHistory',
+      errors,
+    ) ||
+    schemaHistory.status !== 'NOT_STARTED' ||
+    schemaHistory.historyImported !== false ||
+    Object.keys(schemaHistory)
+      .filter((field) => !['historyImported', 'status'].includes(field))
+      .some((field) => schemaHistory[field] !== null)
+  ) {
+    errors.push(
+      authoringIntakePath + ': fresh schema history must remain absent',
+    );
+  }
+  const completeness = provenance?.semanticCompletenessReview;
+  if (
+    !checkExactFields(
+      completeness,
+      [
+        'coverageEvidenceSha256',
+        'decision',
+        'normativeComparisonSource',
+        'reviewedCommit',
+        'reviewer',
+        'status',
+      ],
+      authoringIntakePath + '.provenancePlan.semanticCompletenessReview',
+      errors,
+    ) ||
+    completeness.status !== 'NOT_STARTED' ||
+    completeness.normativeComparisonSource !==
+      'APPROVED_PV0_G03_REQUIREMENTS_ONLY' ||
+    ['reviewer', 'reviewedCommit', 'coverageEvidenceSha256', 'decision'].some(
+      (field) => completeness[field] !== null,
+    )
+  ) {
+    errors.push(
+      authoringIntakePath +
+        ': semantic completeness evidence must remain absent',
+    );
+  }
+  const warningScan = provenance?.redSourceWarningScan;
+  if (
+    !checkExactFields(
+      warningScan,
+      [
+        'dispositiveProofOfCleanProvenance',
+        'mayModifyAuthoredArtifacts',
+        'mayReturnSourceExcerptsToAuthorsOrReviewers',
+        'mode',
+        'prohibitedCorpusBinding',
+        'resultDigest',
+        'reviewedBy',
+        'scannerBinding',
+        'status',
+      ],
+      authoringIntakePath + '.provenancePlan.redSourceWarningScan',
+      errors,
+    ) ||
+    warningScan.status !== 'NOT_STARTED' ||
+    warningScan.mode !==
+      'POST_FREEZE_WARNING_ONLY_BY_NON_AUTHORING_CUSTODIAN' ||
+    warningScan.prohibitedCorpusBinding !==
+      'frozenBindings.contaminatedIncubator' ||
+    warningScan.mayReturnSourceExcerptsToAuthorsOrReviewers !== false ||
+    warningScan.mayModifyAuthoredArtifacts !== false ||
+    warningScan.dispositiveProofOfCleanProvenance !== false ||
+    ['scannerBinding', 'resultDigest', 'reviewedBy'].some(
+      (field) => warningScan[field] !== null,
+    )
+  ) {
+    errors.push(
+      authoringIntakePath + ': RED-source warning scan boundary drift',
+    );
+  }
+  const dependencyEvidence = provenance?.runtimeDependencyEvidence;
+  if (
+    !checkExactFields(
+      dependencyEvidence,
+      [
+        'forbiddenDependencyFindings',
+        'lockfileSha256',
+        'manifestSha256',
+        'monorepoDependencyCount',
+        'reviewedBy',
+        'runtimeDependencyCount',
+        'scanEvidenceSha256',
+        'status',
+      ],
+      authoringIntakePath + '.provenancePlan.runtimeDependencyEvidence',
+      errors,
+    ) ||
+    dependencyEvidence.status !== 'NOT_STARTED' ||
+    Object.keys(dependencyEvidence)
+      .filter((field) => field !== 'status')
+      .some((field) => dependencyEvidence[field] !== null)
+  ) {
+    errors.push(
+      authoringIntakePath + ': runtime dependency evidence must remain absent',
+    );
+  }
+
+  const execution = document.executionGate;
+  if (
+    !checkExactFields(
+      execution,
+      [
+        'authoringMayBegin',
+        'blockers',
+        'checks',
+        'reason',
+        'requiredPrerequisiteGateIds',
+        'satisfiedPrerequisiteGateIds',
+        'schemaEditsAuthorized',
+        'status',
+      ],
+      authoringIntakePath + '.executionGate',
+      errors,
+    ) ||
+    execution.status !== 'BLOCKED' ||
+    !sameValues(execution.requiredPrerequisiteGateIds, [
+      'PV0-G01',
+      'PV0-G03',
+    ]) ||
+    !sameValues(execution.satisfiedPrerequisiteGateIds, []) ||
+    !sameValues(execution.blockers, authoringBlockers) ||
+    execution.authoringMayBegin !== false ||
+    execution.schemaEditsAuthorized !== false ||
+    execution.reason !==
+      'Setup-only intake. PV0-G01 and PV0-G03 are open and no named clean participants, approved input packet, constrained workspace, tool context, or environment attestation are bound.'
+  ) {
+    errors.push(
+      authoringIntakePath +
+        ': constrained authoring execution gate must remain blocked',
+    );
+  }
+  const expectedCheckFields = [
+    'approvedAuthorPacketBound',
+    'authorExposureCleared',
+    'environmentAttested',
+    'freshWorkspaceBound',
+    'namedAuthorSelected',
+    'namedReviewerSelected',
+    'pv0G01Approved',
+    'pv0G03Approved',
+    'reviewerExposureCleared',
+    'toolContextBound',
+  ];
+  if (
+    !checkExactFields(
+      execution?.checks,
+      expectedCheckFields,
+      authoringIntakePath + '.executionGate.checks',
+      errors,
+    ) ||
+    expectedCheckFields.some((field) => execution.checks[field] !== false)
+  ) {
+    errors.push(
+      authoringIntakePath + ': execution prerequisites must remain unsatisfied',
+    );
+  }
+
+  const closures = Array.isArray(document.gateClosure)
+    ? document.gateClosure
+    : [];
+  if (
+    !sameValues(
+      closures.map((closure) => closure?.gateId),
+      authoringGateScope,
+    ) ||
+    closures.some(
+      (closure) =>
+        !checkExactFields(
+          closure,
+          [
+            'eligible',
+            'evidenceReferences',
+            'gateId',
+            'gateRemainsOpen',
+            'reason',
+          ],
+          authoringIntakePath + '.gateClosure.' + closure?.gateId,
+          errors,
+        ) ||
+        closure.eligible !== false ||
+        closure.gateRemainsOpen !== true ||
+        !sameValues(closure.evidenceReferences, []),
+    )
+  ) {
+    errors.push(authoringIntakePath + ': PV0-G02/G04/G05 must remain open');
+  }
+
+  const scopeFields = [
+    'codeGenerationAuthorized',
+    'conformancePayloadsAuthorized',
+    'conformanceRunnersAuthorized',
+    'enterpriseOrCloudImplementationAuthorized',
+    'gatewayImplementationAuthorized',
+    'otherGateClosuresAuthorized',
+    'privateImplementationAuthorized',
+    'protocolPublicationAuthorized',
+    'relicensingAuthorized',
+    'schemaAuthoringAuthorized',
+    'schemaEditsAuthorized',
+    'sdkPublicationAuthorized',
+  ];
+  if (
+    !checkExactFields(
+      document.scopeNonAuthorization,
+      scopeFields,
+      authoringIntakePath + '.scopeNonAuthorization',
+      errors,
+    ) ||
+    scopeFields
+      .filter((field) => field !== 'otherGateClosuresAuthorized')
+      .some((field) => document.scopeNonAuthorization[field] !== false) ||
+    !sameValues(document.scopeNonAuthorization.otherGateClosuresAuthorized, [])
+  ) {
+    errors.push(
+      authoringIntakePath +
+        ': prohibited authoring or implementation scope was authorized',
+    );
+  }
+  if (
+    !checkExactFields(
+      document.signOff,
+      ['evidenceReference', 'signedAt', 'signedBy', 'statement'],
+      authoringIntakePath + '.signOff',
+      errors,
+    ) ||
+    Object.values(document.signOff).some((value) => value !== null)
+  ) {
+    errors.push(authoringIntakePath + ': setup intake must remain unsigned');
+  }
+
+  const guide = join(root, authoringGuidePath);
+  if (!existsSync(guide)) {
+    errors.push(authoringGuidePath + ': required guide missing');
+    return;
+  }
+  const guideSource = readFileSync(guide, 'utf8');
+  if (digest(guide) !== authoringGuideSha256) {
+    errors.push(authoringGuidePath + ': exact setup-only guide content drift');
+  }
+  checkSetupOnlyGuideClaims(guideSource, authoringGuidePath, errors);
+  for (const marker of [
+    'setup only; execution blocked; every Protocol v0 gate remains open',
+    '374539f98dba20d1aade6208c2834928bf7fa09a',
+    'd36c03eab98cd249a2b52fa1bd662869e7a494b3',
+    'Unknown exposure is disqualifying',
+    'The current author allowlist is empty',
+    '`PV0-IN-008` remains RED',
+    '`authoringMayBegin` and `schemaEditsAuthorized` remain `false`',
+    'Every `PV0-G01` through',
+    '`PV0-G10` gate remains open',
+    'The setup artifact should remain immutable',
+  ]) {
+    if (!guideSource.includes(marker)) {
+      errors.push(authoringGuidePath + ': missing boundary marker ' + marker);
+    }
+  }
+}
+
 function checkSchemas(protocolRoot, files, errors) {
   const documents = new Map();
   for (const file of files.filter((name) => name.endsWith('.schema.json'))) {
@@ -1403,6 +2571,7 @@ export function checkProtocolV0Governance(root) {
   const inputs = checkInputManifest(root, errors);
   checkG01ReviewIntake(root, inputs, errors);
   checkG03RequirementsReviewIntake(root, errors);
+  checkConstrainedAuthoringIntake(root, errors);
   const requirementSource = readFileSync(
     join(protocolRoot, 'REQUIREMENTS.md'),
     'utf8',
