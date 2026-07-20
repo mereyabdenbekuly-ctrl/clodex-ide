@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "status": "REFERENCE_POLICY_UNAPPROVED",
+  "gatewayImplementationAuthorized": false,
+  "allowedPublishedPackages": [],
+  "approvedGeneratedInputs": [],
+  "forbiddenFileSha256": [],
+  "notes": [
+    "This is a public synthetic policy shape, not a private repository baseline.",
+    "No CLODEx protocol or SDK package is approved for private dependency use yet.",
+    "A future private repository must independently implement and operate its own reviewed CI policy before PV0-G09 or B3 can close."
+  ]
+}

@@ -9,6 +9,9 @@ on:
       - "packages/**"
       - "agent/**"
       - "scripts/**"
+      - "docs/protocol/**"
+      - "docs/governance/**"
+      - "docs/provenance/PROTOCOL_V0_INPUT_MANIFEST.json"
       - ".release-evidence/**"
       - ".release-notes/**"
       - "pnpm-lock.yaml"
@@ -92,6 +95,9 @@ jobs:
 
       - name: Validate Community Free product boundary
         run: pnpm check:community-free-boundary
+
+      - name: Validate Protocol v0 incubator governance
+        run: pnpm check:protocol-v0-governance
 
       - name: Validate release plumbing contracts
         run: pnpm release:signing:readiness:test

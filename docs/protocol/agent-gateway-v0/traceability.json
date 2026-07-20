@@ -1,0 +1,692 @@
+{
+  "traceabilityVersion": "0.1.0-draft",
+  "protocolVersion": "0.1.0-draft",
+  "status": "INCUBATOR_MAPPING_REVIEW_PENDING",
+  "generatedAt": "2026-07-20",
+  "generationMethod": "Manually curated requirement-to-field mapping with hashes generated from the current review worktree.",
+  "authoringContext": "REPOSITORY_EXPOSED_NOT_CLEAN_ROOM",
+  "publicationAuthorized": false,
+  "privateImplementationAuthorized": false,
+  "requirementsCatalogue": "REQUIREMENTS.md",
+  "inputManifest": "../../provenance/PROTOCOL_V0_INPUT_MANIFEST.json",
+  "unclosedGates": [
+    "PV0-G01",
+    "PV0-G02",
+    "PV0-G03",
+    "PV0-G04",
+    "PV0-G05",
+    "PV0-G06",
+    "PV0-G07",
+    "PV0-G08",
+    "PV0-G09",
+    "PV0-G10"
+  ],
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "e76123099314539a7528c5ea4ebdd5f913e712d9f1899e386295b9a73c80c045",
+      "artifactClass": "incubator-specification",
+      "sourceInputs": [
+        "PV0-IN-001",
+        "PV0-IN-002",
+        "PV0-IN-003",
+        "PV0-IN-004",
+        "PV0-IN-005",
+        "PV0-IN-006",
+        "PV0-IN-009",
+        "PV0-IN-010",
+        "PV0-IN-011"
+      ],
+      "requirementIds": [
+        "PV0-BOUND-001",
+        "PV0-VER-001",
+        "PV0-VER-002",
+        "PV0-VER-003",
+        "PV0-BIND-001",
+        "PV0-BIND-002",
+        "PV0-BIND-003",
+        "PV0-BIND-004",
+        "PV0-BIND-005",
+        "PV0-ART-001",
+        "PV0-ART-002",
+        "PV0-ART-003",
+        "PV0-ART-004",
+        "PV0-ART-005",
+        "PV0-SIG-001",
+        "PV0-SIG-002",
+        "PV0-SIG-003",
+        "PV0-REPLAY-001",
+        "PV0-REPLAY-002",
+        "PV0-REPLAY-003",
+        "PV0-EVID-001",
+        "PV0-EVID-002",
+        "PV0-EVID-003",
+        "PV0-AUTH-001",
+        "PV0-AUTH-002",
+        "PV0-RCPT-001",
+        "PV0-RCPT-002",
+        "PV0-RCPT-003",
+        "PV0-RCPT-004",
+        "PV0-ERR-001",
+        "PV0-ERR-002",
+        "PV0-NEG-001",
+        "PV0-NEG-002",
+        "PV0-NEG-003",
+        "PV0-NEG-004",
+        "PV0-LIMIT-001",
+        "PV0-PRIV-001",
+        "PV0-PROV-001",
+        "PV0-PROV-002"
+      ],
+      "mappings": [
+        {
+          "pointer": "/",
+          "requirementIds": [
+            "PV0-BOUND-001",
+            "PV0-VER-001",
+            "PV0-VER-002",
+            "PV0-VER-003",
+            "PV0-BIND-001",
+            "PV0-BIND-002",
+            "PV0-BIND-003",
+            "PV0-BIND-004",
+            "PV0-BIND-005",
+            "PV0-ART-001",
+            "PV0-ART-002",
+            "PV0-ART-003",
+            "PV0-ART-004",
+            "PV0-ART-005",
+            "PV0-SIG-001",
+            "PV0-SIG-002",
+            "PV0-SIG-003",
+            "PV0-REPLAY-001",
+            "PV0-REPLAY-002",
+            "PV0-REPLAY-003",
+            "PV0-EVID-001",
+            "PV0-EVID-002",
+            "PV0-EVID-003",
+            "PV0-AUTH-001",
+            "PV0-AUTH-002",
+            "PV0-RCPT-001",
+            "PV0-RCPT-002",
+            "PV0-RCPT-003",
+            "PV0-RCPT-004",
+            "PV0-ERR-001",
+            "PV0-ERR-002",
+            "PV0-NEG-001",
+            "PV0-NEG-002",
+            "PV0-NEG-003",
+            "PV0-NEG-004",
+            "PV0-LIMIT-001",
+            "PV0-PRIV-001",
+            "PV0-PROV-001",
+            "PV0-PROV-002"
+          ]
+        }
+      ],
+      "reviewStatus": "INCUBATOR_CONSISTENCY_REVIEW_PENDING"
+    },
+    {
+      "path": "REQUIREMENTS.md",
+      "sha256": "e670ea4af006602d304f92b13d977067a7201e185d8db028010c101450958d52",
+      "artifactClass": "reconstructed-requirements",
+      "sourceInputs": ["PV0-IN-001", "PV0-IN-009", "PV0-IN-010", "PV0-IN-011"],
+      "requirementIds": [
+        "PV0-BOUND-001",
+        "PV0-VER-001",
+        "PV0-VER-002",
+        "PV0-VER-003",
+        "PV0-BIND-001",
+        "PV0-BIND-002",
+        "PV0-BIND-003",
+        "PV0-BIND-004",
+        "PV0-BIND-005",
+        "PV0-ART-001",
+        "PV0-ART-002",
+        "PV0-ART-003",
+        "PV0-ART-004",
+        "PV0-ART-005",
+        "PV0-SIG-001",
+        "PV0-SIG-002",
+        "PV0-SIG-003",
+        "PV0-REPLAY-001",
+        "PV0-REPLAY-002",
+        "PV0-REPLAY-003",
+        "PV0-EVID-001",
+        "PV0-EVID-002",
+        "PV0-EVID-003",
+        "PV0-AUTH-001",
+        "PV0-AUTH-002",
+        "PV0-RCPT-001",
+        "PV0-RCPT-002",
+        "PV0-RCPT-003",
+        "PV0-RCPT-004",
+        "PV0-ERR-001",
+        "PV0-ERR-002",
+        "PV0-NEG-001",
+        "PV0-NEG-002",
+        "PV0-NEG-003",
+        "PV0-NEG-004",
+        "PV0-LIMIT-001",
+        "PV0-PRIV-001",
+        "PV0-PROV-001",
+        "PV0-PROV-002"
+      ],
+      "mappings": [
+        {
+          "pointer": "/",
+          "requirementIds": [
+            "PV0-BOUND-001",
+            "PV0-VER-001",
+            "PV0-VER-002",
+            "PV0-VER-003",
+            "PV0-BIND-001",
+            "PV0-BIND-002",
+            "PV0-BIND-003",
+            "PV0-BIND-004",
+            "PV0-BIND-005",
+            "PV0-ART-001",
+            "PV0-ART-002",
+            "PV0-ART-003",
+            "PV0-ART-004",
+            "PV0-ART-005",
+            "PV0-SIG-001",
+            "PV0-SIG-002",
+            "PV0-SIG-003",
+            "PV0-REPLAY-001",
+            "PV0-REPLAY-002",
+            "PV0-REPLAY-003",
+            "PV0-EVID-001",
+            "PV0-EVID-002",
+            "PV0-EVID-003",
+            "PV0-AUTH-001",
+            "PV0-AUTH-002",
+            "PV0-RCPT-001",
+            "PV0-RCPT-002",
+            "PV0-RCPT-003",
+            "PV0-RCPT-004",
+            "PV0-ERR-001",
+            "PV0-ERR-002",
+            "PV0-NEG-001",
+            "PV0-NEG-002",
+            "PV0-NEG-003",
+            "PV0-NEG-004",
+            "PV0-LIMIT-001",
+            "PV0-PRIV-001",
+            "PV0-PROV-001",
+            "PV0-PROV-002"
+          ]
+        }
+      ],
+      "reviewStatus": "INDEPENDENT_REDERIVATION_REQUIRED"
+    },
+    {
+      "path": "common.schema.json",
+      "sha256": "036d7b79ece6e0d3a72840252ec5e8af35571bdbec7b3db03589fe52d2029ad2",
+      "artifactClass": "incubator-schema",
+      "sourceInputs": ["PV0-IN-003", "PV0-IN-004", "PV0-IN-005", "PV0-IN-006"],
+      "requirementIds": [
+        "PV0-VER-001",
+        "PV0-BIND-001",
+        "PV0-BIND-002",
+        "PV0-BIND-003",
+        "PV0-BIND-004",
+        "PV0-BIND-005",
+        "PV0-ART-001",
+        "PV0-ART-002",
+        "PV0-ART-003",
+        "PV0-ART-005",
+        "PV0-SIG-001",
+        "PV0-SIG-002",
+        "PV0-REPLAY-001",
+        "PV0-REPLAY-002",
+        "PV0-REPLAY-003",
+        "PV0-RCPT-001",
+        "PV0-RCPT-002",
+        "PV0-RCPT-003"
+      ],
+      "mappings": [
+        {
+          "pointer": "/$defs/ProtocolVersion",
+          "requirementIds": ["PV0-VER-001"]
+        },
+        {
+          "pointer": "/$defs/Nonce",
+          "requirementIds": ["PV0-ART-003", "PV0-REPLAY-001"]
+        },
+        {
+          "pointer": "/$defs/Digest",
+          "requirementIds": ["PV0-ART-002"]
+        },
+        {
+          "pointer": "/$defs/Signature",
+          "requirementIds": ["PV0-SIG-001", "PV0-SIG-002"]
+        },
+        {
+          "pointer": "/$defs/EffectBinding",
+          "requirementIds": [
+            "PV0-BIND-001",
+            "PV0-BIND-002",
+            "PV0-BIND-003",
+            "PV0-BIND-004",
+            "PV0-BIND-005"
+          ]
+        },
+        {
+          "pointer": "/$defs/Artifact",
+          "requirementIds": [
+            "PV0-ART-001",
+            "PV0-ART-002",
+            "PV0-ART-003",
+            "PV0-ART-005"
+          ]
+        },
+        {
+          "pointer": "/$defs/ReplayProtection",
+          "requirementIds": [
+            "PV0-REPLAY-001",
+            "PV0-REPLAY-002",
+            "PV0-REPLAY-003"
+          ]
+        },
+        {
+          "pointer": "/$defs/TerminalOutcome",
+          "requirementIds": ["PV0-RCPT-001", "PV0-RCPT-002", "PV0-RCPT-003"]
+        }
+      ],
+      "reviewStatus": "FIELD_MAPPING_RECORDED_APPROVAL_PENDING"
+    },
+    {
+      "path": "request-envelope.schema.json",
+      "sha256": "2b551a755ce1cb8b08e56d5ee7038c7ae20a34e52819c72b82d3fd8f5982a452",
+      "artifactClass": "incubator-schema",
+      "sourceInputs": ["PV0-IN-003", "PV0-IN-004", "PV0-IN-005", "PV0-IN-006"],
+      "requirementIds": [
+        "PV0-VER-001",
+        "PV0-BIND-001",
+        "PV0-BIND-002",
+        "PV0-BIND-004",
+        "PV0-ART-001",
+        "PV0-ART-002",
+        "PV0-ART-003",
+        "PV0-ART-005",
+        "PV0-SIG-001",
+        "PV0-SIG-002",
+        "PV0-SIG-003",
+        "PV0-REPLAY-001",
+        "PV0-REPLAY-002",
+        "PV0-REPLAY-003",
+        "PV0-EVID-001",
+        "PV0-EVID-002",
+        "PV0-AUTH-001",
+        "PV0-NEG-004"
+      ],
+      "mappings": [
+        {
+          "pointer": "/properties/protocolVersion",
+          "requirementIds": ["PV0-VER-001"]
+        },
+        {
+          "pointer": "/properties/negotiation",
+          "requirementIds": ["PV0-NEG-004"]
+        },
+        {
+          "pointer": "/properties/binding",
+          "requirementIds": [
+            "PV0-BIND-001",
+            "PV0-BIND-002",
+            "PV0-BIND-004",
+            "PV0-AUTH-001"
+          ]
+        },
+        {
+          "pointer": "/properties/intent",
+          "requirementIds": [
+            "PV0-ART-001",
+            "PV0-ART-002",
+            "PV0-ART-003",
+            "PV0-ART-005"
+          ]
+        },
+        {
+          "pointer": "/properties/toolDescriptor",
+          "requirementIds": [
+            "PV0-ART-001",
+            "PV0-ART-002",
+            "PV0-ART-003",
+            "PV0-ART-005"
+          ]
+        },
+        {
+          "pointer": "/properties/context",
+          "requirementIds": [
+            "PV0-ART-001",
+            "PV0-ART-002",
+            "PV0-ART-003",
+            "PV0-ART-005"
+          ]
+        },
+        {
+          "pointer": "/properties/requestedEffect",
+          "requirementIds": [
+            "PV0-BIND-004",
+            "PV0-ART-001",
+            "PV0-ART-002",
+            "PV0-ART-003",
+            "PV0-ART-005"
+          ]
+        },
+        {
+          "pointer": "/properties/approvalEvidence",
+          "requirementIds": ["PV0-EVID-001", "PV0-EVID-002"]
+        },
+        {
+          "pointer": "/properties/replayProtection",
+          "requirementIds": [
+            "PV0-REPLAY-001",
+            "PV0-REPLAY-002",
+            "PV0-REPLAY-003"
+          ]
+        },
+        {
+          "pointer": "/properties/signature",
+          "requirementIds": ["PV0-SIG-001", "PV0-SIG-002", "PV0-SIG-003"]
+        }
+      ],
+      "reviewStatus": "FIELD_MAPPING_RECORDED_APPROVAL_PENDING"
+    },
+    {
+      "path": "approval-evidence-reference.schema.json",
+      "sha256": "7c2767a053ca3509321d4f42bf2783524004b50d0dfb03a9038c31293abb7a67",
+      "artifactClass": "incubator-schema",
+      "sourceInputs": [
+        "PV0-IN-003",
+        "PV0-IN-004",
+        "PV0-IN-005",
+        "PV0-IN-006",
+        "PV0-IN-009"
+      ],
+      "requirementIds": [
+        "PV0-VER-001",
+        "PV0-BIND-001",
+        "PV0-BIND-002",
+        "PV0-ART-002",
+        "PV0-ART-003",
+        "PV0-SIG-001",
+        "PV0-SIG-002",
+        "PV0-SIG-003",
+        "PV0-EVID-001",
+        "PV0-EVID-002",
+        "PV0-EVID-003"
+      ],
+      "mappings": [
+        {
+          "pointer": "/properties/binding",
+          "requirementIds": ["PV0-BIND-001", "PV0-BIND-002", "PV0-EVID-001"]
+        },
+        {
+          "pointer": "/properties/decision",
+          "requirementIds": ["PV0-EVID-003"]
+        },
+        {
+          "pointer": "/properties/scope",
+          "requirementIds": ["PV0-EVID-001"]
+        },
+        {
+          "pointer": "/properties/evidenceDigest",
+          "requirementIds": ["PV0-ART-002", "PV0-EVID-002"]
+        },
+        {
+          "pointer": "/properties/evidenceNonce",
+          "requirementIds": ["PV0-ART-003", "PV0-EVID-002"]
+        },
+        {
+          "pointer": "/properties/expiresAt",
+          "requirementIds": ["PV0-EVID-001"]
+        },
+        {
+          "pointer": "/properties/signature",
+          "requirementIds": ["PV0-SIG-001", "PV0-SIG-002", "PV0-SIG-003"]
+        }
+      ],
+      "reviewStatus": "FIELD_MAPPING_RECORDED_APPROVAL_PENDING"
+    },
+    {
+      "path": "signed-effect-receipt.schema.json",
+      "sha256": "0f6298a073bd0cd5b7e041ed82af988c2ba3ba0af28e91b18385e47cbe2f024e",
+      "artifactClass": "incubator-schema",
+      "sourceInputs": [
+        "PV0-IN-003",
+        "PV0-IN-004",
+        "PV0-IN-005",
+        "PV0-IN-006",
+        "PV0-IN-009",
+        "PV0-IN-011"
+      ],
+      "requirementIds": [
+        "PV0-VER-001",
+        "PV0-BIND-001",
+        "PV0-BIND-002",
+        "PV0-SIG-001",
+        "PV0-SIG-002",
+        "PV0-SIG-003",
+        "PV0-REPLAY-002",
+        "PV0-EVID-002",
+        "PV0-EVID-003",
+        "PV0-AUTH-001",
+        "PV0-AUTH-002",
+        "PV0-RCPT-001",
+        "PV0-RCPT-002",
+        "PV0-RCPT-003",
+        "PV0-RCPT-004",
+        "PV0-ERR-002",
+        "PV0-NEG-004"
+      ],
+      "mappings": [
+        {
+          "pointer": "/properties/requestEnvelopeDigest",
+          "requirementIds": ["PV0-BIND-002", "PV0-AUTH-001"]
+        },
+        {
+          "pointer": "/properties/negotiation",
+          "requirementIds": ["PV0-NEG-004"]
+        },
+        {
+          "pointer": "/properties/binding",
+          "requirementIds": ["PV0-BIND-001", "PV0-BIND-002", "PV0-AUTH-001"]
+        },
+        {
+          "pointer": "/properties/requestReplayProtection",
+          "requirementIds": ["PV0-REPLAY-002"]
+        },
+        {
+          "pointer": "/properties/authorization",
+          "requirementIds": [
+            "PV0-EVID-002",
+            "PV0-EVID-003",
+            "PV0-AUTH-001",
+            "PV0-AUTH-002"
+          ]
+        },
+        {
+          "pointer": "/properties/outcome",
+          "requirementIds": [
+            "PV0-RCPT-001",
+            "PV0-RCPT-002",
+            "PV0-RCPT-003",
+            "PV0-ERR-002"
+          ]
+        },
+        {
+          "pointer": "/properties/claimedAt",
+          "requirementIds": ["PV0-RCPT-004"]
+        },
+        {
+          "pointer": "/properties/completedAt",
+          "requirementIds": ["PV0-RCPT-004"]
+        },
+        {
+          "pointer": "/properties/issuedAt",
+          "requirementIds": ["PV0-RCPT-004"]
+        },
+        {
+          "pointer": "/properties/signature",
+          "requirementIds": ["PV0-SIG-001", "PV0-SIG-002", "PV0-SIG-003"]
+        }
+      ],
+      "reviewStatus": "FIELD_MAPPING_RECORDED_APPROVAL_PENDING"
+    },
+    {
+      "path": "error-envelope.schema.json",
+      "sha256": "859cb1d23f5857020ee93d99a7ca88e8a95244486148034c067fb4859b9e9dd7",
+      "artifactClass": "incubator-schema",
+      "sourceInputs": ["PV0-IN-003", "PV0-IN-004", "PV0-IN-005", "PV0-IN-006"],
+      "requirementIds": [
+        "PV0-VER-001",
+        "PV0-VER-003",
+        "PV0-SIG-001",
+        "PV0-SIG-002",
+        "PV0-SIG-003",
+        "PV0-ERR-001",
+        "PV0-ERR-002"
+      ],
+      "mappings": [
+        {
+          "pointer": "/properties/protocolVersion",
+          "requirementIds": ["PV0-VER-001", "PV0-VER-003"]
+        },
+        {
+          "pointer": "/properties/error",
+          "requirementIds": ["PV0-ERR-001", "PV0-ERR-002"]
+        },
+        {
+          "pointer": "/properties/signature",
+          "requirementIds": ["PV0-SIG-001", "PV0-SIG-002", "PV0-SIG-003"]
+        }
+      ],
+      "reviewStatus": "FIELD_MAPPING_RECORDED_APPROVAL_PENDING"
+    },
+    {
+      "path": "version-negotiation.schema.json",
+      "sha256": "4932dfb8138e5b3cdea83dd5f64cbedb5b540a0cdbdddeaf673d47bc960087f2",
+      "artifactClass": "incubator-schema",
+      "sourceInputs": ["PV0-IN-003", "PV0-IN-004", "PV0-IN-005", "PV0-IN-006"],
+      "requirementIds": [
+        "PV0-VER-002",
+        "PV0-VER-003",
+        "PV0-SIG-001",
+        "PV0-SIG-002",
+        "PV0-SIG-003",
+        "PV0-REPLAY-001",
+        "PV0-NEG-001",
+        "PV0-NEG-002",
+        "PV0-NEG-003"
+      ],
+      "mappings": [
+        {
+          "pointer": "/$defs/Offer",
+          "requirementIds": [
+            "PV0-VER-002",
+            "PV0-VER-003",
+            "PV0-REPLAY-001",
+            "PV0-NEG-001",
+            "PV0-NEG-002",
+            "PV0-NEG-003",
+            "PV0-SIG-001",
+            "PV0-SIG-002",
+            "PV0-SIG-003"
+          ]
+        },
+        {
+          "pointer": "/$defs/Selection",
+          "requirementIds": [
+            "PV0-VER-002",
+            "PV0-VER-003",
+            "PV0-REPLAY-001",
+            "PV0-NEG-001",
+            "PV0-NEG-002",
+            "PV0-NEG-003",
+            "PV0-SIG-001",
+            "PV0-SIG-002",
+            "PV0-SIG-003"
+          ]
+        }
+      ],
+      "reviewStatus": "FIELD_MAPPING_RECORDED_APPROVAL_PENDING"
+    },
+    {
+      "path": "openapi.yaml",
+      "sha256": "696c0ee07fb2febc662d482c10e815c26485e8208ea6063aebdfdda8c5069536",
+      "artifactClass": "incubator-transport-description",
+      "sourceInputs": ["PV0-IN-001", "PV0-IN-002"],
+      "requirementIds": [
+        "PV0-BOUND-001",
+        "PV0-VER-001",
+        "PV0-VER-002",
+        "PV0-VER-003",
+        "PV0-ERR-001",
+        "PV0-ERR-002",
+        "PV0-NEG-001",
+        "PV0-NEG-002",
+        "PV0-NEG-003",
+        "PV0-NEG-004",
+        "PV0-LIMIT-001"
+      ],
+      "mappings": [
+        {
+          "pointer": "/openapi",
+          "requirementIds": ["PV0-BOUND-001"]
+        },
+        {
+          "pointer": "/paths/~1protocol~1versions",
+          "requirementIds": [
+            "PV0-VER-002",
+            "PV0-VER-003",
+            "PV0-NEG-001",
+            "PV0-NEG-002",
+            "PV0-NEG-003"
+          ]
+        },
+        {
+          "pointer": "/paths/~1v0~1effect-requests",
+          "requirementIds": [
+            "PV0-VER-001",
+            "PV0-ERR-001",
+            "PV0-ERR-002",
+            "PV0-NEG-004",
+            "PV0-LIMIT-001"
+          ]
+        }
+      ],
+      "reviewStatus": "FIELD_MAPPING_RECORDED_APPROVAL_PENDING"
+    },
+    {
+      "path": "conformance/README.md",
+      "sha256": "b72c23981b21226674df0398ecf5e51efb3339179d17e466b6504b33b4379d2d",
+      "artifactClass": "fixture-plan-only",
+      "sourceInputs": ["PV0-IN-001"],
+      "requirementIds": ["PV0-BOUND-001", "PV0-PROV-001", "PV0-PROV-002"],
+      "mappings": [
+        {
+          "pointer": "/",
+          "requirementIds": ["PV0-BOUND-001", "PV0-PROV-001", "PV0-PROV-002"]
+        }
+      ],
+      "reviewStatus": "DEFINITIONS_ONLY"
+    },
+    {
+      "path": "conformance/manifest.json",
+      "sha256": "0d1799571b3dcdb737171a896e6076205c6d678793209a9bf320ff3564aeee12",
+      "artifactClass": "fixture-reservation-manifest",
+      "sourceInputs": ["PV0-IN-001"],
+      "requirementIds": ["PV0-PROV-001", "PV0-PROV-002"],
+      "mappings": [
+        {
+          "pointer": "/vectors",
+          "requirementIds": ["PV0-PROV-001", "PV0-PROV-002"]
+        }
+      ],
+      "reviewStatus": "PLANNED_VECTORS_ONLY"
+    }
+  ]
+}
