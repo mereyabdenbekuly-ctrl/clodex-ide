@@ -138,19 +138,45 @@ function checkResolvedCommunityEnvironment(errors) {
 
 export function checkCommunityFreeBoundary(rootDirectory) {
   const errors = [];
-  const contractPath = 'docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md';
-  const contract = read(rootDirectory, contractPath);
-  for (const requiredText of [
-    'local-first desktop IDE',
-    'does **not** bundle a configured or operational',
-    'operational managed implementation',
-    'managed-service connectors are disabled by distribution policy',
-    'ambient service endpoint or credential overrides are discarded',
+  for (const policy of [
+    {
+      path: 'AGENTS.md',
+      requiredText: [
+        'permanently available to Community users at source level',
+        'Paid entitlements, authorization, metering, and billing must be enforced',
+        'Never place managed Gateway',
+        'local Guardian, authorization',
+      ],
+    },
+    {
+      path: 'docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md',
+      requiredText: [
+        'local-first desktop IDE',
+        'treated as Community-available at',
+        'not accepted as a durable paid boundary',
+        'metered, and billed by the service',
+        'does **not** bundle a configured or operational',
+        'operational managed implementation',
+        'managed-service connectors are disabled by distribution policy',
+        'ambient service endpoint or credential overrides are discarded',
+      ],
+    },
+    {
+      path: 'docs/governance/OPEN_CLOSED_BOUNDARY.md',
+      requiredText: [
+        'Community-available at source level',
+        'local license checks are not a durable',
+        'enforced by a separately operated managed service',
+      ],
+    },
   ]) {
-    if (!contract.includes(requiredText)) {
-      errors.push(
-        `${contractPath}: missing product boundary text: ${requiredText}`,
-      );
+    const source = read(rootDirectory, policy.path);
+    for (const requiredText of policy.requiredText) {
+      if (!source.includes(requiredText)) {
+        errors.push(
+          `${policy.path}: missing product boundary text: ${requiredText}`,
+        );
+      }
     }
   }
 

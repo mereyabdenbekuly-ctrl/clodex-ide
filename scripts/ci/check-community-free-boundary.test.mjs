@@ -25,12 +25,14 @@ const repositoryRoot = resolve(
 const fixtureFiles = [
   '.github/workflows/community-observed-build.yml',
   '.github/workflows/community-unsigned-build.yml',
+  'AGENTS.md',
   'apps/browser/build-constants.ts',
   'apps/browser/src/backend/main.ts',
   'apps/browser/src/backend/services/toolbox/index.ts',
   'apps/browser/src/backend/services/toolbox/services/clodex-mcp/community-disabled.ts',
   'apps/browser/vite.backend.config.ts',
   'docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md',
+  'docs/governance/OPEN_CLOSED_BOUNDARY.md',
 ];
 
 function fixture() {
@@ -52,6 +54,38 @@ function replace(root, file, before, after) {
 
 test('accepts the repository Community Free boundary', () => {
   assert.deepEqual(checkCommunityFreeBoundary(repositoryRoot), []);
+});
+
+test('rejects removing the public-client commercial invariant', () => {
+  const root = fixture();
+  replace(
+    root,
+    'AGENTS.md',
+    'permanently available to Community users at source level',
+    'available only when the official client permits it',
+  );
+  assert.ok(
+    checkCommunityFreeBoundary(root).some((error) =>
+      error.includes('AGENTS.md: missing product boundary text'),
+    ),
+  );
+});
+
+test('rejects treating client-side gating as a paid boundary', () => {
+  const root = fixture();
+  replace(
+    root,
+    'docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md',
+    'not accepted as a durable paid boundary',
+    'accepted as the paid boundary',
+  );
+  assert.ok(
+    checkCommunityFreeBoundary(root).some((error) =>
+      error.includes(
+        'docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md: missing product boundary text',
+      ),
+    ),
+  );
 });
 
 test('community build environments discard managed endpoints and credentials', () => {
