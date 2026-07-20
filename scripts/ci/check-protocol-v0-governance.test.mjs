@@ -41,6 +41,8 @@ function fixture() {
     'PROTOCOL_V0_G01_REVIEW_INTAKE.md',
     'PROTOCOL_V0_G03_REQUIREMENTS_REVIEW_INTAKE.json',
     'PROTOCOL_V0_G03_REQUIREMENTS_REVIEW_INTAKE.md',
+    'PROTOCOL_V0_G02_G04_G05_AUTHORING_INTAKE.json',
+    'PROTOCOL_V0_G02_G04_G05_AUTHORING_INTAKE.md',
   ]) {
     cpSync(
       join(repositoryRoot, 'docs', 'provenance', file),
@@ -68,6 +70,18 @@ function mutateG03Intake(root, mutate) {
     'docs',
     'provenance',
     'PROTOCOL_V0_G03_REQUIREMENTS_REVIEW_INTAKE.json',
+  );
+  const document = JSON.parse(readFileSync(path, 'utf8'));
+  mutate(document);
+  writeFileSync(path, JSON.stringify(document, null, 2) + '\n');
+}
+
+function mutateAuthoringIntake(root, mutate) {
+  const path = join(
+    root,
+    'docs',
+    'provenance',
+    'PROTOCOL_V0_G02_G04_G05_AUTHORING_INTAKE.json',
   );
   const document = JSON.parse(readFileSync(path, 'utf8'));
   mutate(document);
@@ -447,6 +461,353 @@ test('rejects contradictory claims in the exact PV0-G01 setup guide', () => {
         /contradictory gate-closure or scope-authorization claim/u.test(error),
       ),
     );
+  }
+});
+
+test('requires the setup-only constrained-authoring intake and guide', () => {
+  for (const file of [
+    'PROTOCOL_V0_G02_G04_G05_AUTHORING_INTAKE.json',
+    'PROTOCOL_V0_G02_G04_G05_AUTHORING_INTAKE.md',
+  ]) {
+    const root = fixture();
+    rmSync(join(root, 'docs', 'provenance', file));
+    assert.ok(
+      checkProtocolV0Governance(root).some(
+        (error) => error.includes(file) && /required .* missing/u.test(error),
+      ),
+      file,
+    );
+  }
+});
+
+test('rejects constrained-authoring issue and frozen baseline drift', () => {
+  const root = fixture();
+  mutateAuthoringIntake(root, (document) => {
+    document.issue.bodySha256 = 'f'.repeat(64);
+    document.frozenBindings.contaminatedIncubator.pullRequest.headCommit =
+      'a'.repeat(40);
+    document.frozenBindings.contaminatedIncubator.protocolTree.gitTree =
+      'b'.repeat(40);
+    document.frozenBindings.pv0G01ReviewTarget.issue.bodySha256 = 'c'.repeat(
+      64,
+    );
+    document.frozenBindings.pv0G03ReviewTarget.reviewInputs[0].sha256 =
+      'd'.repeat(64);
+  });
+  const errors = checkProtocolV0Governance(root);
+  for (const expected of [
+    'exact setup-only intake content drift',
+    'issue #77 binding drift',
+    'PR #74 frozen baseline drift',
+    'PV0-G01 must remain open with no closure evidence',
+    'PV0-G03 must remain open with no closure evidence',
+  ]) {
+    assert.ok(
+      errors.some((error) => error.includes(expected)),
+      expected,
+    );
+  }
+});
+
+test('rejects fabricated G01/G03 approval or a hidden closed gate', () => {
+  const root = fixture();
+  mutateAuthoringIntake(root, (document) => {
+    document.protocolGateState.openGates =
+      document.protocolGateState.openGates.filter((gate) => gate !== 'PV0-G04');
+    document.protocolGateState.closedGates = ['PV0-G04'];
+    document.frozenBindings.pv0G01ReviewTarget.status = 'GREEN';
+    document.frozenBindings.pv0G01ReviewTarget.closureEvidence.path =
+      'fabricated-g01.json';
+    document.frozenBindings.pv0G03ReviewTarget.status = 'GREEN';
+    document.frozenBindings.pv0G03ReviewTarget.closureEvidence.path =
+      'fabricated-g03.json';
+  });
+  const errors = checkProtocolV0Governance(root);
+  assert.ok(
+    errors.some((error) =>
+      /all Protocol v0 gates must remain open/u.test(error),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      /PV0-G01 must remain open with no closure evidence/u.test(error),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      /PV0-G03 must remain open with no closure evidence/u.test(error),
+    ),
+  );
+});
+
+test('rejects prefilled author reviewer or custodian evidence', () => {
+  const root = fixture();
+  mutateAuthoringIntake(root, (document) => {
+    const author = document.participantSlots.authors[0];
+    author.identity = 'repository-exposed author';
+    author.eligibility = 'ELIGIBLE';
+    author.sourceExposure.overallStatus =
+      'DECLARED_NO_PROHIBITED_CONTEXT_EXPOSURE';
+    author.sourceExposure.clodexIdeRepositorySource = 'NOT_EXPOSED';
+    author.signOff.statement = 'approved';
+    const reviewer = document.participantSlots.reviewers[0];
+    reviewer.identity = 'self-reviewer';
+    reviewer.sourceExposure.protocolIncubatorPr74 = 'NOT_EXPOSED';
+    document.participantSlots.environmentCustodian.identity = 'custodian';
+    document.participantSlots.environmentCustodian.mayAuthorSchemas = true;
+    document.participantSlots.separationPolicy.authorsAndReviewersMustBeDisjoint = false;
+  });
+  const errors = checkProtocolV0Governance(root);
+  for (const expected of [
+    'participant attribution must remain pending',
+    'source exposure must remain unresolved',
+    'participant slot must remain unsigned',
+    'custodian must remain non-authoring and unattributed',
+    'author/reviewer separation policy drift',
+  ]) {
+    assert.ok(
+      errors.some((error) => error.includes(expected)),
+      expected,
+    );
+  }
+});
+
+test('rejects weakening fail-closed source exposure policy', () => {
+  const root = fixture();
+  mutateAuthoringIntake(root, (document) => {
+    document.sourceExposurePolicy.unknownExposureDefault = 'ALLOW';
+    document.sourceExposurePolicy.prohibitedContextClasses.pop();
+    document.sourceExposurePolicy.selfDeclarationAloneClosesGate = true;
+    document.sourceExposurePolicy.humanAndEnvironmentEvidenceRequired = false;
+  });
+  assert.ok(
+    checkProtocolV0Governance(root).some((error) =>
+      /fail-closed source exposure policy drift/u.test(error),
+    ),
+  );
+});
+
+test('rejects widening the constrained-authoring input allowlist', () => {
+  const root = fixture();
+  mutateAuthoringIntake(root, (document) => {
+    document.inputPolicy.unknownInputsDefaultTo = 'GREEN';
+    document.inputPolicy.currentlyAllowedForSchemaAuthoring = ['PV0-IN-008'];
+    document.inputPolicy.repositoryDerivedInputsRoute.directAuthorExposure = true;
+    document.inputPolicy.alwaysDenied.shift();
+  });
+  const errors = checkProtocolV0Governance(root);
+  for (const expected of [
+    'current author input allowlist must remain empty and default RED',
+    'repository-derived inputs may not reach authors directly',
+    'permanent RED and deny input inventory drift',
+  ]) {
+    assert.ok(
+      errors.some((error) => error.includes(expected)),
+      expected,
+    );
+  }
+});
+
+test('rejects conditional-source or author-packet policy drift', () => {
+  const root = fixture();
+  mutateAuthoringIntake(root, (document) => {
+    const external =
+      document.inputPolicy.conditionallyEligibleAfterGateClosure[1];
+    external.inputIds.push('PV0-IN-008');
+    external.conditions.pop();
+    document.inputPolicy.authorPacketRules.exactBytesAndSha256Required = false;
+    document.inputPolicy.authorPacketRules.dynamicOrMutableUrlsForbidden = false;
+  });
+  const errors = checkProtocolV0Governance(root);
+  assert.ok(
+    errors.some((error) =>
+      /conditional approved-input policy drift/u.test(error),
+    ),
+  );
+  assert.ok(
+    errors.some((error) => /exact author packet rules drift/u.test(error)),
+  );
+});
+
+test('rejects repository-aware tooling memory retrieval or egress', () => {
+  const root = fixture();
+  mutateAuthoringIntake(root, (document) => {
+    const environment = document.toolingAndEnvironment;
+    environment.status = 'BOUND';
+    environment.toolRuns = [{ toolRunId: 'fabricated' }];
+    environment.aiContextRuns = [{ session: 'old repository session' }];
+    environment.toolPolicy.selectedAuthoringMode = 'FRESH_CONTEXT_AI_SESSION';
+    environment.toolPolicy.persistentMemoryMustBeDisabled = false;
+    environment.toolPolicy.repositoryRetrievalForbidden = false;
+    environment.toolPolicy.githubCodeSearchForbidden = false;
+    environment.toolPolicy.mcpServerAllowlist = ['repository-search'];
+    environment.toolPolicy.networkDefaultDeny = false;
+    environment.toolPolicy.selectedEgressMode = 'UNRESTRICTED';
+  });
+  const errors = checkProtocolV0Governance(root);
+  assert.ok(
+    errors.some((error) =>
+      /tool and AI run evidence must remain unbound/u.test(error),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      /fail-closed tool and AI context policy drift/u.test(error),
+    ),
+  );
+});
+
+test('rejects a non-empty workspace or monorepo dependency path', () => {
+  const root = fixture();
+  mutateAuthoringIntake(root, (document) => {
+    const environment = document.toolingAndEnvironment;
+    environment.workspace.repositoryIdentifier = 'clodex-ide';
+    environment.workspace.initialEmptyCommit = 'f'.repeat(40);
+    environment.workspace.mustStartEmpty = false;
+    environment.workspace.mustNotContainClodexIdeHistory = false;
+    environment.workspace.repositoryMounts = ['../clodex-ide'];
+    environment.dependencyPolicy.runtimeDependenciesAllowed = true;
+    environment.dependencyPolicy.forbiddenDependencySources = ['npm'];
+    environment.dependencyPolicy.forbiddenPackageScopes = [];
+    environment.dependencyPolicy.dependencyManifestBindings = [
+      { dependency: '@clodex/agent-shell' },
+    ];
+  });
+  const errors = checkProtocolV0Governance(root);
+  assert.ok(
+    errors.some((error) =>
+      /fresh workspace must remain empty and unbound/u.test(error),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      /zero-runtime and monorepo dependency policy drift/u.test(error),
+    ),
+  );
+});
+
+test('rejects fabricated schema history and provenance completion', () => {
+  const root = fixture();
+  mutateAuthoringIntake(root, (document) => {
+    const provenance = document.provenancePlan;
+    provenance.schemaHistory.status = 'COMPLETE';
+    provenance.schemaHistory.firstAuthoringCommit = 'f'.repeat(40);
+    provenance.perFileRecords = [{ path: 'common.schema.json' }];
+    provenance.generatedArtifacts = [{ path: 'openapi.yaml' }];
+    provenance.semanticCompletenessReview.status = 'COMPLETE';
+    provenance.semanticCompletenessReview.decision = 'APPROVE';
+    provenance.redSourceWarningScan.status = 'PASS';
+    provenance.redSourceWarningScan.mayModifyAuthoredArtifacts = true;
+    provenance.runtimeDependencyEvidence.status = 'COMPLETE';
+    provenance.runtimeDependencyEvidence.runtimeDependencyCount = 0;
+  });
+  const errors = checkProtocolV0Governance(root);
+  for (const expected of [
+    'per-file and generated provenance must remain empty',
+    'fresh schema history must remain absent',
+    'semantic completeness evidence must remain absent',
+    'RED-source warning scan boundary drift',
+    'runtime dependency evidence must remain absent',
+  ]) {
+    assert.ok(
+      errors.some((error) => error.includes(expected)),
+      expected,
+    );
+  }
+});
+
+test('rejects fabricated authoring execution gate closure or sign-off', () => {
+  const root = fixture();
+  mutateAuthoringIntake(root, (document) => {
+    document.executionGate.status = 'AUTHORIZED';
+    document.executionGate.satisfiedPrerequisiteGateIds = [
+      'PV0-G01',
+      'PV0-G03',
+    ];
+    document.executionGate.checks.pv0G01Approved = true;
+    document.executionGate.checks.pv0G03Approved = true;
+    document.executionGate.blockers = [];
+    document.executionGate.authoringMayBegin = true;
+    document.executionGate.schemaEditsAuthorized = true;
+    document.gateClosure[0].eligible = true;
+    document.gateClosure[0].gateRemainsOpen = false;
+    document.scopeNonAuthorization.schemaAuthoringAuthorized = true;
+    document.scopeNonAuthorization.gatewayImplementationAuthorized = true;
+    document.signOff.signedBy = 'self-approved';
+  });
+  const errors = checkProtocolV0Governance(root);
+  for (const expected of [
+    'constrained authoring execution gate must remain blocked',
+    'execution prerequisites must remain unsatisfied',
+    'PV0-G02/G04/G05 must remain open',
+    'prohibited authoring or implementation scope was authorized',
+    'setup intake must remain unsigned',
+  ]) {
+    assert.ok(
+      errors.some((error) => error.includes(expected)),
+      expected,
+    );
+  }
+});
+
+test('rejects hidden constrained-authoring authorization fields', () => {
+  const root = fixture();
+  mutateAuthoringIntake(root, (document) => {
+    document.hiddenSchemaAuthorization = true;
+  });
+  const errors = checkProtocolV0Governance(root);
+  assert.ok(errors.some((error) => /fields must be exactly/u.test(error)));
+  assert.ok(
+    errors.some((error) =>
+      /exact setup-only intake content drift/u.test(error),
+    ),
+  );
+});
+
+test('rejects constrained-authoring guide drift or contradictory claims', () => {
+  const cases = [
+    {
+      mutate: (source) =>
+        source.replace(
+          'The current author allowlist is empty',
+          'The current author allowlist is approved',
+        ),
+      expected: [
+        'exact setup-only guide content drift',
+        'missing boundary marker',
+      ],
+    },
+    {
+      mutate: (source) => source + '\nFresh schema authoring is authorized.\n',
+      expected: [
+        'exact setup-only guide content drift',
+        'contradictory gate-closure or scope-authorization claim',
+      ],
+    },
+    {
+      mutate: (source) => source + '\nauthoringMayBegin = true\n',
+      expected: [
+        'exact setup-only guide content drift',
+        'contradictory gate-closure or scope-authorization claim',
+      ],
+    },
+  ];
+  for (const { mutate, expected } of cases) {
+    const root = fixture();
+    const path = join(
+      root,
+      'docs',
+      'provenance',
+      'PROTOCOL_V0_G02_G04_G05_AUTHORING_INTAKE.md',
+    );
+    writeFileSync(path, mutate(readFileSync(path, 'utf8')));
+    const errors = checkProtocolV0Governance(root);
+    for (const message of expected) {
+      assert.ok(
+        errors.some((error) => error.includes(message)),
+        message,
+      );
+    }
   }
 });
 
