@@ -8,6 +8,10 @@ const inputPath = 'docs/provenance/PROTOCOL_V0_INPUT_MANIFEST.json';
 const g01ReviewIntakePath =
   'docs/provenance/PROTOCOL_V0_G01_REVIEW_INTAKE.json';
 const g01ReviewGuidePath = 'docs/provenance/PROTOCOL_V0_G01_REVIEW_INTAKE.md';
+const g03ReviewIntakePath =
+  'docs/provenance/PROTOCOL_V0_G03_REQUIREMENTS_REVIEW_INTAKE.json';
+const g03ReviewGuidePath =
+  'docs/provenance/PROTOCOL_V0_G03_REQUIREMENTS_REVIEW_INTAKE.md';
 const tracePath = protocolPath + '/traceability.json';
 const allowedFiles = new Set([
   'README.md',
@@ -45,6 +49,8 @@ const g01RepositoryBindingInputIds = new Set([
   'PV0-IN-011',
 ]);
 const g01FrozenMainCommit = '374539f98dba20d1aade6208c2834928bf7fa09a';
+const g01ReviewGuideSha256 =
+  '227fd464b3a68de4ac02df701df6e6a7a74aadd4ddf81be4a9b54259c54343cb';
 const g01PendingBlocker =
   'Independent provenance-owner review required by issue #75 has not been recorded.';
 const g01FrozenReviewInputs = [
@@ -68,6 +74,77 @@ const g01FrozenReviewInputs = [
     gitBlob: '53067da80054014fa0179d2bcfce125c3b8f292a',
     sha256: '25aac2097baf2f5dc9c336074c0ddd8286f9247cce9878d3e6aabfbb69e9b6c3',
   },
+];
+const g03FrozenMainCommit = '374539f98dba20d1aade6208c2834928bf7fa09a';
+const g03PendingBlocker =
+  'Independent requirements review required by issue #76 has not been recorded.';
+const g03PrerequisiteReason =
+  'PV0-G01 has no attributed terminal approval; an approved input set is not established.';
+const g03GateOpenReason =
+  'Setup-only intake; PV0-G01 is open and no attributed independent per-requirement review or exact approved catalogue revision is present.';
+const g03FrozenReviewInputs = [
+  {
+    path: 'docs/protocol/agent-gateway-v0/REQUIREMENTS.md',
+    gitBlob: '2a1768411bbf7c78c3c2eca09e86c4a5052477d1',
+    sha256: 'e670ea4af006602d304f92b13d977067a7201e185d8db028010c101450958d52',
+  },
+  {
+    path: 'docs/provenance/PROTOCOL_V0_INPUT_MANIFEST.json',
+    gitBlob: '5000ec24b5c90c0c0296f0d72076b1710518c1f3',
+    sha256: '73d1b87194605704037162cb7cc5b47ac5fd2dc56dd6c0860d3757f34fd0b1b2',
+  },
+  {
+    path: 'docs/protocol/agent-gateway-v0/traceability.json',
+    gitBlob: 'a8857d64eb0a5a6891d45937dff5a6692e26b45c',
+    sha256: 'e08704376b6955b894b6b0d6ae61de22d3ede1306695a4de96dc567b324b610d',
+  },
+];
+const g03ReviewGuideSha256 =
+  '25632cda70e26e730ab07f649a0d0e9034e74818bb141de2343e7db6b91ef592';
+const g03FrozenReviewGuideRows = g03FrozenReviewInputs.map(
+  ({ path, gitBlob, sha256 }) =>
+    `| \`${path}\` | \`${gitBlob}\` | \`${sha256}\` |`,
+);
+const g03FrozenRequirementIds = [
+  'PV0-BOUND-001',
+  'PV0-VER-001',
+  'PV0-VER-002',
+  'PV0-VER-003',
+  'PV0-BIND-001',
+  'PV0-BIND-002',
+  'PV0-BIND-003',
+  'PV0-BIND-004',
+  'PV0-BIND-005',
+  'PV0-ART-001',
+  'PV0-ART-002',
+  'PV0-ART-003',
+  'PV0-ART-004',
+  'PV0-ART-005',
+  'PV0-SIG-001',
+  'PV0-SIG-002',
+  'PV0-SIG-003',
+  'PV0-REPLAY-001',
+  'PV0-REPLAY-002',
+  'PV0-REPLAY-003',
+  'PV0-EVID-001',
+  'PV0-EVID-002',
+  'PV0-EVID-003',
+  'PV0-AUTH-001',
+  'PV0-AUTH-002',
+  'PV0-RCPT-001',
+  'PV0-RCPT-002',
+  'PV0-RCPT-003',
+  'PV0-RCPT-004',
+  'PV0-ERR-001',
+  'PV0-ERR-002',
+  'PV0-NEG-001',
+  'PV0-NEG-002',
+  'PV0-NEG-003',
+  'PV0-NEG-004',
+  'PV0-LIMIT-001',
+  'PV0-PRIV-001',
+  'PV0-PROV-001',
+  'PV0-PROV-002',
 ];
 
 function parseJson(path, label, errors) {
@@ -101,6 +178,21 @@ function checkExactFields(value, expected, label, errors) {
 
 function digest(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function checkSetupOnlyGuideClaims(source, path, errors) {
+  for (const claim of [
+    /\bPV0-G\d{2}\s+is\s+(?:CLOSED|GREEN|APPROVED)\b/iu,
+    /\b(?:all\s+)?Protocol v0 gates?\s+(?:is|are)\s+(?:CLOSED|GREEN|APPROVED)\b/iu,
+    /\b(?:Gateway implementation|private implementation|SDK publication|schema edits?|conformance payloads?|relicensing|enterprise(?:\/cloud)? implementation)\s+(?:is|are)\s+authorized\b/iu,
+    /\bthis intake authorizes\b[^\n]*(?:Gateway|private implementation|SDK|schema|conformance|relicensing|enterprise|cloud)\b/iu,
+  ]) {
+    if (claim.test(source)) {
+      errors.push(
+        path + ': contradictory gate-closure or scope-authorization claim',
+      );
+    }
+  }
 }
 
 function walk(directory, base, errors) {
@@ -580,6 +672,10 @@ function checkG01ReviewIntake(root, inputs, errors) {
     return;
   }
   const guideSource = readFileSync(guide, 'utf8');
+  if (digest(guide) !== g01ReviewGuideSha256) {
+    errors.push(g01ReviewGuidePath + ': exact setup-only guide content drift');
+  }
+  checkSetupOnlyGuideClaims(guideSource, g01ReviewGuidePath, errors);
   for (const marker of [
     'setup only; awaiting a named independent provenance owner',
     g01FrozenMainCommit,
@@ -589,6 +685,465 @@ function checkG01ReviewIntake(root, inputs, errors) {
   ]) {
     if (!guideSource.includes(marker)) {
       errors.push(g01ReviewGuidePath + ': missing boundary marker ' + marker);
+    }
+  }
+}
+
+function checkG03RequirementsReviewIntake(root, errors) {
+  const intake = join(root, g03ReviewIntakePath);
+  if (!existsSync(intake)) {
+    errors.push(g03ReviewIntakePath + ': required intake missing');
+    return;
+  }
+  const document = parseJson(intake, g03ReviewIntakePath, errors);
+  if (!document) return;
+  if (
+    !checkExactFields(
+      document,
+      [
+        'approvedCatalogueRevision',
+        'artifactType',
+        'assessmentVocabulary',
+        'baseline',
+        'catalogueCompletenessReview',
+        'decisionVocabulary',
+        'gateClosure',
+        'gateId',
+        'issue',
+        'methodConstraints',
+        'prerequisiteState',
+        'requirementReviews',
+        'reviewer',
+        'schemaVersion',
+        'scopeNonAuthorization',
+        'signOff',
+        'status',
+      ],
+      g03ReviewIntakePath,
+      errors,
+    )
+  ) {
+    return;
+  }
+  if (
+    document.schemaVersion !== 1 ||
+    document.artifactType !==
+      'PV0_G03_INDEPENDENT_REQUIREMENTS_REVIEW_INTAKE' ||
+    document.gateId !== 'PV0-G03' ||
+    document.status !== 'AWAITING_INDEPENDENT_REQUIREMENTS_REVIEW'
+  ) {
+    errors.push(g03ReviewIntakePath + ': invalid setup-only intake status');
+  }
+
+  if (
+    !checkExactFields(
+      document.issue,
+      ['number', 'repository', 'url'],
+      g03ReviewIntakePath + '.issue',
+      errors,
+    ) ||
+    document.issue.repository !== 'mereyabdenbekuly-ctrl/clodex-ide' ||
+    document.issue.number !== 76 ||
+    document.issue.url !==
+      'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/76'
+  ) {
+    errors.push(g03ReviewIntakePath + ': issue binding must remain #76');
+  }
+
+  if (
+    !checkExactFields(
+      document.baseline,
+      ['frozenMainCommit', 'policy', 'reviewedMainCommit', 'reviewInputs'],
+      g03ReviewIntakePath + '.baseline',
+      errors,
+    ) ||
+    document.baseline.policy !== 'ISSUE_PINNED' ||
+    document.baseline.frozenMainCommit !== g03FrozenMainCommit ||
+    document.baseline.reviewedMainCommit !== null ||
+    JSON.stringify(document.baseline.reviewInputs) !==
+      JSON.stringify(g03FrozenReviewInputs)
+  ) {
+    errors.push(g03ReviewIntakePath + ': frozen issue baseline drift');
+  }
+
+  if (
+    !checkExactFields(
+      document.prerequisiteState,
+      [
+        'approvedInputEvidenceReference',
+        'approvedInputIds',
+        'reason',
+        'rederivationEligible',
+        'requiredGate',
+        'requiredGateStatus',
+      ],
+      g03ReviewIntakePath + '.prerequisiteState',
+      errors,
+    ) ||
+    document.prerequisiteState.requiredGate !== 'PV0-G01' ||
+    document.prerequisiteState.requiredGateStatus !== 'OPEN' ||
+    document.prerequisiteState.approvedInputEvidenceReference !== null ||
+    !sameValues(document.prerequisiteState.approvedInputIds, []) ||
+    document.prerequisiteState.rederivationEligible !== false ||
+    document.prerequisiteState.reason !== g03PrerequisiteReason
+  ) {
+    errors.push(
+      g03ReviewIntakePath +
+        ': PV0-G01 prerequisite must remain unresolved and fail closed',
+    );
+  }
+
+  const reviewerFields = [
+    'affiliation',
+    'approvedInputsOnlyDeclaration',
+    'identity',
+    'implementationStructureNonAuthorityDeclaration',
+    'independenceDeclaration',
+    'reviewDate',
+    'role',
+    'sourceExposureDeclaration',
+  ];
+  if (
+    !checkExactFields(
+      document.reviewer,
+      reviewerFields,
+      g03ReviewIntakePath + '.reviewer',
+      errors,
+    ) ||
+    reviewerFields.some((field) => document.reviewer[field] !== null)
+  ) {
+    errors.push(
+      g03ReviewIntakePath +
+        ': setup intake must not claim reviewer attribution or completion',
+    );
+  }
+  if (
+    !sameValues(document.decisionVocabulary, [
+      'PENDING',
+      'APPROVE',
+      'REVISE',
+      'REJECT',
+    ])
+  ) {
+    errors.push(g03ReviewIntakePath + ': decision vocabulary drift');
+  }
+  if (
+    !sameValues(document.assessmentVocabulary, [
+      'PENDING',
+      'SATISFIED',
+      'DEFICIENT',
+      'NOT_APPLICABLE',
+    ])
+  ) {
+    errors.push(g03ReviewIntakePath + ': assessment vocabulary drift');
+  }
+
+  const methodFields = [
+    'approvedInputsOnly',
+    'currentImplementationStructureNormative',
+    'currentSchemaStructureNormative',
+    'deploymentIndependentAcceptanceCriteriaOnly',
+    'deploymentIndependentThreatCriteriaOnly',
+    'redSourceAuthoringAllowed',
+    'traceabilityFileFieldMappingsNormative',
+  ];
+  const expectedMethod = {
+    approvedInputsOnly: true,
+    deploymentIndependentThreatCriteriaOnly: true,
+    deploymentIndependentAcceptanceCriteriaOnly: true,
+    currentImplementationStructureNormative: false,
+    currentSchemaStructureNormative: false,
+    traceabilityFileFieldMappingsNormative: false,
+    redSourceAuthoringAllowed: false,
+  };
+  if (
+    !checkExactFields(
+      document.methodConstraints,
+      methodFields,
+      g03ReviewIntakePath + '.methodConstraints',
+      errors,
+    ) ||
+    JSON.stringify(document.methodConstraints) !==
+      JSON.stringify(expectedMethod)
+  ) {
+    errors.push(
+      g03ReviewIntakePath +
+        ': approved-input and implementation-independence constraints drift',
+    );
+  }
+
+  const reviews = Array.isArray(document.requirementReviews)
+    ? document.requirementReviews
+    : [];
+  if (!Array.isArray(document.requirementReviews)) {
+    errors.push(g03ReviewIntakePath + ': requirementReviews must be an array');
+  }
+  const reviewIds = reviews.map((review) => review?.requirementId);
+  if (!sameValues(reviewIds, g03FrozenRequirementIds)) {
+    errors.push(
+      g03ReviewIntakePath +
+        ': requirementReviews must contain exactly the 39 frozen requirement ids once and in order',
+    );
+  }
+  const reviewFields = [
+    'assessment',
+    'conditions',
+    'decision',
+    'implementationStructureReview',
+    'proposedRequirementText',
+    'rationale',
+    'requirementId',
+    'residualBlockers',
+    'sourceDerivation',
+  ];
+  const assessmentFields = [
+    'clarity',
+    'conflictReview',
+    'necessity',
+    'privacyConstraintReview',
+    'securityConstraintReview',
+    'testability',
+  ];
+  const sourceFields = [
+    'approvedInputIds',
+    'deploymentIndependentAcceptanceCriteria',
+    'deploymentIndependentThreatCriteria',
+    'evidenceReferences',
+    'status',
+  ];
+  const implementationFields = [
+    'normativeImplementationDependencies',
+    'status',
+    'traceabilityComparisonNotes',
+  ];
+  for (const [index, review] of reviews.entries()) {
+    const label = g03ReviewIntakePath + '.requirementReviews[' + index + ']';
+    if (!checkExactFields(review, reviewFields, label, errors)) continue;
+    if (
+      review.decision !== 'PENDING' ||
+      review.proposedRequirementText !== null ||
+      review.rationale !== null ||
+      !sameValues(review.conditions, []) ||
+      !sameValues(review.residualBlockers, [g03PendingBlocker])
+    ) {
+      errors.push(
+        label + ': terminal requirement review evidence is not present',
+      );
+    }
+    if (
+      !checkExactFields(
+        review.assessment,
+        assessmentFields,
+        label + '.assessment',
+        errors,
+      ) ||
+      assessmentFields.some((field) => review.assessment[field] !== 'PENDING')
+    ) {
+      errors.push(label + ': requirement assessment must remain pending');
+    }
+    if (
+      !checkExactFields(
+        review.sourceDerivation,
+        sourceFields,
+        label + '.sourceDerivation',
+        errors,
+      ) ||
+      review.sourceDerivation.status !== 'PENDING' ||
+      !sameValues(review.sourceDerivation.approvedInputIds, []) ||
+      !sameValues(review.sourceDerivation.evidenceReferences, []) ||
+      review.sourceDerivation.deploymentIndependentThreatCriteria !== null ||
+      review.sourceDerivation.deploymentIndependentAcceptanceCriteria !== null
+    ) {
+      errors.push(
+        label + ': approved-input derivation must remain absent and pending',
+      );
+    }
+    if (
+      !checkExactFields(
+        review.implementationStructureReview,
+        implementationFields,
+        label + '.implementationStructureReview',
+        errors,
+      ) ||
+      review.implementationStructureReview.status !== 'PENDING' ||
+      review.implementationStructureReview
+        .normativeImplementationDependencies !== null ||
+      review.implementationStructureReview.traceabilityComparisonNotes !== null
+    ) {
+      errors.push(
+        label + ': implementation-structure review must remain pending',
+      );
+    }
+  }
+
+  const completenessFields = [
+    'approvedInputsReviewed',
+    'conflictingRequirementPairs',
+    'deploymentIndependentAcceptanceCriteriaReview',
+    'deploymentIndependentThreatCriteriaReview',
+    'missingPrivacyRequirements',
+    'missingSecurityRequirements',
+    'otherMissingRequirements',
+    'rationale',
+    'residualBlockers',
+    'status',
+  ];
+  if (
+    !checkExactFields(
+      document.catalogueCompletenessReview,
+      completenessFields,
+      g03ReviewIntakePath + '.catalogueCompletenessReview',
+      errors,
+    ) ||
+    document.catalogueCompletenessReview.status !== 'PENDING' ||
+    document.catalogueCompletenessReview.approvedInputsReviewed !== 'PENDING' ||
+    document.catalogueCompletenessReview
+      .deploymentIndependentThreatCriteriaReview !== 'PENDING' ||
+    document.catalogueCompletenessReview
+      .deploymentIndependentAcceptanceCriteriaReview !== 'PENDING' ||
+    completenessFields
+      .filter((field) =>
+        [
+          'conflictingRequirementPairs',
+          'missingPrivacyRequirements',
+          'missingSecurityRequirements',
+          'otherMissingRequirements',
+          'rationale',
+        ].includes(field),
+      )
+      .some((field) => document.catalogueCompletenessReview[field] !== null) ||
+    !sameValues(document.catalogueCompletenessReview.residualBlockers, [
+      g03PendingBlocker,
+    ])
+  ) {
+    errors.push(
+      g03ReviewIntakePath +
+        ': catalogue completeness review must remain pending',
+    );
+  }
+
+  const revisionFields = [
+    'commit',
+    'gitBlob',
+    'path',
+    'requirementIds',
+    'sha256',
+    'status',
+  ];
+  if (
+    !checkExactFields(
+      document.approvedCatalogueRevision,
+      revisionFields,
+      g03ReviewIntakePath + '.approvedCatalogueRevision',
+      errors,
+    ) ||
+    document.approvedCatalogueRevision.status !== 'PENDING' ||
+    revisionFields
+      .filter((field) => !['requirementIds', 'status'].includes(field))
+      .some((field) => document.approvedCatalogueRevision[field] !== null) ||
+    !sameValues(document.approvedCatalogueRevision.requirementIds, [])
+  ) {
+    errors.push(
+      g03ReviewIntakePath + ': approved catalogue revision is absent',
+    );
+  }
+
+  if (
+    !checkExactFields(
+      document.gateClosure,
+      [
+        'catalogueCompletenessUnresolved',
+        'eligible',
+        'gateRemainsOpen',
+        'reason',
+        'unresolvedRequirementIds',
+      ],
+      g03ReviewIntakePath + '.gateClosure',
+      errors,
+    ) ||
+    document.gateClosure.eligible !== false ||
+    document.gateClosure.gateRemainsOpen !== true ||
+    document.gateClosure.catalogueCompletenessUnresolved !== true ||
+    !sameValues(
+      document.gateClosure.unresolvedRequirementIds,
+      g03FrozenRequirementIds,
+    ) ||
+    document.gateClosure.reason !== g03GateOpenReason
+  ) {
+    errors.push(g03ReviewIntakePath + ': PV0-G03 must remain open');
+  }
+
+  const scopeFields = [
+    'codeGenerationAuthorized',
+    'conformancePayloadsAuthorized',
+    'enterpriseCloudImplementationAuthorized',
+    'gatewayImplementationAuthorized',
+    'otherGateClosuresAuthorized',
+    'relicensingAuthorized',
+    'requirementsCatalogueChangesAuthorized',
+    'schemaEditsAuthorized',
+    'sdkPublicationAuthorized',
+  ];
+  if (
+    !checkExactFields(
+      document.scopeNonAuthorization,
+      scopeFields,
+      g03ReviewIntakePath + '.scopeNonAuthorization',
+      errors,
+    ) ||
+    scopeFields
+      .filter((field) => field !== 'otherGateClosuresAuthorized')
+      .some((field) => document.scopeNonAuthorization[field] !== false) ||
+    !sameValues(document.scopeNonAuthorization.otherGateClosuresAuthorized, [])
+  ) {
+    errors.push(g03ReviewIntakePath + ': prohibited scope was authorized');
+  }
+
+  const signOffFields = [
+    'evidenceReference',
+    'signedAt',
+    'signedBy',
+    'statement',
+  ];
+  if (
+    !checkExactFields(
+      document.signOff,
+      signOffFields,
+      g03ReviewIntakePath + '.signOff',
+      errors,
+    ) ||
+    signOffFields.some((field) => document.signOff[field] !== null)
+  ) {
+    errors.push(g03ReviewIntakePath + ': setup intake must remain unsigned');
+  }
+
+  const guide = join(root, g03ReviewGuidePath);
+  if (!existsSync(guide)) {
+    errors.push(g03ReviewGuidePath + ': required guide missing');
+    return;
+  }
+  const guideSource = readFileSync(guide, 'utf8');
+  const guideBindingRows = guideSource
+    .split('\n')
+    .filter((line) => line.startsWith('| `docs/'));
+  if (!sameValues(guideBindingRows, g03FrozenReviewGuideRows)) {
+    errors.push(g03ReviewGuidePath + ': frozen baseline table drift');
+  }
+  if (digest(guide) !== g03ReviewGuideSha256) {
+    errors.push(g03ReviewGuidePath + ': exact setup-only guide content drift');
+  }
+  checkSetupOnlyGuideClaims(guideSource, g03ReviewGuidePath, errors);
+  for (const marker of [
+    'setup only; awaiting a named independent requirements reviewer',
+    g03FrozenMainCommit,
+    'exactly 39 frozen requirement IDs',
+    '`PV0-G01` remains open',
+    '`traceability.json` is non-normative comparison material',
+    'This scaffold cannot prove reviewer independence',
+    '`PV0-G10` remain OPEN',
+  ]) {
+    if (!guideSource.includes(marker)) {
+      errors.push(g03ReviewGuidePath + ': missing boundary marker ' + marker);
     }
   }
 }
@@ -847,6 +1402,7 @@ export function checkProtocolV0Governance(root) {
 
   const inputs = checkInputManifest(root, errors);
   checkG01ReviewIntake(root, inputs, errors);
+  checkG03RequirementsReviewIntake(root, errors);
   const requirementSource = readFileSync(
     join(protocolRoot, 'REQUIREMENTS.md'),
     'utf8',
