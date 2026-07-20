@@ -1,0 +1,466 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "PV0_G01_INDEPENDENT_REVIEW_INTAKE",
+  "gateId": "PV0-G01",
+  "status": "AWAITING_INDEPENDENT_REVIEW",
+  "issue": {
+    "repository": "mereyabdenbekuly-ctrl/clodex-ide",
+    "number": 75,
+    "url": "https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/75"
+  },
+  "baseline": {
+    "policy": "ISSUE_PINNED",
+    "frozenMainCommit": "374539f98dba20d1aade6208c2834928bf7fa09a",
+    "reviewedMainCommit": null,
+    "reviewInputs": [
+      {
+        "path": "docs/provenance/PROTOCOL_V0_INPUT_MANIFEST.json",
+        "gitBlob": "5000ec24b5c90c0c0296f0d72076b1710518c1f3",
+        "sha256": "73d1b87194605704037162cb7cc5b47ac5fd2dc56dd6c0860d3757f34fd0b1b2"
+      },
+      {
+        "path": "docs/provenance/PROTOCOL_EXTRACTION_AUDIT.md",
+        "gitBlob": "880bea15455756120a6ddd3ea8eab9a7d4571107",
+        "sha256": "04f8e2b28c2dd9071af8a5be6bf97f3d19ce380b2a16e887c2d40086feba4334"
+      },
+      {
+        "path": "docs/protocol/agent-gateway-v0/traceability.json",
+        "gitBlob": "a8857d64eb0a5a6891d45937dff5a6692e26b45c",
+        "sha256": "e08704376b6955b894b6b0d6ae61de22d3ede1306695a4de96dc567b324b610d"
+      },
+      {
+        "path": "docs/governance/OPEN_CLOSED_BOUNDARY.md",
+        "gitBlob": "53067da80054014fa0179d2bcfce125c3b8f292a",
+        "sha256": "25aac2097baf2f5dc9c336074c0ddd8286f9247cce9878d3e6aabfbb69e9b6c3"
+      }
+    ]
+  },
+  "reviewer": {
+    "identity": null,
+    "role": null,
+    "affiliation": null,
+    "reviewDate": null,
+    "independenceDeclaration": null,
+    "sourceExposureDeclaration": null
+  },
+  "decisionVocabulary": ["PENDING", "APPROVE", "REJECT", "CONDITIONAL"],
+  "inputReviews": [
+    {
+      "inputId": "PV0-IN-001",
+      "requiredManifestStatus": "YELLOW_REVIEW_REQUIRED",
+      "decision": "PENDING",
+      "verification": {
+        "locator": "PENDING",
+        "version": "NOT_APPLICABLE",
+        "immutableRevision": "PENDING",
+        "gitBlob": "PENDING",
+        "sha256": "PENDING",
+        "manifestStatus": "PENDING",
+        "permittedUse": "PENDING",
+        "prohibitedUse": "PENDING",
+        "blocker": "PENDING"
+      },
+      "termsNoticeReview": {
+        "applicability": "NOT_APPLICABLE",
+        "status": "NOT_APPLICABLE",
+        "officialRevision": null,
+        "contentSha256": null,
+        "licenseOrTermsConclusion": null,
+        "noticeConclusion": null,
+        "specificationTextDecision": null,
+        "exampleCodeDecision": null,
+        "testVectorDecision": null
+      },
+      "redStatusRequirement": "NOT_APPLICABLE",
+      "decidedPermittedUse": null,
+      "decidedProhibitedUse": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent provenance-owner review required by issue #75 has not been recorded."
+      ],
+      "rationale": null
+    },
+    {
+      "inputId": "PV0-IN-002",
+      "requiredManifestStatus": "CANDIDATE_GREEN_TERMS_REVIEW_REQUIRED",
+      "decision": "PENDING",
+      "verification": {
+        "locator": "PENDING",
+        "version": "PENDING",
+        "immutableRevision": "PENDING",
+        "gitBlob": "NOT_APPLICABLE",
+        "sha256": "PENDING",
+        "manifestStatus": "PENDING",
+        "permittedUse": "PENDING",
+        "prohibitedUse": "PENDING",
+        "blocker": "PENDING"
+      },
+      "termsNoticeReview": {
+        "applicability": "REQUIRED",
+        "status": "PENDING",
+        "officialRevision": null,
+        "contentSha256": null,
+        "licenseOrTermsConclusion": null,
+        "noticeConclusion": null,
+        "specificationTextDecision": null,
+        "exampleCodeDecision": null,
+        "testVectorDecision": null
+      },
+      "redStatusRequirement": "NOT_APPLICABLE",
+      "decidedPermittedUse": null,
+      "decidedProhibitedUse": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent provenance-owner review required by issue #75 has not been recorded."
+      ],
+      "rationale": null
+    },
+    {
+      "inputId": "PV0-IN-003",
+      "requiredManifestStatus": "CANDIDATE_GREEN_TERMS_REVIEW_REQUIRED",
+      "decision": "PENDING",
+      "verification": {
+        "locator": "PENDING",
+        "version": "PENDING",
+        "immutableRevision": "PENDING",
+        "gitBlob": "NOT_APPLICABLE",
+        "sha256": "PENDING",
+        "manifestStatus": "PENDING",
+        "permittedUse": "PENDING",
+        "prohibitedUse": "PENDING",
+        "blocker": "PENDING"
+      },
+      "termsNoticeReview": {
+        "applicability": "REQUIRED",
+        "status": "PENDING",
+        "officialRevision": null,
+        "contentSha256": null,
+        "licenseOrTermsConclusion": null,
+        "noticeConclusion": null,
+        "specificationTextDecision": null,
+        "exampleCodeDecision": null,
+        "testVectorDecision": null
+      },
+      "redStatusRequirement": "NOT_APPLICABLE",
+      "decidedPermittedUse": null,
+      "decidedProhibitedUse": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent provenance-owner review required by issue #75 has not been recorded."
+      ],
+      "rationale": null
+    },
+    {
+      "inputId": "PV0-IN-004",
+      "requiredManifestStatus": "CANDIDATE_GREEN_TERMS_REVIEW_REQUIRED",
+      "decision": "PENDING",
+      "verification": {
+        "locator": "PENDING",
+        "version": "PENDING",
+        "immutableRevision": "PENDING",
+        "gitBlob": "NOT_APPLICABLE",
+        "sha256": "PENDING",
+        "manifestStatus": "PENDING",
+        "permittedUse": "PENDING",
+        "prohibitedUse": "PENDING",
+        "blocker": "PENDING"
+      },
+      "termsNoticeReview": {
+        "applicability": "REQUIRED",
+        "status": "PENDING",
+        "officialRevision": null,
+        "contentSha256": null,
+        "licenseOrTermsConclusion": null,
+        "noticeConclusion": null,
+        "specificationTextDecision": null,
+        "exampleCodeDecision": null,
+        "testVectorDecision": null
+      },
+      "redStatusRequirement": "NOT_APPLICABLE",
+      "decidedPermittedUse": null,
+      "decidedProhibitedUse": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent provenance-owner review required by issue #75 has not been recorded."
+      ],
+      "rationale": null
+    },
+    {
+      "inputId": "PV0-IN-005",
+      "requiredManifestStatus": "CANDIDATE_GREEN_TERMS_REVIEW_REQUIRED",
+      "decision": "PENDING",
+      "verification": {
+        "locator": "PENDING",
+        "version": "PENDING",
+        "immutableRevision": "PENDING",
+        "gitBlob": "NOT_APPLICABLE",
+        "sha256": "PENDING",
+        "manifestStatus": "PENDING",
+        "permittedUse": "PENDING",
+        "prohibitedUse": "PENDING",
+        "blocker": "PENDING"
+      },
+      "termsNoticeReview": {
+        "applicability": "REQUIRED",
+        "status": "PENDING",
+        "officialRevision": null,
+        "contentSha256": null,
+        "licenseOrTermsConclusion": null,
+        "noticeConclusion": null,
+        "specificationTextDecision": null,
+        "exampleCodeDecision": null,
+        "testVectorDecision": null
+      },
+      "redStatusRequirement": "NOT_APPLICABLE",
+      "decidedPermittedUse": null,
+      "decidedProhibitedUse": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent provenance-owner review required by issue #75 has not been recorded."
+      ],
+      "rationale": null
+    },
+    {
+      "inputId": "PV0-IN-006",
+      "requiredManifestStatus": "CANDIDATE_GREEN_TERMS_REVIEW_REQUIRED",
+      "decision": "PENDING",
+      "verification": {
+        "locator": "PENDING",
+        "version": "PENDING",
+        "immutableRevision": "PENDING",
+        "gitBlob": "NOT_APPLICABLE",
+        "sha256": "PENDING",
+        "manifestStatus": "PENDING",
+        "permittedUse": "PENDING",
+        "prohibitedUse": "PENDING",
+        "blocker": "PENDING"
+      },
+      "termsNoticeReview": {
+        "applicability": "REQUIRED",
+        "status": "PENDING",
+        "officialRevision": null,
+        "contentSha256": null,
+        "licenseOrTermsConclusion": null,
+        "noticeConclusion": null,
+        "specificationTextDecision": null,
+        "exampleCodeDecision": null,
+        "testVectorDecision": null
+      },
+      "redStatusRequirement": "NOT_APPLICABLE",
+      "decidedPermittedUse": null,
+      "decidedProhibitedUse": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent provenance-owner review required by issue #75 has not been recorded."
+      ],
+      "rationale": null
+    },
+    {
+      "inputId": "PV0-IN-007",
+      "requiredManifestStatus": "YELLOW_REVIEW_REQUIRED",
+      "decision": "PENDING",
+      "verification": {
+        "locator": "PENDING",
+        "version": "NOT_APPLICABLE",
+        "immutableRevision": "PENDING",
+        "gitBlob": "PENDING",
+        "sha256": "PENDING",
+        "manifestStatus": "PENDING",
+        "permittedUse": "PENDING",
+        "prohibitedUse": "PENDING",
+        "blocker": "PENDING"
+      },
+      "termsNoticeReview": {
+        "applicability": "NOT_APPLICABLE",
+        "status": "NOT_APPLICABLE",
+        "officialRevision": null,
+        "contentSha256": null,
+        "licenseOrTermsConclusion": null,
+        "noticeConclusion": null,
+        "specificationTextDecision": null,
+        "exampleCodeDecision": null,
+        "testVectorDecision": null
+      },
+      "redStatusRequirement": "NOT_APPLICABLE",
+      "decidedPermittedUse": null,
+      "decidedProhibitedUse": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent provenance-owner review required by issue #75 has not been recorded."
+      ],
+      "rationale": null
+    },
+    {
+      "inputId": "PV0-IN-008",
+      "requiredManifestStatus": "RED_FOR_PROTOCOL_AUTHORING",
+      "decision": "PENDING",
+      "verification": {
+        "locator": "PENDING",
+        "version": "NOT_APPLICABLE",
+        "immutableRevision": "PENDING",
+        "gitBlob": "NOT_APPLICABLE",
+        "sha256": "NOT_APPLICABLE",
+        "manifestStatus": "PENDING",
+        "permittedUse": "PENDING",
+        "prohibitedUse": "PENDING",
+        "blocker": "PENDING"
+      },
+      "termsNoticeReview": {
+        "applicability": "NOT_APPLICABLE",
+        "status": "NOT_APPLICABLE",
+        "officialRevision": null,
+        "contentSha256": null,
+        "licenseOrTermsConclusion": null,
+        "noticeConclusion": null,
+        "specificationTextDecision": null,
+        "exampleCodeDecision": null,
+        "testVectorDecision": null
+      },
+      "redStatusRequirement": "MUST_REMAIN_RED_FOR_PROTOCOL_AUTHORING",
+      "decidedPermittedUse": null,
+      "decidedProhibitedUse": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent provenance-owner review required by issue #75 has not been recorded."
+      ],
+      "rationale": null
+    },
+    {
+      "inputId": "PV0-IN-009",
+      "requiredManifestStatus": "YELLOW_REQUIREMENTS_ONLY",
+      "decision": "PENDING",
+      "verification": {
+        "locator": "PENDING",
+        "version": "NOT_APPLICABLE",
+        "immutableRevision": "PENDING",
+        "gitBlob": "PENDING",
+        "sha256": "PENDING",
+        "manifestStatus": "PENDING",
+        "permittedUse": "PENDING",
+        "prohibitedUse": "PENDING",
+        "blocker": "PENDING"
+      },
+      "termsNoticeReview": {
+        "applicability": "NOT_APPLICABLE",
+        "status": "NOT_APPLICABLE",
+        "officialRevision": null,
+        "contentSha256": null,
+        "licenseOrTermsConclusion": null,
+        "noticeConclusion": null,
+        "specificationTextDecision": null,
+        "exampleCodeDecision": null,
+        "testVectorDecision": null
+      },
+      "redStatusRequirement": "NOT_APPLICABLE",
+      "decidedPermittedUse": null,
+      "decidedProhibitedUse": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent provenance-owner review required by issue #75 has not been recorded."
+      ],
+      "rationale": null
+    },
+    {
+      "inputId": "PV0-IN-010",
+      "requiredManifestStatus": "YELLOW_NEGATIVE_CONSTRAINTS_ONLY",
+      "decision": "PENDING",
+      "verification": {
+        "locator": "PENDING",
+        "version": "NOT_APPLICABLE",
+        "immutableRevision": "PENDING",
+        "gitBlob": "PENDING",
+        "sha256": "PENDING",
+        "manifestStatus": "PENDING",
+        "permittedUse": "PENDING",
+        "prohibitedUse": "PENDING",
+        "blocker": "PENDING"
+      },
+      "termsNoticeReview": {
+        "applicability": "NOT_APPLICABLE",
+        "status": "NOT_APPLICABLE",
+        "officialRevision": null,
+        "contentSha256": null,
+        "licenseOrTermsConclusion": null,
+        "noticeConclusion": null,
+        "specificationTextDecision": null,
+        "exampleCodeDecision": null,
+        "testVectorDecision": null
+      },
+      "redStatusRequirement": "NOT_APPLICABLE",
+      "decidedPermittedUse": null,
+      "decidedProhibitedUse": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent provenance-owner review required by issue #75 has not been recorded."
+      ],
+      "rationale": null
+    },
+    {
+      "inputId": "PV0-IN-011",
+      "requiredManifestStatus": "YELLOW_NEGATIVE_CONSTRAINTS_ONLY",
+      "decision": "PENDING",
+      "verification": {
+        "locator": "PENDING",
+        "version": "NOT_APPLICABLE",
+        "immutableRevision": "PENDING",
+        "gitBlob": "PENDING",
+        "sha256": "PENDING",
+        "manifestStatus": "PENDING",
+        "permittedUse": "PENDING",
+        "prohibitedUse": "PENDING",
+        "blocker": "PENDING"
+      },
+      "termsNoticeReview": {
+        "applicability": "NOT_APPLICABLE",
+        "status": "NOT_APPLICABLE",
+        "officialRevision": null,
+        "contentSha256": null,
+        "licenseOrTermsConclusion": null,
+        "noticeConclusion": null,
+        "specificationTextDecision": null,
+        "exampleCodeDecision": null,
+        "testVectorDecision": null
+      },
+      "redStatusRequirement": "NOT_APPLICABLE",
+      "decidedPermittedUse": null,
+      "decidedProhibitedUse": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent provenance-owner review required by issue #75 has not been recorded."
+      ],
+      "rationale": null
+    }
+  ],
+  "gateClosure": {
+    "eligible": false,
+    "gateRemainsOpen": true,
+    "unresolvedInputIds": [
+      "PV0-IN-001",
+      "PV0-IN-002",
+      "PV0-IN-003",
+      "PV0-IN-004",
+      "PV0-IN-005",
+      "PV0-IN-006",
+      "PV0-IN-007",
+      "PV0-IN-008",
+      "PV0-IN-009",
+      "PV0-IN-010",
+      "PV0-IN-011"
+    ],
+    "reason": "Setup-only intake; no attributed independent review or terminal input decision is present."
+  },
+  "scopeNonAuthorization": {
+    "schemaEditsAuthorized": false,
+    "conformancePayloadsAuthorized": false,
+    "sdkPublicationAuthorized": false,
+    "gatewayImplementationAuthorized": false,
+    "relicensingAuthorized": false,
+    "otherGateClosuresAuthorized": []
+  },
+  "signOff": {
+    "statement": null,
+    "signedBy": null,
+    "signedAt": null,
+    "evidenceReference": null
+  }
+}

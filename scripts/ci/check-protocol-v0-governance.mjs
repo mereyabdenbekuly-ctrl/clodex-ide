@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 
 const protocolPath = 'docs/protocol/agent-gateway-v0';
 const inputPath = 'docs/provenance/PROTOCOL_V0_INPUT_MANIFEST.json';
+const g01ReviewIntakePath =
+  'docs/provenance/PROTOCOL_V0_G01_REVIEW_INTAKE.json';
+const g01ReviewGuidePath = 'docs/provenance/PROTOCOL_V0_G01_REVIEW_INTAKE.md';
 const tracePath = protocolPath + '/traceability.json';
 const allowedFiles = new Set([
   'README.md',
@@ -24,6 +27,48 @@ const openGates = Array.from(
   { length: 10 },
   (_, index) => 'PV0-G' + String(index + 1).padStart(2, '0'),
 );
+const g01InputIds = Array.from(
+  { length: 11 },
+  (_, index) => 'PV0-IN-' + String(index + 1).padStart(3, '0'),
+);
+const g01ExternalTermsInputIds = new Set(
+  Array.from(
+    { length: 5 },
+    (_, index) => 'PV0-IN-' + String(index + 2).padStart(3, '0'),
+  ),
+);
+const g01RepositoryBindingInputIds = new Set([
+  'PV0-IN-001',
+  'PV0-IN-007',
+  'PV0-IN-009',
+  'PV0-IN-010',
+  'PV0-IN-011',
+]);
+const g01FrozenMainCommit = '374539f98dba20d1aade6208c2834928bf7fa09a';
+const g01PendingBlocker =
+  'Independent provenance-owner review required by issue #75 has not been recorded.';
+const g01FrozenReviewInputs = [
+  {
+    path: 'docs/provenance/PROTOCOL_V0_INPUT_MANIFEST.json',
+    gitBlob: '5000ec24b5c90c0c0296f0d72076b1710518c1f3',
+    sha256: '73d1b87194605704037162cb7cc5b47ac5fd2dc56dd6c0860d3757f34fd0b1b2',
+  },
+  {
+    path: 'docs/provenance/PROTOCOL_EXTRACTION_AUDIT.md',
+    gitBlob: '880bea15455756120a6ddd3ea8eab9a7d4571107',
+    sha256: '04f8e2b28c2dd9071af8a5be6bf97f3d19ce380b2a16e887c2d40086feba4334',
+  },
+  {
+    path: 'docs/protocol/agent-gateway-v0/traceability.json',
+    gitBlob: 'a8857d64eb0a5a6891d45937dff5a6692e26b45c',
+    sha256: 'e08704376b6955b894b6b0d6ae61de22d3ede1306695a4de96dc567b324b610d',
+  },
+  {
+    path: 'docs/governance/OPEN_CLOSED_BOUNDARY.md',
+    gitBlob: '53067da80054014fa0179d2bcfce125c3b8f292a',
+    sha256: '25aac2097baf2f5dc9c336074c0ddd8286f9247cce9878d3e6aabfbb69e9b6c3',
+  },
+];
 
 function parseJson(path, label, errors) {
   try {
@@ -32,6 +77,26 @@ function parseJson(path, label, errors) {
     errors.push(label + ': invalid JSON: ' + error.message);
     return null;
   }
+}
+
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function checkExactFields(value, expected, label, errors) {
+  if (!isRecord(value)) {
+    errors.push(label + ': expected an object');
+    return false;
+  }
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  if (!sameValues(actual, sortedExpected)) {
+    errors.push(
+      label + ': fields must be exactly ' + sortedExpected.join(', '),
+    );
+    return false;
+  }
+  return true;
 }
 
 function digest(path) {
@@ -147,7 +212,7 @@ function checkDocumentReferences(name, document, documents, errors) {
 
 function checkInputManifest(root, errors) {
   const document = parseJson(join(root, inputPath), inputPath, errors);
-  if (!document) return new Set();
+  if (!document) return new Map();
   if (
     document.status !== 'FROZEN_ENGINEERING_INVENTORY_REVIEW_PENDING' ||
     document.cleanRoomClaim !== false ||
@@ -171,13 +236,13 @@ function checkInputManifest(root, errors) {
     );
   }
 
-  const ids = new Set();
+  const inputs = new Map();
   for (const input of document.candidateInputs ?? []) {
-    if (!/^PV0-IN-\d{3}$/u.test(input.id ?? '') || ids.has(input.id)) {
+    if (!/^PV0-IN-\d{3}$/u.test(input.id ?? '') || inputs.has(input.id)) {
       errors.push(inputPath + ': invalid or duplicate input id ' + input.id);
       continue;
     }
-    ids.add(input.id);
+    inputs.set(input.id, input);
     const external = /^https?:\/\//u.test(input.locator ?? '');
     const repositoryExposure = input.type === 'repository_context_exposure';
     if (!external && !repositoryExposure) {
@@ -197,25 +262,335 @@ function checkInputManifest(root, errors) {
     if (
       external &&
       (!Array.isArray(input.observedTermsEvidence) ||
-        input.observedTermsEvidence.length === 0)
+        input.observedTermsEvidence.length === 0 ||
+        input.observedTermsEvidence.some(
+          (entry) =>
+            !isRecord(entry) ||
+            typeof entry.locator !== 'string' ||
+            entry.locator.length === 0 ||
+            typeof entry.observation !== 'string' ||
+            entry.observation.length === 0,
+        ))
     ) {
       errors.push(
         inputPath + ': ' + input.id + ' lacks observed terms evidence',
       );
     }
-    if (!input.status || !input.permittedUse || !input.blocker) {
+    if (
+      !input.status ||
+      !input.permittedUse ||
+      !input.prohibitedUse ||
+      !input.blocker
+    ) {
       errors.push(inputPath + ': ' + input.id + ' lacks review metadata');
     }
   }
-  const redExposure = (document.candidateInputs ?? []).some(
-    (input) =>
-      input.type === 'repository_context_exposure' &&
-      input.status === 'RED_FOR_PROTOCOL_AUTHORING',
-  );
-  if (!redExposure) {
-    errors.push(inputPath + ': repository exposure must remain RED');
+  if (!sameValues([...inputs.keys()], g01InputIds)) {
+    errors.push(
+      inputPath + ': candidate input ids must be exactly PV0-IN-001..011',
+    );
   }
-  return ids;
+  const redExposure = inputs.get('PV0-IN-008');
+  if (
+    redExposure?.type !== 'repository_context_exposure' ||
+    redExposure?.status !== 'RED_FOR_PROTOCOL_AUTHORING'
+  ) {
+    errors.push(inputPath + ': PV0-IN-008 repository exposure must remain RED');
+  }
+  return inputs;
+}
+
+function checkG01ReviewIntake(root, inputs, errors) {
+  const intake = join(root, g01ReviewIntakePath);
+  if (!existsSync(intake)) {
+    errors.push(g01ReviewIntakePath + ': required intake missing');
+    return;
+  }
+  const document = parseJson(intake, g01ReviewIntakePath, errors);
+  if (!document) return;
+  if (
+    !checkExactFields(
+      document,
+      [
+        'artifactType',
+        'baseline',
+        'decisionVocabulary',
+        'gateClosure',
+        'gateId',
+        'inputReviews',
+        'issue',
+        'reviewer',
+        'schemaVersion',
+        'scopeNonAuthorization',
+        'signOff',
+        'status',
+      ],
+      g01ReviewIntakePath,
+      errors,
+    )
+  ) {
+    return;
+  }
+  if (
+    document.schemaVersion !== 1 ||
+    document.artifactType !== 'PV0_G01_INDEPENDENT_REVIEW_INTAKE' ||
+    document.gateId !== 'PV0-G01' ||
+    document.status !== 'AWAITING_INDEPENDENT_REVIEW'
+  ) {
+    errors.push(g01ReviewIntakePath + ': invalid setup-only intake status');
+  }
+
+  if (
+    !checkExactFields(
+      document.issue,
+      ['number', 'repository', 'url'],
+      g01ReviewIntakePath + '.issue',
+      errors,
+    ) ||
+    document.issue.repository !== 'mereyabdenbekuly-ctrl/clodex-ide' ||
+    document.issue.number !== 75 ||
+    document.issue.url !==
+      'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/75'
+  ) {
+    errors.push(g01ReviewIntakePath + ': issue binding must remain #75');
+  }
+
+  if (
+    !checkExactFields(
+      document.baseline,
+      ['frozenMainCommit', 'policy', 'reviewedMainCommit', 'reviewInputs'],
+      g01ReviewIntakePath + '.baseline',
+      errors,
+    ) ||
+    document.baseline.policy !== 'ISSUE_PINNED' ||
+    document.baseline.frozenMainCommit !== g01FrozenMainCommit ||
+    document.baseline.reviewedMainCommit !== null ||
+    JSON.stringify(document.baseline.reviewInputs) !==
+      JSON.stringify(g01FrozenReviewInputs)
+  ) {
+    errors.push(g01ReviewIntakePath + ': frozen issue baseline drift');
+  }
+
+  const reviewerFields = [
+    'affiliation',
+    'identity',
+    'independenceDeclaration',
+    'reviewDate',
+    'role',
+    'sourceExposureDeclaration',
+  ];
+  if (
+    !checkExactFields(
+      document.reviewer,
+      reviewerFields,
+      g01ReviewIntakePath + '.reviewer',
+      errors,
+    ) ||
+    reviewerFields.some((field) => document.reviewer[field] !== null)
+  ) {
+    errors.push(
+      g01ReviewIntakePath +
+        ': setup intake must not claim reviewer attribution or completion',
+    );
+  }
+  if (
+    !sameValues(document.decisionVocabulary, [
+      'PENDING',
+      'APPROVE',
+      'REJECT',
+      'CONDITIONAL',
+    ])
+  ) {
+    errors.push(g01ReviewIntakePath + ': decision vocabulary drift');
+  }
+
+  const inputReviews = Array.isArray(document.inputReviews)
+    ? document.inputReviews
+    : [];
+  if (!Array.isArray(document.inputReviews)) {
+    errors.push(g01ReviewIntakePath + ': inputReviews must be an array');
+  }
+  const reviewIds = inputReviews.map((review) => review?.inputId);
+  if (!sameValues(reviewIds, g01InputIds)) {
+    errors.push(
+      g01ReviewIntakePath +
+        ': inputReviews must contain exactly PV0-IN-001..011 once and in order',
+    );
+  }
+  const reviewFields = [
+    'conditions',
+    'decidedPermittedUse',
+    'decidedProhibitedUse',
+    'decision',
+    'inputId',
+    'rationale',
+    'redStatusRequirement',
+    'requiredManifestStatus',
+    'residualBlockers',
+    'termsNoticeReview',
+    'verification',
+  ];
+  const verificationFields = [
+    'blocker',
+    'gitBlob',
+    'immutableRevision',
+    'locator',
+    'manifestStatus',
+    'permittedUse',
+    'prohibitedUse',
+    'sha256',
+    'version',
+  ];
+  const termsFields = [
+    'applicability',
+    'contentSha256',
+    'exampleCodeDecision',
+    'licenseOrTermsConclusion',
+    'noticeConclusion',
+    'officialRevision',
+    'specificationTextDecision',
+    'status',
+    'testVectorDecision',
+  ];
+  for (const [index, review] of inputReviews.entries()) {
+    const label = g01ReviewIntakePath + '.inputReviews[' + index + ']';
+    if (!checkExactFields(review, reviewFields, label, errors)) continue;
+    const input = inputs.get(review.inputId);
+    if (!input) continue;
+    const external = g01ExternalTermsInputIds.has(review.inputId);
+    const expectedVerification = {
+      locator: 'PENDING',
+      version: external ? 'PENDING' : 'NOT_APPLICABLE',
+      immutableRevision: 'PENDING',
+      gitBlob: g01RepositoryBindingInputIds.has(review.inputId)
+        ? 'PENDING'
+        : 'NOT_APPLICABLE',
+      sha256: review.inputId === 'PV0-IN-008' ? 'NOT_APPLICABLE' : 'PENDING',
+      manifestStatus: 'PENDING',
+      permittedUse: 'PENDING',
+      prohibitedUse: 'PENDING',
+      blocker: 'PENDING',
+    };
+    if (
+      review.requiredManifestStatus !== input.status ||
+      review.decision !== 'PENDING' ||
+      review.decidedPermittedUse !== null ||
+      review.decidedProhibitedUse !== null ||
+      review.rationale !== null ||
+      !sameValues(review.conditions, []) ||
+      !sameValues(review.residualBlockers, [g01PendingBlocker]) ||
+      review.redStatusRequirement !==
+        (review.inputId === 'PV0-IN-008'
+          ? 'MUST_REMAIN_RED_FOR_PROTOCOL_AUTHORING'
+          : 'NOT_APPLICABLE')
+    ) {
+      errors.push(label + ': terminal review evidence is not present');
+    }
+    if (
+      !checkExactFields(
+        review.verification,
+        verificationFields,
+        label + '.verification',
+        errors,
+      ) ||
+      JSON.stringify(review.verification) !==
+        JSON.stringify(expectedVerification)
+    ) {
+      errors.push(label + ': verification must remain pending');
+    }
+    if (
+      !checkExactFields(
+        review.termsNoticeReview,
+        termsFields,
+        label + '.termsNoticeReview',
+        errors,
+      ) ||
+      review.termsNoticeReview.applicability !==
+        (external ? 'REQUIRED' : 'NOT_APPLICABLE') ||
+      review.termsNoticeReview.status !==
+        (external ? 'PENDING' : 'NOT_APPLICABLE') ||
+      termsFields
+        .filter((field) => field !== 'applicability' && field !== 'status')
+        .some((field) => review.termsNoticeReview[field] !== null)
+    ) {
+      errors.push(label + ': terms and notice review slot drift');
+    }
+  }
+
+  if (
+    !checkExactFields(
+      document.gateClosure,
+      ['eligible', 'gateRemainsOpen', 'reason', 'unresolvedInputIds'],
+      g01ReviewIntakePath + '.gateClosure',
+      errors,
+    ) ||
+    document.gateClosure.eligible !== false ||
+    document.gateClosure.gateRemainsOpen !== true ||
+    !sameValues(document.gateClosure.unresolvedInputIds, g01InputIds) ||
+    document.gateClosure.reason !==
+      'Setup-only intake; no attributed independent review or terminal input decision is present.'
+  ) {
+    errors.push(g01ReviewIntakePath + ': PV0-G01 must remain open');
+  }
+
+  const scopeFields = [
+    'conformancePayloadsAuthorized',
+    'gatewayImplementationAuthorized',
+    'otherGateClosuresAuthorized',
+    'relicensingAuthorized',
+    'schemaEditsAuthorized',
+    'sdkPublicationAuthorized',
+  ];
+  if (
+    !checkExactFields(
+      document.scopeNonAuthorization,
+      scopeFields,
+      g01ReviewIntakePath + '.scopeNonAuthorization',
+      errors,
+    ) ||
+    scopeFields
+      .filter((field) => field !== 'otherGateClosuresAuthorized')
+      .some((field) => document.scopeNonAuthorization[field] !== false) ||
+    !sameValues(document.scopeNonAuthorization.otherGateClosuresAuthorized, [])
+  ) {
+    errors.push(g01ReviewIntakePath + ': prohibited scope was authorized');
+  }
+
+  const signOffFields = [
+    'evidenceReference',
+    'signedAt',
+    'signedBy',
+    'statement',
+  ];
+  if (
+    !checkExactFields(
+      document.signOff,
+      signOffFields,
+      g01ReviewIntakePath + '.signOff',
+      errors,
+    ) ||
+    signOffFields.some((field) => document.signOff[field] !== null)
+  ) {
+    errors.push(g01ReviewIntakePath + ': setup intake must remain unsigned');
+  }
+
+  const guide = join(root, g01ReviewGuidePath);
+  if (!existsSync(guide)) {
+    errors.push(g01ReviewGuidePath + ': required guide missing');
+    return;
+  }
+  const guideSource = readFileSync(guide, 'utf8');
+  for (const marker of [
+    'setup only; awaiting a named independent provenance owner',
+    g01FrozenMainCommit,
+    'PV0-IN-008` must remain',
+    'This scaffold cannot prove reviewer independence',
+    'all `PV0-G01` through `PV0-G10`',
+  ]) {
+    if (!guideSource.includes(marker)) {
+      errors.push(g01ReviewGuidePath + ': missing boundary marker ' + marker);
+    }
+  }
 }
 
 function checkSchemas(protocolRoot, files, errors) {
@@ -471,6 +846,7 @@ export function checkProtocolV0Governance(root) {
   }
 
   const inputs = checkInputManifest(root, errors);
+  checkG01ReviewIntake(root, inputs, errors);
   const requirementSource = readFileSync(
     join(protocolRoot, 'REQUIREMENTS.md'),
     'utf8',

@@ -41,6 +41,18 @@ CLODEx uses this product model:
   entirely in the public client or locally, stop and require a product-boundary
   decision before editing or staging it.
 
+### Current Protocol v0 phase
+
+- The current Protocol v0 phase is governance and evidence-intake only.
+- Every Protocol v0 gate remains OPEN. An intake, checklist, validator, review
+  template, or collected source does not close a gate by itself.
+- No Protocol v0 schema authoring or schema change, conformance fixture or
+  implementation, code generation, SDK publication, Gateway bootstrap,
+  enterprise/cloud implementation, or relicensing is authorized until the
+  applicable gates are independently reviewed and explicitly closed.
+- Preserve fail-closed state in code and documentation: pending, conditional,
+  incomplete, unattributed, or stale evidence is not approval.
+
 The public repository may contain:
 
 - the IDE and local-first user experience;
