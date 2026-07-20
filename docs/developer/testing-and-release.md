@@ -153,12 +153,14 @@ Each promoted subsystem owns a separate evidence authority:
 | Subsystem | Evidence |
 | --- | --- |
 | Context Ledger | Signed quality and trace-replay packet bound to the source commit |
-| Model Fabric | Authenticated policy publication and pinned trust root |
+| Model Fabric | **Quarantined:** no public release-promotion contract; local state and caller-supplied trust roots are reference-only |
 | Session continuity / Cloud Tasks | Observation window, platform smoke, SLOs, and approvals |
 | Runners | Signed physical SSH/Docker paired replay |
 | Generated-app runtime | Deterministic evaluation, observation aggregate, and manual gates |
 
-Local development keys and local packets do not authorize a release.
+Local development keys and local packets do not authorize a release. In
+particular, the public readiness CLI has no Model Fabric state/root input and
+cannot promote that epic until a separately reviewed external contract exists.
 
 ## 8. CI security
 

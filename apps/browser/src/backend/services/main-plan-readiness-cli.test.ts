@@ -67,6 +67,32 @@ describe('main plan readiness CLI', () => {
     );
   });
 
+  it('fails closed when Model Fabric promotion is requested', async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const report = await runMainPlanReadinessCli(
+      ['--channel', 'release', '--require-promotion', 'model-fabric'],
+      {
+        now: () => new Date('2026-07-20T00:00:00.000Z'),
+        inspectSource: () => ({
+          commitSha: 'a'.repeat(40),
+          clean: true,
+        }),
+        collectPromotions: () => ({}),
+      },
+    );
+
+    expect(report?.ready).toBe(false);
+    expect(report?.blockers).toContain(
+      'model-fabric:required-promotion-not-ready',
+    );
+    expect(
+      report?.epics.find((epic) => epic.id === 'model-fabric'),
+    ).toMatchObject({
+      promotionContract: 'not-yet-defined',
+      promotionState: 'unsupported',
+    });
+  });
+
   it('rejects unknown epic identifiers', async () => {
     await expect(
       runMainPlanReadinessCli(['--require-promotion', 'not-a-real-epic']),

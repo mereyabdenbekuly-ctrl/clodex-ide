@@ -1,15 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AppReleaseChannel } from '@shared/feature-gates';
 import type { MainPlanPromotionAssessment } from '@shared/main-plan-readiness';
-import { verifyModelFabricPublicationState } from './model-fabric-policy-publication';
 import {
   isRunnerDogfoodEvidencePromotionEligible,
   verifyRunnerDogfoodEvidenceBundle,
   type RunnerDogfoodEvidenceBundle,
 } from './runner-routing/dogfood-evidence';
 
-const MAX_MODEL_FABRIC_STATE_BYTES = 8 * 1024 * 1024;
 const MAX_PUBLIC_KEY_BYTES = 64 * 1024;
 const MAX_RUNNER_BUNDLE_BYTES = 4 * 1024 * 1024;
 const MAX_RUNNER_BUNDLES = 128;
@@ -18,129 +15,12 @@ const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 const MINIMUM_PHYSICAL_RUNNER_SAMPLES = 4;
 const MINIMUM_DISTINCT_COMMAND_CLASSES = 2;
 
-export interface ModelFabricPromotionAssessmentInput {
-  channel: AppReleaseChannel;
-  now: Date;
-  statePath: string;
-  rootPublicKeyPath: string;
-  snapshotRootPublicKeyPath?: string;
-}
-
 export interface RunnerPromotionAssessmentInput {
   now: Date;
   buildCommitSha: string;
   evidenceDirectoryPath: string;
   trustedCollectorPublicKeys?: readonly string[];
   trustedCollectorPublicKeysPath?: string;
-}
-
-/**
- * Treats the authenticated Model Fabric publication state as the promotion
- * authority. The state already contains signed approvals, a signed publication
- * receipt, and the exact signed policy snapshot. Release builds additionally
- * require the publication to have reached the production stage.
- */
-export function assessModelFabricPromotion(
-  input: ModelFabricPromotionAssessmentInput,
-): MainPlanPromotionAssessment {
-  const evidencePath = path.resolve(input.statePath);
-  if (!fs.existsSync(evidencePath)) {
-    return {
-      state: 'absent',
-      source: 'model-fabric-policy-publication',
-      evidencePath,
-      blockers: [],
-    };
-  }
-
-  const rootPublicKeyPath = path.resolve(input.rootPublicKeyPath);
-  if (!fs.existsSync(rootPublicKeyPath)) {
-    return {
-      state: 'not-ready',
-      source: 'model-fabric-policy-publication',
-      evidencePath,
-      blockers: ['model-fabric-root-public-key-missing'],
-    };
-  }
-
-  try {
-    const state = JSON.parse(
-      readRegularFile(
-        evidencePath,
-        MAX_MODEL_FABRIC_STATE_BYTES,
-        'Model Fabric publication state',
-      ).toString('utf8'),
-    );
-    const rootPublicKey = readRegularFile(
-      rootPublicKeyPath,
-      MAX_PUBLIC_KEY_BYTES,
-      'Model Fabric root public key',
-    ).toString('utf8');
-    const snapshotRootPublicKeyPath = input.snapshotRootPublicKeyPath
-      ? path.resolve(input.snapshotRootPublicKeyPath)
-      : rootPublicKeyPath;
-    if (!fs.existsSync(snapshotRootPublicKeyPath)) {
-      return {
-        state: 'not-ready',
-        source: 'model-fabric-policy-publication',
-        evidencePath,
-        blockers: ['model-fabric-snapshot-root-public-key-missing'],
-      };
-    }
-    const snapshotRootPublicKey =
-      snapshotRootPublicKeyPath === rootPublicKeyPath
-        ? rootPublicKey
-        : readRegularFile(
-            snapshotRootPublicKeyPath,
-            MAX_PUBLIC_KEY_BYTES,
-            'Model Fabric snapshot root public key',
-          ).toString('utf8');
-    const nowMs = input.now.getTime();
-    const verified = verifyModelFabricPublicationState({
-      state,
-      rootPublicKey,
-      snapshotRootPublicKey,
-      now: nowMs,
-    });
-    const receipt = verified.lastReceipt;
-    const snapshot = verified.lastSnapshot;
-    const blockers: string[] = [];
-
-    if (input.channel === 'release' && receipt.stage !== 'production') {
-      blockers.push('model-fabric-production-publication-required');
-    }
-    if (receipt.publishedAt > nowMs + MAX_CLOCK_SKEW_MS) {
-      blockers.push('model-fabric-publication-from-future');
-    }
-    if (
-      verified.authority.expiresAt <= nowMs ||
-      snapshot.rootset.expiresAt <= nowMs ||
-      snapshot.keyset.expiresAt <= nowMs ||
-      snapshot.policy.expiresAt <= nowMs
-    ) {
-      blockers.push('model-fabric-publication-expired');
-    }
-
-    return {
-      state: blockers.length === 0 ? 'ready' : 'not-ready',
-      source: 'model-fabric-policy-publication',
-      evidencePath,
-      blockers,
-      details: {
-        stage: receipt.stage,
-        authorityRevision: receipt.authorityRevision,
-        policyRevision: receipt.policyRevision,
-        publishedAt: receipt.publishedAt,
-      },
-    };
-  } catch {
-    return {
-      state: 'invalid',
-      source: 'model-fabric-policy-publication',
-      evidencePath,
-      blockers: ['model-fabric-publication-validation-failed'],
-    };
-  }
 }
 
 /**

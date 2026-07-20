@@ -125,7 +125,10 @@ export const mainPlanEpicDefinitions: readonly MainPlanEpicDefinition[] = [
       'model-fabric-control-plane-refresh',
       'model-fabric-inspector',
     ],
-    promotionContract: 'authenticated-policy-publication',
+    // The former public release wrapper trusted caller-supplied roots and was
+    // quarantined. A managed promotion contract may be added only after the
+    // public protocol and private implementation gates are independently met.
+    promotionContract: 'not-yet-defined',
     postV1: [
       'external HSM/KMS signing adapters',
       'organization-wide audit receipt export',
@@ -228,8 +231,10 @@ export function evaluateMainPlanReadiness(input: {
       (id) => gateStates[id] === undefined,
     );
     const promotion =
-      input.promotions?.[definition.id] ??
-      defaultPromotionAssessment(definition);
+      definition.promotionContract === 'not-yet-defined'
+        ? defaultPromotionAssessment(definition)
+        : (input.promotions?.[definition.id] ??
+          defaultPromotionAssessment(definition));
     const promotionRequired = requiredPromotionSet.has(definition.id);
     const promotionReady = promotion.state === 'ready';
     const blockers = [...promotion.blockers];
