@@ -228,6 +228,12 @@ public repository.
   agents.
 - Root [`.gitignore`](../../.gitignore) blocks known private/restricted artifact
   locations as defense in depth.
+- Protocol incubator governance is enforced by
+  scripts/ci/check-protocol-v0-governance.mjs; it keeps all approval gates open
+  while rejecting file, schema, traceability, and fixture drift.
+- The public private-dependency firewall is a synthetic reference oracle only;
+  docs/governance/PRIVATE_DEPENDENCY_FIREWALL.md explains why it does not close
+  B3 or PV0-G09 without independently operating private CI.
 - Ignore rules do not make it acceptable to keep private material in this
   worktree and do not protect already tracked files or forced additions.
 - Agents must never use `git add -f` to override a boundary rule.

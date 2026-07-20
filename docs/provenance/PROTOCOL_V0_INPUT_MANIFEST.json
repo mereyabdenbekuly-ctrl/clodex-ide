@@ -1,14 +1,34 @@
 {
-  "manifestVersion": "0.1.0-draft",
-  "status": "UNAPPROVED_INPUT_INVENTORY",
-  "auditBaseCommit": "f331fa976f043f5e909ea0e60aeafbdd4fd1446a",
-  "auditBaseDate": "2026-07-14",
+  "manifestVersion": "0.2.0-draft",
+  "status": "FROZEN_ENGINEERING_INVENTORY_REVIEW_PENDING",
+  "inventoryAsOfCommit": "8d2618a91a541607944fb7eb7bad30001d5b4aeb",
+  "inventoryAsOfDate": "2026-07-20",
+  "incubatorCreationCommit": "bd858e5c0dddc98524bcd0add6f50ab4316f6e32",
   "protocolPath": "docs/protocol/agent-gateway-v0",
   "cleanRoomClaim": false,
   "publicationAuthorized": false,
   "privateImplementationAuthorized": false,
+  "gateAssessment": {
+    "PV0-G01": {
+      "status": "INVENTORY_FROZEN_APPROVAL_PENDING",
+      "reason": "Repository inputs now have immutable commits, blob object IDs, and SHA-256 digests. Public-standard terms and provenance-owner approval remain outstanding."
+    },
+    "PV0-G02": {
+      "status": "EXCLUSIONS_RECORDED_ENFORCEMENT_PENDING",
+      "reason": "RED inputs and prohibited uses are explicit, but the current repository-exposed authoring history is not clean-room evidence."
+    },
+    "PV0-G03": {
+      "status": "REVIEW_PENDING",
+      "reason": "The requirement catalogue was reconstructed in the same commit as the schema draft."
+    },
+    "PV0-G04": {
+      "status": "REAUTHORING_OR_INDEPENDENT_APPROVAL_REQUIRED",
+      "reason": "The incubator schemas remain review-only and were authored with repository exposure."
+    }
+  },
   "requirementsCatalogue": {
     "path": "docs/protocol/agent-gateway-v0/REQUIREMENTS.md",
+    "creationCommit": "bd858e5c0dddc98524bcd0add6f50ab4316f6e32",
     "status": "RECONSTRUCTED_UNAPPROVED",
     "warning": "The catalogue was recorded in the same change as the schemas and does not prove that approved requirements preceded authoring."
   },
@@ -19,26 +39,32 @@
       "boundary and release documentation",
       "Protocol v0 requirements reconstruction",
       "schema and OpenAPI drafting",
-      "independent manual consistency reviews"
+      "manual consistency and governance reviews"
     ],
     "contextClasses": [
       "maintainer task direction",
       "public standards listed in the protocol README",
-      "the public repository at the audit base commit",
+      "the public repository",
       "repository governance and provenance documentation",
       "review findings produced during the same task"
     ],
-    "disclosure": "Repository exposure means this draft is not accepted as clean-room evidence. No permissive relicensing or private implementation use is authorized."
+    "disclosure": "Repository exposure means this incubator draft is not accepted as clean-room evidence. No permissive relicensing, SDK generation, publication, or private implementation use is authorized."
   },
   "candidateInputs": [
     {
       "id": "PV0-IN-001",
-      "type": "maintainer_direction",
-      "locator": "CLODEx task direction dated 2026-07-14",
-      "immutableRevision": null,
-      "status": "YELLOW",
-      "permittedUse": "High-level public/private product boundary and instruction to draft provenance controls and schema-only Protocol v0.",
-      "blocker": "Archive and approve an immutable decision record before PV0-G01 can close."
+      "type": "maintainer_decision_record",
+      "title": "CLODEx Open/Closed Boundary Policy",
+      "locator": "docs/governance/OPEN_CLOSED_BOUNDARY.md",
+      "immutableRevision": "bd858e5c0dddc98524bcd0add6f50ab4316f6e32",
+      "gitBlob": "e1164e1fdaf406ff14e72839f5fc1cf5a4a9cccf",
+      "sha256": "7090bbf5d15f3cf102180f255f5a169f990bd8d79102689353b58081d25eeba4",
+      "copyrightAndAuthorEvidence": "Git commit metadata records SSY <mereyabdenbekuly@gmail.com>; final ownership and contributor-rights review remains external.",
+      "licenseOrTerms": "Current repository license; no relicensing conclusion.",
+      "status": "YELLOW_REVIEW_REQUIRED",
+      "permittedUse": "High-level public/private product boundary, schema-only authorization, explicit exclusions, and gate ordering.",
+      "prohibitedUse": "Using policy prose as authority to copy or relicense implementation source.",
+      "blocker": "Provenance owner must approve the exact stated use."
     },
     {
       "id": "PV0-IN-002",
@@ -46,9 +72,20 @@
       "title": "OpenAPI Specification 3.2.0",
       "locator": "https://spec.openapis.org/oas/v3.2.0.html",
       "version": "3.2.0",
-      "status": "CANDIDATE_GREEN_REVIEW_REQUIRED",
+      "status": "CANDIDATE_GREEN_TERMS_REVIEW_REQUIRED",
       "permittedUse": "OpenAPI document structure and dialect declaration.",
-      "blocker": "Record terms/notice review and reviewer approval."
+      "prohibitedUse": "Copying non-permitted prose, examples, or reference implementation code.",
+      "blocker": "Record terms/notice review and provenance-owner approval.",
+      "observedTermsEvidence": [
+        {
+          "locator": "https://github.com/OAI/OpenAPI-Specification",
+          "observation": "Official repository identifies Apache-2.0 licensing."
+        },
+        {
+          "locator": "https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.2.0.md",
+          "observation": "Official versioned specification source for OAS 3.2.0."
+        }
+      ]
     },
     {
       "id": "PV0-IN-003",
@@ -56,9 +93,16 @@
       "title": "JSON Schema Draft 2020-12",
       "locator": "https://json-schema.org/draft/2020-12",
       "version": "2020-12",
-      "status": "CANDIDATE_GREEN_REVIEW_REQUIRED",
+      "status": "CANDIDATE_GREEN_TERMS_REVIEW_REQUIRED",
       "permittedUse": "Schema vocabulary and validation semantics.",
-      "blocker": "Record terms/notice review and reviewer approval."
+      "prohibitedUse": "Treating a schema vocabulary as approval of CLODEx-specific field structure.",
+      "blocker": "Record terms/notice review and provenance-owner approval.",
+      "observedTermsEvidence": [
+        {
+          "locator": "https://github.com/json-schema-org/json-schema-spec",
+          "observation": "Official repository states BSD-3-Clause or Academic Free License 3.0; exact choice and notice treatment remain reviewer decisions."
+        }
+      ]
     },
     {
       "id": "PV0-IN-004",
@@ -66,9 +110,20 @@
       "title": "RFC 8785 JSON Canonicalization Scheme",
       "locator": "https://www.rfc-editor.org/rfc/rfc8785",
       "version": "RFC 8785",
-      "status": "CANDIDATE_GREEN_REVIEW_REQUIRED",
+      "status": "CANDIDATE_GREEN_TERMS_REVIEW_REQUIRED",
       "permittedUse": "Canonical JSON byte construction.",
-      "blocker": "Record terms/notice review and reviewer approval."
+      "prohibitedUse": "Copying reference code without a separate license review.",
+      "blocker": "Record terms/notice review and provenance-owner approval.",
+      "observedTermsEvidence": [
+        {
+          "locator": "https://www.rfc-editor.org/info/rfc8785",
+          "observation": "Official RFC Editor record invokes IETF Trust legal provisions; RFC 8785 is an Independent Submission, so text/code reuse treatment remains review-pending."
+        },
+        {
+          "locator": "https://trustee.ietf.org/documents/trust-legal-provisions/tlp-5/",
+          "observation": "Current IETF Trust legal-provisions reference; no RFC prose or reference code is copied into the incubator."
+        }
+      ]
     },
     {
       "id": "PV0-IN-005",
@@ -76,9 +131,16 @@
       "title": "RFC 4648 Base-N Encodings",
       "locator": "https://www.rfc-editor.org/rfc/rfc4648",
       "version": "RFC 4648",
-      "status": "CANDIDATE_GREEN_REVIEW_REQUIRED",
+      "status": "CANDIDATE_GREEN_TERMS_REVIEW_REQUIRED",
       "permittedUse": "Unpadded canonical base64url encoding rules.",
-      "blocker": "Record terms/notice review and reviewer approval."
+      "prohibitedUse": "Using unrelated implementation examples as source.",
+      "blocker": "Record terms/notice review and provenance-owner approval.",
+      "observedTermsEvidence": [
+        {
+          "locator": "https://www.rfc-editor.org/info/rfc4648",
+          "observation": "Official RFC Editor record identifies the 2006 standards-track document and its legacy copying conditions; only interoperability requirements are cited."
+        }
+      ]
     },
     {
       "id": "PV0-IN-006",
@@ -86,36 +148,118 @@
       "title": "RFC 8032 Edwards-Curve Digital Signature Algorithm",
       "locator": "https://www.rfc-editor.org/rfc/rfc8032",
       "version": "RFC 8032",
-      "status": "CANDIDATE_GREEN_REVIEW_REQUIRED",
+      "status": "CANDIDATE_GREEN_TERMS_REVIEW_REQUIRED",
       "permittedUse": "Ed25519 signature algorithm requirements.",
-      "blocker": "Record terms/notice review and reviewer approval."
+      "prohibitedUse": "Copying reference code without a separate license review.",
+      "blocker": "Record terms/notice review and provenance-owner approval.",
+      "observedTermsEvidence": [
+        {
+          "locator": "https://www.rfc-editor.org/info/rfc8032",
+          "observation": "Official RFC Editor record invokes IETF Trust legal provisions and includes example code/test vectors; those examples and vectors are explicitly excluded from Protocol v0 authoring."
+        },
+        {
+          "locator": "https://trustee.ietf.org/documents/trust-legal-provisions/tlp-5/",
+          "observation": "IETF Trust terms remain subject to specialist review for the intended artifact and notices."
+        }
+      ]
     },
     {
       "id": "PV0-IN-007",
       "type": "repository_governance",
+      "title": "CLODEx Provenance Policy",
       "locator": "docs/governance/PROVENANCE_POLICY.md",
-      "immutableRevision": "f331fa976f043f5e909ea0e60aeafbdd4fd1446a",
-      "status": "YELLOW",
+      "immutableRevision": "1dc7747f14d131c6934574f06d913d013ace2b96",
+      "gitBlob": "96bfcf0efa2f124781119d8777b1baf92fab81a2",
+      "sha256": "bc35605b9e2f51ae7fd04dee04a4786df0763ef0d7ccecf1784a534fdd22f7a7",
+      "copyrightAndAuthorEvidence": "Git commit metadata records Merey Abdenbekuly <234955825+mereyabdenbekuly-ctrl@users.noreply.github.com>.",
+      "licenseOrTerms": "Current repository license; no relicensing conclusion.",
+      "status": "YELLOW_REVIEW_REQUIRED",
       "permittedUse": "Engineering provenance process only; not protocol wire semantics.",
-      "blocker": "Approve exact paragraphs and authorship/context record."
+      "prohibitedUse": "Using governance structure as a wire-schema blueprint.",
+      "blocker": "Provenance owner must approve the exact stated use."
     },
     {
       "id": "PV0-IN-008",
       "type": "repository_context_exposure",
+      "title": "CLODEx public implementation repository",
       "locator": "clodex-ide repository",
-      "immutableRevision": "f331fa976f043f5e909ea0e60aeafbdd4fd1446a",
-      "status": "RED_FOR_STRUCTURAL_USE",
-      "permittedUse": "Component/provenance inventory and negative dependency constraints only.",
-      "prohibitedUse": "Copying, translating, structurally following, or generating schemas/tests/types from implementation source.",
-      "blocker": "Independent review must determine whether re-derivation or clean-room reauthoring is required before PV0-G04 can close."
+      "immutableRevision": "8d2618a91a541607944fb7eb7bad30001d5b4aeb",
+      "status": "RED_FOR_PROTOCOL_AUTHORING",
+      "permittedUse": "Component/provenance inventory, negative dependency constraints, and black-box behavior only when separately approved.",
+      "prohibitedUse": "Copying, translating, structurally following, or generating schemas, SDK types, validators, conformance vectors, tests, or private code from implementation source.",
+      "blocker": "A separate independently constrained author/reviewer context is required before fresh schema or vector authorship can close PV0-G02, PV0-G04, or PV0-G06."
+    },
+    {
+      "id": "PV0-IN-009",
+      "type": "repository_specification",
+      "title": "Intent Contract Specification",
+      "locator": "docs/INTENT_CONTRACT_SPEC.md",
+      "immutableRevision": "6ac232e8d42c57a8d92515f5c9b92e2d968b9ed5",
+      "gitBlob": "b0c19032408ac9bdc6434ac1f8ac93c7ddd93f2a",
+      "sha256": "6d8b82a5c88aa7eb06d13ef2d5f933304ff7309d1c98046dce592e8880d274bd",
+      "copyrightAndAuthorEvidence": "Git commit metadata records Merey Abdenbekuly <234955825+mereyabdenbekuly-ctrl@users.noreply.github.com>; AI/source context remains subject to approval.",
+      "licenseOrTerms": "Current repository license; specification input only.",
+      "status": "YELLOW_REQUIREMENTS_ONLY",
+      "permittedUse": "Independently extract and approve security requirements without current code layout or names.",
+      "prohibitedUse": "Copying TypeScript shapes, validators, tests, constants, or document structure into a permissive artifact.",
+      "blocker": "Approve exact normative statements and their AI/source context."
+    },
+    {
+      "id": "PV0-IN-010",
+      "type": "repository_adr",
+      "title": "Guardian fails closed",
+      "locator": "docs/adr/0002-guardian-fails-closed.md",
+      "immutableRevision": "1dc7747f14d131c6934574f06d913d013ace2b96",
+      "gitBlob": "13b3c7ff76e0f9ffd75cd368f62108dc433b5869",
+      "sha256": "ed856be7c66d7337bb807eb6c6c3c5d63435cec4564c734a2ecc91884adea588",
+      "copyrightAndAuthorEvidence": "Git commit metadata records Merey Abdenbekuly <234955825+mereyabdenbekuly-ctrl@users.noreply.github.com>.",
+      "licenseOrTerms": "Current repository license; requirements discussion only.",
+      "status": "YELLOW_NEGATIVE_CONSTRAINTS_ONLY",
+      "permittedUse": "Fail-closed requirements and negative constraints after reviewer approval.",
+      "prohibitedUse": "Using implementation decomposition or module references as a blueprint.",
+      "blocker": "Approve exact normative statements."
+    },
+    {
+      "id": "PV0-IN-011",
+      "type": "repository_adr",
+      "title": "Evidence requires provenance",
+      "locator": "docs/adr/0004-evidence-requires-provenance.md",
+      "immutableRevision": "1dc7747f14d131c6934574f06d913d013ace2b96",
+      "gitBlob": "41c7d218a37e149a00da781ddafb14fc826665ea",
+      "sha256": "47574691e3a1e19647c32fd21c865af871d45f415a56a91e9fb87e4969307e83",
+      "copyrightAndAuthorEvidence": "Git commit metadata records Merey Abdenbekuly <234955825+mereyabdenbekuly-ctrl@users.noreply.github.com>.",
+      "licenseOrTerms": "Current repository license; requirements discussion only.",
+      "status": "YELLOW_NEGATIVE_CONSTRAINTS_ONLY",
+      "permittedUse": "Evidence/provenance requirements and negative constraints after reviewer approval.",
+      "prohibitedUse": "Using implementation decomposition or module references as a blueprint.",
+      "blocker": "Approve exact normative statements."
     }
   ],
   "excludedInputClasses": [
     "customer or production data",
-    "private threat intelligence",
-    "current implementation types, validators, tests, fixtures, constants, or module structure as a blueprint",
-    "other AI answers as legal authority or normative protocol authority"
+    "private threat intelligence, benchmark holdouts, or anti-abuse heuristics",
+    "current implementation types, validators, tests, fixtures, constants, comments, distinctive literals, or module structure as a blueprint",
+    "Stagewise-derived agent-shell, agent-core, Karton, browser IPC, UI, or runtime source",
+    "runner-sdk source or exports while it depends on agent-shell",
+    "other AI answers as legal authority or normative protocol authority",
+    "private repository material, production topology, credentials, or signing identifiers"
   ],
+  "authoringRestrictions": {
+    "unknownInputsDefaultTo": "RED",
+    "repositoryExposedAgentsMay": [
+      "maintain the inventory",
+      "record negative constraints",
+      "validate the incubator draft for internal consistency",
+      "build governance and boundary-checking tools"
+    ],
+    "repositoryExposedAgentsMustNot": [
+      "claim clean-room authorship",
+      "freshly reauthor publishable schemas",
+      "author conformance fixture payloads",
+      "generate a publishable SDK",
+      "implement or seed a private Gateway"
+    ]
+  },
   "openGates": [
     "PV0-G01",
     "PV0-G02",

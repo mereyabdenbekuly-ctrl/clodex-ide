@@ -122,3 +122,6 @@ jobs:
 
       - name: Enforce Clodex package boundaries
         run: pnpm check:boundaries
+
+      - name: Enforce Protocol v0 incubator governance
+        run: pnpm check:protocol-v0-governance

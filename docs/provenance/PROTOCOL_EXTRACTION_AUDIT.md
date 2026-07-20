@@ -220,6 +220,32 @@ The current controls are useful but insufficient for an open/closed boundary:
 | Independently authored conformance vectors | P0 | Vector provenance is recorded; no copied legacy fixtures; SDK and private implementation pass the same public schema/vector corpus |
 | Similarity/forbidden-source warning scan | P1 | Scan identifies copied comments, distinctive literals, fixtures, and module-shape anomalies for human review; it is never treated as dispositive proof |
 
+## Engineering control update — 2026-07-20
+
+The current M0 engineering increment adds review infrastructure without
+claiming clean-room completion or closing a Gateway gate:
+
+- the input inventory now pins repository inputs by immutable commit, Git blob,
+  and SHA-256 and records repository exposure as RED for fresh protocol
+  authorship;
+- a file and field-level traceability record binds every incubator artifact to
+  candidate inputs and stable requirement IDs;
+- Protocol governance CI rejects unallowlisted files, schema/hash drift,
+  unresolved references, premature conformance fixtures, or publication and
+  private-implementation authorization;
+- a synthetic private-dependency firewall reference rejects forbidden package
+  sources, implementation dependencies, copied-source fingerprints, secret or
+  restricted markers, and unreviewed generated inputs; and
+- all conformance fixture payloads and runners remain absent and prohibited.
+
+This is engineering progress, not approval. PV0-G01 and PV0-G03 still require
+named independent review. PV0-G02 and PV0-G04 require an authoring/review
+context that was not exposed to RED implementation source. PV0-G06 remains
+blocked until the earlier gates are GREEN. PV0-G09 and B3 remain open until an
+independently reviewed firewall is actually operating in the future private
+repository. The runner-sdk to agent-shell dependency remains unchanged and
+RED.
+
 ## Protocol v0 release gates
 
 Protocol v0 is GREEN only when every gate is closed:
