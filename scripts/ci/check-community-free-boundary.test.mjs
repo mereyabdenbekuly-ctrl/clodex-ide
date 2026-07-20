@@ -22,22 +22,35 @@ const repositoryRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '../..',
 );
+const TOKEN_TEMPLATE_PLACEHOLDER = `\${token}`;
+const ACCESS_TOKEN_TEMPLATE_PLACEHOLDER = `\${authService.accessToken}`;
+const ACCOUNT_ACCESS_TOKEN_TEMPLATE_PLACEHOLDER = `\${accountAccessToken}`;
+const TASK_CREDENTIAL_TEMPLATE_PLACEHOLDER = `\${taskCredential}`;
 const fixtureFiles = [
   '.github/workflows/community-observed-build.yml',
   '.github/workflows/community-unsigned-build.yml',
   '.release-evidence/README.md',
   'AGENTS.md',
   'apps/browser/build-constants.ts',
+  'apps/browser/community-capability-boundary.json',
+  'apps/browser/community-free-build-policy.mjs',
+  'apps/browser/public-managed-service-entitlement-contract.v1.json',
   'apps/browser/scripts/check-main-plan-readiness.ts',
   'apps/browser/scripts/model-fabric-policy-publication.ts',
+  'apps/browser/src/backend/agent-host/cloud-task-control-plane.ts',
   'apps/browser/src/backend/main.ts',
   'apps/browser/src/backend/services/main-plan-promotion-assessments.ts',
   'apps/browser/src/backend/services/model-fabric-policy-publication.ts',
+  'apps/browser/src/backend/services/session-continuity/index.ts',
   'apps/browser/src/backend/services/toolbox/index.ts',
   'apps/browser/src/backend/services/toolbox/services/clodex-mcp/community-disabled.ts',
+  'apps/browser/src/backend/services/toolbox/services/clodex-mcp/index.ts',
+  'apps/browser/src/shared/feature-gates.ts',
   'apps/browser/src/shared/main-plan-readiness.ts',
+  'apps/browser/src/backend/startup/phases/cloud-task-runtime.ts',
   'apps/browser/vite.backend.config.ts',
   'docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md',
+  'docs/governance/COMMUNITY_CAPABILITY_BOUNDARY.md',
   'docs/governance/OPEN_CLOSED_BOUNDARY.md',
   'docs/model-fabric-policy-publication.md',
 ];
@@ -59,8 +72,678 @@ function replace(root, file, before, after) {
   writeFileSync(path, source.replace(before, after));
 }
 
+function replaceInPublicAsyncMethod(root, file, methodName, before, after) {
+  const path = join(root, file);
+  const source = readFileSync(path, 'utf8');
+  const regularMarker = `  public async ${methodName}(`;
+  const generatorMarker = `  public async *${methodName}(`;
+  const start = Math.max(
+    source.indexOf(regularMarker),
+    source.indexOf(generatorMarker),
+  );
+  assert.ok(start >= 0, `${file}: ${methodName} exists`);
+  const nextPublic = source.indexOf('\n  public ', start + 1);
+  const nextPrivate = source.indexOf('\n  private ', start + 1);
+  const boundaries = [nextPublic, nextPrivate].filter((index) => index >= 0);
+  const end = boundaries.length > 0 ? Math.min(...boundaries) : source.length;
+  const methodSource = source.slice(start, end);
+  assert.ok(
+    methodSource.includes(before),
+    `${file}: ${methodName} mutation target exists`,
+  );
+  writeFileSync(
+    path,
+    `${source.slice(0, start)}${methodSource.replace(before, after)}${source.slice(end)}`,
+  );
+}
+
+function mutateCapabilityManifest(root, mutate) {
+  const path = join(root, 'apps/browser/community-capability-boundary.json');
+  const manifest = JSON.parse(readFileSync(path, 'utf8'));
+  mutate(manifest);
+  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function mutateEntitlementContract(root, mutate) {
+  const path = join(
+    root,
+    'apps/browser/public-managed-service-entitlement-contract.v1.json',
+  );
+  const contract = JSON.parse(readFileSync(path, 'utf8'));
+  mutate(contract);
+  writeFileSync(path, `${JSON.stringify(contract, null, 2)}\n`);
+}
+
 test('accepts the repository Community Free boundary', () => {
   assert.deepEqual(checkCommunityFreeBoundary(repositoryRoot), []);
+});
+
+test('literal feature gate parsing ignores fake gates in comments', () => {
+  const root = fixture();
+  replace(
+    root,
+    'apps/browser/src/shared/feature-gates.ts',
+    "  'collaboration-presets',\n",
+    "  'collaboration-presets',\n  // 'comment-only-fake-gate',\n  /* 'block-comment-fake-gate', */\n",
+  );
+
+  assert.deepEqual(checkCommunityFreeBoundary(root), []);
+});
+
+test('literal feature gate parsing rejects spread and nonliteral entries', () => {
+  const root = fixture();
+  replace(
+    root,
+    'apps/browser/src/shared/feature-gates.ts',
+    "  'collaboration-presets',\n",
+    "  'collaboration-presets',\n  ...externalFeatureGates,\n",
+  );
+
+  assert.ok(
+    checkCommunityFreeBoundary(root).some((error) =>
+      error.includes(
+        'featureGateIds must be a literal string array: array entries must be string literals',
+      ),
+    ),
+  );
+});
+
+test('rejects a new undeclared backend CLODEx endpoint even with bearer auth', () => {
+  const root = fixture();
+  const path = join(root, 'apps/browser/src/backend/main.ts');
+  writeFileSync(
+    path,
+    `${readFileSync(path, 'utf8')}\nvoid fetch(process.env.CLODEX_NEW_PAID_URL!, { headers: { Authorization: \`Bearer \${authService.accessToken}\` } });\n`,
+  );
+
+  assert.ok(
+    checkCommunityFreeBoundary(root).some((error) =>
+      error.includes(
+        'unknown CLODEx endpoint environment usage CLODEX_NEW_PAID_URL',
+      ),
+    ),
+  );
+});
+
+test('rejects undeclared endpoint syntax variants and unknown CLODEx hosts', () => {
+  const cases = [
+    {
+      source: "void process.env['CLODEX_NEW_PAID_URL'];\n",
+      expected: 'unknown CLODEx endpoint environment usage CLODEX_NEW_PAID_URL',
+    },
+    {
+      source: 'void process.env["CLODEX_NEW_PAID_URL"];\n',
+      expected: 'unknown CLODEx endpoint environment usage CLODEX_NEW_PAID_URL',
+    },
+    {
+      source: 'void process.env[`CLODEX_NEW_PAID_URL`];\n',
+      expected: 'unknown CLODEx endpoint environment usage CLODEX_NEW_PAID_URL',
+    },
+    {
+      source: `void \`\${process.env.CLODEX_NEW_PAID_URL}/v1\`;\n`,
+      expected: 'unknown CLODEx endpoint environment usage CLODEX_NEW_PAID_URL',
+    },
+    {
+      source: "void fetch('https://paid.clodex.xyz/v1');\n",
+      expected: 'unknown hardcoded CLODEx service hostname paid.clodex.xyz',
+    },
+    {
+      source: 'void `https://paid.clodex.xyz/v1`;\n',
+      expected: 'unknown hardcoded CLODEx service hostname paid.clodex.xyz',
+    },
+  ];
+
+  for (const mutation of cases) {
+    const root = fixture();
+    const path = join(root, 'apps/browser/src/backend/main.ts');
+    writeFileSync(path, `${readFileSync(path, 'utf8')}\n${mutation.source}`);
+    assert.ok(
+      checkCommunityFreeBoundary(root).some((error) =>
+        error.includes(mutation.expected),
+      ),
+      mutation.source,
+    );
+  }
+});
+
+test('endpoint inventory ignores comment-only decoys, including template expressions', () => {
+  const root = fixture();
+  const path = join(root, 'apps/browser/src/backend/main.ts');
+  writeFileSync(
+    path,
+    `${readFileSync(path, 'utf8')}
+// process.env.CLODEX_NEW_PAID_URL https://paid.clodex.xyz
+/* process.env['CLODEX_NEW_PAID_URL'] https://paid.clodex.xyz */
+void \`${'${'}/* process.env.CLODEX_NEW_PAID_URL https://paid.clodex.xyz */ 'safe'}\`;
+`,
+  );
+
+  assert.deepEqual(checkCommunityFreeBoundary(root), []);
+});
+
+test('rejects canonical and managed endpoint use outside exact implementation paths', () => {
+  const cases = [
+    {
+      file: 'apps/browser/src/backend/rogue-paid.ts',
+      source: "void fetch(new URL('/paid', process.env.CLODEX_API_URL));\n",
+      expected:
+        'endpoint environment usage CLODEX_API_URL is outside its exact public client implementation path inventory',
+    },
+    {
+      file: 'apps/browser/src/backend/rogue-managed.ts',
+      source: "void process.env['CLODEX_MCP_GATEWAY_URL'];\n",
+      expected:
+        'endpoint environment usage CLODEX_MCP_GATEWAY_URL is outside its exact public client implementation path inventory',
+    },
+    {
+      file: 'apps/browser/src/ui/rogue-paid.ts',
+      source: 'void fetch(import.meta.env.VITE_CLODEX_NEW_PAID_URL);\n',
+      expected:
+        'unknown CLODEx endpoint environment usage VITE_CLODEX_NEW_PAID_URL',
+    },
+    {
+      file: 'apps/browser/src/ui/rogue-console.ts',
+      source: 'void import.meta.env.VITE_CLODEX_CONSOLE_URL;\n',
+      expected:
+        'endpoint environment usage VITE_CLODEX_CONSOLE_URL is outside its exact public client implementation path inventory',
+    },
+    {
+      file: 'apps/browser/src/ui/rogue-host.ts',
+      source: "void fetch('https://paid.clodex.xyz/v1');\n",
+      expected: 'unknown hardcoded CLODEx service hostname paid.clodex.xyz',
+    },
+  ];
+
+  for (const mutation of cases) {
+    const root = fixture();
+    const path = join(root, mutation.file);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, mutation.source);
+    assert.ok(
+      checkCommunityFreeBoundary(root).some((error) =>
+        error.includes(mutation.expected),
+      ),
+      mutation.file,
+    );
+  }
+});
+
+test('rejects removing bearer authorization from managed connector transports', () => {
+  const cases = [
+    {
+      file: 'apps/browser/src/backend/agent-host/cloud-task-control-plane.ts',
+      before: `function bearerJsonHeaders(token: string): Record<string, string> {\n  if (!token?.trim()) throw new Error('Cloud task bearer token is unavailable');\n  return {\n    Authorization: \`Bearer ${TOKEN_TEMPLATE_PLACEHOLDER}\`,`,
+      after:
+        "function bearerJsonHeaders(token: string): Record<string, string> {\n  if (!token?.trim()) throw new Error('Cloud task bearer token is unavailable');\n  return {\n    Authorization: token,",
+      expected:
+        'Cloud Task remote operations must construct bearer authorization',
+    },
+    {
+      file: 'apps/browser/src/backend/main.ts',
+      before: `Authorization: \`Bearer ${ACCESS_TOKEN_TEMPLATE_PLACEHOLDER}\`,`,
+      after: 'Authorization: authService.accessToken,',
+      expected:
+        'both session-sharing operations must use account bearer authorization',
+    },
+    {
+      file: 'apps/browser/src/backend/services/toolbox/services/clodex-mcp/index.ts',
+      before: `Authorization: \`Bearer ${TOKEN_TEMPLATE_PLACEHOLDER}\`,`,
+      after: 'Authorization: token,',
+      expected: 'hosted MCP transport must require a model access token',
+    },
+  ];
+
+  for (const mutation of cases) {
+    const root = fixture();
+    replace(root, mutation.file, mutation.before, mutation.after);
+    assert.ok(
+      checkCommunityFreeBoundary(root).some((error) =>
+        error.includes(mutation.expected),
+      ),
+      mutation.file,
+    );
+  }
+});
+
+test('rejects removing any reviewed Cloud Task operation authorization site', () => {
+  const cloudControlPlane =
+    'apps/browser/src/backend/agent-host/cloud-task-control-plane.ts';
+  const simpleBindings = [
+    ['createUploadSession', 'bearerJsonHeaders(accountAccessToken)'],
+    ['issueCredential', 'bearerJsonHeaders(accountAccessToken)'],
+    [
+      'revokeCredential',
+      `Authorization: \`Bearer ${ACCOUNT_ACCESS_TOKEN_TEMPLATE_PLACEHOLDER}\``,
+    ],
+    ['startExecution', 'bearerJsonHeaders(taskCredential)'],
+    ['pushEvidenceMemory', 'bearerJsonHeaders(taskCredential)'],
+    ['pullEvidenceMemory', 'bearerJsonHeaders(taskCredential)'],
+    ['commitEvidenceMemoryAtomicMerge', 'bearerJsonHeaders(taskCredential)'],
+    ['resolveEvidenceMemoryDivergence', 'bearerJsonHeaders(taskCredential)'],
+    ['confirmExecutionRestore', 'bearerJsonHeaders(taskCredential)'],
+    ['acquireExecutionLease', 'bearerJsonHeaders(taskCredential)'],
+    ['renewExecutionLease', 'fencingJsonHeaders(taskCredential, lease)'],
+    ['releaseExecutionLease', 'fencingJsonHeaders(taskCredential, lease)'],
+    ['suspendExecution', 'fencingJsonHeaders(taskCredential, lease)'],
+    ['resumeExecution', 'bearerJsonHeaders(taskCredential)'],
+    [
+      'downloadArtifact',
+      `Authorization: \`Bearer ${TASK_CREDENTIAL_TEMPLATE_PLACEHOLDER}\``,
+    ],
+  ];
+  const optionallyFencedMethods = [
+    'streamExecution',
+    'getExecutionStatus',
+    'cancelExecution',
+    'cancelExecutionById',
+  ];
+  const mutations = [
+    ...simpleBindings.map(([methodName, before]) => ({
+      methodName,
+      before,
+      after: before.includes('Authorization:')
+        ? 'Authorization: taskCredential'
+        : 'Object.create(null)',
+    })),
+    ...optionallyFencedMethods.flatMap((methodName) => [
+      {
+        methodName,
+        before: 'fencingHeaders(taskCredential, lease)',
+        after: 'Object.create(null)',
+      },
+      {
+        methodName,
+        before: `Authorization: \`Bearer ${TASK_CREDENTIAL_TEMPLATE_PLACEHOLDER}\``,
+        after: 'Authorization: taskCredential',
+      },
+    ]),
+  ];
+
+  assert.equal(mutations.length, 23);
+  for (const mutation of mutations) {
+    const root = fixture();
+    replaceInPublicAsyncMethod(
+      root,
+      cloudControlPlane,
+      mutation.methodName,
+      mutation.before,
+      mutation.after,
+    );
+    assert.ok(
+      checkCommunityFreeBoundary(root).some((error) =>
+        error.includes(
+          `${mutation.methodName} must contain exactly one reviewed`,
+        ),
+      ),
+      `${mutation.methodName}: ${mutation.before}`,
+    );
+  }
+});
+
+test('rejects weakening Cloud Task bearer helper composition', () => {
+  const cases = [
+    {
+      before: `function fencingHeaders(
+  token: string,
+  lease: CloudTaskExecutionLease,
+): Record<string, string> {
+  if (!token?.trim()) throw new Error('Cloud task bearer token is unavailable');
+  return {
+    Authorization: \`Bearer ${TOKEN_TEMPLATE_PLACEHOLDER}\``,
+      after: `function fencingHeaders(
+  token: string,
+  lease: CloudTaskExecutionLease,
+): Record<string, string> {
+  if (!token?.trim()) throw new Error('Cloud task bearer token is unavailable');
+  return {
+    Authorization: token,`,
+      expected:
+        'Cloud Task remote operations must construct bearer authorization',
+    },
+    {
+      before: '...fencingHeaders(token, lease),',
+      after: 'Authorization: token,',
+      expected:
+        'fencingJsonHeaders must compose the reviewed bearer fencing headers',
+    },
+  ];
+
+  for (const mutation of cases) {
+    const root = fixture();
+    replace(
+      root,
+      'apps/browser/src/backend/agent-host/cloud-task-control-plane.ts',
+      mutation.before,
+      mutation.after,
+    );
+    assert.ok(
+      checkCommunityFreeBoundary(root).some((error) =>
+        error.includes(mutation.expected),
+      ),
+      mutation.expected,
+    );
+  }
+});
+
+test('rejects Cloud Task transport inventory drift and bearer on presigned upload', () => {
+  const cloudControlPlane =
+    'apps/browser/src/backend/agent-host/cloud-task-control-plane.ts';
+
+  const unreviewedMethods = [
+    `  public async unreviewedPaidRoute(): Promise<void> {
+    await this.fetchFn(new URL('/paid', this.baseUrl));
+  }
+`,
+    `  async unreviewedPaidRoute(): Promise<void> {
+    await this.fetchFn(new URL('/paid', this.baseUrl));
+  }
+`,
+    `  public unreviewedPaidRoute(): Promise<Response> {
+    return this.fetchFn(new URL('/paid', this.baseUrl));
+  }
+`,
+    `  public unreviewedPaidRoute(): Promise<Response> {
+    return this['fetchFn'](new URL('/paid', this.baseUrl));
+  }
+`,
+    `  public unreviewedPaidRoute(): Promise<Response | undefined> {
+    return this.fetchFn?.(new URL('/paid', this.baseUrl));
+  }
+`,
+    `  public unreviewedPaidRoute(): Promise<Response> {
+    const transport = this.fetchFn;
+    return transport(new URL('/paid', this.baseUrl));
+  }
+`,
+    `  public unreviewedPaidRoute(): Promise<Response> {
+    const { fetchFn: transport } = this;
+    return transport(new URL('/paid', this.baseUrl));
+  }
+`,
+  ];
+  for (const declaration of unreviewedMethods) {
+    const root = fixture();
+    replace(
+      root,
+      cloudControlPlane,
+      '  private async requestJson(',
+      `${declaration}
+  private async requestJson(`,
+    );
+    assert.ok(
+      checkCommunityFreeBoundary(root).some((error) =>
+        error.includes('unreviewed Cloud Task method unreviewedPaidRoute'),
+      ),
+      declaration,
+    );
+  }
+
+  {
+    const root = fixture();
+    replace(
+      root,
+      cloudControlPlane,
+      '  private async requestJson(',
+      `  private readonly unreviewedPaidRoute = () =>
+    this.fetchFn(new URL('/paid', this.baseUrl));
+
+  private async requestJson(`,
+    );
+    assert.ok(
+      checkCommunityFreeBoundary(root).some(
+        (error) =>
+          error.includes('reviewed control-plane transport call') ||
+          error.includes(
+            'every class-level transport call must belong to a reviewed method inventory entry',
+          ),
+      ),
+    );
+  }
+
+  {
+    const root = fixture();
+    replaceInPublicAsyncMethod(
+      root,
+      cloudControlPlane,
+      'uploadSnapshot',
+      "headers.set('Content-Type', 'application/octet-stream');",
+      `headers.set('Authorization', \`Bearer ${TASK_CREDENTIAL_TEMPLATE_PLACEHOLDER}\`);
+    headers.set('Content-Type', 'application/octet-stream');`,
+    );
+    assert.ok(
+      checkCommunityFreeBoundary(root).some((error) =>
+        error.includes(
+          'uploadSnapshot must remain a sanitized presigned-upload exception',
+        ),
+      ),
+    );
+  }
+});
+
+test('rejects public entitlement contract drift and connector reference drift', () => {
+  const root = fixture();
+  mutateEntitlementContract(root, (contract) => {
+    contract.decisionAuthority = 'client-authoritative';
+    contract.localGrant = 'allowed';
+    contract.denialHttpStatuses = [200];
+    contract.clientPaywall = 'required';
+  });
+  mutateCapabilityManifest(root, (manifest) => {
+    manifest.managedConnectors[0].entitlementContract =
+      'apps/browser/private-entitlement-contract.json';
+  });
+
+  const errors = checkCommunityFreeBoundary(root);
+  for (const expected of [
+    'decisionAuthority must be server-authoritative',
+    'localGrant must be forbidden',
+    'denialHttpStatuses must be exactly 401, 403',
+    'clientPaywall must be forbidden',
+    `entitlementContract must be apps/browser/public-managed-service-entitlement-contract.v1.json`,
+  ]) {
+    assert.ok(
+      errors.some((error) => error.includes(expected)),
+      expected,
+    );
+  }
+});
+
+test('rejects missing, extra, and duplicate feature gate classifications', () => {
+  const root = fixture();
+  mutateCapabilityManifest(root, (manifest) => {
+    const collaboration = manifest.featureGates.find(
+      ({ featureGateId }) => featureGateId === 'collaboration-presets',
+    );
+    manifest.featureGates = manifest.featureGates.filter(
+      ({ featureGateId }) => featureGateId !== 'mascot-overlay',
+    );
+    manifest.featureGates.push(collaboration, {
+      featureGateId: 'invented-paid-toggle',
+      classification: 'community-local',
+    });
+  });
+
+  const errors = checkCommunityFreeBoundary(root);
+  assert.ok(
+    errors.some((error) =>
+      error.includes('missing featureGateId mascot-overlay'),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes('extra featureGateId invented-paid-toggle'),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes('duplicate featureGateId collaboration-presets'),
+    ),
+  );
+});
+
+test('rejects changing the exact managed feature gate classification', () => {
+  const root = fixture();
+  mutateCapabilityManifest(root, (manifest) => {
+    manifest.featureGates.find(
+      ({ featureGateId }) => featureGateId === 'cloud-tasks',
+    ).classification = 'community-local';
+    manifest.featureGates.find(
+      ({ featureGateId }) => featureGateId === 'automations',
+    ).classification = 'managed-connector';
+  });
+
+  const errors = checkCommunityFreeBoundary(root);
+  assert.ok(
+    errors.some((error) =>
+      error.includes(
+        'featureGateId cloud-tasks must be classified managed-connector',
+      ),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes(
+        'featureGateId automations must be classified community-local',
+      ),
+    ),
+  );
+});
+
+test('rejects missing, extra, and duplicate managed connectors', () => {
+  const root = fixture();
+  mutateCapabilityManifest(root, (manifest) => {
+    const cloudConnector = manifest.managedConnectors.find(
+      ({ id }) => id === 'cloud-task-control-plane',
+    );
+    manifest.managedConnectors = manifest.managedConnectors.filter(
+      ({ id }) => id !== 'session-sharing',
+    );
+    manifest.managedConnectors.push(cloudConnector, {
+      ...cloudConnector,
+      id: 'client-side-paywall',
+    });
+  });
+
+  const errors = checkCommunityFreeBoundary(root);
+  assert.ok(
+    errors.some((error) =>
+      error.includes('missing managed connector session-sharing'),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes('extra managed connector client-side-paywall'),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes('duplicate managed connector cloud-task-control-plane'),
+    ),
+  );
+});
+
+test('rejects weakening the managed connector contract', () => {
+  const root = fixture();
+  mutateCapabilityManifest(root, (manifest) => {
+    const connector = manifest.managedConnectors.find(
+      ({ id }) => id === 'cloud-task-control-plane',
+    );
+    connector.buildGate = 'renderer-feature-flag';
+    connector.authorization = 'none';
+    connector.entitlementAuthority = 'client-authoritative';
+  });
+
+  const errors = checkCommunityFreeBoundary(root);
+  assert.ok(
+    errors.some((error) =>
+      error.includes('buildGate must be __APP_MANAGED_SERVICES_ENABLED__'),
+    ),
+  );
+  assert.ok(
+    errors.some((error) => error.includes('authorization must be bearer')),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes('entitlementAuthority must be server-authoritative'),
+    ),
+  );
+});
+
+test('rejects a connector gate that is absent or Community-local', () => {
+  const root = fixture();
+  mutateCapabilityManifest(root, (manifest) => {
+    const cloudConnector = manifest.managedConnectors.find(
+      ({ id }) => id === 'cloud-task-control-plane',
+    );
+    cloudConnector.featureGateIds = ['not-a-feature-gate'];
+    const sessionGate = manifest.featureGates.find(
+      ({ featureGateId }) => featureGateId === 'session-continuity',
+    );
+    sessionGate.classification = 'community-local';
+  });
+
+  const errors = checkCommunityFreeBoundary(root);
+  assert.ok(
+    errors.some((error) =>
+      error.includes(
+        'connector featureGateId not-a-feature-gate does not exist',
+      ),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes(
+        'connector featureGateId session-continuity is not classified managed-connector',
+      ),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes(
+        'managed featureGateId cloud-tasks is not covered by a managed connector',
+      ),
+    ),
+  );
+});
+
+test('rejects an endpoint key that Community builds do not discard', () => {
+  const root = fixture();
+  mutateCapabilityManifest(root, (manifest) => {
+    manifest.managedConnectors.find(
+      ({ id }) => id === 'session-sharing',
+    ).endpointEnvironmentKeys = ['CLODEX_UNFILTERED_PAID_ENDPOINT'];
+  });
+
+  assert.ok(
+    checkCommunityFreeBoundary(root).some((error) =>
+      error.includes(
+        'endpoint environment key CLODEX_UNFILTERED_PAID_ENDPOINT is not forbidden in Community builds',
+      ),
+    ),
+  );
+});
+
+test('rejects a connector implementation path outside the exact public inventory', () => {
+  const root = fixture();
+  mutateCapabilityManifest(root, (manifest) => {
+    manifest.managedConnectors.find(
+      ({ id }) => id === 'clodex-hosted-mcp',
+    ).implementationPaths = ['/private/gateway.ts'];
+  });
+
+  const errors = checkCommunityFreeBoundary(root);
+  assert.ok(
+    errors.some((error) =>
+      error.includes('implementationPaths: must be exactly'),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes(
+        'implementation path must be an existing repository-relative file',
+      ),
+    ),
+  );
 });
 
 test('rejects removing the public-client commercial invariant', () => {

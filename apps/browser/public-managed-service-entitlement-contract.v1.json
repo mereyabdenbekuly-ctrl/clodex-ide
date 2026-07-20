@@ -1,0 +1,8 @@
+{
+  "contractId": "clodex-public-managed-service-entitlement",
+  "contractVersion": 1,
+  "decisionAuthority": "server-authoritative",
+  "localGrant": "forbidden",
+  "denialHttpStatuses": [401, 403],
+  "clientPaywall": "forbidden"
+}
