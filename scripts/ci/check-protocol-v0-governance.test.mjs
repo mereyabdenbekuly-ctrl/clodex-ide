@@ -201,6 +201,62 @@ test('rejects weakening the nonce lower bound', () => {
   );
 });
 
+test('rejects removing the nonce upper bound', () => {
+  const root = fixture();
+  const path = join(
+    root,
+    'docs',
+    'protocol',
+    'agent-gateway-v0',
+    'common.schema.json',
+  );
+  const schema = JSON.parse(readFileSync(path, 'utf8'));
+  delete schema.$defs.Nonce.maxLength;
+  writeFileSync(path, JSON.stringify(schema, null, 2) + '\n');
+  const errors = checkProtocolV0Governance(root);
+  assert.ok(
+    errors.some((error) =>
+      /nonce no longer guarantees bounded 128-bit input/u.test(error),
+    ),
+  );
+});
+
+test('rejects schema references that escape the incubator allowlist', () => {
+  const root = fixture();
+  const path = join(
+    root,
+    'docs',
+    'protocol',
+    'agent-gateway-v0',
+    'request-envelope.schema.json',
+  );
+  const schema = JSON.parse(readFileSync(path, 'utf8'));
+  schema.properties.protocolVersion.$ref =
+    '../../../provenance/PROTOCOL_V0_INPUT_MANIFEST.json';
+  writeFileSync(path, JSON.stringify(schema, null, 2) + '\n');
+  const errors = checkProtocolV0Governance(root);
+  assert.ok(
+    errors.some((error) => /external or non-allowlisted ref/u.test(error)),
+  );
+});
+
+test('rejects unresolved local schema reference pointers', () => {
+  const root = fixture();
+  const path = join(
+    root,
+    'docs',
+    'protocol',
+    'agent-gateway-v0',
+    'request-envelope.schema.json',
+  );
+  const schema = JSON.parse(readFileSync(path, 'utf8'));
+  schema.properties.protocolVersion.$ref =
+    'common.schema.json#/$defs/DoesNotExist';
+  writeFileSync(path, JSON.stringify(schema, null, 2) + '\n');
+  const errors = checkProtocolV0Governance(root);
+  assert.ok(errors.some((error) => /unresolved ref pointer/u.test(error)));
+});
+
 test('rejects executable files in the schema-only protocol directory', () => {
   const root = fixture();
   writeFileSync(

@@ -72,23 +72,77 @@ function getPointer(document, pointer) {
   return value;
 }
 
-function localRefs(value, result = []) {
+function documentRefs(value, result = []) {
   if (Array.isArray(value)) {
-    for (const child of value) localRefs(child, result);
+    for (const child of value) documentRefs(child, result);
   } else if (value && typeof value === 'object') {
     for (const [key, child] of Object.entries(value)) {
-      if (
-        key === '$ref' &&
-        typeof child === 'string' &&
-        child.startsWith('./')
-      ) {
+      if (key === '$ref' && typeof child === 'string') {
         result.push(child);
       } else {
-        localRefs(child, result);
+        documentRefs(child, result);
       }
     }
   }
   return result;
+}
+
+function splitReference(reference, label, errors) {
+  if (reference.length === 0 || reference.includes('\\')) {
+    errors.push(label + ': invalid reference ' + reference);
+    return null;
+  }
+  const hash = reference.indexOf('#');
+  if (hash !== -1 && reference.indexOf('#', hash + 1) !== -1) {
+    errors.push(label + ': invalid reference ' + reference);
+    return null;
+  }
+  return {
+    target: hash === -1 ? reference : reference.slice(0, hash),
+    fragment: hash === -1 ? '' : reference.slice(hash + 1),
+  };
+}
+
+function checkDocumentReferences(name, document, documents, errors) {
+  const label = protocolPath + '/' + name;
+  for (const reference of documentRefs(document)) {
+    const parts = splitReference(reference, label, errors);
+    if (!parts) continue;
+
+    let targetName = name;
+    if (parts.target.length > 0) {
+      const normalized = parts.target.startsWith('./')
+        ? parts.target.slice(2)
+        : parts.target;
+      if (
+        normalized.includes('/') ||
+        !normalized.endsWith('.schema.json') ||
+        !allowedFiles.has(normalized)
+      ) {
+        errors.push(label + ': external or non-allowlisted ref ' + reference);
+        continue;
+      }
+      targetName = normalized;
+    }
+
+    const target = documents.get(targetName);
+    if (!target) {
+      errors.push(label + ': unresolved ref ' + reference);
+      continue;
+    }
+    if (parts.fragment.length === 0) continue;
+
+    let pointer;
+    try {
+      pointer = decodeURIComponent(parts.fragment);
+    } catch {
+      errors.push(label + ': invalid reference encoding ' + reference);
+      continue;
+    }
+    if (!pointer.startsWith('/') || getPointer(target, pointer) === undefined) {
+      errors.push(label + ': unresolved ref pointer ' + reference);
+    }
+  }
 }
 
 function checkInputManifest(root, errors) {
@@ -165,10 +219,12 @@ function checkInputManifest(root, errors) {
 }
 
 function checkSchemas(protocolRoot, files, errors) {
+  const documents = new Map();
   for (const file of files.filter((name) => name.endsWith('.schema.json'))) {
     const path = join(protocolRoot, file);
     const schema = parseJson(path, protocolPath + '/' + file, errors);
     if (!schema) continue;
+    documents.set(file, schema);
     if (schema.$schema !== 'https://json-schema.org/draft/2020-12/schema') {
       errors.push(protocolPath + '/' + file + ': wrong JSON Schema dialect');
     }
@@ -178,14 +234,9 @@ function checkSchemas(protocolRoot, files, errors) {
     ) {
       errors.push(protocolPath + '/' + file + ': missing incubator schema id');
     }
-    for (const reference of localRefs(schema)) {
-      const target = reference.split('#')[0];
-      if (!existsSync(resolve(dirname(path), target))) {
-        errors.push(
-          protocolPath + '/' + file + ': unresolved ref ' + reference,
-        );
-      }
-    }
+  }
+  for (const [name, document] of documents) {
+    checkDocumentReferences(name, document, documents, errors);
   }
 }
 
@@ -325,6 +376,7 @@ function checkSecurityInvariants(protocolRoot, errors) {
   }
   if (
     common.$defs?.Nonce?.minLength !== 22 ||
+    typeof common.$defs?.Nonce?.maxLength !== 'number' ||
     common.$defs?.Nonce?.maxLength > 128
   ) {
     errors.push(
