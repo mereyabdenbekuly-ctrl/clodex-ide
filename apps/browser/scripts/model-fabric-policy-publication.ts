@@ -13,6 +13,11 @@ import {
   type ModelFabricRolloutStage,
 } from '../src/backend/services/model-fabric-policy-publication';
 
+// PUBLIC/FREE local-reference CLI. It operates only on caller-supplied files
+// and does not publish to a CLODEx-managed service. Do not add hosted delivery,
+// production secret custody, billing, or enterprise control-plane behavior to
+// this public command.
+
 const MAX_JSON_BYTES = 5 * 1024 * 1024;
 const MAX_KEY_BYTES = 64 * 1024;
 

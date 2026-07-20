@@ -83,7 +83,7 @@ Primary code:
 - capability-aware routing;
 - usage accounting, quotas, and budget policies;
 - health, retry, and circuit-breaker state;
-- authenticated managed policy publication.
+- authenticated local/reference policy publication tooling.
 
 Primary code:
 

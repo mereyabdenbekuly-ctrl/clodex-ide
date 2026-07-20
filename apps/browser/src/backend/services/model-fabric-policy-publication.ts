@@ -16,6 +16,17 @@ import {
   verifyControlPlaneModelFabricPolicySnapshot,
 } from './model-fabric-managed-policy';
 
+/**
+ * PUBLIC/FREE local-reference tooling under the repository license.
+ *
+ * This module demonstrates deterministic signing, approval, receipt, and
+ * rollback checks for operator-supplied policy artifacts. It is not a CLODEx
+ * managed publication service, paid entitlement, production key-custody
+ * system, or authorization to build one in this repository. Any future paid
+ * publisher must be implemented greenfield behind a reviewed public contract
+ * in a separately secured private repository.
+ */
+
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 const DEFAULT_APPROVAL_TTL_MS = 24 * 60 * 60_000;
 const MIN_APPROVAL_TTL_MS = 60_000;

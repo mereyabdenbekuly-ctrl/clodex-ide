@@ -57,7 +57,8 @@ without committing them. Never upload the Ed25519 private key.
 
 ### Model Fabric
 
-Model Fabric promotion uses authenticated inputs rather than repository policy
+Model Fabric publication code is PUBLIC/FREE local-reference tooling. It may
+verify authenticated operator-controlled inputs rather than repository policy
 files:
 
 - a root-signed publication authority;
@@ -65,10 +66,13 @@ files:
 - externally signed, stage-bound approvals;
 - previous signed state after bootstrap.
 
-`.github/workflows/model-fabric-publication.yml` validates those inputs in a
-secretless job and exposes only the protected publisher identity in the second
-job. It never creates release/security approvals. Production must publish the
-exact snapshot from the immediately preceding canary state.
+The former operational GitHub publisher workflow was quarantined and removed
+on July 20, 2026. No public workflow may materialize a publisher private key or
+claim managed canary/production publication. Local CLI output is reference
+evidence only and does not satisfy release, managed-service, or commercial
+authorization. The public main-plan readiness gate intentionally has no Model
+Fabric promotion input; caller-supplied state and trust roots cannot make that
+epic promotion-ready.
 
 ### Agentic App Runtime
 

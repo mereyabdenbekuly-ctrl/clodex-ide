@@ -25,7 +25,7 @@ describe('main plan readiness', () => {
     expect(report.buildReady).toBe(true);
     expect(report.ready).toBe(true);
     expect(report.promotionReady).toBe(false);
-    expect(report.promotableEpicCount).toBe(5);
+    expect(report.promotableEpicCount).toBe(4);
     expect(report.epics).toHaveLength(5);
     expect(
       report.epics.every((epic) => epic.status === 'implemented-gated'),
@@ -103,6 +103,33 @@ describe('main plan readiness', () => {
     );
   });
 
+  it('cannot promote Model Fabric without an external managed contract', () => {
+    const report = evaluateMainPlanReadiness({
+      generatedAt: '2026-07-20T00:00:00.000Z',
+      channel: 'release',
+      source: SOURCE,
+      requiredPromotions: ['model-fabric'],
+      promotions: {
+        // Even a caller that tries to inject a ready assessment cannot replace
+        // an undefined external contract with local authority.
+        'model-fabric': promotion('ready'),
+      },
+    });
+
+    expect(report.ready).toBe(false);
+    expect(report.requiredPromotionReady).toBe(false);
+    expect(report.blockers).toContain(
+      'model-fabric:required-promotion-not-ready',
+    );
+    expect(
+      report.epics.find((epic) => epic.id === 'model-fabric'),
+    ).toMatchObject({
+      promotionContract: 'not-yet-defined',
+      promotionState: 'unsupported',
+      promotionSource: 'no-release-promotion-contract',
+    });
+  });
+
   it('requires a clean source only when explicitly requested', () => {
     const dirtySource = { ...SOURCE, clean: false };
     expect(
@@ -131,10 +158,10 @@ describe('main plan readiness', () => {
     const snapshot = createMainPlanGateSnapshot('release');
     expect(gates.every((gate) => snapshot[gate] !== undefined)).toBe(true);
     expect(
-      mainPlanEpicDefinitions.every(
-        (epic) => epic.promotionContract !== 'not-yet-defined',
-      ),
-    ).toBe(true);
+      mainPlanEpicDefinitions
+        .filter((epic) => epic.promotionContract === 'not-yet-defined')
+        .map((epic) => epic.id),
+    ).toEqual(['model-fabric']);
   });
 });
 

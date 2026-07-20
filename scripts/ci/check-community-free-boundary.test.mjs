@@ -25,14 +25,21 @@ const repositoryRoot = resolve(
 const fixtureFiles = [
   '.github/workflows/community-observed-build.yml',
   '.github/workflows/community-unsigned-build.yml',
+  '.release-evidence/README.md',
   'AGENTS.md',
   'apps/browser/build-constants.ts',
+  'apps/browser/scripts/check-main-plan-readiness.ts',
+  'apps/browser/scripts/model-fabric-policy-publication.ts',
   'apps/browser/src/backend/main.ts',
+  'apps/browser/src/backend/services/main-plan-promotion-assessments.ts',
+  'apps/browser/src/backend/services/model-fabric-policy-publication.ts',
   'apps/browser/src/backend/services/toolbox/index.ts',
   'apps/browser/src/backend/services/toolbox/services/clodex-mcp/community-disabled.ts',
+  'apps/browser/src/shared/main-plan-readiness.ts',
   'apps/browser/vite.backend.config.ts',
   'docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md',
   'docs/governance/OPEN_CLOSED_BOUNDARY.md',
+  'docs/model-fabric-policy-publication.md',
 ];
 
 function fixture() {
@@ -83,6 +90,236 @@ test('rejects treating client-side gating as a paid boundary', () => {
     checkCommunityFreeBoundary(root).some((error) =>
       error.includes(
         'docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md: missing product boundary text',
+      ),
+    ),
+  );
+});
+
+test('rejects reclassifying public Model Fabric tooling as managed product', () => {
+  const root = fixture();
+  replace(
+    root,
+    'docs/model-fabric-policy-publication.md',
+    'PUBLIC CORE / LOCAL REFERENCE TOOLING',
+    'PRIVATE MANAGED PRODUCT',
+  );
+  assert.ok(
+    checkCommunityFreeBoundary(root).some((error) =>
+      error.includes(
+        'docs/model-fabric-policy-publication.md: missing product boundary text',
+      ),
+    ),
+  );
+});
+
+test('rejects reintroducing an operational Model Fabric publisher workflow', () => {
+  const root = fixture();
+  writeFileSync(
+    join(root, '.github/workflows/model-fabric-publication.yml'),
+    `name: forbidden publisher
+on: workflow_dispatch
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          PUBLISHER_PRIVATE_KEY: \${{ secrets.CLODEX_MODEL_FABRIC_PUBLICATION_PUBLISHER_PRIVATE_KEY }}
+        run: pnpm --dir apps/browser policy:publication -- publish --publisher-private-key publisher.pem
+`,
+  );
+  const errors = checkCommunityFreeBoundary(root);
+  assert.ok(
+    errors.some((error) =>
+      error.includes(
+        'operational Model Fabric publisher must remain quarantined',
+      ),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes('operational Model Fabric automation is forbidden'),
+    ),
+  );
+});
+
+test('rejects renamed workflows and wrapper scripts for Model Fabric publication', () => {
+  const root = fixture();
+  const workflowPath = join(root, '.github/workflows/renamed.yml');
+  writeFileSync(
+    workflowPath,
+    `name: renamed automation
+on: workflow_dispatch
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - run: >-
+          pnpm tsx
+          apps/browser/scripts/model-fabric-policy-publication.ts
+          publish
+`,
+  );
+  const wrapperPath = join(root, 'scripts/release/policy-wrapper.ts');
+  mkdirSync(dirname(wrapperPath), { recursive: true });
+  writeFileSync(
+    wrapperPath,
+    `import { authorizeModelFabricPolicyPublication } from '../../apps/browser/src/backend/services/model-fabric-policy-publication';
+void authorizeModelFabricPolicyPublication;
+`,
+  );
+
+  const errors = checkCommunityFreeBoundary(root);
+  assert.ok(
+    errors.some((error) =>
+      error.includes(
+        '.github/workflows/renamed.yml: operational Model Fabric automation is forbidden',
+      ),
+    ),
+  );
+  assert.ok(
+    errors.some((error) =>
+      error.includes(
+        'scripts/release/policy-wrapper.ts: operational Model Fabric automation is forbidden',
+      ),
+    ),
+  );
+});
+
+test('rejects operational wrappers placed at the repository root', () => {
+  const root = fixture();
+  writeFileSync(
+    join(root, 'ship.mjs'),
+    `import { authorizeModelFabricPolicyPublication } from './apps/browser/src/backend/services/model-fabric-policy-publication.ts';
+void authorizeModelFabricPolicyPublication;
+`,
+  );
+  writeFileSync(
+    join(root, '.github/workflows/root-wrapper.yml'),
+    `name: root wrapper
+on: workflow_dispatch
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    steps:
+      - run: node ship.mjs
+`,
+  );
+
+  assert.ok(
+    checkCommunityFreeBoundary(root).some((error) =>
+      error.includes(
+        'ship.mjs: operational Model Fabric automation is forbidden',
+      ),
+    ),
+  );
+});
+
+test('rejects turning the local/reference publisher into a hosted client', () => {
+  const root = fixture();
+  const cliPath = join(
+    root,
+    'apps/browser/scripts/model-fabric-policy-publication.ts',
+  );
+  writeFileSync(
+    cliPath,
+    `${readFileSync(cliPath, 'utf8')}\nvoid fetch('https://managed.clodex.xyz/publish', { headers: { Authorization: \`Bearer \${process.env.CLODEX_PUBLISHER_TOKEN}\` } });\n`,
+  );
+
+  const errors = checkCommunityFreeBoundary(root);
+  assert.ok(
+    errors.some((error) =>
+      error.includes('local/reference publication code must remain offline'),
+    ),
+  );
+});
+
+test('rejects package-script aliases that wrap the reference publication CLI', () => {
+  const root = fixture();
+  const packagePath = join(root, 'apps/browser/package.json');
+  writeFileSync(
+    packagePath,
+    `${JSON.stringify(
+      {
+        scripts: {
+          'policy:publication':
+            'tsx --tsconfig tsconfig.backend.json scripts/model-fabric-policy-publication.ts',
+          'release:model-policy': 'pnpm policy:publication -- publish',
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  assert.ok(
+    checkCommunityFreeBoundary(root).some((error) =>
+      error.includes('apps/browser/package.json#scripts.release:model-policy'),
+    ),
+  );
+});
+
+test('allows workflows to run local/reference publication tests', () => {
+  const root = fixture();
+  writeFileSync(
+    join(root, '.github/workflows/reference-tests.yml'),
+    `name: reference tests
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pnpm --dir apps/browser exec vitest run src/backend/services/model-fabric-policy-publication.test.ts
+`,
+  );
+
+  assert.deepEqual(checkCommunityFreeBoundary(root), []);
+});
+
+test('rejects caller-controlled Model Fabric main-plan promotion inputs', () => {
+  const root = fixture();
+  const cliPath = join(
+    root,
+    'apps/browser/scripts/check-main-plan-readiness.ts',
+  );
+  writeFileSync(
+    cliPath,
+    `${readFileSync(cliPath, 'utf8')}\nconst forbiddenLegacyArgument = '--model-fabric-state';\n`,
+  );
+
+  assert.ok(
+    checkCommunityFreeBoundary(root).some((error) =>
+      error.includes(
+        'caller-controlled Model Fabric promotion input is forbidden',
+      ),
+    ),
+  );
+});
+
+test('rejects restoring a public Model Fabric promotion contract', () => {
+  const root = fixture();
+  replace(
+    root,
+    'apps/browser/src/shared/main-plan-readiness.ts',
+    "promotionContract: 'not-yet-defined'",
+    "promotionContract: 'authenticated-policy-publication'",
+  );
+  replace(
+    root,
+    'apps/browser/src/shared/main-plan-readiness.ts',
+    "promotionContract: 'release-readiness-evidence'",
+    "promotionContract: 'not-yet-defined'",
+  );
+  replace(
+    root,
+    'apps/browser/src/shared/main-plan-readiness.ts',
+    "promotionContract: 'authenticated-policy-publication'",
+    "// promotionContract: 'not-yet-defined'\n    promotionContract: 'authenticated-policy-publication'",
+  );
+
+  assert.ok(
+    checkCommunityFreeBoundary(root).some((error) =>
+      error.includes(
+        'Model Fabric managed promotion contract must remain quarantined',
       ),
     ),
   );

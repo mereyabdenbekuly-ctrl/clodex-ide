@@ -1,10 +1,19 @@
-# Model Fabric authenticated policy publication
+# Model Fabric local/reference policy publication
+
+**Classification:** `PUBLIC CORE / LOCAL REFERENCE TOOLING`
+
+This implementation is Community-available under the repository license. It
+is not a paid entitlement, a hosted CLODEx publisher, a managed enterprise
+control plane, or an authorization to implement one in this repository. The
+tooling remains public because it has already been published and is useful for
+local/synthetic verification. Any future paid managed publisher must be a
+greenfield private implementation behind a reviewed public wire contract.
 
 ## Purpose
 
-The publication plane converts declarative enterprise policy inputs into the
-same version-3 trust snapshot consumed by the IDE runtime. It is designed for
-offline signing workstations or protected CI runners and provides:
+The reference publication plane converts synthetic or operator-controlled
+policy inputs into the same version-3 trust snapshot consumed by the IDE
+runtime. It is designed for local/offline evaluation and provides:
 
 - Ed25519 signing for the rootset, delegated keyset, and policy envelope;
 - a root-signed publication authority manifest;
@@ -265,62 +274,29 @@ All output files are written with temp-file, `fsync`, rename, and owner-only
 permissions. The state is written last so a failed output publication does not
 consume approvals and can be retried safely.
 
-## Protected GitHub publication workflow
+## Operational quarantine
 
-`.github/workflows/model-fabric-publication.yml` provides a two-job trust
-boundary for release evidence:
+The former public GitHub Actions publisher was removed on July 20, 2026. A
+public repository workflow must not materialize a Model Fabric publisher
+private key or perform canary/production publication. The local CLI and crypto
+module remain available for synthetic fixtures, offline evaluation, and
+verification of operator-controlled artifacts.
 
-1. A secretless job checks out the exact `main` commit, runs the publication
-   and promotion contract tests, decodes bounded signed inputs, and transfers
-   them with a SHA-256 manifest.
-2. A fresh job checks out the same trusted commit, enters the
-   `model-fabric-publication` Environment, verifies the transport manifest,
-   and receives only the publisher identity needed for final authorization.
-3. The workflow verifies the signed authority, signed v3 snapshot, every
-   externally signed approval, and prior signed state through the production
-   CLI. It then emits a signed receipt/state and requires the Model Fabric
-   main-plan promotion gate.
+The stage names `canary` and `production` describe the reference state machine
+only. They do not prove CLODEx production deployment, managed-service
+authorization, organizational separation, external monotonic storage, key
+custody, or commercial entitlement.
 
-The workflow never has release-operator or security-operator private keys and
-does not create approvals. Distinct approver identities and required roles are
-enforced cryptographically by the signed authority. Organizational separation
-still requires those private keys to be controlled by different operators or
-systems; selecting workflow inputs is not a substitute for that separation.
+The public main-plan readiness command does not accept Model Fabric state or
+root-key arguments and reports the promotion contract as `not-yet-defined`.
+Locally generated or caller-supplied publication artifacts can therefore never
+make a public release gate promotion-ready.
 
-Configure these Environment secrets before the first real publication:
-
-- `CLODEX_MODEL_FABRIC_PUBLICATION_ROOT_PUBLIC_KEY`;
-- `CLODEX_MODEL_FABRIC_PUBLICATION_PUBLISHER_PRIVATE_KEY`.
-
-Configure these Environment variables:
-
-- `CLODEX_MODEL_FABRIC_PUBLICATION_PUBLISHER_KEY_ID`;
-- `CLODEX_MODEL_FABRIC_PUBLICATION_ROOT_PUBLIC_KEY_SHA256`;
-- `CLODEX_MODEL_FABRIC_PUBLICATION_PUBLISHER_PUBLIC_KEY_SHA256`.
-
-The two hashes are SHA-256 fingerprints of canonical Ed25519 SPKI DER, not PEM
-text hashes. The workflow derives both public keys again before exposing the
-publisher private key to the trusted publication CLI and fails closed on any
-mismatch.
-
-Inputs are gzip+base64 encoded JSON for the root-signed authority, signed v3
-snapshot, an array of signed approvals, and—after bootstrap—the exact previous
-signed state. Bootstrap is accepted only for the first canary and cannot
-include previous state. A canary cannot satisfy a `release` channel gate;
-production still requires the exact prior canary snapshot and the authority’s
-release/security threshold.
-
-The uploaded bundle contains the publication state, content-free receipt,
-control-plane snapshot, pinned root public key, strict main-plan readiness
-report, immutable workflow metadata, and a deterministic tar checksum. Retain
-the state in external monotonic storage before the next publication. The
-workflow validates signed state continuity but cannot detect a deliberately
-supplied rollback to an older still-valid state without that external
-watermark.
-
-The Environment is restricted to `main`. Required GitHub reviewers are a
-separate repository-administration control; do not represent their absence as
-cryptographic release/security approval.
+Do not add hosted upload/deployment behavior, CLODEx production credentials,
+GitHub Environment publisher secrets, enterprise administration, or managed
+policy distribution to this public tooling. A future managed implementation
+must start separately after the documented Protocol, provenance, private-CI,
+maintainer, and legal gates are GREEN.
 
 ## Failure behavior
 

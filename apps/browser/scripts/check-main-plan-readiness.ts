@@ -5,10 +5,7 @@ import fsPromises, { type FileHandle } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import {
-  assessModelFabricPromotion,
-  assessRunnerPromotion,
-} from '../src/backend/services/main-plan-promotion-assessments';
+import { assessRunnerPromotion } from '../src/backend/services/main-plan-promotion-assessments';
 import { parseTrustedRunnerDogfoodCollectorKeys } from '../src/backend/services/runner-routing/dogfood-ingestion';
 import {
   evaluateCloudTaskReleaseReadiness,
@@ -38,16 +35,6 @@ const defaultCloudTaskEvidencePath = path.join(
   '.release-evidence',
   'cloud-tasks.json',
 );
-const defaultModelFabricStatePath = path.join(
-  repositoryRoot,
-  '.release-evidence',
-  'model-fabric-publication-state.json',
-);
-const defaultModelFabricRootPublicKeyPath = path.join(
-  repositoryRoot,
-  '.release-evidence',
-  'model-fabric-root-public-key.pem',
-);
 const defaultRunnerEvidenceDirectoryPath = path.join(
   repositoryRoot,
   '.release-evidence',
@@ -72,9 +59,6 @@ interface CheckMainPlanReadinessOptions {
   agenticAppEvidencePath?: string;
   agenticAppEvaluationPath?: string;
   cloudTaskEvidencePath?: string;
-  modelFabricStatePath?: string;
-  modelFabricRootPublicKeyPath?: string;
-  modelFabricSnapshotRootPublicKeyPath?: string;
   runnerEvidenceDirectoryPath?: string;
   runnerTrustedCollectorsPath?: string;
   runnerTrustedCollectorPublicKeys: string[];
@@ -181,24 +165,6 @@ function collectPromotionAssessments(
       evidenceMemoryArgs,
       'evidence-memory-rollout',
     ),
-    'model-fabric': assessModelFabricPromotion({
-      channel: options.channel,
-      now,
-      statePath: path.resolve(
-        options.modelFabricStatePath ?? defaultModelFabricStatePath,
-      ),
-      rootPublicKeyPath: path.resolve(
-        options.modelFabricRootPublicKeyPath ??
-          defaultModelFabricRootPublicKeyPath,
-      ),
-      ...(options.modelFabricSnapshotRootPublicKeyPath
-        ? {
-            snapshotRootPublicKeyPath: path.resolve(
-              options.modelFabricSnapshotRootPublicKeyPath,
-            ),
-          }
-        : {}),
-    }),
     'session-teleporter': assessCloudTaskPromotion(
       path.resolve(
         options.cloudTaskEvidencePath ?? defaultCloudTaskEvidencePath,
@@ -440,23 +406,6 @@ function parseArguments(rawArgs: string[]): CheckMainPlanReadinessOptions {
       case '--cloud-task-evidence':
         options.cloudTaskEvidencePath = readArgument(args, ++index, argument);
         break;
-      case '--model-fabric-state':
-        options.modelFabricStatePath = readArgument(args, ++index, argument);
-        break;
-      case '--model-fabric-root-public-key':
-        options.modelFabricRootPublicKeyPath = readArgument(
-          args,
-          ++index,
-          argument,
-        );
-        break;
-      case '--model-fabric-snapshot-root-public-key':
-        options.modelFabricSnapshotRootPublicKeyPath = readArgument(
-          args,
-          ++index,
-          argument,
-        );
-        break;
       case '--runner-evidence-dir':
         options.runnerEvidenceDirectoryPath = readArgument(
           args,
@@ -646,10 +595,11 @@ stale, or insufficient promotion evidence always fails closed. Use repeatable
 --require-promotion values (or "all") only when a release operator intends to
 promote those epics. --require-clean is intended for an exact RC source tree.
 
-Model Fabric defaults to .release-evidence/model-fabric-publication-state.json
-plus model-fabric-root-public-key.pem. Decoupled Execution defaults to signed
-bundles under .release-evidence/runner-routing and pinned public collector keys
-from runner-routing-trusted-collectors.txt or
+Model Fabric managed promotion is quarantined and has no public release
+evidence input. Local reference publication state and caller-supplied roots
+cannot satisfy this gate. Decoupled Execution defaults to signed bundles under
+.release-evidence/runner-routing and pinned public collector keys from
+runner-routing-trusted-collectors.txt or
 CLODEX_RUNNER_DOGFOOD_TRUSTED_COLLECTOR_KEYS.
 `;
 }
