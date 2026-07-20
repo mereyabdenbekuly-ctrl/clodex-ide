@@ -1,0 +1,1325 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "PV0_G03_INDEPENDENT_REQUIREMENTS_REVIEW_INTAKE",
+  "gateId": "PV0-G03",
+  "status": "AWAITING_INDEPENDENT_REQUIREMENTS_REVIEW",
+  "issue": {
+    "repository": "mereyabdenbekuly-ctrl/clodex-ide",
+    "number": 76,
+    "url": "https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/76"
+  },
+  "baseline": {
+    "policy": "ISSUE_PINNED",
+    "frozenMainCommit": "374539f98dba20d1aade6208c2834928bf7fa09a",
+    "reviewedMainCommit": null,
+    "reviewInputs": [
+      {
+        "path": "docs/protocol/agent-gateway-v0/REQUIREMENTS.md",
+        "gitBlob": "2a1768411bbf7c78c3c2eca09e86c4a5052477d1",
+        "sha256": "e670ea4af006602d304f92b13d977067a7201e185d8db028010c101450958d52"
+      },
+      {
+        "path": "docs/provenance/PROTOCOL_V0_INPUT_MANIFEST.json",
+        "gitBlob": "5000ec24b5c90c0c0296f0d72076b1710518c1f3",
+        "sha256": "73d1b87194605704037162cb7cc5b47ac5fd2dc56dd6c0860d3757f34fd0b1b2"
+      },
+      {
+        "path": "docs/protocol/agent-gateway-v0/traceability.json",
+        "gitBlob": "a8857d64eb0a5a6891d45937dff5a6692e26b45c",
+        "sha256": "e08704376b6955b894b6b0d6ae61de22d3ede1306695a4de96dc567b324b610d"
+      }
+    ]
+  },
+  "prerequisiteState": {
+    "requiredGate": "PV0-G01",
+    "requiredGateStatus": "OPEN",
+    "approvedInputEvidenceReference": null,
+    "approvedInputIds": [],
+    "rederivationEligible": false,
+    "reason": "PV0-G01 has no attributed terminal approval; an approved input set is not established."
+  },
+  "reviewer": {
+    "identity": null,
+    "role": null,
+    "affiliation": null,
+    "reviewDate": null,
+    "independenceDeclaration": null,
+    "sourceExposureDeclaration": null,
+    "approvedInputsOnlyDeclaration": null,
+    "implementationStructureNonAuthorityDeclaration": null
+  },
+  "decisionVocabulary": ["PENDING", "APPROVE", "REVISE", "REJECT"],
+  "assessmentVocabulary": [
+    "PENDING",
+    "SATISFIED",
+    "DEFICIENT",
+    "NOT_APPLICABLE"
+  ],
+  "methodConstraints": {
+    "approvedInputsOnly": true,
+    "deploymentIndependentThreatCriteriaOnly": true,
+    "deploymentIndependentAcceptanceCriteriaOnly": true,
+    "currentImplementationStructureNormative": false,
+    "currentSchemaStructureNormative": false,
+    "traceabilityFileFieldMappingsNormative": false,
+    "redSourceAuthoringAllowed": false
+  },
+  "requirementReviews": [
+    {
+      "requirementId": "PV0-BOUND-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-VER-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-VER-002",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-VER-003",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-BIND-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-BIND-002",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-BIND-003",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-BIND-004",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-BIND-005",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-ART-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-ART-002",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-ART-003",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-ART-004",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-ART-005",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-SIG-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-SIG-002",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-SIG-003",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-REPLAY-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-REPLAY-002",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-REPLAY-003",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-EVID-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-EVID-002",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-EVID-003",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-AUTH-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-AUTH-002",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-RCPT-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-RCPT-002",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-RCPT-003",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-RCPT-004",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-ERR-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-ERR-002",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-NEG-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-NEG-002",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-NEG-003",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-NEG-004",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-LIMIT-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-PRIV-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-PROV-001",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    },
+    {
+      "requirementId": "PV0-PROV-002",
+      "decision": "PENDING",
+      "assessment": {
+        "necessity": "PENDING",
+        "clarity": "PENDING",
+        "testability": "PENDING",
+        "conflictReview": "PENDING",
+        "securityConstraintReview": "PENDING",
+        "privacyConstraintReview": "PENDING"
+      },
+      "sourceDerivation": {
+        "status": "PENDING",
+        "approvedInputIds": [],
+        "evidenceReferences": [],
+        "deploymentIndependentThreatCriteria": null,
+        "deploymentIndependentAcceptanceCriteria": null
+      },
+      "implementationStructureReview": {
+        "status": "PENDING",
+        "normativeImplementationDependencies": null,
+        "traceabilityComparisonNotes": null
+      },
+      "proposedRequirementText": null,
+      "rationale": null,
+      "conditions": [],
+      "residualBlockers": [
+        "Independent requirements review required by issue #76 has not been recorded."
+      ]
+    }
+  ],
+  "catalogueCompletenessReview": {
+    "status": "PENDING",
+    "approvedInputsReviewed": "PENDING",
+    "deploymentIndependentThreatCriteriaReview": "PENDING",
+    "deploymentIndependentAcceptanceCriteriaReview": "PENDING",
+    "missingSecurityRequirements": null,
+    "missingPrivacyRequirements": null,
+    "otherMissingRequirements": null,
+    "conflictingRequirementPairs": null,
+    "rationale": null,
+    "residualBlockers": [
+      "Independent requirements review required by issue #76 has not been recorded."
+    ]
+  },
+  "approvedCatalogueRevision": {
+    "status": "PENDING",
+    "commit": null,
+    "path": null,
+    "gitBlob": null,
+    "sha256": null,
+    "requirementIds": []
+  },
+  "gateClosure": {
+    "eligible": false,
+    "gateRemainsOpen": true,
+    "unresolvedRequirementIds": [
+      "PV0-BOUND-001",
+      "PV0-VER-001",
+      "PV0-VER-002",
+      "PV0-VER-003",
+      "PV0-BIND-001",
+      "PV0-BIND-002",
+      "PV0-BIND-003",
+      "PV0-BIND-004",
+      "PV0-BIND-005",
+      "PV0-ART-001",
+      "PV0-ART-002",
+      "PV0-ART-003",
+      "PV0-ART-004",
+      "PV0-ART-005",
+      "PV0-SIG-001",
+      "PV0-SIG-002",
+      "PV0-SIG-003",
+      "PV0-REPLAY-001",
+      "PV0-REPLAY-002",
+      "PV0-REPLAY-003",
+      "PV0-EVID-001",
+      "PV0-EVID-002",
+      "PV0-EVID-003",
+      "PV0-AUTH-001",
+      "PV0-AUTH-002",
+      "PV0-RCPT-001",
+      "PV0-RCPT-002",
+      "PV0-RCPT-003",
+      "PV0-RCPT-004",
+      "PV0-ERR-001",
+      "PV0-ERR-002",
+      "PV0-NEG-001",
+      "PV0-NEG-002",
+      "PV0-NEG-003",
+      "PV0-NEG-004",
+      "PV0-LIMIT-001",
+      "PV0-PRIV-001",
+      "PV0-PROV-001",
+      "PV0-PROV-002"
+    ],
+    "catalogueCompletenessUnresolved": true,
+    "reason": "Setup-only intake; PV0-G01 is open and no attributed independent per-requirement review or exact approved catalogue revision is present."
+  },
+  "scopeNonAuthorization": {
+    "requirementsCatalogueChangesAuthorized": false,
+    "schemaEditsAuthorized": false,
+    "conformancePayloadsAuthorized": false,
+    "codeGenerationAuthorized": false,
+    "sdkPublicationAuthorized": false,
+    "gatewayImplementationAuthorized": false,
+    "enterpriseCloudImplementationAuthorized": false,
+    "relicensingAuthorized": false,
+    "otherGateClosuresAuthorized": []
+  },
+  "signOff": {
+    "evidenceReference": null,
+    "signedAt": null,
+    "signedBy": null,
+    "statement": null
+  }
+}
