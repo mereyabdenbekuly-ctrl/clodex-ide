@@ -13,7 +13,7 @@ export const landingCopy = {
       title: 'Одна задача.',
       titleAccent: 'Вся локальная инженерная среда.',
       description:
-        'CLODEx объединяет постоянные задачи, код, Git, терминал, браузер, модели и MCP в одном desktop workspace. Проверенная Community Observed 11 доступна для macOS Apple Silicon и Intel, Windows x64 и Linux x64.',
+        'CLODEx объединяет постоянные задачи, код, Git, терминал, браузер, модели и MCP в одном desktop workspace. Проверенная Community Observed 13 доступна для macOS Apple Silicon и Intel, Windows x64 и Linux x64.',
       explore: 'Что входит в Free',
       proof: [
         'Постоянные задачи и восстановление после перезапуска',
@@ -250,7 +250,7 @@ export const landingCopy = {
       eyebrow: 'Что поставляет текущая проверенная сборка',
       title: 'Local-first desktop workspace с видимым review.',
       description:
-        'Community Observed 11 прошла Free/managed boundary и packaged-byte проверки, но Technical Preview не является заявлением о полном hardening или идеальной изоляции. Claims ограничены опубликованным release evidence.',
+        'Community Observed 13 прошла Free/managed boundary и packaged-byte проверки, но Technical Preview не является заявлением о полном hardening или идеальной изоляции. Claims ограничены опубликованным release evidence.',
       layers: [
         {
           label: 'Local workspace',
@@ -275,7 +275,7 @@ export const landingCopy = {
         {
           label: 'Release evidence',
           title: 'Проверяемая тестовая поставка',
-          text: 'Community Observed 11 публикует SHA-256, SBOM, validation manifests и evidence archive для пяти installers.',
+          text: 'Community Observed 13 публикует SHA-256, SBOM, validation manifests и evidence archive для пяти installers.',
           detail:
             'macOS packages не trust-signed и не notarized; Technical Preview не является stable signed release.',
         },
@@ -354,7 +354,7 @@ export const landingCopy = {
         ],
         [
           'Что входит в Free Product Contract?',
-          'Free Product Contract включает persistent tasks и restart recovery, files/diffs/Git/worktrees, local terminal и browser, CLODEx account, BYOK, compatible endpoints, Ollama, user-configured MCP, EN/RU beta и privacy choice. Community Observed 11 — текущий проверенный Technical Preview; точный scope определяют его release notes и evidence.',
+          'Free Product Contract включает persistent tasks и restart recovery, files/diffs/Git/worktrees, local terminal и browser, CLODEx account, BYOK, compatible endpoints, Ollama, user-configured MCP, EN/RU beta и privacy choice. Community Observed 13 — текущий проверенный Technical Preview; точный scope определяют его release notes и evidence.',
         ],
         [
           'Входят ли remote и cloud workflows в Free?',
@@ -381,7 +381,7 @@ export const landingCopy = {
     final: {
       title: 'Скачайте проверенный Free Technical Preview.',
       description:
-        'Community Observed 11 привязана к точному source commit, build run, checksums и release evidence.',
+        'Community Observed 13 привязана к точному source commit, build run, checksums и release evidence.',
       sales: 'Отправить feedback',
     },
   },
@@ -397,7 +397,7 @@ export const landingCopy = {
       title: 'One task.',
       titleAccent: 'Your local engineering workspace.',
       description:
-        'CLODEx brings persistent tasks, code, Git, terminal, browser, models, and MCP into one desktop workspace. Verified Community Observed 11 is available for macOS Apple Silicon and Intel, Windows x64, and Linux x64.',
+        'CLODEx brings persistent tasks, code, Git, terminal, browser, models, and MCP into one desktop workspace. Verified Community Observed 13 is available for macOS Apple Silicon and Intel, Windows x64, and Linux x64.',
       explore: "What's included in Free",
       proof: [
         'Persistent tasks with restart recovery',
@@ -630,7 +630,7 @@ export const landingCopy = {
       eyebrow: 'What the current verified build ships',
       title: 'A local-first desktop workspace with visible review.',
       description:
-        'Community Observed 11 passed the Free/managed boundary and packaged-byte gates, but a Technical Preview is not a claim of complete hardening or perfect isolation. Claims remain limited to the published release evidence.',
+        'Community Observed 13 passed the Free/managed boundary and packaged-byte gates, but a Technical Preview is not a claim of complete hardening or perfect isolation. Claims remain limited to the published release evidence.',
       layers: [
         {
           label: 'Local workspace',
@@ -656,7 +656,7 @@ export const landingCopy = {
         {
           label: 'Release evidence',
           title: 'A verifiable testing distribution',
-          text: 'Community Observed 11 publishes SHA-256 checksums, SBOMs, validation manifests, and an evidence archive for five installers.',
+          text: 'Community Observed 13 publishes SHA-256 checksums, SBOMs, validation manifests, and an evidence archive for five installers.',
           detail:
             'macOS packages are not trust-signed or notarized; a Technical Preview is not a stable signed release.',
         },
@@ -734,7 +734,7 @@ export const landingCopy = {
         ],
         [
           'What does the Free Product Contract include?',
-          'The Free Product Contract includes persistent tasks and restart recovery, files/diffs/Git/worktrees, local terminal and browser, CLODEx account, BYOK, compatible endpoints, Ollama, user-configured MCP, EN/RU beta, and the privacy choice. Community Observed 11 is the current verified Technical Preview; its exact scope is defined by its release notes and evidence.',
+          'The Free Product Contract includes persistent tasks and restart recovery, files/diffs/Git/worktrees, local terminal and browser, CLODEx account, BYOK, compatible endpoints, Ollama, user-configured MCP, EN/RU beta, and the privacy choice. Community Observed 13 is the current verified Technical Preview; its exact scope is defined by its release notes and evidence.',
         ],
         [
           'Are remote and cloud workflows included in Free?',
@@ -761,7 +761,7 @@ export const landingCopy = {
     final: {
       title: 'Download the verified Free Technical Preview.',
       description:
-        'Community Observed 11 is pinned to one exact source commit, build run, checksum set, and release-evidence archive.',
+        'Community Observed 13 is pinned to one exact source commit, build run, checksum set, and release-evidence archive.',
       sales: 'Send feedback',
     },
   },
