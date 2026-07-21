@@ -7,7 +7,12 @@
 **Inventory:** 835 unique inventoried components on macOS arm64 (834 package
 versions plus the bundled `vscode-eslint` server); 0 blockers
 
-**Reviewed exact-version overrides:** 42 applied on macOS arm64 and 43 on Linux x64 from a 54-record release-matrix registry
+**Reviewed exact-version overrides:** 42 applied on macOS arm64 and 43 on
+Linux x64 from a 60-record release-matrix registry
+
+The registry was extended on 2026-07-21 with five exact-version records for
+pending Dependabot graphs; those versions were not present in the observed
+baseline inventory above.
 
 **Nucleo:** `NOT_REQUIRED`; no `nucleo-*` package is present
 
@@ -56,16 +61,16 @@ They were closed without a broad or name-only fallback:
    repairs, 4 combined license/notice bundles, and 2 GSAP custom-license
    snapshots.
 
-The registry contains 54 records in total. Twelve additional integrity-bound
+The registry contains 60 records in total. Eighteen additional integrity-bound
 records cover platform-specific native variants or exact lockfile variants not
-present in this macOS arm64 inventory. Across all 54 records the basis counts
-are 35 pinned upstream, 9 pinned canonical supplements, 2 exact package files, 6 combined
-license/notice bundles, and 2 custom-license snapshots.
+present in this macOS arm64 inventory. Across all 60 records the basis counts
+are 40 pinned upstream, 10 pinned canonical supplements, 2 exact package
+files, 6 combined license/notice bundles, and 2 custom-license snapshots.
 
 The Linux x64 CI inventory applies the exact
 `@libsql/linux-x64-musl@0.5.29` record in addition to the applicable GNU
 variant. It therefore applies 43 records (29 upstream, 6 canonical, 2 exact
-package files, 4 combined bundles, and 2 custom-license snapshots), leaving 11
+package files, 4 combined bundles, and 2 custom-license snapshots), leaving 17
 release-matrix records non-current on that host.
 
 Every override is bound to an exact npm tarball and integrity value, a reviewed

@@ -1902,7 +1902,7 @@ test('the exact installed repository dependency graph is strict-green', () => {
     9,
   );
   assert.equal(inventory.licenseOverrides.status, 'ENGINEERING_REVIEWED');
-  assert.equal(inventory.licenseOverrides.entryCount, 55);
+  assert.equal(inventory.licenseOverrides.entryCount, 60);
   assert.ok(inventory.licenseOverrides.appliedCount >= 40);
   assert.equal(
     overrideRegistry.entries.find(
