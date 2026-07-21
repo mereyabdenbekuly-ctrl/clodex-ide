@@ -616,8 +616,8 @@ importers:
         specifier: 8.5.14
         version: 8.5.14
       posthog-js:
-        specifier: 1.379.1
-        version: 1.379.1
+        specifier: 1.405.3
+        version: 1.405.3
       react:
         specifier: ^19.1.0
         version: 19.2.3
@@ -816,8 +816,8 @@ importers:
         specifier: ^6.0.0
         version: 6.0.0(@types/react@19.2.14)(react@19.2.3)
       posthog-js:
-        specifier: 1.379.1
-        version: 1.379.1
+        specifier: 1.405.3
+        version: 1.405.3
       posthog-node:
         specifier: ^4.17.1
         version: 4.18.0
@@ -3818,14 +3818,14 @@ packages:
   '@posthog/core@1.28.4':
     resolution: {integrity: sha512-wmtUYHYqA3zIAKDKvYWRNWAQsWOIBwxV08e+bWzVy0wQQzpaS/LzzRupXWRMRrLOk+1x3JKFxbqA3n0QGvpqsQ==}
 
-  '@posthog/core@1.30.4':
-    resolution: {integrity: sha512-57RyT+moR9YGzMTZxbMEPnx6elDeBLzyUd1rfn5XB5yZO425ylKy1nZ1YuKT3CG27bAspUz5J1zHo9y4ygNRCQ==}
+  '@posthog/core@1.44.0':
+    resolution: {integrity: sha512-uE+mdKvetxNQC6gWQf4MHIH8bGt+JN6z7ho0A4G3t9G1VGQTx9wHYHNwkKf3gzi+1oAXS9ej2VVY4pjWUU2PWg==}
 
   '@posthog/types@1.372.10':
     resolution: {integrity: sha512-KuT3vLu3LSFsNWCwasS4gqjH/ysAyIUcB/aJSmKyNhDd/85hAznHRz1eSSl0sMvtsDTYiQIq0I0ybduVbrpPew==}
 
-  '@posthog/types@1.379.1':
-    resolution: {integrity: sha512-Wr14NDmjl3sUVTgjpIojdsnS5+pNKi53IOD7Q+dAjrNlvGxYcLRkrgJ3AQm6//4NO451L7jCXgfx1x3AkZ7ZBw==}
+  '@posthog/types@1.397.1':
+    resolution: {integrity: sha512-W/LpWbKVaaUnfZKuFuHa+Dg03D+fC87cM+PQbG+59JcSPW8F0JcBtSoXmpfrqbpuxUToMo+gktutrUkAb/KQBw==}
 
   '@protobufjs/aspromise@1.1.2':
     resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
@@ -6439,8 +6439,8 @@ packages:
     resolution: {integrity: sha512-7Vv6asjS4gMOuILabD3l739tsaxFQmC+a7pLZm02zyvs8p977bL3zEgq3yDk5rn9B0PbYgIv++jmHcuUab4RhA==}
     engines: {node: '>=18'}
 
-  core-js@3.47.0:
-    resolution: {integrity: sha512-c3Q2VVkGAUyupsjRnaNX6u8Dq2vAdzm9iuPj5FW0fRxzlxgq9Q39MDq10IvmQSpLgHQNyQzQmOo6bgGHmH3NNg==}
+  core-js@3.49.0:
+    resolution: {integrity: sha512-es1U2+YTtzpwkxVLwAFdSpaIMyQaq0PBgm3YD1W3Qpsn1NAmO3KSgZfu+oGSWVu6NvLHoHCV/aYcsE5wiB7ALg==}
 
   core-util-is@1.0.3:
     resolution: {integrity: sha512-ZQBvi1DcpJ4GDqanjucZ2Hj3wEO5pZDS89BWbkcrvdxksJorwUDDZamX9ldFkp9aw2lmBDLgkObEA4DWNJ9FYQ==}
@@ -7343,8 +7343,8 @@ packages:
     resolution: {integrity: sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==}
     engines: {node: ^12.20 || >= 14.13}
 
-  fflate@0.4.8:
-    resolution: {integrity: sha512-FJqqoDBR00Mdj9ppamLa/Y7vxm+PRmNWA67N846RvsoYVMKB4q3y/de5PA7gUmRMYK/8CMz2GDZQmCRN1wBcWA==}
+  fflate@0.4.9:
+    resolution: {integrity: sha512-zdxgIEddhfsyCaWpJ2SdXEP8ZMrKJ6+5jl4OupODcywU0IhRk6gdXuVGcPICyfx2H97hVK7xmJtRLPjkxAX8Vw==}
 
   fflate@0.8.2:
     resolution: {integrity: sha512-cPJU47OaAoCbg0pBvzsgpTPhmhqI5eJjh/JIu8tPj5q+T7iLvW/JAYUqmE7KOB4R1ZyEhzBaIQpQpardBF5z8A==}
@@ -9476,8 +9476,8 @@ packages:
     resolution: {integrity: sha512-SoSL4+OSEtR99LHFZQiJLkT59C5B1amGO1NzTwj7TT1qCUgUO6hxOvzkOYxD+vMrXBM3XJIKzokoERdqQq/Zmg==}
     engines: {node: ^10 || ^12 || >=14}
 
-  posthog-js@1.379.1:
-    resolution: {integrity: sha512-eQ7kG4km594L6kzFIsVrjfGoeqmH/+iS/vPN9UVMtQ/IHict8HWCd4vl2iqIfkcfERQOurbwP9vlgoXTeC3izg==}
+  posthog-js@1.405.3:
+    resolution: {integrity: sha512-uedFwL6TD3YO/oH/eh6ObrJANJwdpis9I7dQZMcN0cS22vT5PfbpaLaC3RPuL5/hGDSwNJ8flxucV6hHDUz6Tw==}
 
   posthog-node@4.18.0:
     resolution: {integrity: sha512-XROs1h+DNatgKh/AlIlCtDxWzwrKdYDb2mOs58n4yN8BkGN9ewqeQwG5ApS4/IzwCb7HPttUkOVulkYatd2PIw==}
@@ -9488,8 +9488,13 @@ packages:
     engines: {node: '>=14.0.0'}
     hasBin: true
 
-  preact@10.29.1:
-    resolution: {integrity: sha512-gQCLc/vWroE8lIpleXtdJhTFDogTdZG9AjMUpVkDf2iTCNwYNWA+u16dL41TqUDJO4gm2IgrcMv3uTpjd4Pwmg==}
+  preact@10.29.7:
+    resolution: {integrity: sha512-DCHYrK/B10yUD3ZjLfhZ3WIE/9Vf9VFUODcRE2dRomTYDpJk6z6L9wecSfhfE6M9ZTHUdyQkoC46arIDhEV84Q==}
+    peerDependencies:
+      preact-render-to-string: '>=5'
+    peerDependenciesMeta:
+      preact-render-to-string:
+        optional: true
 
   prelude-ls@1.2.1:
     resolution: {integrity: sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g==}
@@ -11110,8 +11115,8 @@ packages:
   web-tree-sitter@0.26.8:
     resolution: {integrity: sha512-4sUwi7ZyOrIk5KLgYLkc2A/F0LFMQnBhfb+2Cdl7ik4ePJ6JD+fk4ofI2sA5eGawBKBaK4Vntt7Ww5KcEsay4A==}
 
-  web-vitals@5.2.0:
-    resolution: {integrity: sha512-i2z98bEmaCqSDiHEDu+gHl/dmR4Q+TxFmG3/13KkMO+o8UxQzCqWaDRCiLgEa41nlO4VpXSI0ASa1xWmO9sBlA==}
+  web-vitals@5.3.0:
+    resolution: {integrity: sha512-q6LWsLatGYZp5VGBIOvbTj6JBV2nOmC8KvWztXBmwJcfFAzhwKwbOxhUH306XY3CcaZDUlSmSuNPBsCn0bFu+g==}
 
   webidl-conversions@3.0.1:
     resolution: {integrity: sha512-2JAn3z8AR6rjK8Sm8orRC0h/bcl/DqL7tRPdGZ4I1CjdF+EaMLmYxBHyXuKL849eucPFhvBoxMsflfOb8kxaeQ==}
@@ -14117,13 +14122,13 @@ snapshots:
     dependencies:
       '@posthog/types': 1.372.10
 
-  '@posthog/core@1.30.4':
+  '@posthog/core@1.44.0':
     dependencies:
-      '@posthog/types': 1.379.1
+      '@posthog/types': 1.397.1
 
   '@posthog/types@1.372.10': {}
 
-  '@posthog/types@1.379.1': {}
+  '@posthog/types@1.397.1': {}
 
   '@protobufjs/aspromise@1.1.2': {}
 
@@ -16990,7 +16995,7 @@ snapshots:
     dependencies:
       is-what: 5.5.0
 
-  core-js@3.47.0: {}
+  core-js@3.49.0: {}
 
   core-util-is@1.0.3: {}
 
@@ -17967,7 +17972,7 @@ snapshots:
       node-domexception: 1.0.0
       web-streams-polyfill: 3.3.3
 
-  fflate@0.4.8: {}
+  fflate@0.4.9: {}
 
   fflate@0.8.2: {}
 
@@ -20463,16 +20468,18 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
-  posthog-js@1.379.1:
+  posthog-js@1.405.3:
     dependencies:
-      '@posthog/core': 1.30.4
-      '@posthog/types': 1.379.1
-      core-js: 3.47.0
+      '@posthog/core': 1.44.0
+      '@posthog/types': 1.397.1
+      core-js: 3.49.0
       dompurify: 3.4.11
-      fflate: 0.4.8
-      preact: 10.29.1
+      fflate: 0.4.9
+      preact: 10.29.7
       query-selector-shadow-dom: 1.0.1
-      web-vitals: 5.2.0
+      web-vitals: 5.3.0
+    transitivePeerDependencies:
+      - preact-render-to-string
 
   posthog-node@4.18.0:
     dependencies:
@@ -20485,7 +20492,7 @@ snapshots:
     dependencies:
       commander: 9.5.0
 
-  preact@10.29.1: {}
+  preact@10.29.7: {}
 
   prelude-ls@1.2.1: {}
 
@@ -22426,7 +22433,7 @@ snapshots:
 
   web-tree-sitter@0.26.8: {}
 
-  web-vitals@5.2.0: {}
+  web-vitals@5.3.0: {}
 
   webidl-conversions@3.0.1: {}
 
