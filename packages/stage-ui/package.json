@@ -37,7 +37,7 @@
     "tw-animate-css": "^1.3.5"
   },
   "devDependencies": {
-    "@storybook/react-vite": "^10.3.6",
+    "@storybook/react-vite": "10.5.3",
     "@tailwindcss/postcss": "^4.3.0",
     "@tailwindcss/vite": "^4.3.0",
     "@turbo/gen": "^2.9.12",
