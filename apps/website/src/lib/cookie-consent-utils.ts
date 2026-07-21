@@ -6,6 +6,13 @@ const COOKIE_MAX_AGE = 31536000; // 1 year in seconds
 
 export type ConsentStatus = 'accepted' | 'denied' | null;
 
+export const COOKIE_CONSENT_CHANGE_EVENT = 'clodex-cookie-consent-change';
+export const OPEN_COOKIE_PREFERENCES_EVENT = 'clodex-open-cookie-preferences';
+
+export function parseCookieConsentValue(value: unknown): ConsentStatus {
+  return value === 'accepted' || value === 'denied' ? value : null;
+}
+
 /**
  * Get the current cookie consent status
  */
@@ -14,12 +21,26 @@ export function getCookieConsent(): ConsentStatus {
 
   const cookies = document.cookie.split(';');
   for (const cookie of cookies) {
-    const [name, value] = cookie.trim().split('=');
+    const normalized = cookie.trim();
+    const separatorIndex = normalized.indexOf('=');
+    if (separatorIndex === -1) continue;
+    const name = normalized.slice(0, separatorIndex);
+    const value = normalized.slice(separatorIndex + 1);
     if (name === COOKIE_NAME) {
-      return value as ConsentStatus;
+      return parseCookieConsentValue(value);
     }
   }
   return null;
+}
+
+export function notifyCookieConsentChange(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(COOKIE_CONSENT_CHANGE_EVENT));
+}
+
+export function openCookiePreferences(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(OPEN_COOKIE_PREFERENCES_EVENT));
 }
 
 /**
@@ -41,6 +62,7 @@ export function setCookieConsent(status: 'accepted' | 'denied'): void {
 
   const cookieString = `${COOKIE_NAME}=${status}; path=/; max-age=${COOKIE_MAX_AGE}; SameSite=Lax${domainAttribute}${secureAttribute}`;
   document.cookie = cookieString;
+  notifyCookieConsentChange();
 }
 
 /**
@@ -63,4 +85,5 @@ export function removeCookieConsent(): void {
   // Set cookie with max-age=0 to delete it
   const cookieString = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax${domainAttribute}${secureAttribute}`;
   document.cookie = cookieString;
+  notifyCookieConsentChange();
 }

@@ -3,9 +3,25 @@ import { useEffect } from 'react';
 import { PostHogProvider as PostHogProviderOriginal } from 'posthog-js/react';
 import posthog from 'posthog-js';
 import { containsResizeObserverLoopError } from '@ui/utils/resize-observer';
+import { createRendererPostHogController } from '@ui/telemetry/posthog-privacy';
 import { useKartonState } from './use-karton';
 
-let registeredSuperPropsInitKey: string | null = null;
+const rendererPostHogController = createRendererPostHogController({
+  client: posthog,
+  metadata: {
+    product: 'clodex-browser',
+    app_name: __APP_NAME__,
+    app_version: __APP_VERSION__,
+    app_release_channel: __APP_RELEASE_CHANNEL__,
+    app_platform: __APP_PLATFORM__,
+    app_arch: __APP_ARCH__,
+  },
+  beforeSend: (event) => {
+    if (!event || containsResizeObserverLoopError(event)) return null;
+    return event;
+  },
+  debug: import.meta.env.NODE_ENV === 'development',
+});
 
 interface PostHogProviderProps {
   children: ReactNode;
@@ -22,105 +38,23 @@ export function PostHogProvider({ children }: PostHogProviderProps) {
     (s) => s.preferences.privacy.telemetryLevel,
   );
 
-  // Add custom logic based on karton state
   useEffect(() => {
-    if (!posthog) return;
-    if (!__APP_RENDERER_TELEMETRY_ENABLED__) {
-      try {
-        posthog.stopSessionRecording();
-        posthog.consent.optInOut(false);
-        posthog.opt_out_capturing();
-      } catch (_e) {}
-      return;
-    }
-    if (
-      telemetryLevel === 'off' ||
-      (import.meta.env.NODE_ENV === 'development' &&
-        import.meta.env.VITE_DISABLE_TELEMETRY === 'true')
-    ) {
-      try {
-        posthog.stopSessionRecording();
-        posthog.consent.optInOut(false);
-        posthog.opt_out_capturing();
-      } catch (_e) {}
-      return;
-    }
-
-    // Initialize PostHog once config is available; user identity is handled
-    // separately below.
-    const apiKey = internalData.posthog?.apiKey;
-    const apiHost = internalData.posthog?.host;
-    if (apiKey) {
-      posthog.init(apiKey, {
-        before_send: (event) => {
-          // Filter out user app errors - only capture toolbar errors
-          if (!event) return null; // Reject the event
-          if (containsResizeObserverLoopError(event)) return null;
-          return event;
-        },
-        disable_session_recording: true,
-        autocapture: true,
-        api_host: apiHost,
-        ui_host: 'https://us.posthog.com',
-        capture_pageview: false, // We capture pageviews manually
-        capture_pageleave: true, // Enable pageleave capture
-        debug: import.meta.env.NODE_ENV === 'development',
-      });
-      const initKey = `${apiKey}::${apiHost ?? ''}`;
-      if (registeredSuperPropsInitKey !== initKey) {
-        // Register common app-level super-properties once per PostHog init
-        // target so repeated effect runs do not re-register on every render.
-        posthog.register({
-          product: 'clodex-browser',
-          app_name: __APP_NAME__,
-          app_version: __APP_VERSION__,
-          app_release_channel: __APP_RELEASE_CHANNEL__,
-          app_platform: __APP_PLATFORM__,
-          app_arch: __APP_ARCH__,
-        });
-        registeredSuperPropsInitKey = initKey;
-      }
-      posthog.consent.optInOut(true);
-      posthog.opt_in_capturing();
-    }
+    rendererPostHogController.sync({
+      rendererEnabled: __APP_RENDERER_TELEMETRY_ENABLED__,
+      telemetryLevel,
+      disabledInDevelopment:
+        import.meta.env.NODE_ENV === 'development' &&
+        import.meta.env.VITE_DISABLE_TELEMETRY === 'true',
+      apiKey: internalData.posthog?.apiKey,
+      apiHost: internalData.posthog?.host,
+      userId: userAccount?.user?.id,
+    });
   }, [
     telemetryLevel,
     internalData.posthog?.apiKey,
     internalData.posthog?.host,
+    userAccount?.user?.id,
   ]);
-
-  useEffect(() => {
-    if (
-      __APP_RENDERER_TELEMETRY_ENABLED__ &&
-      telemetryLevel === 'full' &&
-      userAccount?.user?.id &&
-      (!posthog._isIdentified() ||
-        posthog.get_distinct_id() !== userAccount.user.id)
-    ) {
-      if (posthog._isIdentified()) {
-        // reset() clears super-properties too; invalidate the registration
-        // cache so the init effect re-registers them on the next run.
-        registeredSuperPropsInitKey = null;
-        posthog.reset();
-        posthog.register({
-          product: 'clodex-browser',
-          app_name: __APP_NAME__,
-          app_version: __APP_VERSION__,
-          app_release_channel: __APP_RELEASE_CHANNEL__,
-          app_platform: __APP_PLATFORM__,
-          app_arch: __APP_ARCH__,
-        });
-      }
-
-      posthog.identify(userAccount.user.id, {
-        telemetryLevel,
-        email: userAccount.user.email,
-        machineId: userAccount.machineId,
-      });
-      if (userAccount?.user?.id && userAccount?.machineId)
-        posthog.alias(userAccount.user.id, userAccount.machineId);
-    }
-  }, [telemetryLevel, userAccount]);
 
   return (
     <PostHogProviderOriginal client={posthog}>

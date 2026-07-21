@@ -4,7 +4,7 @@ title: Privacy policy
 
 # Privacy Policy
 
-**Effective date: July 12, 2026**
+**Effective date: July 21, 2026**
 
 This policy explains how the Clodex project handles information when you use the project website or the Clodex Agentic IDE.
 
@@ -12,7 +12,11 @@ This policy explains how the Clodex project handles information when you use the
 
 The website may process standard server logs such as IP address, request time, browser type, requested URL, and error information. These records are used to operate, secure, and troubleshoot the service.
 
-Optional analytics are enabled only when you grant the relevant consent. You can withdraw that consent through the website's privacy controls.
+Optional PostHog analytics are off by default. The website does not initialize the PostHog browser client or send PostHog requests unless you select **Allow analytics**. Selecting **Keep analytics off** leaves the client disabled.
+
+When enabled, website analytics are limited to sanitized page-view events and a small allowlist of coarse browser and SDK metadata. URLs are reduced to their origin and path; query strings and fragments are never included. Autocapture, session recording, person profiles, device-model collection, surveys, product tours, conversations, performance capture, and external PostHog script loading are disabled.
+
+The website stores your analytics choice in a first-party preference cookie for up to one year. Use **Privacy choices** in the website footer to change or withdraw that choice. Withdrawal closes the local capture gate before the PostHog client is opted out, so subsequent page navigation is not sent to PostHog.
 
 ## Accounts and authentication
 
@@ -28,7 +32,7 @@ Credentials should be stored through the operating system's protected credential
 
 ## Telemetry
 
-Optional product telemetry may include feature usage, diagnostics, application version, platform information, and error metadata. It is intended to exclude source files, prompts, responses, credentials, and terminal output unless a diagnostic flow explicitly asks you to include that material.
+Optional product telemetry may include feature usage, diagnostics, application version, platform information, and error metadata. It is intended to exclude source files, prompts, responses, credentials, and terminal output unless a separate diagnostic flow explicitly asks you to include particular material and obtains the relevant choice. Standard IDE analytics do not send email addresses or the raw persistent machine identifier. Community Observed analytics use the separately disclosed, domain-separated pseudonymous installation identifier only after the explicit anonymous-statistics choice.
 
 ## Sharing and sale of data
 

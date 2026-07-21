@@ -123,7 +123,6 @@ describe('TelemetryService community-observed privacy contract', () => {
     expect(service.telemetryLevel).toBe('off');
     service.setUserProperties({
       user_id: 'account-id',
-      user_email: 'person@example.invalid',
     });
     service.identifyUser();
     service.capture('settings-opened');
@@ -264,6 +263,27 @@ describe('TelemetryService community-observed privacy contract', () => {
     expect(posthogConstructor).not.toHaveBeenCalled();
     expect(posthogClient.capture).not.toHaveBeenCalled();
     await service.teardown();
+  });
+
+  it('stops without a shutdown flush after an anonymous-to-off change', async () => {
+    const { service, setPrivacy } = makeHarness('anonymous');
+    posthogClient.capture.mockClear();
+
+    setPrivacy({
+      telemetryLevel: 'off',
+      anonymousTelemetryConsentVersion: 1,
+    });
+    await Promise.resolve();
+
+    expect(service.posthogClient).toBeNull();
+    expect(posthogClient.optOut).toHaveBeenCalledTimes(1);
+    expect(posthogClient.shutdown).not.toHaveBeenCalled();
+    expect(posthogClient.capture).not.toHaveBeenCalled();
+
+    service.capture('settings-opened');
+    expect(posthogClient.capture).not.toHaveBeenCalled();
+    await service.teardown();
+    expect(posthogClient.shutdown).not.toHaveBeenCalled();
   });
 });
 
