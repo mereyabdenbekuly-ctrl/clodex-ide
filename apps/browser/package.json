@@ -123,7 +123,7 @@
     "@ai-sdk/openai": "3.0.63",
     "@ai-sdk/openai-compatible": "^2.0.47",
     "@ai-sdk/provider": "3.0.10",
-    "@aws-sdk/credential-providers": "^3.908.0",
+    "@aws-sdk/credential-providers": "^3.1091.0",
     "@clodex/agent-core": "workspace:*",
     "@clodex/agent-runtime-node": "workspace:*",
     "@clodex/agent-shell": "workspace:*",
