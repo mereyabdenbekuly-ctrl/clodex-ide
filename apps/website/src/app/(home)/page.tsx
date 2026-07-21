@@ -39,7 +39,7 @@ const softwareAppJsonLd = {
       }
     : {}),
   description: readyCommunityRelease
-    ? 'Free open-source local-first Agentic IDE for persistent tasks, code, Git, terminal, browser, models, MCP, and review. Community Observed 13 is the current verified Technical Preview.'
+    ? 'Free open-source local-first Agentic IDE for persistent tasks, code, Git, terminal, browser, models, MCP, and review. Community Observed 14 is the current verified Technical Preview.'
     : 'Free open-source local-first Agentic IDE for persistent tasks, code, Git, terminal, browser, models, MCP, and review.',
   url: 'https://ide.clodex.xyz',
   publisher: { '@type': 'Organization', name: 'CLODEx' },
@@ -53,17 +53,17 @@ const softwareAppJsonLd = {
 export const metadata: Metadata = {
   title: 'CLODEx Community — Free local-first Agentic IDE',
   description:
-    'Download the verified CLODEx Community Observed 13 Technical Preview for macOS, Windows, and Linux.',
+    'Download the verified CLODEx Community Observed 14 Technical Preview for macOS, Windows, and Linux.',
   openGraph: {
     title: 'One task. Your local engineering workspace. · CLODEx Community',
     description:
-      'Free local-first Agentic IDE with the verified Community Observed 13 Technical Preview for macOS, Windows, and Linux.',
+      'Free local-first Agentic IDE with the verified Community Observed 14 Technical Preview for macOS, Windows, and Linux.',
     type: 'website',
   },
   twitter: {
     title: 'One task. Your local engineering workspace. · CLODEx Community',
     description:
-      'Free local-first Agentic IDE with the verified Community Observed 13 Technical Preview for macOS, Windows, and Linux.',
+      'Free local-first Agentic IDE with the verified Community Observed 14 Technical Preview for macOS, Windows, and Linux.',
     creator: '@CLODEx_lab',
   },
   category: 'technology',

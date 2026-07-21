@@ -26,11 +26,11 @@ forbidden.
 
 ## Current public Technical Preview
 
-Community Observed 13 (`1.16.0-communityobserved13`) is built from exact source
-[`eb1ea435c8c11ecb9c57c9a61d3e08ec56d9a1fc`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/eb1ea435c8c11ecb9c57c9a61d3e08ec56d9a1fc)
-by [Actions run `29813149668`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29813149668)
+Community Observed 14 (`1.16.0-communityobserved14`) is built from exact source
+[`0ea2e51368410d2d197d14f34c0c0640bc16323f`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/0ea2e51368410d2d197d14f34c0c0640bc16323f)
+by [Actions run `29840259012`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29840259012)
 and published under
-[`v1.16.0-communityobserved13`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved13).
+[`v1.16.0-communityobserved14`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved14).
 
 The packaged Free/managed boundary, byte-level audit, artifact identity, and
 metadata gates passed. This is still an unsigned/ad-hoc, non-notarized test

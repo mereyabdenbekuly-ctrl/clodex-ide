@@ -53,7 +53,7 @@ export default function Welcome() {
                 </span>
               </h1>
               <p className="mx-auto mb-10 max-w-md text-muted-foreground">
-                Community Observed 13 is the current verified Free Technical
+                Community Observed 14 is the current verified Free Technical
                 Preview for macOS, Windows, and Linux.
               </p>
 
@@ -74,7 +74,7 @@ export default function Welcome() {
                       variant: 'primary',
                     })}
                   >
-                    Download Community Observed 13
+                    Download Community Observed 14
                   </Link>
                 )}
                 <p className="text-sm text-subtle-foreground">
