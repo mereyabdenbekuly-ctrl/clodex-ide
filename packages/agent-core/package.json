@@ -179,7 +179,7 @@
     "gray-matter": "^4.0.3",
     "ignore": "^6.0.2",
     "immer": "^10.1.1",
-    "superjson": "2.2.2",
+    "superjson": "2.2.6",
     "isbinaryfile": "^5.0.4",
     "pdfjs-dist": "^5.5.207",
     "sharp": "^0.34.5",
