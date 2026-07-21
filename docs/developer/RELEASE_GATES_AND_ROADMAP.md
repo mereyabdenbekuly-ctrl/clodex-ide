@@ -81,7 +81,7 @@ arm64. The archived server lock has nine separately pinned production packages;
 source-map inspection proves seven are emitted and only those seven are
 represented as child components in CycloneDX. That graph applies 42 reviewed
 exact-version records;
-the 54-record registry also covers supported release-matrix and exact lockfile
+the 60-record registry also covers supported release-matrix and exact lockfile
 variants not present in this host inventory. It supplies pinned public evidence
 only where an exact tarball omitted text or metadata. The Linux x64 CI graph
 applies 43 records because it includes the exact `@libsql/linux-x64-musl`

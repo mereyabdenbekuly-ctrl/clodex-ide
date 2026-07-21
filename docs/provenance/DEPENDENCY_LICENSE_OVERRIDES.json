@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "status": "ENGINEERING_REVIEWED",
-  "reviewedAt": "2026-07-17",
+  "reviewedAt": "2026-07-21",
   "legalConclusion": false,
   "policy": "Exact package@version overrides only. An override may fill missing text or missing/Unknown license metadata; it may not contradict a non-empty package declaration. Hash or identity drift fails closed.",
   "entries": [
@@ -30,6 +30,34 @@
         "sourceReferences": [
           "https://github.com/vercel/ai/tree/02882860df29ae2aa8140003c87a493af80bef08/packages/provider-utils",
           "https://github.com/vercel/ai/blob/02882860df29ae2aa8140003c87a493af80bef08/LICENSE"
+        ]
+      }
+    },
+    {
+      "package": "@ai-sdk/provider-utils",
+      "version": "4.0.40",
+      "license": "Apache-2.0",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-21",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@ai-sdk/provider-utils/-/provider-utils-4.0.40.tgz",
+        "integrity": "sha512-OL5IrpUm9Y8Dwy+w/vvFwPotS6m52O9W0op2oXgXdCROMJIBalBI0oro6OIBYkPxvm5Xg02GSkoQN25RlR0bnw==",
+        "repository": {
+          "url": "git+https://github.com/vercel/ai.git",
+          "type": "git",
+          "directory": "packages/provider-utils"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/vercel-ai-provider-utils-4.0.40-APACHE-2.0.txt",
+        "sha256": "b4f9adb7c568904834d0dd6cc98d16c390d21ca32fc17ae7a267715269bd5529",
+        "sourceReferences": [
+          "https://github.com/vercel/ai/tree/da5fbd2703c54dfbaea7ec725757da5b121beef0/packages/provider-utils",
+          "https://github.com/vercel/ai/blob/da5fbd2703c54dfbaea7ec725757da5b121beef0/LICENSE"
         ]
       }
     },
@@ -63,6 +91,35 @@
       "notes": "Exact npm package declares Apache-2.0; the pinned root license is from release-series tag v3.972.0."
     },
     {
+      "package": "@aws-sdk/credential-provider-http",
+      "version": "3.972.61",
+      "license": "Apache-2.0",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-21",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@aws-sdk/credential-provider-http/-/credential-provider-http-3.972.61.tgz",
+        "integrity": "sha512-8jAjgStl5Ytq4+HF3X/9f+EmRinaRbGRRtQGktlPfBRVx73H+R1y48vIeXerQtYGFaUqkEp3fT6jP854rVO2yQ==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/aws/aws-sdk-js-v3.git",
+          "directory": "packages-internal/credential-provider-http"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/aws-sdk-js-v3-3.972-APACHE-2.0.txt",
+        "sha256": "edea91454b811f127fbdea3d86f378f6719bd372ed440abf82b232f6fca06c3d",
+        "sourceReferences": [
+          "https://github.com/aws/aws-sdk-js-v3/tree/a1269f743e0e0963b018593be97d9c8d51e088c4/packages-internal/credential-provider-http",
+          "https://github.com/aws/aws-sdk-js-v3/blob/a1269f743e0e0963b018593be97d9c8d51e088c4/LICENSE"
+        ]
+      },
+      "notes": "Exact npm package declares Apache-2.0; the pinned root license is from the exact v3.1091.0 publication commit containing this package version."
+    },
+    {
       "package": "@aws-sdk/credential-provider-login",
       "version": "3.972.38",
       "license": "Apache-2.0",
@@ -92,6 +149,35 @@
       "notes": "Exact npm package declares Apache-2.0; the pinned root license is from release-series tag v3.972.0."
     },
     {
+      "package": "@aws-sdk/credential-provider-login",
+      "version": "3.972.66",
+      "license": "Apache-2.0",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-21",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.66.tgz",
+        "integrity": "sha512-g2fsqm87r/nKthLZ0VkkDBElkGg0PvSa8d97HQ6EilMbJTZ6hxa8FxkSZyJfgPfFdZn0TTmkOffQmTSUcAHIng==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/aws/aws-sdk-js-v3.git",
+          "directory": "packages-internal/credential-provider-login"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/aws-sdk-js-v3-3.972-APACHE-2.0.txt",
+        "sha256": "edea91454b811f127fbdea3d86f378f6719bd372ed440abf82b232f6fca06c3d",
+        "sourceReferences": [
+          "https://github.com/aws/aws-sdk-js-v3/tree/a1269f743e0e0963b018593be97d9c8d51e088c4/packages-internal/credential-provider-login",
+          "https://github.com/aws/aws-sdk-js-v3/blob/a1269f743e0e0963b018593be97d9c8d51e088c4/LICENSE"
+        ]
+      },
+      "notes": "Exact npm package declares Apache-2.0; the pinned root license is from the exact v3.1091.0 publication commit containing this package version."
+    },
+    {
       "package": "@aws-sdk/nested-clients",
       "version": "3.997.6",
       "license": "Apache-2.0",
@@ -119,6 +205,35 @@
         ]
       },
       "notes": "Exact npm package declares Apache-2.0; the pinned root license is from release-series tag v3.997.0."
+    },
+    {
+      "package": "@aws-sdk/nested-clients",
+      "version": "3.997.33",
+      "license": "Apache-2.0",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-21",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@aws-sdk/nested-clients/-/nested-clients-3.997.33.tgz",
+        "integrity": "sha512-dVZOroI/r3/ENvqNGgjMPul+jjlz9GddfVusgTXlVjfZj5isibOxecLkGQbRPp8XOuX+RAfjXLFgPkD1JS5xrw==",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/aws/aws-sdk-js-v3.git",
+          "directory": "packages/nested-clients"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/aws-sdk-js-v3-3.997-APACHE-2.0.txt",
+        "sha256": "edea91454b811f127fbdea3d86f378f6719bd372ed440abf82b232f6fca06c3d",
+        "sourceReferences": [
+          "https://github.com/aws/aws-sdk-js-v3/tree/a1269f743e0e0963b018593be97d9c8d51e088c4/packages-internal/nested-clients",
+          "https://github.com/aws/aws-sdk-js-v3/blob/a1269f743e0e0963b018593be97d9c8d51e088c4/LICENSE"
+        ]
+      },
+      "notes": "Exact npm metadata declares Apache-2.0 and points to packages/nested-clients; the exact v3.1091.0 publication commit stores this package under packages-internal/nested-clients."
     },
     {
       "package": "@better-auth/utils",
@@ -904,6 +1019,35 @@
         ]
       },
       "notes": "Pinned upstream license text for the exact @posthog/core 1.30.4 tag with trailing whitespace normalized; license terms are unchanged."
+    },
+    {
+      "package": "@posthog/core",
+      "version": "1.44.0",
+      "license": "MIT",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-21",
+      "basis": "PINNED_UPSTREAM_LICENSE",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@posthog/core/-/core-1.44.0.tgz",
+        "integrity": "sha512-uE+mdKvetxNQC6gWQf4MHIH8bGt+JN6z7ho0A4G3t9G1VGQTx9wHYHNwkKf3gzi+1oAXS9ej2VVY4pjWUU2PWg==",
+        "repository": {
+          "type": "git",
+          "url": "https://github.com/PostHog/posthog-js.git",
+          "directory": "packages/core"
+        },
+        "gitHead": null
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/posthog-core-1.44.0-MIT.txt",
+        "sha256": "a4a2a1ca3b22fe608ea29144452418e4a91f11ca44666a8a91cb72ec0a70f6ee",
+        "sourceReferences": [
+          "https://github.com/PostHog/posthog-js/tree/34a03e239b011c2b10a709408f16d8b775eb1633/packages/core",
+          "https://github.com/PostHog/posthog-js/blob/34a03e239b011c2b10a709408f16d8b775eb1633/LICENSE"
+        ]
+      },
+      "notes": "Pinned exact upstream root license and third-party notices for @posthog/core 1.44.0; the npm package declares MIT."
     },
     {
       "package": "@react-three/fiber",
