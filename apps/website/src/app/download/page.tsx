@@ -21,10 +21,10 @@ export default async function DownloadPage({
     ? {
         readyBadge: 'Проверенный Free Community Technical Preview',
         unavailableBadge: 'Free Community download недоступен',
-        readyTitle: 'Скачать CLODEx Community Observed 11',
+        readyTitle: 'Скачать CLODEx Community Observed 13',
         unavailableTitle: 'Ссылки на сборку недоступны',
         readyDescription:
-          'Community Observed 11 прошла проверку Free/managed boundary и packaged bytes. Выберите пакет для своей платформы и проверьте его перед установкой.',
+          'Community Observed 13 прошла проверку Free/managed boundary и packaged bytes. Выберите пакет для своей платформы и проверьте его перед установкой.',
         unavailableDescription:
           'Проверенный release manifest неполон, поэтому страница не показывает прямые ссылки. Не используйте случайные или старые installer-файлы.',
         unavailableVersion: 'Release manifest unavailable',
@@ -49,10 +49,10 @@ export default async function DownloadPage({
     : {
         readyBadge: 'Verified Free Community Technical Preview',
         unavailableBadge: 'Free Community download unavailable',
-        readyTitle: 'Download CLODEx Community Observed 11',
+        readyTitle: 'Download CLODEx Community Observed 13',
         unavailableTitle: 'Build links are unavailable',
         readyDescription:
-          'Community Observed 11 passed the Free/managed boundary and packaged-byte gates. Choose the package for your platform and verify it before installation.',
+          'Community Observed 13 passed the Free/managed boundary and packaged-byte gates. Choose the package for your platform and verify it before installation.',
         unavailableDescription:
           'The verified release manifest is incomplete, so this page exposes no direct links. Do not use arbitrary or older installer files.',
         unavailableVersion: 'Release manifest unavailable',
