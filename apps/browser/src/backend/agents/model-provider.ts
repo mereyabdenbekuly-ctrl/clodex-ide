@@ -25,10 +25,9 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAzure } from '@ai-sdk/azure';
-import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
-import { fromIni, fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import { createVertex } from '@ai-sdk/google-vertex';
 import { createClodex } from './clodex-provider';
+import { createBedrockProvider } from './bedrock-provider';
 import type { AuthService, AuthState } from '@/services/auth';
 import type { PreferencesService } from '@/services/preferences';
 import type { CredentialsService } from '@/services/credentials';
@@ -778,48 +777,23 @@ export class ModelProviderService {
    * - `default-chain`: Node provider chain (env vars, shared credentials,
    *   EC2/ECS instance roles, IMDS).
    *
-   * Region resolution: UI-entered `region` always wins. When empty:
-   *   - `access-keys` falls back to `us-east-1` (preserves pre-feature
-   *     behaviour for static-credential setups with no other region
-   *     source).
-   *   - `profile` and `default-chain` pass `undefined`, letting the AWS
-   *     SDK resolve the region from the profile's `region` entry or the
-   *     `AWS_REGION` / `AWS_DEFAULT_REGION` env vars.
+   * Region resolution is fail-closed before provider construction:
+   * UI override, the selected profile's service region, and the standard
+   * AWS region environment variables are considered in mode-specific order.
+   * Static access keys retain the historical `us-east-1` fallback.
    */
   private buildBedrockProvider(endpoint: CustomEndpoint, apiKey: string) {
-    const mode = endpoint.awsAuthMode ?? 'access-keys';
-    const overrideRegion = endpoint.region?.trim() || undefined;
-
-    if (mode === 'profile') {
-      if (!endpoint.awsProfileName) {
-        throw new Error(
-          'AWS profile name is required when awsAuthMode is "profile".',
-        );
-      }
-      return createAmazonBedrock({
-        // `region` intentionally undefined when the user did not override
-        // it — `createAmazonBedrock` + the AWS SDK will resolve from the
-        // profile's `region` entry or the `AWS_REGION` env var.
-        region: overrideRegion,
-        credentialProvider: fromIni({ profile: endpoint.awsProfileName }),
-      });
-    }
-
-    if (mode === 'default-chain') {
-      return createAmazonBedrock({
-        region: overrideRegion,
-        credentialProvider: fromNodeProviderChain(),
-      });
-    }
-
-    // access-keys: no profile / env to fall back on, so keep the
-    // historical `us-east-1` default to preserve behaviour for existing
-    // setups.
-    const secretAccessKey = this.preferencesService.decryptProviderApiKey(
-      endpoint.encryptedSecretKey,
-    );
-    return createAmazonBedrock({
-      region: overrideRegion ?? 'us-east-1',
+    const authMode = endpoint.awsAuthMode ?? 'access-keys';
+    const secretAccessKey =
+      authMode === 'access-keys'
+        ? this.preferencesService.decryptProviderApiKey(
+            endpoint.encryptedSecretKey,
+          )
+        : undefined;
+    return createBedrockProvider({
+      authMode,
+      regionOverride: endpoint.region,
+      profileName: endpoint.awsProfileName,
       accessKeyId: apiKey,
       secretAccessKey,
     });

@@ -37,6 +37,12 @@ import {
   SettingsSectionHeader,
   SettingsSummaryCard,
 } from '../_components/settings-page';
+import {
+  bedrockInferencePrefix,
+  buildSuggestedBedrockMapping,
+  resolveEffectiveBedrockRegion,
+  type AwsProfileInfo,
+} from './bedrock-settings';
 
 enablePatches();
 
@@ -83,80 +89,6 @@ const AWS_AUTH_MODE_OPTIONS: {
   { value: 'profile', label: 'Named Profile' },
   { value: 'default-chain', label: 'Default Credential Chain' },
 ];
-
-type AwsProfileInfo = {
-  name: string;
-  region?: string;
-  ssoRegion?: string;
-};
-
-/**
- * Map an AWS region to the Bedrock cross-region inference profile
- * prefix required by Claude 4.x and Nova. Falls back to `us.` for
- * unrecognised regions because `us.` is the most broadly supported
- * family and unknown inputs almost always come from typos of a
- * US region.
- */
-function bedrockInferencePrefix(region: string | undefined): string {
-  if (!region) return 'us.';
-  if (region.startsWith('us-') || region.startsWith('ca-')) return 'us.';
-  if (region.startsWith('eu-')) return 'eu.';
-  if (region.startsWith('ap-')) return 'apac.';
-  return 'us.';
-}
-
-/**
- * Resolve the region the Bedrock endpoint will effectively use for
- * model-ID prefix computation. The priority matches what the backend
- * credential resolution does at signing time: explicit override wins,
- * otherwise fall back to whatever the selected profile (or env) says.
- *
- * Returns `undefined` if nothing is known — callers should treat that
- * as "prefix unknown" rather than defaulting silently.
- */
-function resolveEffectiveBedrockRegion(args: {
-  regionOverride: string;
-  awsAuthMode: 'access-keys' | 'profile' | 'default-chain';
-  awsProfileName: string;
-  profiles: AwsProfileInfo[];
-  envRegion: string | undefined;
-}): string | undefined {
-  const override = args.regionOverride.trim();
-  if (override) return override;
-  if (args.awsAuthMode === 'profile' && args.awsProfileName) {
-    const p = args.profiles.find((x) => x.name === args.awsProfileName);
-    if (p?.region) return p.region;
-    if (p?.ssoRegion) return p.ssoRegion;
-  }
-  if (args.awsAuthMode === 'default-chain' && args.envRegion) {
-    return args.envRegion;
-  }
-  return undefined;
-}
-
-/**
- * Build a suggested `modelIdMapping` JSON string for Bedrock, using
- * the given inference-profile prefix. The mapping covers the built-in
- * Anthropic models that Bedrock hosts; IDs are the cross-region
- * inference profile identifiers as published in Anthropic's Bedrock
- * reference (docs.anthropic.com → Models overview → Bedrock column).
- *
- * Note: the 4.6/4.7/4.8 generation uses short-form IDs without a date or
- * `-v1:0` suffix — that is intentional on Anthropic's side, not a
- * placeholder. Older models (4.5 and earlier) still carry the dated,
- * versioned form.
- */
-function buildSuggestedBedrockMapping(prefix: string): string {
-  const mapping: Record<string, string> = {
-    'claude-opus-4.8': `${prefix}anthropic.claude-opus-4-8`,
-    'claude-opus-4.7': `${prefix}anthropic.claude-opus-4-7`,
-    'claude-opus-4.6': `${prefix}anthropic.claude-opus-4-6-v1`,
-    'claude-sonnet-5': `${prefix}anthropic.claude-sonnet-5`,
-    'claude-sonnet-4.6': `${prefix}anthropic.claude-sonnet-4-6`,
-    'claude-haiku-4.5': `${prefix}anthropic.claude-haiku-4-5-20251001-v1:0`,
-  };
-  return JSON.stringify(mapping, null, 2);
-}
 
 /**
  * Bedrock-specific fields. Split out because the auth-mode switch
@@ -251,7 +183,9 @@ function BedrockFields({
               ? 'us-east-1'
               : detectedRegion
                 ? detectedRegion
-                : 'from profile / AWS_REGION'
+                : awsAuthMode === 'profile'
+                  ? 'from selected profile / environment'
+                  : 'from environment / active profile'
           }
           value={region}
           onValueChange={setRegion}
@@ -260,8 +194,8 @@ function BedrockFields({
         {awsAuthMode !== 'access-keys' && detectedRegion && !region && (
           <p className="text-muted-foreground text-xs">
             Detected region: <code className="font-mono">{detectedRegion}</code>
-            {awsAuthMode === 'default-chain' && envRegion === detectedRegion
-              ? ' (from AWS_REGION)'
+            {envRegion === detectedRegion
+              ? ' (from AWS_REGION or AWS_DEFAULT_REGION)'
               : ''}
           </p>
         )}
@@ -776,9 +710,8 @@ function CustomEndpointDialog({
     }
   }, [open]);
 
-  // Bedrock profile auth requires a non-empty profile name — without it the
-  // backend's buildBedrockProvider() throws at call time. Block save here so
-  // a whitespace-only value can't produce a backend-invalid endpoint.
+  // Bedrock profile auth requires a non-empty profile name. Block save here
+  // so a whitespace-only value cannot produce a backend-invalid endpoint.
   const bedrockProfileInvalid =
     apiSpec === 'amazon-bedrock' &&
     awsAuthMode === 'profile' &&
@@ -1095,7 +1028,7 @@ function CustomEndpointCard({
         : endpoint.awsAuthMode === 'profile'
           ? 'from profile'
           : endpoint.awsAuthMode === 'default-chain'
-            ? 'from environment'
+            ? 'from environment/profile'
             : 'us-east-1'
       : null;
 

@@ -2619,6 +2619,7 @@ export type KartonContract = {
         profiles: Array<{
           name: string;
           region?: string;
+          /** IAM Identity Center portal region, not a Bedrock service region. */
           ssoRegion?: string;
         }>;
         envRegion?: string;
