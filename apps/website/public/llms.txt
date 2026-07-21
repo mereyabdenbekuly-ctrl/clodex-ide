@@ -1,7 +1,7 @@
 # CLODEx
 
 > CLODEx is an open-source, local-first Agentic IDE for durable engineering
-> tasks. The Free Community source and the verified Community Observed 13
+> tasks. The Free Community source and the verified Community Observed 14
 > cross-platform Technical Preview are public.
 
 ## Free Community product
@@ -22,8 +22,8 @@ workspace:
 - an explicit first-launch allow-or-decline choice for optional product
   statistics.
 
-Community Observed 13 was built from exact canonical source
-`eb1ea435c8c11ecb9c57c9a61d3e08ec56d9a1fc` by Actions run `29813149668`.
+Community Observed 14 was built from exact canonical source
+`0ea2e51368410d2d197d14f34c0c0640bc16323f` by Actions run `29840259012`.
 It passed the enforced Free/managed boundary and packaged-byte gates. Its
 release publishes five installers, SHA-256 checksums, SBOMs, validation
 manifests, warnings, and an evidence archive. The macOS packages are ad-hoc
@@ -72,16 +72,16 @@ between the user and the selected provider.
 
 ## Build and download status
 
-- Current verified Free Technical Preview: `1.16.0-communityobserved13`
-- Tag: `v1.16.0-communityobserved13`
-- Exact source: `eb1ea435c8c11ecb9c57c9a61d3e08ec56d9a1fc`
-- Build run: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29813149668
-- Immutable prerelease: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved13
+- Current verified Free Technical Preview: `1.16.0-communityobserved14`
+- Tag: `v1.16.0-communityobserved14`
+- Exact source: `0ea2e51368410d2d197d14f34c0c0640bc16323f`
+- Build run: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29840259012
+- Immutable prerelease: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved14
 - Platforms: macOS Apple Silicon, macOS Intel, Windows x64, Debian/Ubuntu x64,
   and Fedora/RHEL x64
 - Download page: https://ide.clodex.xyz/download
-- Checksums: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved13/SHA256SUMS.txt
-- Evidence: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved13/clodex-community-observed-1.16.0-communityobserved13-evidence.zip
+- Checksums: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/SHA256SUMS.txt
+- Evidence: https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed-1.16.0-communityobserved14-evidence.zip
 - Trust warning: this is an unsigned/ad-hoc, non-notarized Technical Preview,
   not a stable signed release. Do not disable operating-system security globally.
 
