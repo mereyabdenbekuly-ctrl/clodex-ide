@@ -23,5 +23,12 @@
     "module": "ESNext"
   },
   "include": ["next-env.d.ts", "src", ".next/types/**/*.ts"],
-  "exclude": ["node_modules", ".next", ".turbo", "out", "dist"]
+  "exclude": [
+    "node_modules",
+    ".next",
+    ".turbo",
+    "out",
+    "dist",
+    "src/**/*.test.mts"
+  ]
 }

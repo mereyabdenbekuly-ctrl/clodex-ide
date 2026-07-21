@@ -3,6 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { openCookiePreferences } from '@/lib/cookie-consent-utils';
 
 export function Footer() {
   const [locale, setLocale] = useState<'ru' | 'en'>('en');
@@ -85,6 +86,13 @@ export function Footer() {
             >
               Privacy
             </Link>
+            <button
+              type="button"
+              onClick={openCookiePreferences}
+              className="text-left text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {locale === 'ru' ? 'Настройки приватности' : 'Privacy choices'}
+            </button>
             <Link
               href="/terms"
               className="text-muted-foreground transition-colors hover:text-foreground"

@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { Button } from '@clodex/stage-ui/components/button';
-import { getCookieConsent, setCookieConsent } from '@/lib/cookie-consent-utils';
+import {
+  getCookieConsent,
+  OPEN_COOKIE_PREFERENCES_EVENT,
+  setCookieConsent,
+} from '@/lib/cookie-consent-utils';
 
 export function CookieBanner() {
   const [showBanner, setShowBanner] = useState(false);
@@ -11,20 +15,27 @@ export function CookieBanner() {
     if (getCookieConsent() === null) {
       setShowBanner(true);
     }
+
+    const handleOpenPreferences = () => setShowBanner(true);
+    window.addEventListener(
+      OPEN_COOKIE_PREFERENCES_EVENT,
+      handleOpenPreferences,
+    );
+    return () =>
+      window.removeEventListener(
+        OPEN_COOKIE_PREFERENCES_EVENT,
+        handleOpenPreferences,
+      );
   }, []);
 
   const handleAccept = () => {
     setCookieConsent('accepted');
     setShowBanner(false);
-    // Notify the PostHogProvider to upgrade to cookie persistence — no page reload needed.
-    window.dispatchEvent(new Event('posthog-consent-change'));
   };
 
   const handleDeny = () => {
     setCookieConsent('denied');
     setShowBanner(false);
-    // No posthog-consent-change event needed: cookieless mode is already active
-    // and declining doesn't change the tracking mode — only acceptance does.
   };
 
   if (!showBanner) {
@@ -40,9 +51,10 @@ export function CookieBanner() {
             Cookie preferences
           </h2>
           <p className="text-muted-foreground text-sm">
-            To help us build a better experience, we'd like to use analytics
-            cookies to understand how you use our site. If you decline, we only
-            use essential cookies and collect anonymous, cookieless analytics.{' '}
+            Optional analytics are off until you allow them. If enabled, we send
+            only sanitized anonymous page views—never form text, query strings,
+            session recordings, or account identifiers. Deny keeps PostHog
+            analytics off.{' '}
             <a
               href="/privacy"
               className="underline transition-colors hover:text-foreground"
@@ -53,10 +65,10 @@ export function CookieBanner() {
         </div>
         <div className="flex w-full flex-row-reverse items-start justify-start gap-2">
           <Button size="sm" onClick={handleAccept}>
-            Accept
+            Allow analytics
           </Button>
           <Button size="sm" variant="secondary" onClick={handleDeny}>
-            Deny
+            Keep analytics off
           </Button>
         </div>
       </div>

@@ -11,7 +11,8 @@
     "build": "next build",
     "dev": "next dev --port 3000",
     "dev:clodex": "clodex -- next dev --port 3000",
-    "start": "next start"
+    "start": "next start",
+    "test": "node --experimental-strip-types --test src/lib/posthog-privacy.test.mts"
   },
   "dependencies": {
     "@clodex/icons": "workspace:*",

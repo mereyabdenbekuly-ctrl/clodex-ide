@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { PostHog } from 'posthog-node';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
 import { withTracing } from '@posthog/ai';
@@ -948,7 +948,6 @@ export function parseUIEventProperties<T extends UIEventName>(
 
 export interface UserProperties {
   user_id?: string;
-  user_email?: string;
 }
 
 export type ExceptionProperties = {
@@ -1097,10 +1096,10 @@ export class TelemetryService extends DisposableService {
   private readonly distributionMode: string;
   private readonly telemetryEnabled: boolean;
   private readonly telemetryMode: string;
-  private readonly telemetryPrivacyMode: boolean;
   private readonly exceptionTelemetryEnabled: boolean;
   private readonly modelTracingEnabled: boolean;
   private readonly posthogApiKey: string;
+  private readonly anonymousDistinctId = `clodex-anonymous-${randomUUID()}`;
   private userProperties: UserProperties = {};
   private pendingAppLaunchedCapture: Promise<void> | null = null;
   private missingApiKeyLogged = false;
@@ -1131,10 +1130,6 @@ export class TelemetryService extends DisposableService {
           : this.telemetryEnabled
             ? 'standard'
             : 'disabled';
-    this.telemetryPrivacyMode =
-      typeof __APP_TELEMETRY_PRIVACY_MODE__ === 'boolean'
-        ? __APP_TELEMETRY_PRIVACY_MODE__
-        : this.distributionMode !== 'official';
     this.exceptionTelemetryEnabled =
       typeof __APP_EXCEPTION_TELEMETRY_ENABLED__ === 'boolean'
         ? __APP_EXCEPTION_TELEMETRY_ENABLED__
@@ -1147,13 +1142,9 @@ export class TelemetryService extends DisposableService {
       ? (process.env.POSTHOG_API_KEY?.trim() ?? '')
       : '';
 
-    // The observed lane creates no network client until the persisted
-    // preference proves an explicit anonymous opt-in. Official builds retain
-    // the existing eager client behavior.
-    if (
-      this.telemetryMode !== 'anonymous-backend-only' ||
-      this.getTelemetryLevel() === 'anonymous'
-    ) {
+    // No distribution creates a network client before the persisted
+    // preference proves an allowed telemetry level.
+    if (this.getTelemetryLevel() !== 'off') {
       this.ensurePostHogClient();
     }
     if (this.telemetryMode === 'anonymous-backend-only') {
@@ -1167,11 +1158,8 @@ export class TelemetryService extends DisposableService {
       const previousTelemetryLevel =
         this.getTelemetryLevelForPreferences(oldPrefs);
       if (nextTelemetryLevel !== previousTelemetryLevel) {
-        if (
-          this.telemetryMode === 'anonymous-backend-only' &&
-          nextTelemetryLevel !== 'anonymous'
-        ) {
-          void this.shutdownObservedClient();
+        if (nextTelemetryLevel === 'off') {
+          this.disablePostHogClientWithoutFlush();
         }
         this.capture('telemetry-level-changed', {
           from: previousTelemetryLevel,
@@ -1220,12 +1208,13 @@ export class TelemetryService extends DisposableService {
     }
     return this.getTelemetryLevel() === 'full' && this.userProperties.user_id
       ? this.userProperties.user_id
-      : this.identifierService.getMachineId();
+      : this.anonymousDistinctId;
   }
 
   private ensurePostHogClient(): PostHog | null {
     if (this.posthogClient) return this.posthogClient;
     if (!this.telemetryEnabled) return null;
+    if (this.getTelemetryLevel() === 'off') return null;
     if (
       this.telemetryMode === 'anonymous-backend-only' &&
       this.getTelemetryLevel() !== 'anonymous'
@@ -1244,54 +1233,41 @@ export class TelemetryService extends DisposableService {
       host: process.env.POSTHOG_HOST || 'https://us.i.posthog.com',
       flushAt: 1,
       flushInterval: 0,
-      ...(this.telemetryMode === 'anonymous-backend-only'
-        ? {
-            defaultOptIn: true,
-            disableGeoip: true,
-            disableRemoteConfig: true,
-            disableSurveys: true,
-            enableExceptionAutocapture: false,
-            preloadFeatureFlags: false,
-            privacyMode: true,
-            sendFeatureFlagEvent: false,
-          }
-        : { privacyMode: this.telemetryPrivacyMode }),
+      defaultOptIn: true,
+      disableGeoip: true,
+      disableRemoteConfig: true,
+      disableSurveys: true,
+      enableExceptionAutocapture: false,
+      preloadFeatureFlags: false,
+      privacyMode: true,
+      sendFeatureFlagEvent: false,
     });
     return this.posthogClient;
   }
 
-  private async shutdownObservedClient(): Promise<void> {
-    if (this.telemetryMode !== 'anonymous-backend-only') return;
+  private disablePostHogClientWithoutFlush(): void {
     const client = this.posthogClient;
     this.posthogClient = null;
     if (!client) return;
-    try {
-      await client.optOut();
-      await client.shutdown();
-    } catch (error) {
-      this.logger.debug(`Failed to stop observed PostHog client: ${error}`);
-    }
+    // shutdown() flushes queued events. A denial path must not initiate that
+    // network activity, so detach the zero-interval client after local opt-out.
+    void client.optOut().catch((error) => {
+      this.logger.debug(`Failed to opt out PostHog client: ${error}`);
+    });
   }
 
   identifyUser() {
     if (this.telemetryMode === 'anonymous-backend-only') return;
-    if (!this.posthogClient) return;
+    const posthogClient = this.ensurePostHogClient();
+    if (!posthogClient) return;
 
-    if (
-      this.userProperties.user_id &&
-      this.userProperties.user_email &&
-      this.getTelemetryLevel() === 'full'
-    ) {
+    if (this.userProperties.user_id && this.getTelemetryLevel() === 'full') {
       this.logger.debug('[TelemetryService] Identifying user...');
-      this.posthogClient.identify({
+      posthogClient.identify({
         distinctId: this.userProperties.user_id,
         properties: {
-          email: this.userProperties.user_email,
+          telemetry_level: 'full',
         },
-      });
-      this.posthogClient.alias({
-        alias: this.userProperties.user_id,
-        distinctId: this.identifierService.getMachineId(),
       });
     } else {
       this.logger.debug(
@@ -1443,16 +1419,17 @@ export class TelemetryService extends DisposableService {
     try {
       if (!this.exceptionTelemetryEnabled) return;
       const telemetryLevel = this.getTelemetryLevel();
-      if (telemetryLevel === 'off') return;
+      if (telemetryLevel !== 'full') return;
 
       this.logger.debug(
         `[TelemetryService] Capturing exception: ${error.message}`,
       );
 
-      if (!this.posthogClient) return;
+      const posthogClient = this.ensurePostHogClient();
+      if (!posthogClient) return;
 
       const distinctId = this.getDistinctId();
-      this.posthogClient.captureException(error, distinctId, {
+      posthogClient.captureException(error, distinctId, {
         properties: {
           ...properties,
           product: 'clodex-browser',
