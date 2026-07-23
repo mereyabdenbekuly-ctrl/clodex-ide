@@ -14,6 +14,16 @@ export const taskEn = {
       attachFile: 'Attach file',
       stopAgent: 'Stop agent',
       sendMessage: 'Send message',
+      queueMessage: 'Queue for the next iteration',
+    },
+    queue: {
+      explanation:
+        'The active model request cannot be changed in flight. These messages will be sent automatically on the next iteration after any pending approval is resolved.',
+      queuedForNextIteration: '{{count}} queued for next iteration',
+      interruptAndSend: 'Interrupt & send',
+      interruptAndSendDescription:
+        'Stop the current iteration and send the queued messages now',
+      remove: 'Remove from queue',
     },
     swarm: {
       battleOverridesUltraLabel: 'Battle Agent overrides Ultra Deep Think',

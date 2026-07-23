@@ -991,6 +991,9 @@ export const ChatInputActions = memo(function ChatInputActions({
   // Always show the send button; show stop button alongside it when agent is working
   const showStopButton = isAgentWorking && !hasPendingQuestion && !!onStop;
   const showSendButton = true;
+  const sendActionLabel = isAgentWorking
+    ? t('composer.actions.queueMessage')
+    : t('composer.actions.sendMessage');
 
   return (
     <div className="flex shrink-0 flex-row items-end justify-end gap-1 pb-0.5">
@@ -1186,14 +1189,14 @@ export const ChatInputActions = memo(function ChatInputActions({
               <Button
                 disabled={!canSendMessage}
                 onClick={onSubmit}
-                aria-label={t('composer.actions.sendMessage')}
+                aria-label={sendActionLabel}
                 variant="primary"
                 className="z-10 size-8 shrink-0 cursor-pointer rounded-full border-clodex-green-400 bg-clodex-green-400 p-1 shadow-codex-md transition-all hover:bg-clodex-green-500 disabled:opacity-40 disabled:shadow-none"
               >
                 <ArrowUpIcon className="size-4 stroke-3" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{t('composer.actions.sendMessage')}</TooltipContent>
+            <TooltipContent>{sendActionLabel}</TooltipContent>
           </Tooltip>
         )}
       </div>

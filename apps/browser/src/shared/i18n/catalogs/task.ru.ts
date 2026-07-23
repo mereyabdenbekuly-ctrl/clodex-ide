@@ -16,6 +16,16 @@ export const taskRu = {
       attachFile: 'Прикрепить файл',
       stopAgent: 'Остановить агента',
       sendMessage: 'Отправить сообщение',
+      queueMessage: 'Поставить в очередь на следующую итерацию',
+    },
+    queue: {
+      explanation:
+        'Активный запрос модели нельзя изменить на лету. Эти сообщения будут автоматически отправлены на следующей итерации после обработки ожидающего подтверждения.',
+      queuedForNextIteration: 'В очереди на следующую итерацию: {{count}}',
+      interruptAndSend: 'Прервать и отправить',
+      interruptAndSendDescription:
+        'Остановить текущую итерацию и сразу отправить сообщения из очереди',
+      remove: 'Удалить из очереди',
     },
     swarm: {
       battleOverridesUltraLabel:

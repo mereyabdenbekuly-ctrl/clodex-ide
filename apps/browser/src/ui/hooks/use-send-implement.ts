@@ -53,7 +53,19 @@ export function useSendImplement(): (promptOverride?: string) => void {
           );
         }
         void sendUserMessage(openAgentId, message)
-          .then(() => setSwarmModeActive(false))
+          .then((result) => {
+            if (
+              didDispatchOptimisticMessage &&
+              result.disposition === 'queued'
+            ) {
+              window.dispatchEvent(
+                new CustomEvent('chat-message-queued', {
+                  detail: { clientId: message.id },
+                }),
+              );
+            }
+            setSwarmModeActive(false);
+          })
           .catch(() => {
             if (didDispatchOptimisticMessage) {
               window.dispatchEvent(
@@ -92,15 +104,25 @@ export function useSendImplement(): (promptOverride?: string) => void {
         );
       }
 
-      void sendUserMessage(openAgentId, message).catch(() => {
-        if (didDispatchOptimisticMessage) {
-          window.dispatchEvent(
-            new CustomEvent('chat-message-failed', {
-              detail: { clientId: message.id },
-            }),
-          );
-        }
-      });
+      void sendUserMessage(openAgentId, message)
+        .then((result) => {
+          if (didDispatchOptimisticMessage && result.disposition === 'queued') {
+            window.dispatchEvent(
+              new CustomEvent('chat-message-queued', {
+                detail: { clientId: message.id },
+              }),
+            );
+          }
+        })
+        .catch(() => {
+          if (didDispatchOptimisticMessage) {
+            window.dispatchEvent(
+              new CustomEvent('chat-message-failed', {
+                detail: { clientId: message.id },
+              }),
+            );
+          }
+        });
     },
     [isWorking, openAgentId, sendUserMessage],
   );

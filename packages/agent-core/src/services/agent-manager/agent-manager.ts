@@ -3,6 +3,7 @@ import type {
   BaseAgent,
   BaseAgentDependencies,
   BaseAgentToolboxView,
+  SendUserMessageResult,
 } from '../../agents/base-agent';
 import type { AgentTypeRegistry } from '../../agents/agents-registry';
 import { toAgentsMap, type AgentsMap } from '../../agents/agents-map';
@@ -657,7 +658,7 @@ export class AgentManager extends DisposableService {
     this.wrapAgentRpc(
       'agents.sendUserMessage',
       async (instanceId: string, message: AgentMessage & { role: 'user' }) => {
-        await this.sendUserMessage(instanceId, message);
+        return await this.sendUserMessage(instanceId, message);
       },
     );
     this.wrapAgentRpc(
@@ -670,16 +671,14 @@ export class AgentManager extends DisposableService {
       ) => {
         // Queue the message FIRST, then resolve the question — both in
         // one backend call so there's no race between separate RPCs.
-        try {
-          await this.sendUserMessage(instanceId, message);
-        } finally {
-          this.managerToolbox.cancelQuestion(
-            instanceId,
-            questionId,
-            'user_sent_message',
-            draftAnswers,
-          );
-        }
+        const result = await this.sendUserMessage(instanceId, message);
+        this.managerToolbox.cancelQuestion(
+          instanceId,
+          questionId,
+          'user_sent_message',
+          draftAnswers,
+        );
+        return result;
       },
     );
     this.wrapAgentRpc(
@@ -1898,7 +1897,7 @@ export class AgentManager extends DisposableService {
   public async sendUserMessage(
     instanceId: string,
     message: AgentMessage & { role: 'user' },
-  ) {
+  ): Promise<SendUserMessageResult> {
     const agent = this.activeAgents.get(instanceId);
 
     if (!agent) {
@@ -1949,7 +1948,7 @@ export class AgentManager extends DisposableService {
     // Host `AgentMessage` carries narrowed `UserMessageMetadata`
     // (browser-specific mention kinds) while the core default widens
     // these. Cast at the seam — the runtime shape is identical.
-    await agent.sendUserMessage(message as any);
+    return await agent.sendUserMessageWithDisposition(message as any);
   }
 
   /**

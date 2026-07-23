@@ -25,7 +25,15 @@ describe('built-in provider adapters', () => {
 
   it('discovers OpenRouter models using the selected profile credentials', async () => {
     const request = vi.fn<typeof fetch>(async () =>
-      responseJson({ data: [{ id: 'openai/example' }] }),
+      responseJson({
+        data: [
+          {
+            id: 'moonshotai/kimi-k2.5',
+            context_length: 262_144,
+            top_provider: { max_completion_tokens: 32_768 },
+          },
+        ],
+      }),
     );
     const adapters = createBuiltInProviderAdapters(
       {
@@ -47,8 +55,12 @@ describe('built-in provider adapters', () => {
 
     await expect(adapter.listModels(config)).resolves.toEqual([
       expect.objectContaining({
-        id: 'openai/example',
+        id: 'moonshotai/kimi-k2.5',
         providerId: 'openrouter-main',
+        capabilities: expect.objectContaining({
+          contextWindow: 262_144,
+          maxOutputTokens: 32_768,
+        }),
       }),
     ]);
     expect(request).toHaveBeenCalledWith(
@@ -59,6 +71,42 @@ describe('built-in provider adapters', () => {
         }),
       }),
     );
+  });
+
+  it('preserves common context-window fields from OpenAI-compatible model catalogs', async () => {
+    const request = vi.fn<typeof fetch>(async () =>
+      responseJson({
+        data: [
+          { id: 'context-window', context_window: 131_072 },
+          { id: 'camel-case', contextWindow: 262_144 },
+          { id: 'vllm', max_model_len: 1_048_576 },
+          { id: 'unknown', context_length: 0 },
+        ],
+      }),
+    );
+    const adapter = createBuiltInProviderAdapters(
+      {
+        getProviderApiKey: vi.fn(() => null),
+      } as unknown as CredentialsService,
+      request,
+    ).find((candidate) => candidate.id === 'openai-compatible')!;
+    const config: AIProviderConfig = {
+      id: 'local-compatible',
+      providerType: 'openai-compatible',
+      displayName: 'Local compatible',
+      baseUrl: 'http://localhost:8000/v1',
+      protocol: 'openai-chat',
+      enabled: true,
+    };
+
+    const models = await adapter.listModels(config);
+
+    expect(models.map((model) => model.capabilities.contextWindow)).toEqual([
+      131_072,
+      262_144,
+      1_048_576,
+      undefined,
+    ]);
   });
 
   it('discovers Ollama models without an API key', async () => {

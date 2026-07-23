@@ -521,6 +521,11 @@ export type BaseAgentConfig<TFinishToolOutputSchema extends z.ZodType | null> =
 
 export type MessageId = string;
 
+export type SendUserMessageResult = {
+  messageId: MessageId;
+  disposition: 'admitted' | 'queued';
+};
+
 /**
  * Interface for the static (class) side of any agent.
  * This enables type-safe access to static properties like `config` and `agentType`
@@ -957,6 +962,18 @@ export abstract class BaseAgent<
   public async sendUserMessage(
     message: AgentMessage & { role: 'user' },
   ): Promise<MessageId> {
+    const result = await this.sendUserMessageWithDisposition(message);
+    return result.messageId;
+  }
+
+  /**
+   * Host-facing variant that reports whether the message entered history or
+   * the follow-up queue. The legacy `sendUserMessage()` return shape
+   * remains a message id for extension compatibility.
+   */
+  public async sendUserMessageWithDisposition(
+    message: AgentMessage & { role: 'user' },
+  ): Promise<SendUserMessageResult> {
     const detachedMessage = structuredClone(message);
     return await this.enqueueHistoryLifecycleOperation(() =>
       this.sendUserMessageSerialized(detachedMessage),
@@ -966,7 +983,7 @@ export abstract class BaseAgent<
   private async sendUserMessageSerialized(
     message: AgentMessage & { role: 'user' },
     deferRunStep = false,
-  ): Promise<MessageId> {
+  ): Promise<SendUserMessageResult> {
     const preemptionGeneration =
       this.captureHistoryPreemptionGeneration('User message');
     // We override the message id with a random UUID to ensure it's unique.
@@ -1009,7 +1026,8 @@ export abstract class BaseAgent<
 
       // Busy agents without a displaced approval keep the existing queue
       // semantics.
-      const isBusy = this.state.get().isWorking || this._activeStepRun !== null;
+      const originatingStep = this._activeStepRun;
+      const isBusy = this.state.get().isWorking || originatingStep !== null;
       if (isBusy && !displacedApproval) {
         const { queuedModelId, queueLengthAfter } =
           this.state.commands.enqueueUserMessage({ message: msg });
@@ -1023,7 +1041,12 @@ export abstract class BaseAgent<
           queue_length_after: queueLengthAfter,
         });
 
-        return id;
+        // Always request a post-settlement wake from the exact step that made
+        // this message busy. This closes the race where the step already made
+        // its continuation decision before the queue mutation became visible.
+        this.scheduleQueuedMessageWake(originatingStep);
+
+        return { messageId: id, disposition: 'queued' };
       }
 
       this.host.logger.debug(
@@ -1064,7 +1087,7 @@ export abstract class BaseAgent<
 
     if (!deferRunStep) void this.runStep();
 
-    return id;
+    return { messageId: id, disposition: 'admitted' };
   }
 
   /**
@@ -1577,6 +1600,9 @@ export abstract class BaseAgent<
       this.rememberClosedRecoveredReplayExecution(input.executionId);
       this._recoveredReplayExecutionId = null;
       this._recoveredReplayStepGeneration = null;
+      if (this.state.get().queuedMessages.length > 0) {
+        this.scheduleQueuedMessageWake(null);
+      }
     }
   }
 
@@ -1775,7 +1801,7 @@ export abstract class BaseAgent<
         preemptionGeneration,
         'User message replacement',
       );
-      const newMessageId = await this.sendUserMessageSerialized(
+      const { messageId: newMessageId } = await this.sendUserMessageSerialized(
         newUserMessage,
         true,
       );
@@ -2491,6 +2517,84 @@ export abstract class BaseAgent<
     }
   }
 
+  /**
+   * Settles the continuation decision after the current step has fully drained.
+   *
+   * `handlePostStep()` decides whether to continue before the UI stream,
+   * path-reference work, and final persistence have completed. A user message
+   * can be queued during that tail after the earlier decision was `false`.
+   * Re-read the queue here so that late follow-up is not stranded when the
+   * current step transitions to idle.
+   */
+  private settleStepContinuation(
+    stepGen: number,
+    stepHasApprovalRequest: boolean,
+  ): boolean {
+    if (this._stepGeneration !== stepGen) return false;
+
+    const pending = this._pendingContinue;
+    this._pendingContinue = null;
+    const hasLateQueuedFollowUp =
+      pending === false && this.state.get().queuedMessages.length > 0;
+    const shouldScheduleContinuation =
+      (pending === true || hasLateQueuedFollowUp) && !stepHasApprovalRequest;
+
+    if (shouldScheduleContinuation) {
+      // setTimeout to keep the call stack clean (unbounded recursion).
+      setTimeout(() => {
+        if (this._stepGeneration === stepGen) void this.runStep();
+      }, 0);
+    } else if (pending !== null) {
+      // An approval request deliberately remains an explicit pause. The
+      // queued follow-up stays visible until the user answers the approval or
+      // chooses the queue's "Send now" interrupt action.
+      // Mark unread only if history contains at least one assistant
+      // message (covers fresh-session edge case).
+      const hasAssistantMessage = this.state
+        .get()
+        .history.some((m) => m.role === 'assistant');
+      this.state.commands.recordStepError({
+        error: undefined,
+        markUnread: 'if-assistant-history',
+      });
+      this.onIdle();
+      // Only notify "done" for a genuine turn completion: there must
+      // be an assistant message and the agent must not be paused on an
+      // open approval request (that's a `question`, emitted elsewhere).
+      if (hasAssistantMessage && !stepHasApprovalRequest) {
+        this.emitNotificationEvent('done');
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Wake a queued user follow-up after the step that caused it to queue has
+   * fully settled. The step tail also re-checks the queue, but this wake closes
+   * the inverse race where enqueue happens just after that final re-check.
+   */
+  private scheduleQueuedMessageWake(
+    originatingStep: {
+      readonly settled: Promise<'completed' | 'failed' | 'superseded'>;
+    } | null,
+  ): void {
+    const wake = () => {
+      if (this.state.get().queuedMessages.length > 0) void this.runStep();
+    };
+
+    if (!originatingStep) {
+      setTimeout(wake, 0);
+      return;
+    }
+
+    void originatingStep.settled.then((outcome) => {
+      // A priority lifecycle action (notably Stop) owns a superseded step.
+      // It must not be undone by an older queued-message wake.
+      if (outcome !== 'superseded') wake();
+    });
+  }
+
   private async runAdmittedStep(
     isApprovalContinuation: boolean,
     stepGen: number,
@@ -3016,39 +3120,13 @@ export abstract class BaseAgent<
       // next step or transition to idle. Guard against a stepGen
       // mismatch in case `internalStop` bumped the generation while we
       // were awaiting fs I/O above.
-      if (this._stepGeneration === stepGen) {
-        const pending = this._pendingContinue;
-        this._pendingContinue = null;
-        if (pending === true) {
-          // setTimeout to keep the call stack clean (unbounded recursion).
-          setTimeout(() => {
-            if (this._stepGeneration === stepGen) void this.runStep();
-          }, 0);
-        } else if (pending === false) {
-          // Mark unread only if history contains at least one assistant
-          // message (covers fresh-session edge case).
-          const hasAssistantMessage = this.state
-            .get()
-            .history.some((m) => m.role === 'assistant');
-          this.state.commands.recordStepError({
-            error: undefined,
-            markUnread: 'if-assistant-history',
-          });
-          this.onIdle();
-          // Only notify "done" for a genuine turn completion: there must
-          // be an assistant message and the agent must not be paused on an
-          // open approval request (that's a `question`, emitted elsewhere).
-          if (hasAssistantMessage && !stepHasApprovalRequest) {
-            this.emitNotificationEvent('done');
-          }
-        }
-        // pending === null → onFinish never set a decision (error path,
-        // aborted, or superseded step). Nothing to do; the onError /
-        // onAbort / catch handlers own state cleanup.
-      } else {
+      if (!this.settleStepContinuation(stepGen, stepHasApprovalRequest)) {
         // Superseded — a newer generation owns the shared continuation slot.
         return 'superseded';
       }
+      // pending === null → onFinish never set a decision (error path,
+      // aborted, or superseded step). Nothing to do; the onError /
+      // onAbort / catch handlers own state cleanup.
       return stepCallbackFailed || finishedResult === null
         ? 'failed'
         : 'completed';

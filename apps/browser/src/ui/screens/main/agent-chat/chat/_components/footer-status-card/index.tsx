@@ -50,6 +50,7 @@ import {
 import { getPlanUIPhases, type LivePlanData } from '@shared/plan-lifecycle';
 import { useSendImplement } from '@ui/hooks/use-send-implement';
 import { useSwarmMode } from '@ui/hooks/use-swarm-mode';
+import { useTranslation } from 'react-i18next';
 
 // Stable empty arrays/sets to avoid infinite loop with useSyncExternalStore
 const EMPTY_HISTORY: AgentMessage[] = [];
@@ -82,6 +83,7 @@ function compareAgentEntries(
 }
 
 export function StatusCard() {
+  const { t } = useTranslation('task');
   const cardRef = useRef<HTMLDivElement>(null);
   const previousHeightRef = useRef(0);
   const [openAgentId] = useOpenAgent();
@@ -575,6 +577,17 @@ export function StatusCard() {
     if (userQuestionSection) result.push(userQuestionSection);
     const messageQueueSection = MessageQueueSection({
       queuedMessages: messageQueue ?? [],
+      labels: {
+        explanation: t('composer.queue.explanation'),
+        queuedForNextIteration: t('composer.queue.queuedForNextIteration', {
+          count: messageQueue.length,
+        }),
+        interruptAndSend: t('composer.queue.interruptAndSend'),
+        interruptAndSendDescription: t(
+          'composer.queue.interruptAndSendDescription',
+        ),
+        remove: t('composer.queue.remove'),
+      },
       onRemoveMessage: async (messageId) => {
         if (!openAgentId) return;
         await deleteQueuedMessage(openAgentId, messageId);
@@ -682,6 +695,7 @@ export function StatusCard() {
     submitUserQuestionStep,
     cancelUserQuestion,
     goBackUserQuestion,
+    t,
   ]);
 
   // Sync card height with CSS variable for ChatHistory padding

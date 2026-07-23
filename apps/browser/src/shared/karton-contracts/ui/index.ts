@@ -13,6 +13,7 @@ import type {
   MountEntry,
   WorkspaceGitSummary,
 } from '@clodex/agent-core/types/metadata';
+import type { SendUserMessageResult } from '@clodex/agent-core/agents';
 import type { ReactSelectedElementInfo } from '../../selected-elements/react';
 import type { ApiClient } from '@clodex/api-client';
 import type { SelectedElement } from '../../selected-elements';
@@ -1594,14 +1595,14 @@ export type KartonContract = {
       sendUserMessage: (
         agentId: string,
         message: AgentMessage & { role: 'user' },
-      ) => Promise<void>;
+      ) => Promise<SendUserMessageResult>;
       /** Queue a user message AND resolve a pending question in one atomic call. */
       interruptQuestionWithMessage: (
         agentId: string,
         questionId: string,
         message: AgentMessage & { role: 'user' },
         draftAnswers: Record<string, QuestionAnswerValue>,
-      ) => Promise<void>;
+      ) => Promise<SendUserMessageResult>;
       sendToolApprovalResponse: (
         instanceId: string,
         approvalId: string,

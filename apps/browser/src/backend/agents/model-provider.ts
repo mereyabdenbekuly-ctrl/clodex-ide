@@ -47,13 +47,18 @@ import {
   type ThinkingCapableModel,
 } from '@shared/model-thinking-capabilities';
 import { getModelThinkingOverride } from '@shared/model-effort-routing';
+import { resolveModelContextWindow } from '@shared/model-context-window';
 
 type ProviderOptions = Parameters<typeof streamText>[0]['providerOptions'];
 type BuiltInModelSettings = (typeof availableModels)[number];
 type ThinkingModelSettings = ThinkingCapableModel;
 type ClodexAuthModel = NonNullable<AuthState['models']>[number];
 
-const CLODEX_UNKNOWN_MODEL_CONTEXT_WINDOW = 200_000;
+// Conservative internal budgets only. The UI deliberately reports unknown
+// when no provider/catalog capability is available instead of presenting
+// either fallback as a model-declared context window.
+const CLODEX_UNKNOWN_MODEL_CONTEXT_WINDOW_BUDGET = 200_000;
+const PROVIDER_PROFILE_UNKNOWN_CONTEXT_WINDOW_BUDGET = 128_000;
 const CLODEX_BUILT_IN_SAME_PROVIDER_FALLBACKS: Partial<
   Record<ModelProvider, readonly string[]>
 > = {
@@ -1095,11 +1100,10 @@ export class ModelProviderService {
     traceId: string,
     requestMetadata?: Record<string, unknown>,
   ): ModelWithOptions {
-    const profile = this.preferencesService
-      .get()
-      .providerProfiles.find(
-        (candidate) => candidate.id === profileId && candidate.enabled,
-      );
+    const preferences = this.preferencesService.get();
+    const profile = preferences.providerProfiles.find(
+      (candidate) => candidate.id === profileId && candidate.enabled,
+    );
     if (!profile)
       throw new Error(`Enabled provider profile ${profileId} not found`);
     const apiKey = profile.apiKeyReference
@@ -1226,6 +1230,16 @@ export class ModelProviderService {
           requestMetadata,
         })
       : {};
+    const contextWindowSize =
+      resolveModelContextWindow({
+        modelId: `${profileId}:${modelId}`,
+        providerProfiles: preferences.providerProfiles,
+        providerModelCatalogs: preferences.providerModelCatalogs,
+        clodexModels: this.getEnabledClodexModels(),
+      })?.tokens ??
+      (profile.providerType === 'clodex'
+        ? CLODEX_UNKNOWN_MODEL_CONTEXT_WINDOW_BUDGET
+        : PROVIDER_PROFILE_UNKNOWN_CONTEXT_WINDOW_BUDGET);
     return {
       model: this.telemetryService.withTracing(model, {
         posthogTraceId: traceId,
@@ -1240,7 +1254,7 @@ export class ModelProviderService {
           ? sanitizeClodexProviderOptions(providerOptions)
           : providerOptions,
       headers: profile.customHeaders,
-      contextWindowSize: 128_000,
+      contextWindowSize,
       providerMode,
       reasoningSignatureSource:
         providerMode === 'custom'
@@ -1331,7 +1345,7 @@ export class ModelProviderService {
       contextWindowSize:
         clodexModel.contextWindow ??
         modelSettings?.modelContextRaw ??
-        CLODEX_UNKNOWN_MODEL_CONTEXT_WINDOW,
+        CLODEX_UNKNOWN_MODEL_CONTEXT_WINDOW_BUDGET,
       providerMode: 'clodex',
       reasoningSignatureSource: createReasoningSignatureSource(
         'clodex',

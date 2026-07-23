@@ -33,6 +33,7 @@ export {
   type BaseAgentStatic,
   type AgentConfig,
   type MessageId,
+  type SendUserMessageResult,
 } from './base-agent';
 export {
   LocalAgentStepExecutor,

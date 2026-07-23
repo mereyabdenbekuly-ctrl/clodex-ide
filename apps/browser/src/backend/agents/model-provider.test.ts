@@ -21,6 +21,7 @@ function createTestModelProviderService({
   modelThinkingOverrides = {},
   customEndpoints = [],
   providerProfiles = [],
+  providerModelCatalogs = {},
   authService,
   providerApiKeys = {},
 }: {
@@ -35,6 +36,7 @@ function createTestModelProviderService({
   >;
   customEndpoints?: typeof defaultUserPreferences.customEndpoints;
   providerProfiles?: typeof defaultUserPreferences.providerProfiles;
+  providerModelCatalogs?: typeof defaultUserPreferences.providerModelCatalogs;
   authService?: unknown;
   providerApiKeys?: Record<string, string>;
 } = {}) {
@@ -42,6 +44,7 @@ function createTestModelProviderService({
   preferences.agent.modelThinkingOverrides = modelThinkingOverrides;
   preferences.customEndpoints = customEndpoints;
   preferences.providerProfiles = providerProfiles;
+  preferences.providerModelCatalogs = providerModelCatalogs;
   for (const [provider, mode] of Object.entries(providerModes)) {
     const config =
       preferences.providerConfigs[
@@ -179,6 +182,142 @@ describe('provider-qualified model routing', () => {
         'trace-openrouter',
       ).providerMode,
     ).toBe('custom');
+  });
+
+  it('uses discovered context metadata for a qualified OpenRouter model', () => {
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'openrouter-main',
+          providerType: 'openrouter',
+          displayName: 'OpenRouter',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKeyReference: 'provider.openrouter-main',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      providerModelCatalogs: {
+        'openrouter-main': [
+          {
+            id: 'moonshotai/kimi-k2.5',
+            displayName: 'Kimi K2.5',
+            providerId: 'openrouter-main',
+            capabilities: {
+              text: true,
+              images: false,
+              streaming: true,
+              functionTools: true,
+              customTools: true,
+              reasoning: true,
+              contextWindow: 262_144,
+            },
+          },
+        ],
+      },
+      providerApiKeys: {
+        'provider.openrouter-main': 'or-secret',
+      },
+    });
+
+    expect(
+      service.getModelWithOptions(
+        'openrouter-main:moonshotai/kimi-k2.5',
+        'trace-openrouter-context',
+      ).contextWindowSize,
+    ).toBe(262_144);
+  });
+
+  it('uses built-in context metadata for a known qualified model without discovery metadata', () => {
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'openrouter-main',
+          providerType: 'openrouter',
+          displayName: 'OpenRouter',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKeyReference: 'provider.openrouter-main',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      providerApiKeys: {
+        'provider.openrouter-main': 'or-secret',
+      },
+    });
+
+    expect(
+      service.getModelWithOptions(
+        'openrouter-main:moonshotai/kimi-k2.5',
+        'trace-openrouter-built-in-context',
+      ).contextWindowSize,
+    ).toBe(250_000);
+  });
+
+  it('uses a conservative budget for an unknown qualified provider model', () => {
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'local-compatible',
+          providerType: 'openai-compatible',
+          displayName: 'Local compatible',
+          baseUrl: 'http://localhost:8000/v1',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+    });
+
+    expect(
+      service.getModelWithOptions(
+        'local-compatible:vendor/unknown-model',
+        'trace-local-unknown-context',
+      ).contextWindowSize,
+    ).toBe(128_000);
+  });
+
+  it('prefers authoritative account context metadata for a qualified Clodex model', () => {
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'clodex-account',
+          providerType: 'clodex',
+          displayName: 'Clodex Cloud',
+          baseUrl: 'https://clodex.xyz/v1',
+          apiKeyReference: 'provider.clodex-account',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      authService: {
+        modelAccessToken: 'ide-model-token',
+        ensureModelAccessToken: vi.fn().mockResolvedValue('ide-model-token'),
+        authState: {
+          models: [
+            {
+              id: 'z-ai/glm-5.2',
+              provider: 'z-ai',
+              enabled: true,
+              contextWindow: 1_200_000,
+            },
+          ],
+        },
+      },
+      providerApiKeys: {
+        'provider.clodex-account': 'clodex-secret',
+      },
+    });
+
+    expect(
+      service.getModelWithOptions(
+        'clodex-account:z-ai/glm-5.2',
+        'trace-clodex-account-context',
+      ).contextWindowSize,
+    ).toBe(1_200_000);
   });
 
   it('maps direct OpenAI Terra Ultra to provider Max', () => {

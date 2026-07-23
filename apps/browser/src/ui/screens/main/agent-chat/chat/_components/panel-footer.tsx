@@ -66,7 +66,7 @@ import type { AgentMessage } from '@shared/karton-contracts/ui/agent';
 import { EMPTY_MOUNTS, type MountEntry } from '@shared/karton-contracts/ui';
 import { useOpenAgent } from '@ui/hooks/use-open-chat';
 import { useContentCollapsed } from '../../../_components/content-collapsed-context';
-import { getAvailableModel } from '@shared/available-models';
+import { resolveModelContextWindow } from '@shared/model-context-window';
 import { useChatDraft } from '@ui/hooks/use-chat-draft';
 import { useGlobalDictation } from '@ui/hooks/use-global-dictation';
 import { useSwarmMode } from '@ui/hooks/use-swarm-mode';
@@ -1109,17 +1109,29 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
       setWorkspaceActionError(null);
 
       if (openAgent) {
-        if (currentPendingQuestionId) {
-          // Atomic: queue message + resolve question in a single backend call.
-          // Include the current form draft so partial answers are preserved.
-          await interruptQuestionWithMessage(
-            openAgent,
-            currentPendingQuestionId,
-            message,
-            getCurrentDraftAnswers(),
+        const sendResult = currentPendingQuestionId
+          ? await interruptQuestionWithMessage(
+              openAgent,
+              currentPendingQuestionId,
+              message,
+              getCurrentDraftAnswers(),
+            )
+          : await sendUserMessage(openAgent, message);
+
+        // `isWorkingRef` is renderer state and can be one update behind the
+        // backend settlement barrier. If the backend authoritatively queued
+        // the message, remove any optimistic history copy immediately; the
+        // queue card is the honest representation until the next
+        // iteration admits it.
+        if (
+          sendResult.disposition === 'queued' &&
+          didDispatchOptimisticMessage
+        ) {
+          window.dispatchEvent(
+            new CustomEvent('chat-message-queued', {
+              detail: { clientId: message.id },
+            }),
           );
-        } else {
-          await sendUserMessage(openAgent, message);
         }
         if (swarmModeActive) setSwarmModeActive(false);
       }
@@ -1174,20 +1186,22 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
       : 0;
     return Math.round(raw / 1000) * 1000;
   });
-  const customModels = useKartonState((s) => s.preferences.customModels);
-  const maxTokens = useMemo(() => {
-    if (!activeModelId) return 200000;
-    const builtIn = getAvailableModel(activeModelId);
-    if (builtIn) return builtIn.modelContextRaw;
-    const custom = customModels.find((m) => m.modelId === activeModelId);
-    if (custom) return custom.contextWindowSize;
-    return 200000;
-  }, [activeModelId, customModels]);
+  const maxTokens = useKartonState((s) =>
+    activeModelId
+      ? resolveModelContextWindow({
+          modelId: activeModelId,
+          providerProfiles: s.preferences.providerProfiles,
+          providerModelCatalogs: s.preferences.providerModelCatalogs,
+          clodexModels: s.userAccount.models ?? [],
+          customModels: s.preferences.customModels,
+        })?.tokens
+      : undefined,
+  );
 
   const contextUsed = useMemo(() => {
+    if (!maxTokens) return 0;
     const used = usedTokens ?? 0;
-    const max = maxTokens ?? 1;
-    return Math.min(100, Math.round((used / max) * 100));
+    return Math.min(100, Math.round((used / maxTokens) * 100));
   }, [usedTokens, maxTokens]);
 
   const queuedMessages = useKartonState((s) =>
@@ -1882,7 +1896,9 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
             showModelSelect
             onModelChange={handleModelChange}
             showContextUsageRing={
-              !!usedTokens && (isVerboseMode || contextUsed > 80)
+              maxTokens !== undefined &&
+              !!usedTokens &&
+              (isVerboseMode || contextUsed > 80)
             }
             contextUsedPercentage={contextUsed}
             contextUsedKb={usedTokens ? usedTokens / 1000 : 0}
