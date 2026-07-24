@@ -24,6 +24,10 @@
       "types": "./dist/types/diff-history.d.ts",
       "import": "./dist/types/diff-history.js"
     },
+    "./types/file-edit-approval": {
+      "types": "./dist/types/file-edit-approval.d.ts",
+      "import": "./dist/types/file-edit-approval.js"
+    },
     "./types/metadata": {
       "types": "./dist/types/metadata.d.ts",
       "import": "./dist/types/metadata.js"

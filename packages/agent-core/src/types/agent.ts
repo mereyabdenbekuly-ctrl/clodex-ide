@@ -116,6 +116,14 @@ export type AgentState<TMessage = AgentMessage> = {
    * the field into core so it rides on the generic recipe channel.
    */
   toolApprovalMode: string;
+  /**
+   * Per-agent file-edit approval preference.
+   *
+   * @persistence persisted-core — column `file_edit_approval_mode`.
+   * Unknown or missing values are normalized to the fail-closed `manual`
+   * mode by the persistence layer.
+   */
+  fileEditApprovalMode: string;
   /** @persistence ephemeral — reset to `{}` on resume; repopulated only while tool calls are awaiting approval. */
   pendingApprovals: Record<string, { explanation: string }>;
   /** @persistence persisted-core — column `input_state` (JSON). Preserves draft input across restart. */

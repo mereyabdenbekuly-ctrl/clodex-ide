@@ -44,6 +44,7 @@ const AGENT_RPC_COMMANDS = [
   'agents.interruptQuestionWithMessage',
   'agents.sendToolApprovalResponse',
   'agents.setToolApprovalMode',
+  'agents.setFileEditApprovalMode',
   'agents.stop',
   'agents.flushQueue',
   'agents.clearQueue',

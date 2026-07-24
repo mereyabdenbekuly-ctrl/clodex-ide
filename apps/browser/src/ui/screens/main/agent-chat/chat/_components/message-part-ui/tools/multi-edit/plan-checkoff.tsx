@@ -7,13 +7,21 @@ import { getBaseName } from '@shared/path-utils';
 import { stripMountPrefix } from '@ui/utils';
 import { ToolPartUINotCollapsible } from '../shared/tool-part-ui-not-collapsible';
 import { IconClipboardContentOutline18 } from '@clodex/icons';
+import { FileEditApprovalStatus } from '../shared/file-edit-approval-waiting';
+import type { FileEditApprovalVisualState } from '../../../file-edit-approval-state';
 
 /**
  * Compact tool-part UI for plan checkbox toggles.
  * Renders a single non-collapsible line like:
  *   "Completed 3 of 7 · Some task description…"
  */
-export const PlanCheckoffToolPart = ({ part }: { part: MultiEditPart }) => {
+export const PlanCheckoffToolPart = ({
+  part,
+  fileEditApprovalState = null,
+}: {
+  part: MultiEditPart;
+  fileEditApprovalState?: FileEditApprovalVisualState;
+}) => {
   const relativePath = part.input?.path ?? '';
   const filename = useMemo(
     () => getBaseName(stripMountPrefix(relativePath)),
@@ -73,6 +81,15 @@ export const PlanCheckoffToolPart = ({ part }: { part: MultiEditPart }) => {
       )}
     </span>
   );
+
+  if (fileEditApprovalState) {
+    return (
+      <FileEditApprovalStatus
+        relativePath={relativePath}
+        state={fileEditApprovalState}
+      />
+    );
+  }
 
   return (
     <ToolPartUINotCollapsible

@@ -27,6 +27,7 @@ import {
   getHunkIds,
   hasRealChanges,
 } from './shared';
+import { areProposedEditDecisionsReady } from './diff-lifecycle';
 
 export interface FileDiffSectionProps {
   pendingDiffs: FormattedFileDiff[];
@@ -44,6 +45,8 @@ export interface FileDiffSectionProps {
 
 export interface PendingProposedEditSectionProps {
   proposedEdits: PendingEditPreview[];
+  waitingLabel: string;
+  applyingLabel: string;
   resolvedMounts: Mount[];
   activeMounts: MountEntry[];
   activeMountPaths: Set<string>;
@@ -487,6 +490,8 @@ export function PendingProposedEditSection(
 ): StatusCardSection | null {
   const {
     proposedEdits,
+    waitingLabel,
+    applyingLabel,
     resolvedMounts,
     activeMounts,
     activeMountPaths,
@@ -498,6 +503,10 @@ export function PendingProposedEditSection(
 
   if (proposedEdits.length === 0) return null;
 
+  const pendingEdits = proposedEdits.filter(
+    (edit) => edit.status === 'pending',
+  );
+  const decisionsReady = areProposedEditDecisionsReady(proposedEdits);
   const diffs = proposedEdits.map((edit) => formatFileDiff(edit.fileDiff));
   const sectionKey = `pending-proposed-edits-${proposedEdits
     .map((edit) => edit.id)
@@ -522,9 +531,14 @@ export function PendingProposedEditSection(
               isOpen && 'rotate-180',
             )}
           />
-          <span className="truncate font-medium text-foreground">
-            {getDiffArtifactSummary(diffs)}
-          </span>
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate font-medium text-foreground">
+              {pendingEdits.length > 0 ? waitingLabel : applyingLabel}
+            </span>
+            <span className="truncate text-[10px] text-token-text-tertiary">
+              {getDiffArtifactSummary(diffs)}
+            </span>
+          </div>
         </div>
 
         <span className="ml-auto flex shrink-0 flex-row items-center gap-1 text-[10px]">
@@ -536,37 +550,39 @@ export function PendingProposedEditSection(
           )}
         </span>
 
-        <div
-          className="flex shrink-0 flex-row items-center justify-start gap-1"
-          aria-busy={decisionPending}
-        >
-          <Button
-            variant="ghost"
-            size="xs"
-            className="cursor-pointer"
-            disabled={decisionPending}
-            onClick={(e) => {
-              e.stopPropagation();
-              for (const edit of proposedEdits) onReject(edit.id);
-            }}
+        {pendingEdits.length > 0 && decisionsReady && (
+          <div
+            className="flex shrink-0 flex-row items-center justify-start gap-1"
+            aria-busy={decisionPending}
           >
-            <XIcon className="size-3" />
-            Reject
-          </Button>
-          <Button
-            variant="primary"
-            size="xs"
-            className="cursor-pointer"
-            disabled={decisionPending}
-            onClick={(e) => {
-              e.stopPropagation();
-              for (const edit of proposedEdits) onAccept(edit.id);
-            }}
-          >
-            <CheckIcon className="size-3" />
-            Accept
-          </Button>
-        </div>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="cursor-pointer"
+              disabled={decisionPending}
+              onClick={(e) => {
+                e.stopPropagation();
+                for (const edit of pendingEdits) onReject(edit.id);
+              }}
+            >
+              <XIcon className="size-3" />
+              Reject
+            </Button>
+            <Button
+              variant="primary"
+              size="xs"
+              className="cursor-pointer"
+              disabled={decisionPending}
+              onClick={(e) => {
+                e.stopPropagation();
+                for (const edit of pendingEdits) onAccept(edit.id);
+              }}
+            >
+              <CheckIcon className="size-3" />
+              Accept
+            </Button>
+          </div>
+        )}
       </div>
     ),
     scrollable: true,

@@ -17,6 +17,11 @@ import {
   toolApprovalModeSchema,
   type ToolApprovalMode,
 } from '../../types/tool-approval';
+import {
+  DEFAULT_FILE_EDIT_APPROVAL_MODE,
+  fileEditApprovalModeSchema,
+  type FileEditApprovalMode,
+} from '../../types/file-edit-approval';
 
 const _sqliteBoolean = customType<{ data: boolean; driverData: number }>({
   dataType() {
@@ -82,6 +87,22 @@ const toolApprovalMode = customType<{
   },
 });
 
+const fileEditApprovalMode = customType<{
+  data: FileEditApprovalMode;
+  driverData: string;
+}>({
+  dataType() {
+    return 'text';
+  },
+  toDriver(value) {
+    return value;
+  },
+  fromDriver(value) {
+    const parsed = fileEditApprovalModeSchema.safeParse(value);
+    return parsed.success ? parsed.data : DEFAULT_FILE_EDIT_APPROVAL_MODE;
+  },
+});
+
 const _sqliteJson = customType<{ data: unknown; driverData: string }>({
   dataType() {
     return 'text';
@@ -124,6 +145,9 @@ export const agentInstances = sqliteTable(
     toolApprovalMode: toolApprovalMode('tool_approval_mode')
       .notNull()
       .$defaultFn(() => DEFAULT_TOOL_APPROVAL_MODE),
+    fileEditApprovalMode: fileEditApprovalMode('file_edit_approval_mode')
+      .notNull()
+      .$defaultFn(() => DEFAULT_FILE_EDIT_APPROVAL_MODE),
     forkedFromAgentId: text('forked_from_agent_id'),
     forkedFromMessageId: text('forked_from_message_id'),
     archivedAt: integer('archived_at', { mode: 'timestamp' }),

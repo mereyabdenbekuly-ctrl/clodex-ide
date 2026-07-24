@@ -38,6 +38,7 @@ import type {
   HostPermissionOverrides,
   WidgetId,
   DevToolbarOriginSettings,
+  FileEditApprovalMode,
   ToolApprovalMode,
   SocialAuthProvider,
 } from './shared-types';
@@ -1619,6 +1620,10 @@ export type KartonContract = {
          * "Always allow" clicks made during an approval request.
          */
         source?: 'panel-combobox' | 'inline-approval-button',
+      ) => Promise<void>;
+      setFileEditApprovalMode: (
+        instanceId: string,
+        mode: FileEditApprovalMode,
       ) => Promise<void>;
       stop: (agentId: string) => Promise<void>;
       flushQueue: (agentId: string) => Promise<void>;

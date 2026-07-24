@@ -1038,6 +1038,86 @@ export async function storeFileContent(
   return newOid;
 }
 
+export interface AutoApprovedTextEditTransaction {
+  agentInstanceId: AgentInstanceId;
+  filepath: string;
+  toolCallId: ToolCallId;
+  contentBefore: string;
+  contentAfter: string;
+}
+
+/**
+ * Persist the init baseline, one agent edit, and its standing-policy baseline
+ * in a single SQLite transaction. This deliberately stores full keyframes:
+ * automatic edits are bounded to small text files, and avoiding reverse-delta
+ * rewrites keeps the authorization receipt atomic with the edit evidence.
+ *
+ * Returns false when the file already has pending history; automatic policy
+ * must never accept unrelated earlier edits on the same path.
+ */
+export async function storeAutoApprovedTextEdit(
+  db: SnapshotDb,
+  edit: AutoApprovedTextEditTransaction,
+): Promise<boolean> {
+  const beforeContent = Buffer.from(edit.contentBefore, 'utf8');
+  const afterContent = Buffer.from(edit.contentAfter, 'utf8');
+  const beforeOid = computeOid(beforeContent);
+  const afterOid = computeOid(afterContent);
+
+  return await db.transaction(async (tx) => {
+    const transactionDb = tx as unknown as SnapshotDb;
+    if (await hasPendingEditsForFilepath(transactionDb, edit.filepath)) {
+      return false;
+    }
+
+    const snapshots = new Map<string, Buffer>([
+      [beforeOid, beforeContent],
+      [afterOid, afterContent],
+    ]);
+    for (const [oid, content] of snapshots) {
+      await tx
+        .insert(schema.snapshots)
+        .values({
+          oid,
+          payload: gzipSync(content),
+          delta_target_oid: null,
+          is_external: false,
+        })
+        .onConflictDoNothing()
+        .run();
+    }
+
+    await tx
+      .insert(schema.operations)
+      .values([
+        {
+          filepath: edit.filepath,
+          operation: 'baseline',
+          snapshot_oid: beforeOid,
+          contributor: 'user',
+          reason: 'init',
+        },
+        {
+          filepath: edit.filepath,
+          operation: 'edit',
+          snapshot_oid: afterOid,
+          contributor: `agent-${edit.agentInstanceId}`,
+          reason: `tool-${edit.toolCallId}`,
+        },
+        {
+          filepath: edit.filepath,
+          operation: 'baseline',
+          snapshot_oid: afterOid,
+          contributor: 'policy',
+          reason: 'auto-accept',
+        },
+      ])
+      .run();
+
+    return true;
+  });
+}
+
 /**
  * Store large file content using LFS (Large File Storage).
  * Streams content to disk blob store instead of SQLite.

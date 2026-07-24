@@ -21,6 +21,10 @@ import {
 } from 'ai';
 import { randomUUID } from 'node:crypto';
 import type {
+  FileEditBatchParticipant,
+  FileEditBatchTerminalOutcome,
+} from '@clodex/agent-core/types';
+import type {
   AgentStepRuntimeSelectionReason,
   AgentStepRuntimeTelemetryEvents,
   AgentStepRuntimeTelemetrySink,
@@ -31,6 +35,7 @@ import type {
   AgentTurnJsonObject,
   AgentTurnJsonValue,
   IsolatedAgentConversationMessage,
+  IsolatedAgentFileEditBatchMetadata,
   IsolatedAgentModelCallResult,
   IsolatedAgentToolCall,
   IsolatedAgentTurnEvent,
@@ -40,6 +45,10 @@ import type {
   IsolatedAgentUsage,
 } from './isolated-agent-turn';
 import { isAgentTurnJsonValue } from './isolated-agent-turn';
+import {
+  FileEditBatchCoordinator,
+  terminalOutcomeForToolResult,
+} from './file-edit-batch-coordinator';
 import {
   IsolatedAgentRuntimeCircuitBreaker,
   type IsolatedAgentRuntimeAdmission,
@@ -625,6 +634,8 @@ function createPerTurnHandlers({
   const toolMessages = (originalOptions.messages as ModelMessage[]).filter(
     (message) => message.role !== 'system',
   );
+  const fileEditBatchCoordinator = new FileEditBatchCoordinator();
+  let latestModelToolCalls: IsolatedAgentToolCall[] = [];
 
   return {
     async callModel(_request, { signal, onEvent }) {
@@ -691,6 +702,8 @@ function createPerTurnHandlers({
         }
       }
 
+      latestModelToolCalls = toolCalls;
+
       return {
         text,
         reasoning,
@@ -703,23 +716,42 @@ function createPerTurnHandlers({
     },
 
     async callTool(request, { signal }) {
-      assertLocalExecutionAllowed(executionRequest.context.agentInstanceId);
-      const resolvedTool = tools[request.call.toolName] as Tool | undefined;
-      if (!resolvedTool?.execute) {
-        return {
-          status: 'error',
-          message: `Tool "${request.call.toolName}" is unavailable or has no executor`,
-        };
-      }
-
-      const executionOptions = {
-        toolCallId: request.call.toolCallId,
-        messages: toolMessages,
-        abortSignal: combineAbortSignals(originalOptions.abortSignal, signal),
-        experimental_context: originalOptions.experimental_context,
-      };
-
+      let fileEditBatchParticipant: FileEditBatchParticipant | undefined;
+      let terminalOutcome: FileEditBatchTerminalOutcome = 'error';
       try {
+        if (request.fileEditBatch) {
+          fileEditBatchParticipant = fileEditBatchCoordinator.getParticipant(
+            request.fileEditBatch,
+          );
+          try {
+            assertExactFileEditBatchMetadata(
+              request.fileEditBatch,
+              request.call,
+              latestModelToolCalls,
+            );
+          } catch (error) {
+            fileEditBatchCoordinator.abort(request.fileEditBatch.batchId);
+            throw error;
+          }
+        }
+
+        assertLocalExecutionAllowed(executionRequest.context.agentInstanceId);
+        const resolvedTool = tools[request.call.toolName] as Tool | undefined;
+        if (!resolvedTool?.execute) {
+          return {
+            status: 'error',
+            message: `Tool "${request.call.toolName}" is unavailable or has no executor`,
+          };
+        }
+
+        const executionOptions = {
+          toolCallId: request.call.toolCallId,
+          messages: toolMessages,
+          abortSignal: combineAbortSignals(originalOptions.abortSignal, signal),
+          experimental_context: originalOptions.experimental_context,
+          fileEditBatchParticipant,
+        };
+
         await resolvedTool.onInputStart?.(executionOptions);
         await resolvedTool.onInputDelta?.({
           ...executionOptions,
@@ -738,6 +770,7 @@ function createPerTurnHandlers({
               )
             : resolvedTool.needsApproval === true;
         if (needsApproval) {
+          terminalOutcome = 'approval-required';
           return {
             status: 'approval-required',
             approvalId: randomUUID(),
@@ -748,15 +781,25 @@ function createPerTurnHandlers({
         const output = await collectToolOutput(
           resolvedTool.execute(request.call.input, executionOptions),
         );
-        return {
+        const completed = {
           status: 'completed',
           output: toAgentTurnJsonValue(output),
-        };
+        } as const;
+        terminalOutcome = terminalOutcomeForToolResult(
+          completed,
+          signal.aborted,
+        );
+        return completed;
       } catch (error) {
+        const normalized = normalizeError(error);
+        terminalOutcome =
+          signal.aborted || isAbortError(normalized) ? 'aborted' : 'error';
         return {
           status: 'error',
-          message: normalizeError(error).message,
+          message: normalized.message,
         };
+      } finally {
+        fileEditBatchParticipant?.settle(terminalOutcome);
       }
     },
   };
@@ -1356,6 +1399,60 @@ function isCacheControlOnlyProviderOptions(value: unknown): boolean {
       cacheControl.type === 'ephemeral'
     );
   });
+}
+
+function assertExactFileEditBatchMetadata(
+  metadata: IsolatedAgentFileEditBatchMetadata,
+  call: IsolatedAgentToolCall,
+  modelToolCalls: readonly IsolatedAgentToolCall[],
+): void {
+  const memberIndex = Number(metadata.memberId);
+  if (!Number.isSafeInteger(memberIndex) || memberIndex < 0) {
+    throw new Error(`Invalid file-edit batch member ${metadata.memberId}`);
+  }
+  const expectedCall = modelToolCalls[memberIndex];
+  if (
+    !expectedCall ||
+    expectedCall.toolCallId !== call.toolCallId ||
+    expectedCall.toolName !== call.toolName
+  ) {
+    throw new Error(
+      `File-edit batch member ${metadata.memberId} does not match the model tool call`,
+    );
+  }
+
+  let start = memberIndex;
+  while (
+    start > 0 &&
+    isNativeFileEditTool(modelToolCalls[start - 1]?.toolName)
+  ) {
+    start--;
+  }
+  let end = memberIndex + 1;
+  while (
+    end < modelToolCalls.length &&
+    isNativeFileEditTool(modelToolCalls[end]?.toolName)
+  ) {
+    end++;
+  }
+  const expectedMembers = modelToolCalls
+    .slice(start, end)
+    .map((toolCall, index) => ({
+      memberId: String(start + index),
+      toolCallId: toolCall.toolCallId,
+    }));
+  if (
+    expectedMembers.length < 2 ||
+    JSON.stringify(metadata.members) !== JSON.stringify(expectedMembers)
+  ) {
+    throw new Error(
+      `File-edit batch ${metadata.batchId} does not describe the exact adjacent model-tool run`,
+    );
+  }
+}
+
+function isNativeFileEditTool(toolName: string | undefined): boolean {
+  return toolName === 'write' || toolName === 'multiEdit';
 }
 
 function normalizeError(error: unknown): Error {

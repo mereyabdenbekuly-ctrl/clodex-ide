@@ -10,6 +10,7 @@ import {
   personalizationThemeIdSchema,
   socialAuthProviderSchema,
   type ModelProvider,
+  type FileEditApprovalMode,
   type PersonalizationThemeId,
   type SocialAuthProvider,
   type TelemetryLevel,
@@ -490,6 +491,15 @@ export interface EventProperties
     tool_call_id?: string;
     /** Tool name for `inline-approval-button`; absent otherwise. */
     tool_name?: string;
+  };
+  /**
+   * Fires when the independent per-agent file-edit approval mode changes.
+   * This event deliberately carries no workspace path or file metadata.
+   */
+  'file-edit-approval-mode-changed': {
+    agent_instance_id: string;
+    previous_mode: FileEditApprovalMode;
+    new_mode: FileEditApprovalMode;
   };
   'tool-call-executed': {
     tool_name: string;

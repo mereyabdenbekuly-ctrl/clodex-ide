@@ -1,6 +1,7 @@
 import type {
   AgentTurnHostHandlers,
   IsolatedAgentConversationMessage,
+  IsolatedAgentFileEditBatchMetadata,
   IsolatedAgentTurnEvent,
   IsolatedAgentTurnRequest,
   IsolatedAgentTurnResult,
@@ -78,19 +79,42 @@ export async function executeIsolatedAgentTurn(
           `Model requested undeclared isolated tool "${call.toolName}"`,
         );
       }
+    }
 
+    const executeToolCall = async (
+      call: (typeof modelResult.toolCalls)[number],
+      signal: AbortSignal,
+      fileEditBatch?: IsolatedAgentFileEditBatchMetadata,
+    ) => {
       options.onEvent?.({ type: 'tool-call', step, call });
-      const result = await options.handlers.callTool(
-        {
-          agentInstanceId: request.agentInstanceId,
+      try {
+        const result = await options.handlers.callTool(
+          {
+            agentInstanceId: request.agentInstanceId,
+            call,
+            messages,
+            ...(fileEditBatch ? { fileEditBatch } : {}),
+          },
+          { signal },
+        );
+        throwIfAborted(signal);
+        return { call, result };
+      } catch (error) {
+        if (signal.aborted || isAbortError(error)) throw error;
+        return {
           call,
-          messages,
-        },
-        {
-          signal: requireSignal(options.signal),
-        },
-      );
-      throwIfAborted(options.signal);
+          result: {
+            status: 'error' as const,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    };
+
+    const commitToolExecution = (
+      execution: Awaited<ReturnType<typeof executeToolCall>>,
+    ) => {
+      const { call, result } = execution;
 
       if (result.status === 'approval-required') {
         const approvalRequest = {
@@ -104,7 +128,7 @@ export async function executeIsolatedAgentTurn(
           step,
           ...approvalRequest,
         });
-        continue;
+        return;
       }
       if (result.status === 'error') {
         const toolError = {
@@ -126,7 +150,7 @@ export async function executeIsolatedAgentTurn(
           step,
           ...toolError,
         });
-        continue;
+        return;
       }
 
       const toolResult = {
@@ -144,6 +168,69 @@ export async function executeIsolatedAgentTurn(
         step,
         ...toolResult,
       });
+    };
+
+    // Only adjacent native text-edit proposals may start together. Running
+    // arbitrary tools concurrently would reorder shell/filesystem side
+    // effects and could execute them before a user has reviewed an edit.
+    for (let index = 0; index < modelResult.toolCalls.length; ) {
+      const call = modelResult.toolCalls[index]!;
+      if (!isConcurrentFileEditTool(call.toolName)) {
+        commitToolExecution(
+          await executeToolCall(call, requireSignal(options.signal)),
+        );
+        index++;
+        continue;
+      }
+
+      let end = index + 1;
+      while (
+        end < modelResult.toolCalls.length &&
+        isConcurrentFileEditTool(modelResult.toolCalls[end]!.toolName)
+      ) {
+        end++;
+      }
+
+      const batchController = new AbortController();
+      const abortBatch = () => batchController.abort(options.signal?.reason);
+      if (options.signal?.aborted) abortBatch();
+      else
+        options.signal?.addEventListener('abort', abortBatch, { once: true });
+      const executions = modelResult.toolCalls
+        .slice(index, end)
+        .map((batchCall, batchOffset, batchCalls) => {
+          const members = batchCalls.map((memberCall, memberOffset) => ({
+            memberId: String(index + memberOffset),
+            toolCallId: memberCall.toolCallId,
+          }));
+          const fileEditBatch =
+            batchCalls.length > 1
+              ? {
+                  batchId: `${request.traceId}:${step}:${index}:${end}`,
+                  memberId: String(index + batchOffset),
+                  members,
+                }
+              : undefined;
+          return executeToolCall(
+            batchCall,
+            batchController.signal,
+            fileEditBatch,
+          );
+        });
+      try {
+        const orderedExecutions = await Promise.all(executions);
+        for (const execution of orderedExecutions) {
+          commitToolExecution(execution);
+        }
+      } catch (error) {
+        batchController.abort(error);
+        await Promise.allSettled(executions);
+        throw error;
+      } finally {
+        options.signal?.removeEventListener('abort', abortBatch);
+      }
+      throwIfAborted(options.signal);
+      index = end;
     }
 
     options.onEvent?.({
@@ -172,6 +259,14 @@ export async function executeIsolatedAgentTurn(
     messages,
     steps,
   };
+}
+
+function isConcurrentFileEditTool(toolName: string): boolean {
+  return toolName === 'write' || toolName === 'multiEdit';
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 function requireSignal(signal: AbortSignal | undefined): AbortSignal {

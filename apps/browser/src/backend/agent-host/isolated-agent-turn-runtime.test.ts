@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
   AgentTurnHostHandlers,
+  IsolatedAgentModelCallResult,
   IsolatedAgentTurnEvent,
   IsolatedAgentTurnRequest,
 } from './isolated-agent-turn';
@@ -36,6 +37,24 @@ const request: IsolatedAgentTurnRequest = {
     },
   ],
   maxSteps: 3,
+};
+
+const fileEditRequest: IsolatedAgentTurnRequest = {
+  ...request,
+  systemPrompt: 'Edit files when requested.',
+  tools: [
+    ...request.tools,
+    {
+      name: 'write',
+      description: 'Write a file',
+      inputSchema: { type: 'object' },
+    },
+    {
+      name: 'multiEdit',
+      description: 'Edit a file',
+      inputSchema: { type: 'object' },
+    },
+  ],
 };
 
 describe('executeIsolatedAgentTurn', () => {
@@ -114,24 +133,168 @@ describe('executeIsolatedAgentTurn', () => {
     ]);
   });
 
+  it('starts adjacent file edits together and commits results in model order', async () => {
+    let modelCall = 0;
+    const resolveTool = new Map<string, (result: { output: string }) => void>();
+    const handlers: AgentTurnHostHandlers = {
+      callModel: vi.fn(async (): Promise<IsolatedAgentModelCallResult> => {
+        modelCall++;
+        return modelCall === 1
+          ? {
+              text: '',
+              reasoning: '',
+              toolCalls: [
+                {
+                  toolCallId: 'tool-1',
+                  toolName: 'write',
+                  input: { path: 'one.md', content: 'one' },
+                },
+                {
+                  toolCallId: 'tool-2',
+                  toolName: 'multiEdit',
+                  input: { path: 'two.md', edits: [] },
+                },
+              ],
+              finishReason: 'tool-calls',
+              usage: {},
+            }
+          : {
+              text: 'done',
+              reasoning: '',
+              toolCalls: [],
+              finishReason: 'stop',
+              usage: {},
+            };
+      }),
+      callTool: vi.fn(
+        async ({ call }) =>
+          await new Promise<{ output: string }>((resolve) => {
+            resolveTool.set(call.toolCallId, resolve);
+          }),
+      ),
+    };
+    const events: IsolatedAgentTurnEvent[] = [];
+
+    const execution = executeIsolatedAgentTurn(fileEditRequest, {
+      handlers,
+      onEvent: (event) => events.push(event),
+    });
+    await vi.waitFor(() => expect(handlers.callTool).toHaveBeenCalledTimes(2));
+    const firstRequest = vi.mocked(handlers.callTool).mock.calls[0]?.[0];
+    const secondRequest = vi.mocked(handlers.callTool).mock.calls[1]?.[0];
+    expect(firstRequest?.fileEditBatch).toEqual({
+      batchId: 'trace-1:1:0:2',
+      memberId: '0',
+      members: [
+        { memberId: '0', toolCallId: 'tool-1' },
+        { memberId: '1', toolCallId: 'tool-2' },
+      ],
+    });
+    expect(secondRequest?.fileEditBatch).toEqual({
+      batchId: 'trace-1:1:0:2',
+      memberId: '1',
+      members: [
+        { memberId: '0', toolCallId: 'tool-1' },
+        { memberId: '1', toolCallId: 'tool-2' },
+      ],
+    });
+
+    resolveTool.get('tool-2')?.({ output: 'two' });
+    await Promise.resolve();
+    expect(handlers.callModel).toHaveBeenCalledOnce();
+    resolveTool.get('tool-1')?.({ output: 'one' });
+
+    const result = await execution;
+    expect(result.steps[0]?.toolResults).toEqual([
+      { toolCallId: 'tool-1', toolName: 'write', output: 'one' },
+      { toolCallId: 'tool-2', toolName: 'multiEdit', output: 'two' },
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === 'tool-result')
+        .map((event) => event.toolCallId),
+    ).toEqual(['tool-1', 'tool-2']);
+  });
+
+  it('keeps non-file tools sequential', async () => {
+    let modelCall = 0;
+    const resolveTool = new Map<string, (result: { output: string }) => void>();
+    const handlers: AgentTurnHostHandlers = {
+      callModel: vi.fn(async () => {
+        modelCall++;
+        return modelCall === 1
+          ? {
+              text: '',
+              reasoning: '',
+              toolCalls: [
+                {
+                  toolCallId: 'read-1',
+                  toolName: 'read',
+                  input: { path: 'one.md' },
+                },
+                {
+                  toolCallId: 'read-2',
+                  toolName: 'read',
+                  input: { path: 'two.md' },
+                },
+              ],
+              finishReason: 'tool-calls',
+              usage: {},
+            }
+          : {
+              text: 'done',
+              reasoning: '',
+              toolCalls: [],
+              finishReason: 'stop',
+              usage: {},
+            };
+      }),
+      callTool: vi.fn(
+        async ({ call }) =>
+          await new Promise<{ output: string }>((resolve) => {
+            resolveTool.set(call.toolCallId, resolve);
+          }),
+      ),
+    };
+
+    const execution = executeIsolatedAgentTurn(request, { handlers });
+    await vi.waitFor(() => expect(handlers.callTool).toHaveBeenCalledOnce());
+    expect(resolveTool.has('read-2')).toBe(false);
+    resolveTool.get('read-1')?.({ output: 'one' });
+    await vi.waitFor(() => expect(handlers.callTool).toHaveBeenCalledTimes(2));
+    resolveTool.get('read-2')?.({ output: 'two' });
+
+    const result = await execution;
+    expect(result.steps[0]?.toolResults.map((item) => item.toolCallId)).toEqual(
+      ['read-1', 'read-2'],
+    );
+  });
+
   it('rejects tool calls that were not declared by the main process', async () => {
     const handlers: AgentTurnHostHandlers = {
-      callModel: vi.fn(async () => ({
-        text: '',
-        reasoning: '',
-        toolCalls: [
-          {
-            toolCallId: 'tool-1',
-            toolName: 'write',
-            input: {
-              path: 'README.md',
-              content: 'changed',
+      callModel: vi.fn(
+        async (): Promise<IsolatedAgentModelCallResult> => ({
+          text: '',
+          reasoning: '',
+          toolCalls: [
+            {
+              toolCallId: 'tool-allowed',
+              toolName: 'read',
+              input: { path: 'README.md' },
             },
-          },
-        ],
-        finishReason: 'tool-calls',
-        usage: {},
-      })),
+            {
+              toolCallId: 'tool-1',
+              toolName: 'write',
+              input: {
+                path: 'README.md',
+                content: 'changed',
+              },
+            },
+          ],
+          finishReason: 'tool-calls',
+          usage: {},
+        }),
+      ),
       callTool: vi.fn(),
     };
 

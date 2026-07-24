@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { removeProposalDuplicateDiffArtifacts } from './diff-lifecycle';
+import {
+  areProposedEditDecisionsReady,
+  removeProposalDuplicateDiffArtifacts,
+} from './diff-lifecycle';
 
 type TestArtifact = {
   id: string;
@@ -104,5 +107,25 @@ describe('removeProposalDuplicateDiffArtifacts', () => {
 
     expect(result.pendingDiffs).toBe(pendingDiffs);
     expect(result.diffSummary).toBe(diffSummary);
+  });
+});
+
+describe('areProposedEditDecisionsReady', () => {
+  it('keeps legacy previews without readiness metadata actionable', () => {
+    expect(
+      areProposedEditDecisionsReady([
+        { id: 'legacy' },
+        { id: 'ready', decisionReady: true },
+      ]),
+    ).toBe(true);
+  });
+
+  it('blocks aggregate decisions while any proposal is still collecting', () => {
+    expect(
+      areProposedEditDecisionsReady([
+        { id: 'ready', decisionReady: true },
+        { id: 'collecting', decisionReady: false },
+      ]),
+    ).toBe(false);
   });
 });

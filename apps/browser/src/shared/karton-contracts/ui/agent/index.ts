@@ -16,7 +16,10 @@ import type { ChatProject as CoreChatProject } from '@clodex/agent-core';
 import { AgentTypes as CoreAgentTypes } from '@clodex/agent-core/types/agent';
 import type { ModelId } from '@shared/available-models';
 import type { MountedWorkspaceGitSummary } from '..';
-import type { ToolApprovalMode } from '@shared/karton-contracts/ui/shared-types';
+import type {
+  FileEditApprovalMode,
+  ToolApprovalMode,
+} from '@shared/karton-contracts/ui/shared-types';
 import type { MountPermission, UserMessageMetadata } from './metadata';
 import type { UIAgentTools } from './tools/types';
 
@@ -38,7 +41,7 @@ export type AgentToolUIPart = CoreAgentToolUIPart<UIAgentTools>;
 
 export type AgentState = Omit<
   CoreAgentState<AgentMessage>,
-  'activeModelId' | 'toolApprovalMode'
+  'activeModelId' | 'toolApprovalMode' | 'fileEditApprovalMode'
 > & {
   activeModelId: ModelId;
   /**
@@ -52,6 +55,8 @@ export type AgentState = Omit<
    * @see `packages/agent-core/SPEC.md` D22 (superseded by Phase 6).
    */
   toolApprovalMode: ToolApprovalMode;
+  /** File-edit approval preference persisted independently per agent. */
+  fileEditApprovalMode: FileEditApprovalMode;
 };
 
 /**

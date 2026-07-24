@@ -424,10 +424,12 @@ export function StatusCard() {
       [pendingProposedEdits, effectivePendingDiffs, formattedDiffSummary],
     );
 
-  const proposedDecisionPending = pendingProposedEdits.some((edit) =>
-    openAgentId
-      ? proposedDecisionIds.has(getProposedDecisionKey(openAgentId, edit.id))
-      : false,
+  const proposedDecisionPending = pendingProposedEdits.some(
+    (edit) =>
+      edit.status === 'pending' &&
+      (openAgentId
+        ? proposedDecisionIds.has(getProposedDecisionKey(openAgentId, edit.id))
+        : false),
   );
 
   // Reconcile: once the server state no longer contains any of our
@@ -690,6 +692,8 @@ export function StatusCard() {
 
     const proposedEditSection = PendingProposedEditSection({
       proposedEdits: pendingProposedEdits,
+      waitingLabel: t('approval.fileEdits.waitingForApproval'),
+      applyingLabel: t('approval.fileEdits.applyingChanges'),
       resolvedMounts,
       activeMounts: workspaceMounts,
       activeMountPaths,

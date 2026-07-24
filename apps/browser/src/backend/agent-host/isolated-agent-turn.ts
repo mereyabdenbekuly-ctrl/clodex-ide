@@ -20,6 +20,17 @@ export interface IsolatedAgentToolCall {
   input: AgentTurnJsonValue;
 }
 
+export interface IsolatedAgentFileEditBatchMember {
+  memberId: string;
+  toolCallId: string;
+}
+
+export interface IsolatedAgentFileEditBatchMetadata {
+  batchId: string;
+  memberId: string;
+  members: IsolatedAgentFileEditBatchMember[];
+}
+
 export type IsolatedAgentConversationMessage =
   | {
       role: 'user';
@@ -98,6 +109,8 @@ export interface IsolatedAgentToolCallRequest {
   agentInstanceId: string;
   call: IsolatedAgentToolCall;
   messages: IsolatedAgentConversationMessage[];
+  /** Serializable only. The main process derives the host capability. */
+  fileEditBatch?: IsolatedAgentFileEditBatchMetadata;
 }
 
 export type IsolatedAgentToolCallResult =
@@ -280,12 +293,19 @@ export function isIsolatedAgentModelCallResult(
 export function isIsolatedAgentToolCallRequest(
   value: unknown,
 ): value is IsolatedAgentToolCallRequest {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyString(value.agentInstanceId) ||
+    !isIsolatedAgentToolCall(value.call) ||
+    !Array.isArray(value.messages) ||
+    !value.messages.every(isIsolatedAgentConversationMessage)
+  ) {
+    return false;
+  }
+  if (value.fileEditBatch === undefined) return true;
   return (
-    isRecord(value) &&
-    isNonEmptyString(value.agentInstanceId) &&
-    isIsolatedAgentToolCall(value.call) &&
-    Array.isArray(value.messages) &&
-    value.messages.every(isIsolatedAgentConversationMessage)
+    (value.call.toolName === 'write' || value.call.toolName === 'multiEdit') &&
+    isIsolatedAgentFileEditBatchMetadata(value.fileEditBatch, value.call)
   );
 }
 
@@ -402,6 +422,41 @@ function isIsolatedAgentToolCall(
     isNonEmptyString(value.toolName) &&
     isAgentTurnJsonValue(value.input)
   );
+}
+
+function isIsolatedAgentFileEditBatchMetadata(
+  value: unknown,
+  call: IsolatedAgentToolCall,
+): value is IsolatedAgentFileEditBatchMetadata {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyString(value.batchId) ||
+    !isNonEmptyString(value.memberId) ||
+    !Array.isArray(value.members) ||
+    value.members.length < 2 ||
+    value.members.length > 64
+  ) {
+    return false;
+  }
+
+  const memberIds = new Set<string>();
+  let currentMemberMatches = false;
+  for (const member of value.members) {
+    if (
+      !isRecord(member) ||
+      !isNonEmptyString(member.memberId) ||
+      !isNonEmptyString(member.toolCallId) ||
+      memberIds.has(member.memberId)
+    ) {
+      return false;
+    }
+    memberIds.add(member.memberId);
+    if (member.memberId === value.memberId) {
+      if (member.toolCallId !== call.toolCallId) return false;
+      currentMemberMatches = true;
+    }
+  }
+  return currentMemberMatches;
 }
 
 function isIsolatedAgentConversationMessage(

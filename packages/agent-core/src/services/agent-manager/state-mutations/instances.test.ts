@@ -5,6 +5,7 @@ import { AgentTypes, type AgentState } from '../../../types/agent';
 import {
   deleteAgentInstance,
   getAgentInstance,
+  setFileEditApprovalMode,
   setToolApprovalMode,
   upsertAgentInstance,
   type AgentInstanceEnvelope,
@@ -22,6 +23,7 @@ function minimalState(): AgentState {
     queuedMessages: [],
     activeModelId: 'model-1',
     toolApprovalMode: 'alwaysAsk',
+    fileEditApprovalMode: 'manual',
     pendingApprovals: {},
     inputState: '',
     usedTokens: 0,
@@ -84,6 +86,25 @@ describe('state-mutations/instances', () => {
     const store = new AgentStore(emptySystemState());
     expect(() =>
       setToolApprovalMode(store, 'ghost', 'alwaysAsk'),
+    ).not.toThrow();
+  });
+
+  it('setFileEditApprovalMode updates state without changing tool mode', () => {
+    const store = new AgentStore(emptySystemState());
+    upsertAgentInstance(store, 'a1', makeEnvelope(minimalState()));
+
+    setFileEditApprovalMode(store, 'a1', 'autoWorkspace');
+
+    expect(getAgentInstance(store, 'a1')?.state).toMatchObject({
+      toolApprovalMode: 'alwaysAsk',
+      fileEditApprovalMode: 'autoWorkspace',
+    });
+  });
+
+  it('setFileEditApprovalMode is a defensive no-op for unknown ids', () => {
+    const store = new AgentStore(emptySystemState());
+    expect(() =>
+      setFileEditApprovalMode(store, 'ghost', 'autoWorkspace'),
     ).not.toThrow();
   });
 });

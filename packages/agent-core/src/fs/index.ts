@@ -28,6 +28,7 @@ export {
   writeFile,
   appendFile,
   stat,
+  lstat,
   readdir,
   mkdir,
   rename,

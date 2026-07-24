@@ -9,12 +9,35 @@ import {
 } from '../mount-manager/mount-registry';
 import { AgentManager } from './agent-manager';
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function createHarness(isWorking = false) {
   const registry = new CommandRegistry();
   const instances = {
     'source-task': {
       type: AgentTypes.CHAT,
-      state: { isWorking, usedTokens: 250, goal: null },
+      state: {
+        title: 'Source task',
+        titleLockedByUser: false,
+        isWorking,
+        history: [],
+        queuedMessages: [],
+        activeModelId: 'test-model',
+        usedTokens: 250,
+        goal: null,
+        toolApprovalMode: 'alwaysAsk',
+        fileEditApprovalMode: 'manual',
+        pendingApprovals: {},
+        inputState: '',
+      },
     },
   };
   const storeState = { agents: { instances }, toolbox: {} };
@@ -22,7 +45,9 @@ function createHarness(isWorking = false) {
     forkAgentInstance: vi.fn(async () => {}),
     deleteAgentInstance: vi.fn(async () => {}),
     setAgentArchived: vi.fn(async () => true),
+    updateFileEditApprovalMode: vi.fn(async () => true),
     getStoredAgentInstanceById: vi.fn(async () => null),
+    storeAgentInstance: vi.fn(async () => {}),
   };
   const attachments = {
     copyAgentBlobs: vi.fn(async () => {}),
@@ -36,8 +61,11 @@ function createHarness(isWorking = false) {
     acceptAllPendingEditsForAgent: vi.fn(async () => {}),
     getEditedFilePathsForAgent: vi.fn(async () => []),
   };
+  const telemetryCapture = vi.fn();
   const manager = new AgentManager({
-    host: createTestAgentHost(),
+    host: createTestAgentHost({
+      telemetry: { capture: telemetryCapture } as never,
+    }),
     commandRegistry: registry,
     agentTypeRegistry: new AgentTypeRegistry(),
     startupPolicy: { kind: 'none' },
@@ -58,7 +86,15 @@ function createHarness(isWorking = false) {
     },
   });
 
-  return { registry, manager, persistenceDb, attachments, toolbox };
+  return {
+    registry,
+    manager,
+    persistenceDb,
+    attachments,
+    toolbox,
+    telemetryCapture,
+    storeState,
+  };
 }
 
 describe('AgentManager task lifecycle handlers', () => {
@@ -176,6 +212,7 @@ describe('AgentManager task lifecycle handlers', () => {
       ],
       activeModelId: '',
       toolApprovalMode: null,
+      fileEditApprovalMode: 'autoWorkspace',
       inputState: `Open ${legacyPrefix}/README.md`,
       usedTokens: 42,
       goal: null,
@@ -197,11 +234,275 @@ describe('AgentManager task lifecycle handlers', () => {
       { type: 'text', text: `Test ${currentPrefix}/src/app.ts` },
     ]);
     expect(initialState?.inputState).toBe(`Open ${currentPrefix}/README.md`);
+    expect(initialState?.fileEditApprovalMode).toBe('autoWorkspace');
     expect(harness.toolbox.handleMountWorkspace).toHaveBeenCalledWith(
       'source-task',
       workspacePath,
       ['read'],
     );
+
+    await harness.manager.teardown();
+  });
+
+  it('persists and reports independent file-edit approval mode changes', async () => {
+    const harness = createHarness(false);
+    (
+      harness.manager as unknown as { activeAgents: Map<string, unknown> }
+    ).activeAgents.set('source-task', {});
+
+    await harness.registry.dispatch(
+      'agents.setFileEditApprovalMode',
+      { callerId: 'test' },
+      ['source-task', 'autoWorkspace'],
+    );
+
+    expect(
+      harness.storeState.agents.instances['source-task'].state,
+    ).toMatchObject({
+      toolApprovalMode: 'alwaysAsk',
+      fileEditApprovalMode: 'autoWorkspace',
+    });
+    expect(
+      harness.persistenceDb.updateFileEditApprovalMode,
+    ).toHaveBeenCalledWith('source-task', 'autoWorkspace');
+    expect(harness.telemetryCapture).toHaveBeenCalledWith(
+      'file-edit-approval-mode-changed',
+      {
+        agent_instance_id: 'source-task',
+        previous_mode: 'manual',
+        new_mode: 'autoWorkspace',
+      },
+    );
+
+    await harness.registry.dispatch(
+      'agents.setFileEditApprovalMode',
+      { callerId: 'test' },
+      ['source-task', 'autoWorkspace'],
+    );
+    expect(
+      harness.persistenceDb.updateFileEditApprovalMode,
+    ).toHaveBeenCalledTimes(1);
+    expect(harness.telemetryCapture).toHaveBeenCalledTimes(1);
+
+    await expect(
+      harness.registry.dispatch(
+        'agents.setFileEditApprovalMode',
+        { callerId: 'test' },
+        ['source-task', 'alwaysAllow'],
+      ),
+    ).rejects.toThrow();
+
+    await harness.manager.teardown();
+  });
+
+  it('keeps file-edit approval fail-closed when persistence fails', async () => {
+    const harness = createHarness(false);
+    (
+      harness.manager as unknown as { activeAgents: Map<string, unknown> }
+    ).activeAgents.set('source-task', {});
+    harness.persistenceDb.updateFileEditApprovalMode.mockRejectedValueOnce(
+      new Error('disk unavailable'),
+    );
+
+    await expect(
+      harness.registry.dispatch(
+        'agents.setFileEditApprovalMode',
+        { callerId: 'test' },
+        ['source-task', 'autoWorkspace'],
+      ),
+    ).rejects.toThrow('disk unavailable');
+
+    expect(
+      harness.storeState.agents.instances['source-task'].state
+        .fileEditApprovalMode,
+    ).toBe('manual');
+    expect(harness.telemetryCapture).not.toHaveBeenCalled();
+
+    await harness.manager.teardown();
+  });
+
+  it('serializes file-edit mode updates ahead of full state snapshots', async () => {
+    const harness = createHarness(false);
+    (
+      harness.manager as unknown as {
+        activeAgents: Map<string, { agentType: AgentTypes }>;
+      }
+    ).activeAgents.set('source-task', { agentType: AgentTypes.CHAT });
+    const update = createDeferred<boolean>();
+    harness.persistenceDb.updateFileEditApprovalMode.mockImplementationOnce(
+      async () => await update.promise,
+    );
+
+    const modeChange = harness.registry.dispatch(
+      'agents.setFileEditApprovalMode',
+      { callerId: 'test' },
+      ['source-task', 'autoWorkspace'],
+    );
+    const snapshot = (
+      harness.manager as unknown as {
+        persistAgentState(instanceId: string): Promise<void>;
+      }
+    ).persistAgentState('source-task');
+
+    await vi.waitFor(() =>
+      expect(
+        harness.persistenceDb.updateFileEditApprovalMode,
+      ).toHaveBeenCalledOnce(),
+    );
+    expect(harness.persistenceDb.storeAgentInstance).not.toHaveBeenCalled();
+
+    update.resolve(true);
+    await modeChange;
+    await snapshot;
+
+    expect(harness.persistenceDb.storeAgentInstance).toHaveBeenCalledOnce();
+    expect(
+      harness.persistenceDb.storeAgentInstance.mock.calls[0]?.[0],
+    ).toMatchObject({ fileEditApprovalMode: 'autoWorkspace' });
+
+    await harness.manager.teardown();
+  });
+
+  it('applies rapid file-edit mode changes in enqueue order', async () => {
+    const harness = createHarness(false);
+    (
+      harness.manager as unknown as { activeAgents: Map<string, unknown> }
+    ).activeAgents.set('source-task', {});
+    const firstUpdate = createDeferred<boolean>();
+    harness.persistenceDb.updateFileEditApprovalMode
+      .mockImplementationOnce(async () => await firstUpdate.promise)
+      .mockResolvedValueOnce(true);
+
+    const enable = harness.registry.dispatch(
+      'agents.setFileEditApprovalMode',
+      { callerId: 'test' },
+      ['source-task', 'autoWorkspace'],
+    );
+    await vi.waitFor(() =>
+      expect(
+        harness.persistenceDb.updateFileEditApprovalMode,
+      ).toHaveBeenCalledWith('source-task', 'autoWorkspace'),
+    );
+    const disable = harness.registry.dispatch(
+      'agents.setFileEditApprovalMode',
+      { callerId: 'test' },
+      ['source-task', 'manual'],
+    );
+
+    await Promise.resolve();
+    expect(
+      harness.persistenceDb.updateFileEditApprovalMode,
+    ).toHaveBeenCalledTimes(1);
+
+    firstUpdate.resolve(true);
+    await enable;
+    await disable;
+
+    expect(harness.persistenceDb.updateFileEditApprovalMode.mock.calls).toEqual(
+      [
+        ['source-task', 'autoWorkspace'],
+        ['source-task', 'manual'],
+      ],
+    );
+    expect(
+      harness.storeState.agents.instances['source-task'].state
+        .fileEditApprovalMode,
+    ).toBe('manual');
+    expect(harness.telemetryCapture).toHaveBeenCalledTimes(2);
+
+    await harness.manager.teardown();
+  });
+
+  it('persists auto edits before the first message and restores them on reload', async () => {
+    const harness = createHarness(false);
+    (
+      harness.manager as unknown as {
+        activeAgents: Map<string, { agentType: AgentTypes }>;
+      }
+    ).activeAgents.set('source-task', { agentType: AgentTypes.CHAT });
+    harness.persistenceDb.updateFileEditApprovalMode.mockResolvedValueOnce(
+      false,
+    );
+    let persistedAgent: Record<string, unknown> | undefined;
+    harness.persistenceDb.storeAgentInstance.mockImplementationOnce(
+      async (agentInstance, history) => {
+        persistedAgent = {
+          ...agentInstance,
+          history,
+          instanceConfig: {},
+          parentAgentInstanceId: null,
+          archivedAt: null,
+        };
+      },
+    );
+
+    await harness.registry.dispatch(
+      'agents.setFileEditApprovalMode',
+      { callerId: 'test' },
+      ['source-task', 'autoWorkspace'],
+    );
+
+    expect(
+      harness.storeState.agents.instances['source-task'].state
+        .fileEditApprovalMode,
+    ).toBe('autoWorkspace');
+    expect(harness.persistenceDb.storeAgentInstance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'source-task',
+        fileEditApprovalMode: 'autoWorkspace',
+      }),
+      [],
+      undefined,
+      expect.objectContaining({ throwOnError: true }),
+    );
+    expect(persistedAgent).toBeDefined();
+
+    await harness.manager.teardown();
+
+    const reloadedHarness = createHarness(false);
+    reloadedHarness.persistenceDb.getStoredAgentInstanceById.mockResolvedValue(
+      persistedAgent as never,
+    );
+    const createSpy = vi
+      .spyOn(reloadedHarness.manager, 'createAgent')
+      .mockResolvedValue({ instanceId: 'source-task' } as any);
+
+    await reloadedHarness.manager.resumeAgent('source-task');
+
+    expect(createSpy.mock.calls[0]?.[3]?.fileEditApprovalMode).toBe(
+      'autoWorkspace',
+    );
+
+    await reloadedHarness.manager.teardown();
+  });
+
+  it('keeps fresh-agent auto edits fail-closed when the initial snapshot fails', async () => {
+    const harness = createHarness(false);
+    (
+      harness.manager as unknown as {
+        activeAgents: Map<string, { agentType: AgentTypes }>;
+      }
+    ).activeAgents.set('source-task', { agentType: AgentTypes.CHAT });
+    harness.persistenceDb.updateFileEditApprovalMode.mockResolvedValueOnce(
+      false,
+    );
+    harness.persistenceDb.storeAgentInstance.mockRejectedValueOnce(
+      new Error('snapshot unavailable'),
+    );
+
+    await expect(
+      harness.registry.dispatch(
+        'agents.setFileEditApprovalMode',
+        { callerId: 'test' },
+        ['source-task', 'autoWorkspace'],
+      ),
+    ).rejects.toThrow('snapshot unavailable');
+
+    expect(
+      harness.storeState.agents.instances['source-task'].state
+        .fileEditApprovalMode,
+    ).toBe('manual');
+    expect(harness.telemetryCapture).not.toHaveBeenCalled();
 
     await harness.manager.teardown();
   });

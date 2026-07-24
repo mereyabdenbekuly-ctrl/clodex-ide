@@ -29,6 +29,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@clodex/stage-ui/components/tooltip';
+import { FileEditApprovalStatus } from '../shared/file-edit-approval-waiting';
+import type { FileEditApprovalVisualState } from '../../../file-edit-approval-state';
 
 /**
  * Dedicated tool-part UI for plan file creation / update.
@@ -41,10 +43,27 @@ import {
  * re-renders during streaming.
  */
 export const CreatePlanToolPart = memo(
-  function CreatePlanToolPart({ part }: { part: WritePart }) {
+  function CreatePlanToolPart({
+    part,
+    fileEditApprovalState = null,
+  }: {
+    part: WritePart;
+    fileEditApprovalState?: FileEditApprovalVisualState;
+  }) {
     const streaming =
       part.state === 'input-streaming' || part.state === 'input-available';
     const isError = part.state === 'output-error';
+
+    if (fileEditApprovalState) {
+      return (
+        <div className="flex h-6 w-full items-center font-medium">
+          <FileEditApprovalStatus
+            relativePath={part.input?.path}
+            state={fileEditApprovalState}
+          />
+        </div>
+      );
+    }
 
     // Streaming state — plain shimmer label
     if (streaming) {
@@ -76,6 +95,7 @@ export const CreatePlanToolPart = memo(
     return <CreatePlanSettledCard part={part} />;
   },
   (prev, next) => {
+    if (prev.fileEditApprovalState !== next.fileEditApprovalState) return false;
     // During streaming, only part.state matters (shimmer label is static)
     if (
       prev.part.state === next.part.state &&

@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import {
+  chmodSync,
+  linkSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -86,9 +89,16 @@ function makeDeps(root: string, workspace: string): UniversalToolboxDeps {
     diffHistoryService: {
       ignoreFileForWatcher: vi.fn(),
       unignoreFileForWatcher: vi.fn(),
-      registerAgentEdit: vi.fn(async () => {}),
+      beginAutoApprovedWriteWatcher: vi.fn(() => 'auto-watcher-token'),
+      reconcileAutoApprovedWriteWatcher: vi.fn(async () => 'exact' as const),
+      completeAutoApprovedWriteWatcher: vi.fn(),
+      cancelAutoApprovedWriteWatcher: vi.fn(async () => {}),
+      registerAgentEdit: vi.fn(async () => true),
+      registerAutoApprovedTextEdit: vi.fn(async () => true),
       registerAgentEditBatch: vi.fn(async () => {}),
       acceptPendingEditsForAgentFile: vi.fn(async () => {}),
+      canSafelyTrackFilepath: vi.fn(async () => true),
+      canSafelyAutoAcceptFile: vi.fn(async () => true),
     } as never,
     logger: {
       debug: vi.fn(),
@@ -97,6 +107,37 @@ function makeDeps(root: string, workspace: string): UniversalToolboxDeps {
       error: vi.fn(),
     },
   };
+}
+
+function enableAutoWorkspaceEdits(
+  deps: UniversalToolboxDeps,
+  workspace: string,
+): AgentStore {
+  const store = new AgentStore({
+    agents: {
+      instances: {
+        'agent-1': {
+          state: { fileEditApprovalMode: 'autoWorkspace' },
+        } as never,
+      },
+    },
+    toolbox: {},
+  });
+  deps.pendingEditService = new PendingEditService({ store });
+  deps.staticMounts = (deps.staticMounts ?? []).filter(
+    (mount) => mount.prefix !== 'wtest',
+  );
+  deps.mountManager = {
+    getMountPrefixes: () => ['wtest'],
+    getWorkspacePathForPrefix: (prefix) =>
+      prefix === 'wtest' ? workspace : undefined,
+    getMountPermissionsForPrefix: () => ['read', 'write', 'create', 'delete'],
+    findWorkspaceForFile: (_agentInstanceId, filePath) =>
+      filePath === workspace || filePath.startsWith(`${workspace}${path.sep}`)
+        ? workspace
+        : undefined,
+  };
+  return store;
 }
 
 describe('universal toolbox', () => {
@@ -263,14 +304,27 @@ describe('universal toolbox', () => {
 
   it('waits for approval before writing a proposed file edit', async () => {
     writeFileSync(path.join(workspace, 'file.txt'), 'before');
-    let capturedApply: (() => Promise<void>) | undefined;
+    const fileEditBatchParticipant = {
+      batchId: 'batch-1',
+      memberId: '0',
+      toolCallId: 'tc-pre-apply-write',
+      getState: vi.fn(() => 'collecting' as const),
+      arriveAsProposal: vi.fn(async () => 'ready' as const),
+      settle: vi.fn(),
+    };
+    let capturedApply:
+      | ((context: {
+          decisionSource: 'human' | 'auto-policy';
+        }) => Promise<void>)
+      | undefined;
     deps.pendingEditService = {
       requestApproval: vi.fn(async (request) => {
         capturedApply = request.apply;
+        expect(request.fileEditBatchParticipant).toBe(fileEditBatchParticipant);
         expect(readFileSync(path.join(workspace, 'file.txt'), 'utf-8')).toBe(
           'before',
         );
-        await request.apply();
+        await request.apply({ decisionSource: 'human' });
         return {
           status: 'accepted',
           message: 'accepted by test',
@@ -281,7 +335,7 @@ describe('universal toolbox', () => {
     const result = await writeToolExecute(
       { path: 'wtest/file.txt', content: 'after' },
       deps,
-      { toolCallId: 'tc-pre-apply-write' },
+      { toolCallId: 'tc-pre-apply-write', fileEditBatchParticipant },
     );
 
     expect(capturedApply).toBeDefined();
@@ -290,6 +344,9 @@ describe('universal toolbox', () => {
       'after',
     );
     expect(deps.diffHistoryService?.registerAgentEdit).toHaveBeenCalled();
+    expect(
+      deps.diffHistoryService?.acceptPendingEditsForAgentFile,
+    ).toHaveBeenCalledWith('agent-1', path.join(workspace, 'file.txt'));
   });
 
   it('keeps write tool changes pending until the user accepts', async () => {
@@ -307,17 +364,22 @@ describe('universal toolbox', () => {
       { toolCallId: 'tc-real-pending-write' },
     );
 
-    await vi.waitFor(() => {
+    await vi.waitFor(() =>
       expect(
-        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.id,
-      ).toBe('tc-real-pending-write');
-    });
+        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.toolCallId,
+      ).toBe('tc-real-pending-write'),
+    );
     expect(readFileSync(path.join(workspace, 'file.txt'), 'utf-8')).toBe(
       'before',
     );
+    expect(
+      deps.diffHistoryService?.canSafelyTrackFilepath,
+    ).not.toHaveBeenCalled();
     expect(deps.diffHistoryService?.registerAgentEdit).not.toHaveBeenCalled();
 
-    await pendingEditService.acceptEdit('tc-real-pending-write');
+    await pendingEditService.acceptEdit(
+      store.get().toolbox['agent-1']!.pendingProposedEdits[0]!.id,
+    );
 
     const result = await writePromise;
     expect(result.message).toContain('Success: applied changes');
@@ -325,6 +387,378 @@ describe('universal toolbox', () => {
       'after',
     );
     expect(deps.diffHistoryService?.registerAgentEdit).toHaveBeenCalled();
+  });
+
+  it('auto-applies eligible workspace write and multi-edit operations', async () => {
+    writeFileSync(path.join(workspace, 'file.txt'), 'hello world');
+    const store = enableAutoWorkspaceEdits(deps, workspace);
+
+    const writeResult = await writeToolExecute(
+      { path: 'wtest/file.txt', content: 'hello clodex' },
+      deps,
+      { toolCallId: 'tc-auto-write' },
+    );
+    expect(writeResult.message).toContain('Success: applied changes');
+    expect(readFileSync(path.join(workspace, 'file.txt'), 'utf8')).toBe(
+      'hello clodex',
+    );
+
+    const editResult = await multiEditToolExecute(
+      {
+        path: 'wtest/file.txt',
+        edits: [{ old_string: 'clodex', new_string: 'CLODEx' }],
+      },
+      deps,
+      { toolCallId: 'tc-auto-multi-edit' },
+    );
+    expect(editResult.message).toContain('Success: applied changes');
+    expect(readFileSync(path.join(workspace, 'file.txt'), 'utf8')).toBe(
+      'hello CLODEx',
+    );
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+    expect(deps.diffHistoryService?.canSafelyTrackFilepath).toHaveBeenCalled();
+    expect(
+      deps.diffHistoryService?.registerAutoApprovedTextEdit,
+    ).toHaveBeenCalledTimes(2);
+    expect(
+      deps.diffHistoryService?.acceptPendingEditsForAgentFile,
+    ).not.toHaveBeenCalled();
+    expect(
+      deps.diffHistoryService?.canSafelyAutoAcceptFile,
+    ).toHaveBeenCalledWith(path.join(workspace, 'file.txt'));
+  });
+
+  it('keeps new-file creation manual in auto-edit mode', async () => {
+    const store = enableAutoWorkspaceEdits(deps, workspace);
+    const writePromise = writeToolExecute(
+      { path: 'wtest/new-file.txt', content: 'new content' },
+      deps,
+      { toolCallId: 'tc-auto-create' },
+    );
+
+    await vi.waitFor(() =>
+      expect(
+        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.toolCallId,
+      ).toBe('tc-auto-create'),
+    );
+    expect(() => readFileSync(path.join(workspace, 'new-file.txt'))).toThrow();
+    deps.pendingEditService?.rejectEdit(
+      store.get().toolbox['agent-1']!.pendingProposedEdits[0]!.id,
+    );
+    await expect(writePromise).resolves.toMatchObject({
+      message: expect.stringContaining('Action rejected by user'),
+    });
+  });
+
+  it('keeps files with earlier pending history manual in auto-edit mode', async () => {
+    const filePath = path.join(workspace, 'pending-history.txt');
+    writeFileSync(filePath, 'before');
+    const store = enableAutoWorkspaceEdits(deps, workspace);
+    vi.mocked(
+      deps.diffHistoryService!.canSafelyAutoAcceptFile,
+    ).mockResolvedValueOnce(false);
+
+    const writePromise = writeToolExecute(
+      { path: 'wtest/pending-history.txt', content: 'after' },
+      deps,
+      { toolCallId: 'tc-auto-pending-history' },
+    );
+    await vi.waitFor(() =>
+      expect(
+        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.toolCallId,
+      ).toBe('tc-auto-pending-history'),
+    );
+    expect(readFileSync(filePath, 'utf8')).toBe('before');
+    deps.pendingEditService?.rejectEdit(
+      store.get().toolbox['agent-1']!.pendingProposedEdits[0]!.id,
+    );
+    await writePromise;
+    expect(
+      deps.diffHistoryService?.registerAutoApprovedTextEdit,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('preserves existing file mode during automatic edits', async () => {
+    if (process.platform === 'win32') return;
+    const filePath = path.join(workspace, 'private.txt');
+    writeFileSync(filePath, 'before');
+    chmodSync(filePath, 0o600);
+    enableAutoWorkspaceEdits(deps, workspace);
+
+    await writeToolExecute(
+      { path: 'wtest/private.txt', content: 'after' },
+      deps,
+      { toolCallId: 'tc-auto-mode' },
+    );
+
+    expect(statSync(filePath).mode & 0o777).toBe(0o600);
+  });
+
+  it('keeps read-only files manual in auto-edit mode', async () => {
+    if (process.platform === 'win32') return;
+    const filePath = path.join(workspace, 'read-only.txt');
+    writeFileSync(filePath, 'before');
+    chmodSync(filePath, 0o444);
+    const store = enableAutoWorkspaceEdits(deps, workspace);
+
+    const writePromise = writeToolExecute(
+      { path: 'wtest/read-only.txt', content: 'after' },
+      deps,
+      { toolCallId: 'tc-auto-read-only' },
+    );
+    await vi.waitFor(() =>
+      expect(
+        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.toolCallId,
+      ).toBe('tc-auto-read-only'),
+    );
+    expect(readFileSync(filePath, 'utf8')).toBe('before');
+    deps.pendingEditService?.rejectEdit(
+      store.get().toolbox['agent-1']!.pendingProposedEdits[0]!.id,
+    );
+    await writePromise;
+    chmodSync(filePath, 0o600);
+  });
+
+  it('keeps sensitive workspace files manual in auto-edit mode', async () => {
+    writeFileSync(path.join(workspace, '.env'), 'TOKEN=before');
+    const store = enableAutoWorkspaceEdits(deps, workspace);
+
+    const writePromise = writeToolExecute(
+      { path: 'wtest/.env', content: 'TOKEN=after' },
+      deps,
+      { toolCallId: 'tc-sensitive-write' },
+    );
+    await vi.waitFor(() =>
+      expect(
+        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.toolCallId,
+      ).toBe('tc-sensitive-write'),
+    );
+    expect(readFileSync(path.join(workspace, '.env'), 'utf8')).toBe(
+      'TOKEN=before',
+    );
+
+    deps.pendingEditService?.rejectEdit(
+      store.get().toolbox['agent-1']!.pendingProposedEdits[0]!.id,
+    );
+    await expect(writePromise).resolves.toMatchObject({
+      message: expect.stringContaining('Action rejected by user'),
+    });
+  });
+
+  it('keeps credential directories manual even when mounted as a workspace', async () => {
+    const sshWorkspace = path.join(root, '.ssh');
+    mkdirSync(sshWorkspace, { recursive: true });
+    writeFileSync(path.join(sshWorkspace, 'id_ed25519'), 'private key');
+    const store = enableAutoWorkspaceEdits(deps, sshWorkspace);
+
+    const writePromise = writeToolExecute(
+      { path: 'wtest/id_ed25519', content: 'replacement' },
+      deps,
+      { toolCallId: 'tc-sensitive-root' },
+    );
+    await vi.waitFor(() =>
+      expect(
+        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.toolCallId,
+      ).toBe('tc-sensitive-root'),
+    );
+    expect(readFileSync(path.join(sshWorkspace, 'id_ed25519'), 'utf8')).toBe(
+      'private key',
+    );
+    deps.pendingEditService?.rejectEdit(
+      store.get().toolbox['agent-1']!.pendingProposedEdits[0]!.id,
+    );
+    await writePromise;
+  });
+
+  it('keeps extensionless private-key names manual outside dot directories', async () => {
+    const filePath = path.join(workspace, 'id_rsa');
+    writeFileSync(filePath, 'private key');
+    const store = enableAutoWorkspaceEdits(deps, workspace);
+
+    const writePromise = writeToolExecute(
+      { path: 'wtest/id_rsa', content: 'replacement' },
+      deps,
+      { toolCallId: 'tc-sensitive-key-name' },
+    );
+    await vi.waitFor(() =>
+      expect(
+        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.toolCallId,
+      ).toBe('tc-sensitive-key-name'),
+    );
+    expect(readFileSync(filePath, 'utf8')).toBe('private key');
+    deps.pendingEditService?.rejectEdit(
+      store.get().toolbox['agent-1']!.pendingProposedEdits[0]!.id,
+    );
+    await writePromise;
+  });
+
+  it('keeps multiply-linked files manual in auto-edit mode', async () => {
+    const outsidePath = path.join(root, 'outside.txt');
+    const linkedPath = path.join(workspace, 'linked.txt');
+    writeFileSync(outsidePath, 'outside content');
+    linkSync(outsidePath, linkedPath);
+    const store = enableAutoWorkspaceEdits(deps, workspace);
+
+    const writePromise = writeToolExecute(
+      { path: 'wtest/linked.txt', content: 'agent content' },
+      deps,
+      { toolCallId: 'tc-auto-hardlink' },
+    );
+    await vi.waitFor(() =>
+      expect(
+        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.toolCallId,
+      ).toBe('tc-auto-hardlink'),
+    );
+    expect(readFileSync(outsidePath, 'utf8')).toBe('outside content');
+    deps.pendingEditService?.rejectEdit(
+      store.get().toolbox['agent-1']!.pendingProposedEdits[0]!.id,
+    );
+    await writePromise;
+  });
+
+  it('rolls back an automatic edit when durable evidence is unavailable', async () => {
+    const filePath = path.join(workspace, 'evidence.txt');
+    writeFileSync(filePath, 'before');
+    enableAutoWorkspaceEdits(deps, workspace);
+    vi.mocked(
+      deps.diffHistoryService!.registerAutoApprovedTextEdit,
+    ).mockResolvedValueOnce(false);
+
+    const result = await writeToolExecute(
+      { path: 'wtest/evidence.txt', content: 'agent content' },
+      deps,
+      { toolCallId: 'tc-auto-evidence' },
+    );
+
+    expect(result.message).toContain('policy evidence');
+    expect(readFileSync(filePath, 'utf8')).toBe('before');
+    expect(
+      deps.diffHistoryService?.beginAutoApprovedWriteWatcher,
+    ).toHaveBeenCalledWith(filePath, 'agent content');
+    expect(
+      deps.diffHistoryService?.cancelAutoApprovedWriteWatcher,
+    ).toHaveBeenCalledWith(filePath, 'auto-watcher-token');
+    expect(
+      deps.diffHistoryService?.completeAutoApprovedWriteWatcher,
+    ).not.toHaveBeenCalled();
+    expect(
+      deps.diffHistoryService?.ignoreFileForWatcher,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('does not roll back over a newer user save after evidence failure', async () => {
+    const filePath = path.join(workspace, 'evidence-race.txt');
+    writeFileSync(filePath, 'before');
+    enableAutoWorkspaceEdits(deps, workspace);
+    let releaseEvidence!: (tracked: boolean) => void;
+    vi.mocked(
+      deps.diffHistoryService!.registerAutoApprovedTextEdit,
+    ).mockImplementationOnce(
+      async () =>
+        await new Promise<boolean>((resolve) => {
+          releaseEvidence = resolve;
+        }),
+    );
+
+    const writePromise = writeToolExecute(
+      { path: 'wtest/evidence-race.txt', content: 'agent content' },
+      deps,
+      { toolCallId: 'tc-auto-evidence-race' },
+    );
+    await vi.waitFor(() => expect(releaseEvidence).toBeTypeOf('function'));
+    expect(readFileSync(filePath, 'utf8')).toBe('agent content');
+    writeFileSync(filePath, 'user content');
+    releaseEvidence(false);
+
+    const result = await writePromise;
+    expect(result.message).toContain('policy evidence');
+    expect(readFileSync(filePath, 'utf8')).toBe('user content');
+    expect(deps.logger?.error).toHaveBeenCalledWith(
+      expect.stringContaining('rollback skipped'),
+      expect.objectContaining({ path: filePath }),
+    );
+  });
+
+  it('reconciles a user save that lands after durable auto evidence', async () => {
+    const filePath = path.join(workspace, 'post-commit-race.txt');
+    writeFileSync(filePath, 'before');
+    enableAutoWorkspaceEdits(deps, workspace);
+    vi.mocked(
+      deps.diffHistoryService!.registerAutoApprovedTextEdit,
+    ).mockImplementationOnce(async (edit) => {
+      expect(edit.contentAfter).toBe('agent content');
+      writeFileSync(filePath, 'newer user content');
+      return true;
+    });
+    vi.mocked(
+      deps.diffHistoryService!.reconcileAutoApprovedWriteWatcher,
+    ).mockImplementationOnce(async () => {
+      expect(readFileSync(filePath, 'utf8')).toBe('newer user content');
+      return 'reconciled';
+    });
+
+    const result = await writeToolExecute(
+      { path: 'wtest/post-commit-race.txt', content: 'agent content' },
+      deps,
+      { toolCallId: 'tc-auto-post-commit-race' },
+    );
+
+    expect(result.message).toContain('concurrent user save');
+    expect(readFileSync(filePath, 'utf8')).toBe('newer user content');
+    expect(
+      deps.diffHistoryService?.reconcileAutoApprovedWriteWatcher,
+    ).toHaveBeenCalledWith(filePath, 'auto-watcher-token', 'agent content');
+    expect(
+      deps.diffHistoryService?.completeAutoApprovedWriteWatcher,
+    ).toHaveBeenCalledWith(filePath, 'auto-watcher-token');
+    expect(
+      deps.diffHistoryService?.cancelAutoApprovedWriteWatcher,
+    ).not.toHaveBeenCalled();
+    expect(
+      deps.diffHistoryService?.ignoreFileForWatcher,
+    ).not.toHaveBeenCalled();
+    expect(deps.logger?.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Concurrent user save was preserved'),
+      expect.objectContaining({ path: filePath }),
+    );
+  });
+
+  it('does not overwrite a file changed after automatic policy assessment', async () => {
+    const filePath = path.join(workspace, 'conflict.txt');
+    writeFileSync(filePath, 'captured baseline');
+    enableAutoWorkspaceEdits(deps, workspace);
+    let releasePolicy!: (eligible: boolean) => void;
+    vi.mocked(
+      deps.diffHistoryService!.canSafelyTrackFilepath,
+    ).mockImplementationOnce(
+      async () =>
+        await new Promise<boolean>((resolve) => {
+          releasePolicy = resolve;
+        }),
+    );
+    vi.mocked(
+      deps.diffHistoryService!.registerAutoApprovedTextEdit,
+    ).mockClear();
+
+    const writePromise = writeToolExecute(
+      { path: 'wtest/conflict.txt', content: 'agent content' },
+      deps,
+      { toolCallId: 'tc-auto-conflict' },
+    );
+    await vi.waitFor(() => expect(releasePolicy).toBeTypeOf('function'));
+    writeFileSync(filePath, 'external editor content');
+    releasePolicy(true);
+
+    const result = await writePromise;
+    expect(result.message).toContain(
+      'File changed after the edit was proposed',
+    );
+    expect(readFileSync(filePath, 'utf8')).toBe('external editor content');
+    expect(
+      deps.diffHistoryService?.registerAutoApprovedTextEdit,
+    ).not.toHaveBeenCalled();
   });
 
   it('returns a deterministic verification nudge after accepting a pending edit', async () => {
@@ -344,10 +778,14 @@ describe('universal toolbox', () => {
       apply: vi.fn(async () => {}),
     });
 
-    expect(store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.id).toBe(
-      'tc-pre-apply-accept',
+    await vi.waitFor(() =>
+      expect(
+        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.toolCallId,
+      ).toBe('tc-pre-apply-accept'),
     );
-    await pendingEditService.acceptEdit('tc-pre-apply-accept');
+    await pendingEditService.acceptEdit(
+      store.get().toolbox['agent-1']!.pendingProposedEdits[0]!.id,
+    );
 
     const decision = await decisionPromise;
     expect(decision.status).toBe('accepted');
@@ -388,7 +826,14 @@ describe('universal toolbox', () => {
     expect(secondDecision.status).toBe('rejected');
     expect(secondDecision.message).toContain('currently locked');
 
-    await pendingEditService.acceptEdit('tc-lock-1');
+    await vi.waitFor(() =>
+      expect(
+        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.toolCallId,
+      ).toBe('tc-lock-1'),
+    );
+    await pendingEditService.acceptEdit(
+      store.get().toolbox['agent-1']!.pendingProposedEdits[0]!.id,
+    );
     await expect(firstDecisionPromise).resolves.toMatchObject({
       status: 'accepted',
     });
@@ -403,7 +848,14 @@ describe('universal toolbox', () => {
       newContent: 'after-b',
       apply: vi.fn(async () => {}),
     });
-    pendingEditService.rejectEdit('tc-lock-3');
+    await vi.waitFor(() =>
+      expect(
+        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.toolCallId,
+      ).toBe('tc-lock-3'),
+    );
+    pendingEditService.rejectEdit(
+      store.get().toolbox['agent-1']!.pendingProposedEdits[0]!.id,
+    );
 
     await expect(thirdDecisionPromise).resolves.toMatchObject({
       status: 'rejected',

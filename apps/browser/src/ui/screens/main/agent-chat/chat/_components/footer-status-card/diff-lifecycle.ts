@@ -10,6 +10,23 @@ export interface FooterProposedEditIdentity {
   fileDiff: FooterDiffArtifactIdentity;
 }
 
+export interface ProposedEditDecisionReadiness {
+  id: string;
+  /** Absent previews predate batch barriers and remain actionable. */
+  decisionReady?: boolean;
+}
+
+/**
+ * A batch must not expose aggregate decisions until every staged proposal is
+ * actionable. `undefined` intentionally preserves the legacy single-edit
+ * behavior for previews created before batch readiness was introduced.
+ */
+export function areProposedEditDecisionsReady(
+  proposedEdits: readonly ProposedEditDecisionReadiness[],
+): boolean {
+  return proposedEdits.every((edit) => edit.decisionReady !== false);
+}
+
 function getDiffArtifactIdentityKey(
   artifact: FooterDiffArtifactIdentity,
 ): string {

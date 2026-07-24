@@ -52,6 +52,7 @@ function createAgentStore(): AgentStore {
             queuedMessages: [],
             activeModelId: 'model-a',
             toolApprovalMode: 'alwaysAsk',
+            fileEditApprovalMode: 'manual',
             pendingApprovals: {},
             inputState: '',
             usedTokens: 0,

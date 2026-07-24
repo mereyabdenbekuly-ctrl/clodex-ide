@@ -50,6 +50,22 @@ export const taskEn = {
     },
   },
   approval: {
+    fileEdits: {
+      waitingForApproval: 'Waiting for file approval',
+      applyingChanges: 'Applying file changes',
+      mode: {
+        manual: {
+          label: 'Review edits',
+          description:
+            'Pause before applying file edits so you can review and accept or reject them.',
+        },
+        autoWorkspace: {
+          label: 'Auto edits',
+          description:
+            'Automatically apply eligible edits to existing regular text files in connected workspaces. New, sensitive, ignored, linked, executable, or read-only files still require review.',
+        },
+      },
+    },
     mode: {
       alwaysAsk: {
         label: 'Always ask',
