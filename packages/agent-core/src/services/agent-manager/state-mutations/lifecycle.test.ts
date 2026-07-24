@@ -32,6 +32,7 @@ function makeBaseState(history: AgentMessage[] = []): AgentState {
     queuedMessages: [],
     activeModelId: 'model-1',
     toolApprovalMode: 'alwaysAsk',
+    fileEditApprovalMode: 'manual',
     pendingApprovals: {},
     inputState: '',
     usedTokens: 0,

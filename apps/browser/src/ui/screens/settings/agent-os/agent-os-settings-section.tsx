@@ -4,6 +4,7 @@ import { Input } from '@clodex/stage-ui/components/input';
 import { Select } from '@clodex/stage-ui/components/select';
 import { Switch } from '@clodex/stage-ui/components/switch';
 import { useKartonProcedure, useKartonState } from '@ui/hooks/use-karton';
+import { cn } from '@ui/utils';
 import { resolveFeatureGate, type FeatureGateId } from '@shared/feature-gates';
 import type {
   BrowserUseApprovalMode,
@@ -46,6 +47,8 @@ import {
 } from '../_components/settings-page';
 import {
   createChronicleContext,
+  getHookExecutionAvailability,
+  getHookRunDisplay,
   resolveDroppedSkillPath,
   schedulePrefillWhenChatReady,
 } from './agent-os-settings-model';
@@ -1349,7 +1352,12 @@ function SkillsSettings() {
 
 function HooksSettings() {
   const state = useKartonState((item) => item.agentOs);
+  const lastOpenAgentId = useKartonState(
+    (item) => item.browser.lastOpenAgentId,
+  );
   const hooks = state.hooks;
+  const helperAgentRunnerConfigured =
+    state.hookRuntime.helperAgentRunnerConfigured;
   const createHook = useKartonProcedure(
     (procedures) => procedures.agentOs.hooks.create,
   );
@@ -1384,6 +1392,7 @@ function HooksSettings() {
         body: body.trim(),
         trigger,
         kind,
+        timeoutMs: kind === 'agent' ? 30_000 : 10_000,
       });
     } else {
       void createHook({
@@ -1392,7 +1401,7 @@ function HooksSettings() {
         trigger,
         kind,
         enabled: false,
-        timeoutMs: 10_000,
+        timeoutMs: kind === 'agent' ? 30_000 : 10_000,
       });
     }
     resetForm();
@@ -1400,6 +1409,16 @@ function HooksSettings() {
 
   return (
     <div className="space-y-4">
+      <div className="rounded-lg border border-derived-subtle bg-surface-1 p-3 text-muted-foreground text-xs leading-5">
+        Automatic wiring in this build includes Before turn prompt injection
+        plus configured helper-agent hooks after terminal turns and when an
+        approval is requested. Before turn helper-agent hooks are manual-test
+        only. Command execution is disabled until a backend-issued one-shot
+        approval flow exists; command and file-edit lifecycle triggers otherwise
+        remain manual-test only. Helper hooks use the active chat model with a
+        bounded, redacted recent lifecycle snapshot, so provider usage may
+        apply.
+      </div>
       <div className="grid gap-2 sm:grid-cols-2">
         <Input value={name} onValueChange={setName} placeholder="Hook name" />
         <Select
@@ -1421,7 +1440,16 @@ function HooksSettings() {
           items={[
             { value: 'prompt', label: 'Prompt' },
             { value: 'command', label: 'Command' },
-            { value: 'agent', label: 'Agent' },
+            {
+              value: 'agent',
+              label: helperAgentRunnerConfigured
+                ? 'Helper agent'
+                : 'Helper agent (not configured)',
+              description: helperAgentRunnerConfigured
+                ? 'Run through the trusted helper-agent executor.'
+                : 'This build has no trusted helper-agent executor.',
+              disabled: !helperAgentRunnerConfigured,
+            },
           ]}
           onValueChange={(value) =>
             setKind(value as 'prompt' | 'command' | 'agent')
@@ -1446,66 +1474,79 @@ function HooksSettings() {
         className="min-h-24 w-full resize-y rounded-lg border border-derived bg-surface-1 p-3 font-mono text-foreground text-xs outline-none"
       />
       <div className="space-y-2">
-        {hooks.map((hook) => (
-          <div
-            key={hook.id}
-            className="flex items-start justify-between gap-3 rounded-lg border border-derived-subtle p-3"
-          >
-            <div>
-              <p className="font-medium text-foreground text-sm">{hook.name}</p>
-              <p className="text-muted-foreground text-xs">
-                {hook.trigger} · {hook.kind}
-              </p>
+        {hooks.map((hook) => {
+          const availability = getHookExecutionAvailability(
+            hook,
+            helperAgentRunnerConfigured,
+            lastOpenAgentId !== null,
+          );
+          return (
+            <div
+              key={hook.id}
+              className="flex items-start justify-between gap-3 rounded-lg border border-derived-subtle p-3"
+            >
+              <div className="min-w-0">
+                <p className="font-medium text-foreground text-sm">
+                  {hook.name}
+                </p>
+                <p className="text-muted-foreground text-xs">
+                  {hook.trigger} · {hook.kind}
+                </p>
+                {availability.explanation && (
+                  <p className="mt-1 max-w-xl text-amber-500 text-xs leading-4">
+                    {availability.explanation}
+                  </p>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => {
+                    setEditingHookId(hook.id);
+                    setName(hook.name);
+                    setBody(hook.body);
+                    setTrigger(hook.trigger);
+                    setKind(hook.kind);
+                  }}
+                >
+                  Edit
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  disabled={!availability.canTest}
+                  onClick={() => {
+                    void runHooks(hook.trigger, {
+                      manualHookId: hook.id,
+                      values:
+                        hook.kind === 'agent' && lastOpenAgentId
+                          ? { agentInstanceId: lastOpenAgentId }
+                          : undefined,
+                    });
+                  }}
+                >
+                  Test
+                </Button>
+                <Switch
+                  checked={hook.enabled}
+                  disabled={!availability.canEnable && !hook.enabled}
+                  onCheckedChange={(enabled) =>
+                    void updateHook(hook.id, { enabled })
+                  }
+                  size="xs"
+                />
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => void deleteHook(hook.id)}
+                >
+                  <Trash2Icon className="size-3.5" />
+                </Button>
+              </div>
             </div>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => {
-                  setEditingHookId(hook.id);
-                  setName(hook.name);
-                  setBody(hook.body);
-                  setTrigger(hook.trigger);
-                  setKind(hook.kind);
-                }}
-              >
-                Edit
-              </Button>
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => {
-                  const approved =
-                    hook.kind !== 'command' ||
-                    window.confirm(
-                      `Run local command hook “${hook.name}” now?`,
-                    );
-                  if (!approved) return;
-                  void runHooks(hook.trigger, {
-                    commandApproved: hook.kind === 'command',
-                    workspaceTrusted: hook.kind === 'command',
-                  });
-                }}
-              >
-                Test
-              </Button>
-              <Switch
-                checked={hook.enabled}
-                onCheckedChange={(enabled) =>
-                  void updateHook(hook.id, { enabled })
-                }
-                size="xs"
-              />
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={() => void deleteHook(hook.id)}
-              >
-                <Trash2Icon className="size-3.5" />
-              </Button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {state.hookRuns.length > 0 && (
         <div className="space-y-2 rounded-lg bg-surface-1 p-3">
@@ -1518,16 +1559,32 @@ function HooksSettings() {
               const hook = hooks.find(
                 (candidate) => candidate.id === run.hookId,
               );
+              const display = getHookRunDisplay(run);
               return (
                 <div
                   key={run.id}
-                  className="flex items-center justify-between gap-3 text-xs"
+                  className="flex items-start justify-between gap-3 text-xs"
                 >
                   <span className="truncate text-muted-foreground">
                     {hook?.name ?? run.hookId}
                   </span>
-                  <span className="shrink-0 text-foreground">
-                    {run.status} · {run.finishedAt - run.startedAt} ms
+                  <span className="min-w-0 text-right">
+                    <span className="block shrink-0 text-foreground">
+                      {display.summary}
+                    </span>
+                    {display.detail && (
+                      <span
+                        className={cn(
+                          'mt-0.5 block max-w-md whitespace-pre-wrap leading-4',
+                          display.detailKind === 'error'
+                            ? 'text-amber-500'
+                            : 'text-muted-foreground',
+                        )}
+                        title={display.detail}
+                      >
+                        {display.detail}
+                      </span>
+                    )}
                   </span>
                 </div>
               );
@@ -1792,7 +1849,7 @@ export function AgentOsSettingsSection() {
           feature="agent-hooks"
           icon={<WorkflowIcon className="size-4" />}
           title="Lifecycle hooks"
-          description="Run safe prompt, command, and helper-agent hooks around agent activity."
+          description="Inject before-turn prompts and run read-only turn/approval helper hooks through a configured executor."
         >
           <HooksSettings />
         </FeatureCard>

@@ -112,6 +112,9 @@ export async function runNotificationRuntimePhase(
   notificationSoundsService.setWebContentsRef(() =>
     windowLayoutService.getUIWebContents(),
   );
+  notificationSoundsService.setFocusAgentHandler((agentId) =>
+    windowLayoutService.focusAgentFromExternalWindow(agentId),
+  );
 
   const notificationSoundsConfigListener: Parameters<
     typeof globalConfigService.addConfigUpdatedListener

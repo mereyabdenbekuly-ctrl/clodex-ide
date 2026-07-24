@@ -47,13 +47,18 @@ import {
   type ThinkingCapableModel,
 } from '@shared/model-thinking-capabilities';
 import { getModelThinkingOverride } from '@shared/model-effort-routing';
+import { resolveModelContextWindow } from '@shared/model-context-window';
 
 type ProviderOptions = Parameters<typeof streamText>[0]['providerOptions'];
 type BuiltInModelSettings = (typeof availableModels)[number];
 type ThinkingModelSettings = ThinkingCapableModel;
 type ClodexAuthModel = NonNullable<AuthState['models']>[number];
 
-const CLODEX_UNKNOWN_MODEL_CONTEXT_WINDOW = 200_000;
+// Conservative internal budgets only. The UI deliberately reports unknown
+// when no provider/catalog capability is available instead of presenting
+// either fallback as a model-declared context window.
+const CLODEX_UNKNOWN_MODEL_CONTEXT_WINDOW_BUDGET = 200_000;
+const PROVIDER_PROFILE_UNKNOWN_CONTEXT_WINDOW_BUDGET = 128_000;
 const CLODEX_BUILT_IN_SAME_PROVIDER_FALLBACKS: Partial<
   Record<ModelProvider, readonly string[]>
 > = {
@@ -207,6 +212,32 @@ function toNativeMiniMaxModelId(modelId: string): string {
   return modelId;
 }
 
+function guardRevocableModelRoute(
+  model: LanguageModelV3,
+  isValid: () => boolean,
+): LanguageModelV3 {
+  const assertValid = () => {
+    if (!isValid()) {
+      throw new Error('Model route was revoked before request dispatch');
+    }
+  };
+  const doGenerate: LanguageModelV3['doGenerate'] = (options) => {
+    assertValid();
+    return model.doGenerate(options);
+  };
+  const doStream: LanguageModelV3['doStream'] = (options) => {
+    assertValid();
+    return model.doStream(options);
+  };
+  return new Proxy(model, {
+    get(target, property, receiver) {
+      if (property === 'doGenerate') return doGenerate;
+      if (property === 'doStream') return doStream;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
 /**
  * Middleware that tells the SDK all HTTP(S) URLs are natively supported by the
  * clodex gateway. Without this the SDK downloads every image/file URL and
@@ -237,6 +268,13 @@ export type ModelWithOptions = {
    * `tools.0.custom.strict: Extra inputs are not permitted`.
    */
   stripStrictFromTools?: boolean;
+  routeLease?: {
+    isValid(): boolean;
+    forkTrace?(
+      traceId: string,
+      metadata?: Record<string, unknown>,
+    ): ModelWithOptions;
+  };
 };
 
 export interface OfficialOpenAIRealtimeEndpoint {
@@ -260,6 +298,7 @@ export class ModelProviderService {
   private readonly preferencesService: PreferencesService;
   private readonly credentialsService?: CredentialsService;
   private readonly providerRegistry = new AIProviderRegistry();
+  private routeRevision = 0;
 
   public constructor(
     telemetryService: TelemetryService,
@@ -271,6 +310,18 @@ export class ModelProviderService {
     this.authService = authService;
     this.preferencesService = preferencesService;
     this.credentialsService = credentialsService;
+    preferencesService.addListener?.(() => {
+      this.routeRevision += 1;
+    });
+    authService.registerAuthStateChangeCallback?.(() => {
+      this.routeRevision += 1;
+    });
+    authService.registerCredentialEpochChangeCallback?.(() => {
+      this.routeRevision += 1;
+    });
+    credentialsService?.addProviderApiKeyListener?.(() => {
+      this.routeRevision += 1;
+    });
     if (credentialsService) {
       for (const adapter of createBuiltInProviderAdapters(credentialsService)) {
         this.providerRegistry.register(adapter);
@@ -875,10 +926,8 @@ export class ModelProviderService {
     otherPostHogProperties?: Record<string, unknown>,
   ): ModelWithOptions {
     try {
-      return this.createModelWithOptions(
-        modelId,
-        traceId,
-        otherPostHogProperties,
+      return this.bindRouteLease(
+        this.createModelWithOptions(modelId, traceId, otherPostHogProperties),
       );
     } catch (error) {
       this.report(error as Error, 'getModelWithOptions', { modelId });
@@ -892,16 +941,25 @@ export class ModelProviderService {
     otherPostHogProperties?: Record<string, unknown>,
   ): Promise<ModelWithOptions> {
     try {
+      const admittedRevision = this.routeRevision;
       const clodexApiKeyOverride =
         await this.prepareClodexGatewayApiKeyForModel(
           modelId,
           otherPostHogProperties,
         );
-      return this.createModelWithOptions(
-        modelId,
-        traceId,
-        otherPostHogProperties,
-        clodexApiKeyOverride,
+      if (this.routeRevision !== admittedRevision) {
+        throw new Error(
+          'Model route authority changed while credentials were resolving; retry the request against the current route',
+        );
+      }
+      return this.bindRouteLease(
+        this.createModelWithOptions(
+          modelId,
+          traceId,
+          otherPostHogProperties,
+          clodexApiKeyOverride,
+        ),
+        admittedRevision,
       );
     } catch (error) {
       this.report(error as Error, 'getModelWithOptionsAsync', { modelId });
@@ -953,6 +1011,45 @@ export class ModelProviderService {
     }
 
     return this.authService.ensureModelAccessToken();
+  }
+
+  private bindRouteLease(
+    options: ModelWithOptions,
+    admittedRevision = this.routeRevision,
+  ): ModelWithOptions {
+    const isValid = () => this.routeRevision === admittedRevision;
+    const { routeLease: _previousLease, ...exactRoute } = options;
+    return {
+      ...exactRoute,
+      model: guardRevocableModelRoute(exactRoute.model, isValid),
+      routeLease: {
+        isValid,
+        forkTrace: (traceId, metadata) => {
+          if (!isValid()) {
+            throw new Error(
+              'Cannot fork a revoked model route; resolve a new route instead',
+            );
+          }
+          const tracedModel = this.telemetryService.forkTracing(
+            exactRoute.model,
+            {
+              posthogTraceId: traceId,
+              posthogProperties: {
+                posthogTraceId: traceId,
+                ...(omitModelRequestMetadata(metadata) ?? {}),
+              },
+            },
+          );
+          return this.bindRouteLease(
+            {
+              ...exactRoute,
+              model: tracedModel,
+            },
+            admittedRevision,
+          );
+        },
+      },
+    };
   }
 
   private providerUsesClodexGateway(provider: ModelProvider): boolean {
@@ -1095,11 +1192,10 @@ export class ModelProviderService {
     traceId: string,
     requestMetadata?: Record<string, unknown>,
   ): ModelWithOptions {
-    const profile = this.preferencesService
-      .get()
-      .providerProfiles.find(
-        (candidate) => candidate.id === profileId && candidate.enabled,
-      );
+    const preferences = this.preferencesService.get();
+    const profile = preferences.providerProfiles.find(
+      (candidate) => candidate.id === profileId && candidate.enabled,
+    );
     if (!profile)
       throw new Error(`Enabled provider profile ${profileId} not found`);
     const apiKey = profile.apiKeyReference
@@ -1226,6 +1322,16 @@ export class ModelProviderService {
           requestMetadata,
         })
       : {};
+    const contextWindowSize =
+      resolveModelContextWindow({
+        modelId: `${profileId}:${modelId}`,
+        providerProfiles: preferences.providerProfiles,
+        providerModelCatalogs: preferences.providerModelCatalogs,
+        clodexModels: this.getEnabledClodexModels(),
+      })?.tokens ??
+      (profile.providerType === 'clodex'
+        ? CLODEX_UNKNOWN_MODEL_CONTEXT_WINDOW_BUDGET
+        : PROVIDER_PROFILE_UNKNOWN_CONTEXT_WINDOW_BUDGET);
     return {
       model: this.telemetryService.withTracing(model, {
         posthogTraceId: traceId,
@@ -1240,7 +1346,7 @@ export class ModelProviderService {
           ? sanitizeClodexProviderOptions(providerOptions)
           : providerOptions,
       headers: profile.customHeaders,
-      contextWindowSize: 128_000,
+      contextWindowSize,
       providerMode,
       reasoningSignatureSource:
         providerMode === 'custom'
@@ -1331,7 +1437,7 @@ export class ModelProviderService {
       contextWindowSize:
         clodexModel.contextWindow ??
         modelSettings?.modelContextRaw ??
-        CLODEX_UNKNOWN_MODEL_CONTEXT_WINDOW,
+        CLODEX_UNKNOWN_MODEL_CONTEXT_WINDOW_BUDGET,
       providerMode: 'clodex',
       reasoningSignatureSource: createReasoningSignatureSource(
         'clodex',

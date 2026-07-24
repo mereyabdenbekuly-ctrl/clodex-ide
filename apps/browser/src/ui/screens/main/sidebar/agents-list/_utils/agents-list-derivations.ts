@@ -153,6 +153,10 @@ export function deriveActiveAgentCards(
       const mountedWorkspaces = state.toolbox[id]?.workspace?.mounts ?? [];
       const projectRootPath = mountedWorkspaces[0]?.path ?? null;
       const hasPendingQuestion = !!state.toolbox[id]?.pendingUserQuestion;
+      const hasPendingFileApproval =
+        state.toolbox[id]?.pendingProposedEdits?.some(
+          (edit) => edit.status === 'pending',
+        ) ?? false;
       const hasPendingToolApproval = (() => {
         for (let i = history.length - 1; i >= 0; i--) {
           const message = history[i]!;
@@ -166,10 +170,12 @@ export function deriveActiveAgentCards(
       })();
       const rawActivity = hasPendingQuestion
         ? { text: 'Waiting for response...', isUserInput: false }
-        : deriveActivityText(
-            history as ActivityMessage[],
-            agent.state.inputState,
-          );
+        : hasPendingFileApproval
+          ? { text: 'Waiting for file approval...', isUserInput: false }
+          : deriveActivityText(
+              history as ActivityMessage[],
+              agent.state.inputState,
+            );
       const activity =
         agent.state.isWorking && rawActivity.isUserInput
           ? { text: 'Working…', isUserInput: false }
@@ -180,7 +186,10 @@ export function deriveActiveAgentCards(
         type: agent.type,
         title: agent.state.title,
         isWorking: agent.state.isWorking,
-        isWaitingForUser: hasPendingQuestion || hasPendingToolApproval,
+        isWaitingForUser:
+          hasPendingQuestion ||
+          hasPendingFileApproval ||
+          hasPendingToolApproval,
         activityText: activity.text,
         activityIsUserInput: activity.isUserInput,
         hasError:

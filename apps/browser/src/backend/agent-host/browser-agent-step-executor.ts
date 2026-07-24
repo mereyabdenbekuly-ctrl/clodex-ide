@@ -1,9 +1,10 @@
-import type {
-  AgentStepExecution,
-  AgentStepExecutionRequest,
-  AgentStepExecutor,
+import {
+  findToolCallRecoverySignal,
+  localAgentStepExecutor,
+  type AgentStepExecution,
+  type AgentStepExecutionRequest,
+  type AgentStepExecutor,
 } from '@clodex/agent-core/agents';
-import { localAgentStepExecutor } from '@clodex/agent-core/agents';
 import {
   asSchema,
   streamText,
@@ -19,7 +20,11 @@ import {
   type UIMessage,
   type UIMessageStreamOptions,
 } from 'ai';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import type {
+  FileEditBatchParticipant,
+  FileEditBatchTerminalOutcome,
+} from '@clodex/agent-core/types';
 import type {
   AgentStepRuntimeSelectionReason,
   AgentStepRuntimeTelemetryEvents,
@@ -31,7 +36,9 @@ import type {
   AgentTurnJsonObject,
   AgentTurnJsonValue,
   IsolatedAgentConversationMessage,
+  IsolatedAgentFileEditBatchMetadata,
   IsolatedAgentModelCallResult,
+  IsolatedAgentRejectedToolCall,
   IsolatedAgentToolCall,
   IsolatedAgentTurnEvent,
   IsolatedAgentTurnRequest,
@@ -39,7 +46,15 @@ import type {
   IsolatedAgentTurnStepResult,
   IsolatedAgentUsage,
 } from './isolated-agent-turn';
-import { isAgentTurnJsonValue } from './isolated-agent-turn';
+import {
+  createIsolatedToolCallRejectionMessage,
+  isAgentTurnJsonValue,
+  rejectDuplicateIsolatedToolCallIds,
+} from './isolated-agent-turn';
+import {
+  FileEditBatchCoordinator,
+  terminalOutcomeForToolResult,
+} from './file-edit-batch-coordinator';
 import {
   IsolatedAgentRuntimeCircuitBreaker,
   type IsolatedAgentRuntimeAdmission,
@@ -329,6 +344,7 @@ export function createBrowserAgentStepExecutor(
 }
 
 class RemoteAgentStepExecution implements AgentStepExecution {
+  public readonly modelRouteBinding = 'request-model' as const;
   private readonly completion: Promise<void>;
   private resolveCompletion!: () => void;
   private started = false;
@@ -625,9 +641,16 @@ function createPerTurnHandlers({
   const toolMessages = (originalOptions.messages as ModelMessage[]).filter(
     (message) => message.role !== 'system',
   );
+  const fileEditBatchCoordinator = new FileEditBatchCoordinator();
+  let latestModelToolCalls: IsolatedAgentToolCall[] = [];
+  const claimedModelToolCallIds = new Set<string>();
 
   return {
     async callModel(_request, { signal, onEvent }) {
+      // A new model call revokes every prior per-call admission immediately,
+      // including when the provider request later fails.
+      latestModelToolCalls = [];
+      claimedModelToolCallIds.clear();
       const {
         onAbort: _onAbort,
         onError: _onError,
@@ -650,6 +673,7 @@ function createPerTurnHandlers({
       let usage: IsolatedAgentUsage = {};
       let providerMetadata: AgentTurnJsonObject | undefined;
       const toolCalls: IsolatedAgentModelCallResult['toolCalls'] = [];
+      const rejectedToolCalls: IsolatedAgentRejectedToolCall[] = [];
 
       for await (const part of result.fullStream) {
         switch (part.type) {
@@ -662,11 +686,29 @@ function createPerTurnHandlers({
             onEvent({ type: 'reasoning-delta', text: part.text });
             break;
           case 'tool-call':
+            if (part.invalid) {
+              const kind =
+                findToolCallRecoverySignal([part])?.kind ?? 'invalid-input';
+              rejectedToolCalls.push({
+                toolCallId: part.toolCallId,
+                toolName: Object.hasOwn(modelTools, part.toolName)
+                  ? part.toolName
+                  : 'unknown',
+                kind,
+                message: createIsolatedToolCallRejectionMessage(kind),
+              });
+              break;
+            }
             toolCalls.push({
               toolCallId: part.toolCallId,
               toolName: part.toolName,
               input: toAgentTurnJsonValue(part.input),
             });
+            break;
+          case 'tool-error':
+            // The matching invalid tool-call is represented above as a
+            // non-executable rejection. Never promote the SDK's tool-error
+            // companion into an isolated callTool request.
             break;
           case 'finish-step':
             finishReason = String(part.finishReason);
@@ -691,10 +733,20 @@ function createPerTurnHandlers({
         }
       }
 
+      const normalizedCalls = rejectDuplicateIsolatedToolCallIds(
+        toolCalls,
+        rejectedToolCalls,
+        new Set(Object.keys(modelTools)),
+      );
+      latestModelToolCalls = normalizedCalls.toolCalls;
+
       return {
         text,
         reasoning,
-        toolCalls,
+        toolCalls: normalizedCalls.toolCalls,
+        ...(normalizedCalls.rejectedToolCalls.length > 0
+          ? { rejectedToolCalls: normalizedCalls.rejectedToolCalls }
+          : {}),
         finishReason,
         rawFinishReason,
         usage,
@@ -703,23 +755,60 @@ function createPerTurnHandlers({
     },
 
     async callTool(request, { signal }) {
-      assertLocalExecutionAllowed(executionRequest.context.agentInstanceId);
-      const resolvedTool = tools[request.call.toolName] as Tool | undefined;
-      if (!resolvedTool?.execute) {
-        return {
-          status: 'error',
-          message: `Tool "${request.call.toolName}" is unavailable or has no executor`,
-        };
-      }
-
-      const executionOptions = {
-        toolCallId: request.call.toolCallId,
-        messages: toolMessages,
-        abortSignal: combineAbortSignals(originalOptions.abortSignal, signal),
-        experimental_context: originalOptions.experimental_context,
-      };
-
+      let fileEditBatchParticipant: FileEditBatchParticipant | undefined;
+      let terminalOutcome: FileEditBatchTerminalOutcome = 'error';
       try {
+        const admittedCall = latestModelToolCalls.find(
+          (call) => call.toolCallId === request.call.toolCallId,
+        );
+        if (
+          !admittedCall ||
+          claimedModelToolCallIds.has(request.call.toolCallId) ||
+          admittedCall.toolName !== request.call.toolName ||
+          JSON.stringify(admittedCall.input) !==
+            JSON.stringify(request.call.input)
+        ) {
+          throw new Error(
+            'Isolated tool call was not uniquely admitted by the current model step',
+          );
+        }
+        // Claim before approval checks or execution. A replay after any
+        // terminal outcome must never reach tool lifecycle callbacks twice.
+        claimedModelToolCallIds.add(request.call.toolCallId);
+
+        if (request.fileEditBatch) {
+          fileEditBatchParticipant = fileEditBatchCoordinator.getParticipant(
+            request.fileEditBatch,
+          );
+          try {
+            assertExactFileEditBatchMetadata(
+              request.fileEditBatch,
+              request.call,
+              latestModelToolCalls,
+            );
+          } catch (error) {
+            fileEditBatchCoordinator.abort(request.fileEditBatch.batchId);
+            throw error;
+          }
+        }
+
+        assertLocalExecutionAllowed(executionRequest.context.agentInstanceId);
+        const resolvedTool = tools[request.call.toolName] as Tool | undefined;
+        if (!resolvedTool?.execute) {
+          return {
+            status: 'error',
+            message: `Tool "${request.call.toolName}" is unavailable or has no executor`,
+          };
+        }
+
+        const executionOptions = {
+          toolCallId: request.call.toolCallId,
+          messages: toolMessages,
+          abortSignal: combineAbortSignals(originalOptions.abortSignal, signal),
+          experimental_context: originalOptions.experimental_context,
+          fileEditBatchParticipant,
+        };
+
         await resolvedTool.onInputStart?.(executionOptions);
         await resolvedTool.onInputDelta?.({
           ...executionOptions,
@@ -738,6 +827,7 @@ function createPerTurnHandlers({
               )
             : resolvedTool.needsApproval === true;
         if (needsApproval) {
+          terminalOutcome = 'approval-required';
           return {
             status: 'approval-required',
             approvalId: randomUUID(),
@@ -748,15 +838,25 @@ function createPerTurnHandlers({
         const output = await collectToolOutput(
           resolvedTool.execute(request.call.input, executionOptions),
         );
-        return {
+        const completed = {
           status: 'completed',
           output: toAgentTurnJsonValue(output),
-        };
+        } as const;
+        terminalOutcome = terminalOutcomeForToolResult(
+          completed,
+          signal.aborted,
+        );
+        return completed;
       } catch (error) {
+        const normalized = normalizeError(error);
+        terminalOutcome =
+          signal.aborted || isAbortError(normalized) ? 'aborted' : 'error';
         return {
           status: 'error',
-          message: normalizeError(error).message,
+          message: normalized.message,
         };
+      } finally {
+        fileEditBatchParticipant?.settle(terminalOutcome);
       }
     },
   };
@@ -1089,10 +1189,18 @@ function getStepState(
 function createStepResult(
   step: IsolatedAgentTurnStepResult,
   executionRequest: AgentStepExecutionRequest,
+  toolCallIdentity: 'provider' | 'external' = 'provider',
+  toolCallIdentityNamespace?: string,
 ): StepResult<ToolSet> {
-  const toolCalls = step.toolCalls.map((call) => ({
+  const idBindings = bindStepToolCallIds(
+    step,
+    toolCallIdentity,
+    toolCallIdentityNamespace,
+  );
+  const toolCalls = step.toolCalls.map((call, index) => ({
     type: 'tool-call' as const,
-    toolCallId: call.toolCallId,
+    toolCallId: idBindings.toolCallIds[index]!,
+    providerToolCallId: call.toolCallId,
     toolName: call.toolName,
     input: call.input,
   }));
@@ -1103,26 +1211,57 @@ function createStepResult(
     content.push({ type: 'reasoning', text: step.reasoning });
   }
   content.push(...toolCalls);
-  for (const result of step.toolResults) {
+  for (const [index, rejected] of (step.rejectedToolCalls ?? []).entries()) {
+    const error = new Error(rejected.message);
+    const toolCallId = idBindings.rejectedToolCallIds[index]!;
     content.push({
-      type: 'tool-result',
-      toolCallId: result.toolCallId,
-      toolName: result.toolName,
-      input: callsById.get(result.toolCallId)?.input,
-      output: result.output,
-    });
-  }
-  for (const result of step.toolErrors) {
+      type: 'tool-call',
+      toolCallId,
+      providerToolCallId: rejected.toolCallId,
+      toolName: rejected.toolName,
+      input: {},
+      invalid: true,
+      error,
+    } as unknown as StepResult<ToolSet>['content'][number]);
     content.push({
       type: 'tool-error',
-      toolCallId: result.toolCallId,
-      toolName: result.toolName,
-      input: callsById.get(result.toolCallId)?.input,
-      error: new Error(result.message),
-    });
+      toolCallId,
+      providerToolCallId: rejected.toolCallId,
+      toolName: rejected.toolName,
+      input: {},
+      error,
+    } as unknown as StepResult<ToolSet>['content'][number]);
   }
-  for (const approval of step.approvalRequests) {
-    const toolCall = callsById.get(approval.toolCallId);
+  for (const [index, result] of step.toolResults.entries()) {
+    const toolCallId = idBindings.toolResultIds[index]!;
+    content.push({
+      type: 'tool-result',
+      toolCallId,
+      providerToolCallId: result.toolCallId,
+      toolName: result.toolName,
+      input:
+        callsById.get(toolCallId)?.input ??
+        findProviderToolCallInput(step, result.toolCallId, result.toolName) ??
+        {},
+      output: result.output,
+    } as StepResult<ToolSet>['content'][number]);
+  }
+  for (const [index, result] of step.toolErrors.entries()) {
+    const toolCallId = idBindings.toolErrorIds[index]!;
+    content.push({
+      type: 'tool-error',
+      toolCallId,
+      providerToolCallId: result.toolCallId,
+      toolName: result.toolName,
+      input:
+        callsById.get(toolCallId)?.input ??
+        findProviderToolCallInput(step, result.toolCallId, result.toolName) ??
+        {},
+      error: new Error(result.message),
+    } as StepResult<ToolSet>['content'][number]);
+  }
+  for (const [index, approval] of step.approvalRequests.entries()) {
+    const toolCall = callsById.get(idBindings.approvalRequestIds[index]!);
     if (!toolCall) continue;
     content.push({
       type: 'tool-approval-request',
@@ -1170,7 +1309,10 @@ function createStepResult(
     warnings: undefined,
     request: {},
     response: {
-      id: randomUUID(),
+      id:
+        toolCallIdentity === 'external'
+          ? `clodex-external-response:${toolCallIdentityNamespace}`
+          : randomUUID(),
       timestamp: new Date(),
       modelId: executionRequest.context.resolvedModelId,
       messages: [],
@@ -1183,8 +1325,203 @@ function createStepResult(
 export function createAgentStepResultFromIsolatedStep(
   step: IsolatedAgentTurnStepResult,
   executionRequest: AgentStepExecutionRequest,
+  identity: {
+    executionId: string;
+    terminalSequence: number;
+    stepOrdinal: number;
+  },
 ): StepResult<ToolSet> {
-  return createStepResult(step, executionRequest);
+  // A cloud/external worker may already have executed effects before the
+  // desktop sees its terminal result. Always replace provider ids with
+  // host-owned per-result identities so duplicate or reused remote ids cannot
+  // collapse Evidence Memory ingestion keys.
+  return createStepResult(
+    step,
+    executionRequest,
+    'external',
+    createExternalStepResultNamespace(step, identity),
+  );
+}
+
+type StepToolCallIdBindings = {
+  toolCallIds: string[];
+  rejectedToolCallIds: string[];
+  toolResultIds: string[];
+  toolErrorIds: string[];
+  approvalRequestIds: string[];
+};
+
+function bindStepToolCallIds(
+  step: IsolatedAgentTurnStepResult,
+  identity: 'provider' | 'external',
+  durableExternalNamespace?: string,
+): StepToolCallIdBindings {
+  const namespace =
+    identity === 'external'
+      ? requireDurableExternalNamespace(durableExternalNamespace)
+      : randomUUID();
+  const usedIds = new Set<string>();
+  const claimedCallIndexes = new Set<number>();
+  const providerIdCounts = new Map<string, number>();
+  for (const call of step.toolCalls) {
+    providerIdCounts.set(
+      call.toolCallId,
+      (providerIdCounts.get(call.toolCallId) ?? 0) + 1,
+    );
+  }
+
+  const generatedId = (kind: string, index: number): string => {
+    let attempt = 0;
+    while (true) {
+      const suffix = attempt === 0 ? '' : `:${attempt}`;
+      const candidate = `clodex-${identity}:${namespace}:${kind}:${index}${suffix}`;
+      if (!usedIds.has(candidate)) {
+        usedIds.add(candidate);
+        return candidate;
+      }
+      attempt++;
+    }
+  };
+  const claimProviderOrGeneratedId = (
+    providerId: string,
+    kind: string,
+    index: number,
+  ): string => {
+    if (identity === 'provider' && !usedIds.has(providerId)) {
+      usedIds.add(providerId);
+      return providerId;
+    }
+    return generatedId(kind, index);
+  };
+
+  const toolCallIds = step.toolCalls.map((call, index) => {
+    if (
+      identity === 'provider' &&
+      providerIdCounts.get(call.toolCallId) === 1 &&
+      !usedIds.has(call.toolCallId)
+    ) {
+      usedIds.add(call.toolCallId);
+      return call.toolCallId;
+    }
+    return generatedId('call', index);
+  });
+
+  const resolveTerminalId = (
+    providerId: string,
+    toolName: string,
+    kind: string,
+    index: number,
+  ): string => {
+    let callIndex = step.toolCalls.findIndex(
+      (call, candidateIndex) =>
+        !claimedCallIndexes.has(candidateIndex) &&
+        call.toolCallId === providerId &&
+        call.toolName === toolName,
+    );
+    if (callIndex < 0) {
+      callIndex = step.toolCalls.findIndex(
+        (call, candidateIndex) =>
+          !claimedCallIndexes.has(candidateIndex) &&
+          call.toolCallId === providerId,
+      );
+    }
+    if (callIndex >= 0) {
+      claimedCallIndexes.add(callIndex);
+      return toolCallIds[callIndex]!;
+    }
+    return claimProviderOrGeneratedId(providerId, kind, index);
+  };
+
+  const toolResultIds = step.toolResults.map((result, index) =>
+    resolveTerminalId(
+      result.toolCallId,
+      result.toolName,
+      'orphan-result',
+      index,
+    ),
+  );
+  const toolErrorIds = step.toolErrors.map((result, index) =>
+    resolveTerminalId(
+      result.toolCallId,
+      result.toolName,
+      'orphan-error',
+      index,
+    ),
+  );
+  const approvalRequestIds = step.approvalRequests.map((approval, index) =>
+    resolveTerminalId(
+      approval.toolCallId,
+      approval.toolName,
+      'orphan-approval',
+      index,
+    ),
+  );
+  const rejectedToolCallIds = (step.rejectedToolCalls ?? []).map(
+    (rejected, index) =>
+      claimProviderOrGeneratedId(rejected.toolCallId, 'rejected', index),
+  );
+
+  return {
+    toolCallIds,
+    rejectedToolCallIds,
+    toolResultIds,
+    toolErrorIds,
+    approvalRequestIds,
+  };
+}
+
+function createExternalStepResultNamespace(
+  step: IsolatedAgentTurnStepResult,
+  identity: {
+    executionId: string;
+    terminalSequence: number;
+    stepOrdinal: number;
+  },
+): string {
+  if (identity.executionId.trim().length === 0) {
+    throw new Error('External step result execution id is unavailable');
+  }
+  if (
+    !Number.isSafeInteger(identity.terminalSequence) ||
+    identity.terminalSequence < 0
+  ) {
+    throw new Error('External step result terminal sequence is invalid');
+  }
+  if (!Number.isSafeInteger(identity.stepOrdinal) || identity.stepOrdinal < 0) {
+    throw new Error('External step result ordinal is invalid');
+  }
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        schemaVersion: 1,
+        executionId: identity.executionId,
+        terminalSequence: identity.terminalSequence,
+        stepIndex: step.index,
+        stepOrdinal: identity.stepOrdinal,
+      }),
+    )
+    .digest('hex');
+}
+
+function requireDurableExternalNamespace(value: string | undefined): string {
+  if (!value || !/^[a-f0-9]{64}$/.test(value)) {
+    throw new Error('External step result identity namespace is invalid');
+  }
+  return value;
+}
+
+function findProviderToolCallInput(
+  step: IsolatedAgentTurnStepResult,
+  providerToolCallId: string,
+  toolName: string,
+): AgentTurnJsonValue | undefined {
+  return (
+    step.toolCalls.find(
+      (call) =>
+        call.toolCallId === providerToolCallId && call.toolName === toolName,
+    )?.input ??
+    step.toolCalls.find((call) => call.toolCallId === providerToolCallId)?.input
+  );
 }
 
 function normalizeFinishReason(value: string): FinishReason {
@@ -1356,6 +1693,60 @@ function isCacheControlOnlyProviderOptions(value: unknown): boolean {
       cacheControl.type === 'ephemeral'
     );
   });
+}
+
+function assertExactFileEditBatchMetadata(
+  metadata: IsolatedAgentFileEditBatchMetadata,
+  call: IsolatedAgentToolCall,
+  modelToolCalls: readonly IsolatedAgentToolCall[],
+): void {
+  const memberIndex = Number(metadata.memberId);
+  if (!Number.isSafeInteger(memberIndex) || memberIndex < 0) {
+    throw new Error(`Invalid file-edit batch member ${metadata.memberId}`);
+  }
+  const expectedCall = modelToolCalls[memberIndex];
+  if (
+    !expectedCall ||
+    expectedCall.toolCallId !== call.toolCallId ||
+    expectedCall.toolName !== call.toolName
+  ) {
+    throw new Error(
+      `File-edit batch member ${metadata.memberId} does not match the model tool call`,
+    );
+  }
+
+  let start = memberIndex;
+  while (
+    start > 0 &&
+    isNativeFileEditTool(modelToolCalls[start - 1]?.toolName)
+  ) {
+    start--;
+  }
+  let end = memberIndex + 1;
+  while (
+    end < modelToolCalls.length &&
+    isNativeFileEditTool(modelToolCalls[end]?.toolName)
+  ) {
+    end++;
+  }
+  const expectedMembers = modelToolCalls
+    .slice(start, end)
+    .map((toolCall, index) => ({
+      memberId: String(start + index),
+      toolCallId: toolCall.toolCallId,
+    }));
+  if (
+    expectedMembers.length < 2 ||
+    JSON.stringify(metadata.members) !== JSON.stringify(expectedMembers)
+  ) {
+    throw new Error(
+      `File-edit batch ${metadata.batchId} does not describe the exact adjacent model-tool run`,
+    );
+  }
+}
+
+function isNativeFileEditTool(toolName: string | undefined): boolean {
+  return toolName === 'write' || toolName === 'multiEdit';
 }
 
 function normalizeError(error: unknown): Error {

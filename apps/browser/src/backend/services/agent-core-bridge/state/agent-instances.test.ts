@@ -30,6 +30,7 @@ function makeEnvelope(
     queuedMessages: [],
     activeModelId: 'claude-sonnet-4.6',
     toolApprovalMode: 'smart',
+    fileEditApprovalMode: 'manual',
     pendingApprovals: {},
     inputState: '',
     usedTokens: 0,

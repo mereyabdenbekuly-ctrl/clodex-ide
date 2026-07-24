@@ -29,9 +29,17 @@ import {
   StreamingCodeBlock,
   getLanguageFromPath,
 } from '@ui/components/ui/streaming-code-block';
+import { FileEditApprovalStatus } from '../shared/file-edit-approval-waiting';
+import type { FileEditApprovalVisualState } from '../../../file-edit-approval-state';
 
 export const GenericWriteToolPart = memo(
-  function GenericWriteToolPart({ part }: { part: WritePart }) {
+  function GenericWriteToolPart({
+    part,
+    fileEditApprovalState = null,
+  }: {
+    part: WritePart;
+    fileEditApprovalState?: FileEditApprovalVisualState;
+  }) {
     const [codeDiffCollapsed, setCodeDiffCollapsed] = useState(true);
     const [expanded, setExpanded] = useState(true);
     const [openAgent] = useOpenAgent();
@@ -89,6 +97,13 @@ export const GenericWriteToolPart = memo(
     }, [state, expanded]);
 
     const trigger = useMemo(() => {
+      if (fileEditApprovalState)
+        return (
+          <FileEditApprovalStatus
+            relativePath={path}
+            state={fileEditApprovalState}
+          />
+        );
       if (state === 'error')
         return (
           <ErrorHeader
@@ -110,6 +125,7 @@ export const GenericWriteToolPart = memo(
     }, [
       state,
       streaming,
+      fileEditApprovalState,
       path,
       part.input?.path,
       part.errorText,
@@ -120,6 +136,7 @@ export const GenericWriteToolPart = memo(
 
     const content = useMemo(() => {
       if (state === 'error') return undefined;
+      if (fileEditApprovalState) return undefined;
       if (diff)
         return (
           <DiffPreview
@@ -138,6 +155,7 @@ export const GenericWriteToolPart = memo(
       return undefined;
     }, [
       state,
+      fileEditApprovalState,
       diff,
       part.input?.content,
       part.input?.path,
@@ -231,7 +249,9 @@ export const GenericWriteToolPart = memo(
   },
   // Immer structural sharing keeps settled tool-part references stable.
   // Only the actively streaming part gets a new reference per chunk.
-  (prev, next) => prev.part === next.part,
+  (prev, next) =>
+    prev.part === next.part &&
+    prev.fileEditApprovalState === next.fileEditApprovalState,
 );
 
 const ErrorHeader = ({

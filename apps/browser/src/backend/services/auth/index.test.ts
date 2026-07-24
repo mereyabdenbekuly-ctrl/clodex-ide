@@ -190,6 +190,31 @@ describe('AuthService Clodex network consent', () => {
 });
 
 describe('AuthService route-specific Clodex model tokens', () => {
+  it('synchronously advances the credential epoch for a same-account token replacement', async () => {
+    const { authService, uiKarton } = await createTestAuthService();
+    const listener = vi.fn();
+    authService.registerCredentialEpochChangeCallback(listener);
+    const publicStateBefore = structuredClone(uiKarton.state.userAccount);
+    const current = (
+      authService as unknown as {
+        durableCredentials: NonNullable<unknown>;
+      }
+    ).durableCredentials as Record<string, unknown>;
+
+    const persistence = (
+      authService as unknown as {
+        persistCredentials: (credentials: unknown) => Promise<boolean>;
+      }
+    ).persistCredentials({
+      ...current,
+      token: 'replacement-session-token',
+    });
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(uiKarton.state.userAccount).toEqual(publicStateBefore);
+    await expect(persistence).resolves.toBe(true);
+  });
+
   it('allows the universal ALL key to route an Anthropic battle model', async () => {
     const { authService } = await createTestAuthService();
 

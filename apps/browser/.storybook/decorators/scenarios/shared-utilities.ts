@@ -994,6 +994,7 @@ export function createAgentInstance(
       queuedMessages: [],
       activeModelId: options?.activeModelId ?? 'claude-sonnet-4-6',
       toolApprovalMode: 'alwaysAsk',
+      fileEditApprovalMode: 'manual',
       pendingApprovals: {},
       inputState: options?.inputState ?? '',
       usedTokens: 0,

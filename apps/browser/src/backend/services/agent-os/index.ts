@@ -41,7 +41,11 @@ import { MicroControllerService } from './micro-controller';
 import { BrowserUsePolicyService } from './browser-use-policy';
 import { SkillInstallerService } from './skill-installer';
 import { downloadRemoteSkillPackage } from './skill-download';
-import { HooksService, type HookRunContext } from './hooks';
+import {
+  HooksService,
+  sanitizeRendererHookRunContext,
+  type HookRunContext,
+} from './hooks';
 import {
   RemoteControlService,
   type RemoteControlAuditEvent,
@@ -180,7 +184,9 @@ export class AgentOsService extends DisposableService {
       { audit: options.desktopAutomationAuditHandler },
     );
     this.skills = new SkillInstallerService(store, this.debug);
-    this.hooks = new HooksService(store, this.debug);
+    this.hooks = new HooksService(store, this.debug, () =>
+      options.isFeatureEnabled('agent-hooks'),
+    );
     this.remote = new RemoteControlService(
       store,
       this.debug,
@@ -244,6 +250,9 @@ export class AgentOsService extends DisposableService {
   public async enforceFeatureGates(): Promise<void> {
     const state = this.store.snapshot();
     const operations: Promise<void>[] = [];
+    if (!this.options.isFeatureEnabled('agent-hooks')) {
+      this.hooks.cancelPendingAutomaticRuns();
+    }
     if (
       state.chronicle.enabled &&
       !this.options.isFeatureEnabled('chronicle-visual-memory')
@@ -799,7 +808,16 @@ export class AgentOsService extends DisposableService {
       'agentOs.hooks.run',
       async (_clientId, trigger: HookTrigger, context?: HookRunContext) => {
         this.assertFeature('agent-hooks');
-        return await this.hooks.run(trigger, context);
+        // Renderer input is never authority. Ignore forged approval, trust,
+        // and workspace properties; command execution requires a future
+        // backend-minted one-shot grant.
+        const sanitized = sanitizeRendererHookRunContext(context);
+        if (!sanitized.manualHookId) {
+          throw new Error(
+            'Renderer hook execution requires an explicit manual hook id',
+          );
+        }
+        return await this.hooks.run(trigger, sanitized);
       },
     );
 

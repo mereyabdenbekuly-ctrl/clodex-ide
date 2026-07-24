@@ -143,6 +143,10 @@ export function useAgentCommandItems(
             const history = agent.state.history;
             const lastMsg = history[history.length - 1]!;
             const hasPendingQuestion = !!s.toolbox[id]?.pendingUserQuestion;
+            const hasPendingFileApproval =
+              s.toolbox[id]?.pendingProposedEdits?.some(
+                (edit) => edit.status === 'pending',
+              ) ?? false;
             const hasPendingToolApproval = (() => {
               for (let i = history.length - 1; i >= 0; i--) {
                 const msg = history[i]!;
@@ -156,13 +160,15 @@ export function useAgentCommandItems(
             })();
             const rawActivity = hasPendingQuestion
               ? { text: 'Waiting for response...', isUserInput: false }
-              : deriveActivityText(
-                  history as {
-                    role: string;
-                    parts: { type: string; text?: string }[];
-                  }[],
-                  agent.state.inputState,
-                );
+              : hasPendingFileApproval
+                ? { text: 'Waiting for file approval...', isUserInput: false }
+                : deriveActivityText(
+                    history as {
+                      role: string;
+                      parts: { type: string; text?: string }[];
+                    }[],
+                    agent.state.inputState,
+                  );
             const activity =
               agent.state.isWorking && rawActivity.isUserInput
                 ? { text: 'Working…', isUserInput: false }
@@ -173,7 +179,10 @@ export function useAgentCommandItems(
               type: agent.type,
               title: agent.state.title,
               isWorking: agent.state.isWorking,
-              isWaitingForUser: hasPendingQuestion || hasPendingToolApproval,
+              isWaitingForUser:
+                hasPendingQuestion ||
+                hasPendingFileApproval ||
+                hasPendingToolApproval,
               activityText: activity.text,
               activityIsUserInput: activity.isUserInput,
               hasError:

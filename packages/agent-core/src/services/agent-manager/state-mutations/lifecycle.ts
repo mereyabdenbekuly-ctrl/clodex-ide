@@ -34,6 +34,8 @@ export function hydrateInitialState(
         args.initialState?.activeModelId ?? args.defaultModelId;
       state.toolApprovalMode =
         args.initialState?.toolApprovalMode ?? state.toolApprovalMode;
+      state.fileEditApprovalMode =
+        args.initialState?.fileEditApprovalMode ?? state.fileEditApprovalMode;
       state.pendingApprovals = args.initialState?.pendingApprovals ?? {};
       state.inputState = args.initialState?.inputState ?? state.inputState;
       state.usedTokens = args.initialState?.usedTokens ?? 0;

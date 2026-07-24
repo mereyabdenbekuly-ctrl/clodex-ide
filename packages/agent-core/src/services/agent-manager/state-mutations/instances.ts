@@ -85,3 +85,20 @@ export function setToolApprovalMode(
     entry.state.toolApprovalMode = mode as string;
   });
 }
+
+/**
+ * Field-level write for `agents.setFileEditApprovalMode`. Defensive no-op if
+ * the agent id is not present.
+ */
+export function setFileEditApprovalMode(
+  store: AgentStore,
+  agentInstanceId: string,
+  mode: AgentState['fileEditApprovalMode'],
+): void {
+  store.update((draft) => {
+    const systemDraft = draft as AgentSystemState;
+    const entry = systemDraft.agents.instances[agentInstanceId];
+    if (!entry) return;
+    entry.state.fileEditApprovalMode = mode as string;
+  });
+}

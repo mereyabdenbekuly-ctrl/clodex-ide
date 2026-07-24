@@ -51,6 +51,7 @@ No missing or extra fields.
 | --------------------------- | --------------------------- | ------ | ------------------------------------------------------------------------------------------- |
 | `workspace.mounts`          | `workspace.mounts`          | match  | Both are `MountEntry[]` from `@clodex/agent-core/types/metadata`.                        |
 | `pendingFileDiffs`          | `pendingFileDiffs`          | match  | `FileDiff[]`. Karton re-exports `FileDiff` from `@clodex/agent-core/types/diff-history`. |
+| `pendingProposedEdits`      | `pendingProposedEdits`      | match  | Ephemeral manual-review previews. Proposal `id` is host-generated and opaque; provider `toolCallId` is provenance only. |
 | `editSummary`               | `editSummary`               | match  | `FileDiff[]`.                                                                               |
 | `pendingUserQuestion`       | `pendingUserQuestion`       | delta  | Karton specializes the generic with `QuestionField`/`QuestionAnswerValue` (host-owned tool schema); agent-core keeps it generic. See §3. |
 | `pendingSandboxOutputs`     | `pendingSandboxOutputs`     | match  | `Record<string, string[]> \| undefined`.                                                    |
@@ -103,6 +104,7 @@ Source of truth for rehydration:
 | `queuedMessages`        | persisted-core | `agentInstances.queued_messages` (JSON).                                                                                                                      | no                                                        |
 | `activeModelId`         | persisted-core | `agentInstances.active_model_id`, validated against the model provider registry. Falls back to "undefined" (→ default) when the model no longer exists.      | no (unless invalidated)                                   |
 | `toolApprovalMode`      | persisted-core | `agentInstances.tool_approval_mode`; fail-closed to the host default when null.                                                                               | no                                                        |
+| `fileEditApprovalMode`  | persisted-core | `agentInstances.file_edit_approval_mode`; unknown or missing values fail closed to `manual`.                                                                  | no                                                        |
 | `pendingApprovals`      | ephemeral      | Not stored. `createAgent` initializes to `{}`; `resumeAgent` does not override.                                                                                | yes — always `{}`                                         |
 | `inputState`            | persisted-core | `agentInstances.input_state` (JSON-encoded string).                                                                                                           | no                                                        |
 | `usedTokens`            | persisted-core | `agentInstances.used_tokens`.                                                                                                                                 | no                                                        |
@@ -110,9 +112,9 @@ Source of truth for rehydration:
 | `unread`                | ephemeral      | Not stored. Maintained by UI unread-marker logic.                                                                                                             | yes — cleared                                             |
 | `usageWarning`          | ephemeral      | Not stored. Populated by the model provider on soft-limit proximity.                                                                                          | yes — cleared                                             |
 
-As of Phase 6 (see §3.2), `toolApprovalMode` is store-canonical and
-typed as `string` in `AgentState`; the host narrows the string union
-via its `AgentState` overlay.
+Approval modes are store-canonical and typed as `string` in core
+`AgentState`; the host narrows each closed string union via its
+`AgentState` overlay.
 
 ### `ToolboxAgentState` (host-projected per-agent toolbox slice)
 
@@ -124,6 +126,7 @@ storage on load.
 | --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
 | `workspace.mounts`          | persisted-core | Remounted via `MountManager.mountWorkspace(instanceId, path, permissions)` (core, `@clodex/agent-core/mount-manager`) using `agentInstances.mounted_workspaces`. Host shell (`MountManagerService`) wraps it for file-picker + `ClientRuntimeNode`/LSP orchestration. The toolbox slice is populated via the colocated `setAgentMounts` writer as a side effect. | no (recreated)          |
 | `pendingFileDiffs`          | persisted-side | `DiffHistoryService` at `<userData>/clodex/diff-history/data.sqlite` (`snapshots` + `operations` tables, plus on-disk blob dir).                                                         | no (recreated)          |
+| `pendingProposedEdits`      | ephemeral      | Published only for live `write`/`multiEdit` proposals that require manual review. Auto-policy edits are not exposed as user approvals.                                                   | yes — cleared           |
 | `editSummary`               | persisted-side | Same DB as `pendingFileDiffs`; accepted-but-still-relevant diffs.                                                                                                                           | no (recreated)          |
 | `pendingUserQuestion`       | ephemeral      | Not stored; in-flight `askUserQuestions` state.                                                                                                                                             | yes — cleared           |
 | `pendingSandboxOutputs`     | ephemeral      | Not stored.                                                                                                                                                                                 | yes — cleared           |
@@ -168,13 +171,17 @@ still passes.
   as if it were `ModelSettings['capabilities']` when writing; the agent
   never introspects specific flag names.
 
-### 3.2 `toolApprovalMode` narrowing (D22, superseded by Phase 6)
+### 3.2 Approval-mode narrowing (D22, superseded by Phase 6)
 
 - Karton: `AgentState` narrows `toolApprovalMode: ToolApprovalMode` via
   the host `AgentState` shim in
   [](path:w787f/apps/browser/src/shared/karton-contracts/ui/agent/index.ts).
 - agent-core: `AgentState.toolApprovalMode: string` (store-canonical
   since Phase 6).
+- File-edit approval follows the same host-overlay pattern through
+  `AgentState.fileEditApprovalMode: string` in core and
+  `FileEditApprovalMode` on Karton. It remains a separate authorization
+  preference and cannot enable shell, MCP, sandbox, or general tools.
 - Why: Phase 6 made `agents.instances` store-canonical. The generic
   recipe channel used by `BaseAgent.set` writes the whole `AgentState`,
   so `toolApprovalMode` must live on the core shape or the recipe
@@ -182,7 +189,8 @@ still passes.
   narrowed (string union vs. bare string) using the same `Omit` +
   re-add pattern `activeModelId` uses.
 - Bridge: the Karton-side `AgentState` uses
-  `Omit<CoreAgentState<AgentMessage>, 'activeModelId' | 'toolApprovalMode'> & { activeModelId: ModelId; toolApprovalMode: ToolApprovalMode }`.
+  `Omit<CoreAgentState<AgentMessage>, 'activeModelId' | 'toolApprovalMode' | 'fileEditApprovalMode'>`
+  and re-adds the three host-narrowed fields.
   The bridge forward-mirror copies the narrowed value verbatim.
 
 ### 3.3 `ShellSessionSummary` vs `ShellSessionSnapshot` (D14)

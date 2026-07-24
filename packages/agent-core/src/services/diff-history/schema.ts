@@ -40,11 +40,16 @@ export const operations = sqliteTable(
     reason: text('reason')
       .notNull()
       .$type<
-        'init' | `tool-${ToolCallId}` | 'accept' | 'reject' | 'user-save'
+        | 'init'
+        | `tool-${ToolCallId}`
+        | 'accept'
+        | 'auto-accept'
+        | 'reject'
+        | 'user-save'
       >(),
     contributor: text('contributor')
       .notNull()
-      .$type<'user' | `agent-${AgentInstanceId}`>(),
+      .$type<'user' | 'policy' | `agent-${AgentInstanceId}`>(),
   },
   (table) => [
     index('operations_filepath_index').on(table.filepath),
@@ -79,18 +84,38 @@ type NewOperationBase = Omit<
   'operation' | 'contributor' | 'reason'
 >;
 
-// Baseline operations: always 'user' contributor, reason is 'init' or 'accept'
-type BaselineOperation = OperationBase & {
+// Baseline operations retain the actor that authorized the new baseline.
+// Human acceptance remains `user`/`accept`; standing automatic policy is
+// durably distinct as `policy`/`auto-accept`.
+type HumanBaselineOperation = OperationBase & {
   operation: 'baseline';
   contributor: 'user';
   reason: 'init' | 'accept';
 };
 
-type NewBaselineOperation = NewOperationBase & {
+type PolicyBaselineOperation = OperationBase & {
+  operation: 'baseline';
+  contributor: 'policy';
+  reason: 'auto-accept';
+};
+
+type BaselineOperation = HumanBaselineOperation | PolicyBaselineOperation;
+
+type NewHumanBaselineOperation = NewOperationBase & {
   operation: 'baseline';
   contributor: 'user';
   reason: 'init' | 'accept';
 };
+
+type NewPolicyBaselineOperation = NewOperationBase & {
+  operation: 'baseline';
+  contributor: 'policy';
+  reason: 'auto-accept';
+};
+
+type NewBaselineOperation =
+  | NewHumanBaselineOperation
+  | NewPolicyBaselineOperation;
 
 // Edit operations: contributor can be 'user' or 'agent-{id}', reason is 'reject' or 'tool-{id}'
 type EditOperation = OperationBase & {
@@ -110,11 +135,19 @@ export type Operation = BaselineOperation | EditOperation;
 export type NewOperation = NewBaselineOperation | NewEditOperation;
 
 // Meta-only types for function parameters (excludes row-identifying fields)
-type BaselineMeta = {
+type HumanBaselineMeta = {
   operation: 'baseline';
   contributor: 'user';
   reason: 'init' | 'accept';
 };
+
+type PolicyBaselineMeta = {
+  operation: 'baseline';
+  contributor: 'policy';
+  reason: 'auto-accept';
+};
+
+type BaselineMeta = HumanBaselineMeta | PolicyBaselineMeta;
 
 type EditMeta = {
   operation: 'edit';

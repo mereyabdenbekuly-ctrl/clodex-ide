@@ -191,6 +191,10 @@ export function applyOperationToContributorState(
   state.previousContent = currentContent;
 }
 
+function contentContributor(op: OperationWithContent): Contributor {
+  return op.operation === 'baseline' ? 'user' : op.contributor;
+}
+
 /**
  * Converts a ContributorMapState into the public ContributorMaps shape
  * (per-line-number contributor lookup + removal map).
@@ -449,7 +453,7 @@ export function createFileDiffsFromGenerations(
         changeType,
         baselineOid: startsWithBaseline ? firstOp.snapshot_oid : null,
         currentOid: lastOp.snapshot_oid,
-        contributor: lastOp.contributor,
+        contributor: contentContributor(lastOp),
         hunkId: generateDeterministicHunkId(
           path,
           0,
@@ -581,7 +585,7 @@ export function createFileDiffsFromGenerations(
           0,
           `empty-transition:${baselineOid ?? 'null'}:${currentOid ?? 'null'}`,
         ),
-        contributors: [lastOp.contributor],
+        contributors: [contentContributor(lastOp)],
       });
     }
 

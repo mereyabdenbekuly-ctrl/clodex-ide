@@ -18,6 +18,7 @@ import {
   hasRealChanges,
   type FormattedFileDiff,
 } from './footer-status-card/shared';
+import { areProposedEditDecisionsReady } from './footer-status-card/diff-lifecycle';
 
 export function SwarmDiffArtifact({
   agentInstanceId,
@@ -84,7 +85,9 @@ export function SwarmDiffArtifact({
   const stats = useMemo(() => getTotalLineStats(diffs), [diffs]);
   const createdCount = diffs.filter(isCreatedDiff).length;
   const changedCount = Math.max(diffs.length - createdCount, 0);
-  const hasPendingActions = proposedEdits.length > 0 || pendingDiffs.length > 0;
+  const hasPendingActions =
+    (proposedEdits.length > 0 || pendingDiffs.length > 0) &&
+    areProposedEditDecisionsReady(proposedEdits);
 
   useEffect(() => {
     if (diffFingerprint) setExpanded(true);

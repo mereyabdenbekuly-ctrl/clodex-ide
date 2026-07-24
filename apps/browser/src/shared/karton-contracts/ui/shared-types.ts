@@ -505,6 +505,15 @@ export {
   type ToolApprovalMode,
 } from '@clodex/agent-core/types/tool-approval';
 
+// File-edit approval is intentionally separate from the general tool mode:
+// enabling workspace edits must not authorize shell, MCP, sandbox, or any
+// other capability.
+export {
+  fileEditApprovalModeSchema,
+  DEFAULT_FILE_EDIT_APPROVAL_MODE,
+  type FileEditApprovalMode,
+} from '@clodex/agent-core/types/file-edit-approval';
+
 /** Update channel for prerelease builds ('alpha' or 'beta') */
 export const updateChannelSchema = z.enum(['alpha', 'beta']);
 export type UpdateChannel = z.infer<typeof updateChannelSchema>;

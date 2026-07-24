@@ -399,6 +399,7 @@ export function createExecutionTargetRouter(
 }
 
 class TrackedAgentStepExecution implements AgentStepExecution {
+  public readonly modelRouteBinding: AgentStepExecution['modelRouteBinding'];
   private terminal = false;
   private readonly abortHandler: (() => void) | null;
 
@@ -414,6 +415,7 @@ class TrackedAgentStepExecution implements AgentStepExecution {
       reason?: ExecutionTargetFailureReason,
     ) => void,
   ) {
+    this.modelRouteBinding = execution.modelRouteBinding;
     this.abortHandler = abortSignal
       ? () => this.finish('cancelled', 'aborted')
       : null;

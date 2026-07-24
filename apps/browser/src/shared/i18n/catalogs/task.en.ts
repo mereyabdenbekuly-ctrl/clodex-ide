@@ -14,6 +14,16 @@ export const taskEn = {
       attachFile: 'Attach file',
       stopAgent: 'Stop agent',
       sendMessage: 'Send message',
+      queueMessage: 'Queue for the next iteration',
+    },
+    queue: {
+      explanation:
+        'The active model request cannot be changed in flight. These messages will be sent automatically on the next iteration after any pending approval is resolved.',
+      queuedForNextIteration: '{{count}} queued for next iteration',
+      interruptAndSend: 'Interrupt & send',
+      interruptAndSendDescription:
+        'Stop the current iteration and send the queued messages now',
+      remove: 'Remove from queue',
     },
     swarm: {
       battleOverridesUltraLabel: 'Battle Agent overrides Ultra Deep Think',
@@ -40,6 +50,22 @@ export const taskEn = {
     },
   },
   approval: {
+    fileEdits: {
+      waitingForApproval: 'Waiting for file approval',
+      applyingChanges: 'Applying file changes',
+      mode: {
+        manual: {
+          label: 'Review edits',
+          description:
+            'Pause before applying file edits so you can review and accept or reject them.',
+        },
+        autoWorkspace: {
+          label: 'Auto edits',
+          description:
+            'Automatically apply eligible edits to existing regular text files in connected workspaces. New, sensitive, ignored, linked, executable, or read-only files still require review.',
+        },
+      },
+    },
     mode: {
       alwaysAsk: {
         label: 'Always ask',

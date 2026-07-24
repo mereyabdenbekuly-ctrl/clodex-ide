@@ -553,6 +553,7 @@ export class ProductionCloudExecutionTargetAdapter
 }
 
 class ProductionCloudAgentStepExecution implements AgentStepExecution {
+  public readonly modelRouteBinding = 'external' as const;
   private readonly consumeBranch: ReadableStream<
     InferUIMessageChunk<UIMessage>
   >;
@@ -1138,8 +1139,12 @@ class ProductionCloudAgentStepExecution implements AgentStepExecution {
             'Cloud task completed without required usage accounting',
           );
         }
-        const steps = event.result.steps.map((step) =>
-          createAgentStepResultFromIsolatedStep(step, this.options.request),
+        const steps = event.result.steps.map((step, stepOrdinal) =>
+          createAgentStepResultFromIsolatedStep(step, this.options.request, {
+            executionId: this.currentExecution.executionId,
+            terminalSequence: event.sequence,
+            stepOrdinal,
+          }),
         );
         const finalStep = steps.at(-1);
         if (!finalStep) {

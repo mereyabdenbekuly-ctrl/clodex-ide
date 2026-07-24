@@ -18,20 +18,33 @@ import { AttachmentMetadataProvider } from '@ui/hooks/use-attachment-metadata';
 import type { StatusCardSection } from './shared';
 import { getMessageText } from './shared';
 
+type MessageQueueLabels = {
+  explanation: string;
+  queuedForNextIteration: string;
+  interruptAndSend: string;
+  interruptAndSendDescription: string;
+  remove: string;
+};
+
 export interface QueuedMessagesSectionProps {
   queuedMessages: AgentMessage[];
   onRemoveMessage: (messageId: string) => Promise<void>;
   onFlush: () => Promise<void>;
+  labels: MessageQueueLabels;
 }
 
 function MessageQueueSectionContent({
   queuedMessages,
   onRemoveMessage,
+  labels,
 }: QueuedMessagesSectionProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
   return (
     <div className="pt-1" onMouseLeave={() => setHoveredIndex(null)}>
+      <p className="px-2 pb-1 text-[11px] text-muted-foreground">
+        {labels.explanation}
+      </p>
       {queuedMessages.map((queuedMsg, index) => {
         const isFirst = index === 0;
         // Show buttons for first item when nothing is hovered, or when this specific item is hovered
@@ -85,7 +98,7 @@ function MessageQueueSectionContent({
                     <IconTrash2Outline24 className="size-3" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Remove from queue</TooltipContent>
+                <TooltipContent>{labels.remove}</TooltipContent>
               </Tooltip>
             </div>
           </div>
@@ -111,12 +124,19 @@ export function MessageQueueSection(
               isOpen && 'rotate-180',
             )}
           />
-          {`${props.queuedMessages.length} Queued`}
+          {props.labels.queuedForNextIteration}
         </div>
-        <Button variant="ghost" size="xs" onClick={props.onFlush}>
-          Send now
-          <IconArrowUpOutline24 className="size-3" />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger>
+            <Button variant="ghost" size="xs" onClick={props.onFlush}>
+              {props.labels.interruptAndSend}
+              <IconArrowUpOutline24 className="size-3" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {props.labels.interruptAndSendDescription}
+          </TooltipContent>
+        </Tooltip>
       </div>
     ),
     scrollable: true,

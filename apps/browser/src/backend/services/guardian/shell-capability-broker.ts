@@ -14,6 +14,7 @@ interface ShellCapabilityGrant {
   capabilityId: string;
   agentInstanceId: string;
   toolCallId: string;
+  scopeId: string;
   actionHash: string;
   authorization: ShellCapabilityAuthorization;
   createdAt: number;
@@ -23,6 +24,7 @@ interface ShellCapabilityGrant {
 
 export type ShellCapabilityAuditEventType =
   | 'staged'
+  | 'authorization-upgraded'
   | 'human-authorized'
   | 'consumed'
   | 'rejected';
@@ -53,9 +55,9 @@ export interface ShellCapabilityBrokerOptions {
  * Trusted one-time capability broker for shell effects.
  *
  * The agent never receives the capability ID. A grant is bound to the agent,
- * tool call, canonical action hash and a short expiry. `execute` is reachable
- * only after the AI SDK's approval gate, so consuming a human-required grant
- * is also the trusted signal that the user approved that exact tool call.
+ * tool call, host-owned response scope, canonical action hash and a short
+ * expiry. Human-required grants additionally require affirmative approval
+ * evidence derived from the trusted AI SDK continuation history.
  */
 export class ShellCapabilityBroker implements ShellCapabilitySecurityDeps {
   private readonly grants = new Map<string, ShellCapabilityGrant>();
@@ -82,21 +84,40 @@ export class ShellCapabilityBroker implements ShellCapabilitySecurityDeps {
   public async stage(input: {
     agentInstanceId: string;
     toolCallId: string;
+    scopeId: string;
     action: ShellCapabilityAction;
     authorization: ShellCapabilityAuthorization;
-  }): Promise<void> {
+  }): Promise<ShellCapabilityAuthorization> {
     this.cleanupExpired();
     const createdAt = this.now();
     const actionHash = hashShellCapabilityAction(input.action);
-    const key = grantKey(input.toolCallId);
+    const key = grantKey(
+      input.agentInstanceId,
+      input.toolCallId,
+      input.scopeId,
+    );
     const existing = this.grants.get(key);
     if (existing) {
-      if (
-        existing.usedAt === null &&
-        existing.actionHash === actionHash &&
-        existing.authorization === input.authorization
-      ) {
-        return;
+      if (existing.usedAt === null && existing.actionHash === actionHash) {
+        if (
+          existing.authorization === 'policy-approved' &&
+          input.authorization === 'human-required'
+        ) {
+          // Upgrade in memory before awaiting the ledger so a concurrent
+          // consume cannot observe the weaker authorization.
+          existing.authorization = 'human-required';
+          await this.audit.append({
+            eventType: 'authorization-upgraded',
+            createdAt,
+            capabilityId: existing.capabilityId,
+            agentInstanceId: existing.agentInstanceId,
+            toolCallId: existing.toolCallId,
+            actionHash: existing.actionHash,
+            authorization: existing.authorization,
+            reason: null,
+          });
+        }
+        return existing.authorization;
       }
       await this.auditRejection(
         input,
@@ -112,6 +133,7 @@ export class ShellCapabilityBroker implements ShellCapabilitySecurityDeps {
       capabilityId: randomUUID(),
       agentInstanceId: input.agentInstanceId,
       toolCallId: input.toolCallId,
+      scopeId: input.scopeId,
       actionHash,
       authorization: input.authorization,
       createdAt,
@@ -129,16 +151,21 @@ export class ShellCapabilityBroker implements ShellCapabilitySecurityDeps {
       authorization: grant.authorization,
       reason: null,
     });
+    return grant.authorization;
   }
 
   public async consume(input: {
     agentInstanceId: string;
     toolCallId: string;
+    scopeId: string;
+    humanApprovalEvidence: boolean;
     action: ShellCapabilityAction;
   }): Promise<void> {
     const now = this.now();
     const actionHash = hashShellCapabilityAction(input.action);
-    const grant = this.grants.get(grantKey(input.toolCallId));
+    const grant = this.grants.get(
+      grantKey(input.agentInstanceId, input.toolCallId, input.scopeId),
+    );
 
     if (!grant) {
       await this.auditRejection(input, actionHash, null, 'missing-capability');
@@ -153,10 +180,6 @@ export class ShellCapabilityBroker implements ShellCapabilitySecurityDeps {
       );
       throw new Error('Shell capability belongs to a different agent');
     }
-    if (grant.usedAt !== null) {
-      await this.auditRejection(input, actionHash, grant, 'capability-replay');
-      throw new Error('Shell capability was already consumed');
-    }
     if (now > grant.expiresAt) {
       await this.auditRejection(input, actionHash, grant, 'capability-expired');
       throw new Error('Shell capability expired before execution');
@@ -170,6 +193,25 @@ export class ShellCapabilityBroker implements ShellCapabilitySecurityDeps {
       );
       throw new Error('Shell action changed after authorization');
     }
+    if (grant.usedAt !== null) {
+      await this.auditRejection(input, actionHash, grant, 'capability-replay');
+      throw new Error('Shell capability was already consumed');
+    }
+    if (
+      grant.authorization === 'human-required' &&
+      !input.humanApprovalEvidence
+    ) {
+      await this.auditRejection(
+        input,
+        actionHash,
+        grant,
+        'human-approval-evidence-missing',
+      );
+      throw new Error('Shell capability requires affirmative human approval');
+    }
+    // Reserve synchronously before any audit await. This makes the one-time
+    // guarantee atomic even when duplicate human-approved executions race.
+    grant.usedAt = now;
 
     if (grant.authorization === 'human-required') {
       await this.audit.append({
@@ -184,7 +226,6 @@ export class ShellCapabilityBroker implements ShellCapabilitySecurityDeps {
       });
     }
 
-    grant.usedAt = now;
     await this.audit.append({
       eventType: 'consumed',
       createdAt: now,
@@ -203,9 +244,7 @@ export class ShellCapabilityBroker implements ShellCapabilitySecurityDeps {
   private cleanupExpired(): void {
     const now = this.now();
     for (const [key, grant] of this.grants) {
-      if (now > grant.expiresAt) {
-        this.grants.delete(key);
-      }
+      if (now > grant.expiresAt) this.grants.delete(key);
     }
   }
 
@@ -231,8 +270,15 @@ export class ShellCapabilityBroker implements ShellCapabilitySecurityDeps {
   }
 }
 
-function grantKey(toolCallId: string): string {
-  return toolCallId;
+function grantKey(
+  agentInstanceId: string,
+  toolCallId: string,
+  scopeId: string,
+): string {
+  // Provider tool-call identifiers are scoped to a model response and can be
+  // reused by another chat. JSON tuple encoding avoids delimiter collisions
+  // while keeping replacement/replay protection strict within one agent.
+  return JSON.stringify([agentInstanceId, toolCallId, scopeId]);
 }
 
 export function hashShellCapabilityAction(

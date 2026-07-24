@@ -173,6 +173,10 @@ export function MascotOverlay({ onInteract }: { onInteract?: () => void }) {
           isWaitingForUser:
             (state.toolbox[id]?.pendingUserQuestion !== null &&
               state.toolbox[id]?.pendingUserQuestion !== undefined) ||
+            (state.toolbox[id]?.pendingProposedEdits?.some(
+              (edit) => edit.status === 'pending',
+            ) ??
+              false) ||
             Object.keys(agent.state.pendingApprovals ?? {}).length > 0,
           hasError:
             agent.state.error !== undefined &&

@@ -24,18 +24,18 @@ The canonical Linux CI and protected release-gate jobs run
 `pnpm security:dependencies`. It binds all 33 lockfile importers and each direct
 `dependencies`, `devDependencies`, and `optionalDependencies` category to the
 unfiltered recursive `pnpm list --lockfile-only` result after the preceding
-frozen-lockfile install. The schema-v3 report separately binds 459 lock direct
-dependency records, 458 manifest dependency records, and 70 positively resolved
+frozen-lockfile install. The schema-v3 report separately binds 463 lock direct
+dependency records, 462 manifest dependency records, and 70 positively resolved
 `workspace:*` links. This is intentional: the desktop Vite/Electron build
 currently reaches some shipped modules through the browser workspace's dev
 dependency graph, so a production-only traversal would omit real release
 inputs.
 
-The gate audits 1,863 package names / 2,180 exact versions through npm's
-supported bulk advisory endpoint. Every one of the 2,180 registry package
+The gate audits 1,866 package names / 2,181 exact versions through npm's
+supported bulk advisory endpoint. Every one of the 2,181 registry package
 locators must carry a valid SHA-512 integrity and must not declare a tarball;
 every observed record must resolve to its canonical npm registry URL. The gate
-also binds all 2,197 lock snapshots to 2,197 distinct observed virtual-store
+also binds all 2,203 lock snapshots to 2,203 distinct observed virtual-store
 paths, preserving peer variants that a name/version set alone would collapse
 while rejecting patched dependency identities. It fails closed on
 lockfile-version, source-locator, patched-dependency, integrity, registry-URL,
@@ -46,3 +46,18 @@ exception for this advisory; reintroducing a vulnerable version is a blocker.
 This register records the repository control state. It is not a legal opinion
 or a substitute for release-owner review of the generated dependency report
 and final packaged SBOM.
+
+## DR-002: July 24 dependency advisory refresh
+
+| Field | Value |
+| --- | --- |
+| Status | Closed in the locked dependency graph |
+| Recorded | 2026-07-24 |
+| Resolution | Updated direct pins and root overrides to the first safe line or newer |
+
+The frozen graph now resolves `@hono/node-server@2.0.11`,
+`dompurify@3.4.12`, `fast-uri@3.1.4`, `linkify-it@5.0.2`,
+`next@16.2.11`, and `sharp@0.35.3`. The canonical schema-v3 audit returned
+zero findings, zero blockers, and zero residual exceptions after the refresh.
+This entry records the dependency state only; platform builds and the final
+packaged SBOM remain release-gate evidence.

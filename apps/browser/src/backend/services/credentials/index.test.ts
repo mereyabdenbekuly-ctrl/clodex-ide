@@ -24,8 +24,8 @@ vi.mock('../../utils/persisted-data', () => ({
       value: unknown,
       options: unknown,
     ) => {
-      persisted.values[name] = structuredClone(value) as never;
       await writePersistedData(name, _schema, value, options);
+      persisted.values[name] = structuredClone(value) as never;
     },
   ),
 }));
@@ -46,7 +46,8 @@ describe('CredentialsService custom MCP credentials', () => {
     persisted.values.credentials = {};
     persisted.values['mcp-custom-credentials'] = {};
     persisted.values['provider-api-keys'] = {};
-    writePersistedData.mockClear();
+    writePersistedData.mockReset();
+    writePersistedData.mockResolvedValue(undefined);
   });
 
   it('stores provider API keys outside preferences-compatible state', async () => {
@@ -74,6 +75,65 @@ describe('CredentialsService custom MCP credentials', () => {
 
     await service.deleteProviderApiKey('provider.openai-main');
     expect(service.getProviderApiKey('provider.openai-main')).toBeNull();
+    await service.teardown();
+  });
+
+  it('does not publish provider-key mutations when encrypted persistence fails', async () => {
+    const service = await CredentialsService.create(makeLogger());
+    const listener = vi.fn();
+    service.addProviderApiKeyListener(listener);
+
+    writePersistedData.mockRejectedValueOnce(new Error('disk unavailable'));
+    await expect(
+      service.setProviderApiKey('provider.openai-main', 'new-secret'),
+    ).rejects.toThrow('disk unavailable');
+    expect(service.getProviderApiKey('provider.openai-main')).toBeNull();
+    expect(listener).not.toHaveBeenCalled();
+
+    await service.setProviderApiKey('provider.openai-main', 'durable-secret');
+    listener.mockClear();
+    writePersistedData.mockRejectedValueOnce(new Error('disk unavailable'));
+    await expect(
+      service.deleteProviderApiKey('provider.openai-main'),
+    ).rejects.toThrow('disk unavailable');
+    expect(service.getProviderApiKey('provider.openai-main')).toBe(
+      'durable-secret',
+    );
+    expect(listener).not.toHaveBeenCalled();
+    await service.teardown();
+  });
+
+  it('serializes copy-on-write provider-key publications without losing updates', async () => {
+    const service = await CredentialsService.create(makeLogger());
+    let releaseFirstWrite: (() => void) | undefined;
+    writePersistedData.mockImplementationOnce(
+      async () =>
+        await new Promise<undefined>((resolve) => {
+          releaseFirstWrite = () => resolve(undefined);
+        }),
+    );
+
+    const first = service.setProviderApiKey(
+      'provider.openai-main',
+      'openai-secret',
+    );
+    await vi.waitFor(() => expect(writePersistedData).toHaveBeenCalledOnce());
+    const second = service.setProviderApiKey(
+      'provider.anthropic-main',
+      'anthropic-secret',
+    );
+
+    expect(service.getProviderApiKey('provider.openai-main')).toBeNull();
+    expect(service.getProviderApiKey('provider.anthropic-main')).toBeNull();
+    releaseFirstWrite?.();
+    await Promise.all([first, second]);
+
+    expect(service.getProviderApiKey('provider.openai-main')).toBe(
+      'openai-secret',
+    );
+    expect(service.getProviderApiKey('provider.anthropic-main')).toBe(
+      'anthropic-secret',
+    );
     await service.teardown();
   });
 

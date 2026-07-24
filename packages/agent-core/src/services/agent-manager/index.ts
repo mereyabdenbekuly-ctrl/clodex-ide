@@ -20,6 +20,7 @@ export {
   bindStateMutations,
   deleteAgentInstance,
   getAgentInstance,
+  setFileEditApprovalMode,
   setToolApprovalMode,
   updateAgentInstanceState,
   upsertAgentInstance,
