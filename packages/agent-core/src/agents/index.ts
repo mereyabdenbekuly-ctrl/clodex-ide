@@ -25,7 +25,9 @@ export type {
 export { type AgentsMap, toAgentsMap } from './agents-map';
 export {
   BaseAgent,
+  type AgentNotificationContext,
   type AgentNotificationEvent,
+  type AgentStepSettlement,
   type BaseAgentConfig,
   type BaseAgentDependencies,
   type BaseAgentToolboxView,
@@ -46,6 +48,10 @@ export {
   type AgentStepExecutionRequest,
   type AgentStepExecutor,
 } from './agent-step-executor';
+export {
+  findToolCallRecoverySignal,
+  type ToolCallRecoveryKind,
+} from './shared/repair-tool-call';
 export {
   agentExecutionTargets,
   agentExecutionTaskStatuses,

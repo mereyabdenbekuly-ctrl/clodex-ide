@@ -2822,10 +2822,8 @@ export type KartonContract = {
         run: (
           trigger: HookTrigger,
           context?: {
-            workspacePath?: string;
-            commandApproved?: boolean;
-            workspaceTrusted?: boolean;
             values?: Record<string, unknown>;
+            manualHookId?: string;
           },
         ) => Promise<HookRunResult>;
       };

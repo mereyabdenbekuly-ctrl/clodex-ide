@@ -1,6 +1,6 @@
 /**
  * NotificationSoundsService — plays sounds, optionally bounces the macOS
- * dock icon, and shows a Windows completion toast when explicit agent
+ * dock icon, and shows a Windows lifecycle toast when explicit agent
  * notification events are emitted:
  *   - Done (agent finishes work)        → done sound + short dock bounce
  *   - Waiting for user (question/approval) → question sound + long dock bounce
@@ -13,7 +13,7 @@
  * for every notification event.
  *
  * Dock bouncing only applies on macOS and only when the window is not focused.
- * Windows completion toasts use generic copy and never expose agent content.
+ * Windows lifecycle toasts use generic copy and never expose agent content.
  * Dock bouncing uses 'informational' (single short bounce) for all events —
  * macOS does not expose a duration API; 'critical' would bounce indefinitely.
  *
@@ -704,10 +704,12 @@ export class NotificationSoundsService extends DisposableService {
       return;
     }
 
-    // Skip only when the triggering agent is currently visible to the user.
-    // If the app window is out of focus, the selected agent is not actually
-    // visible, so it should still notify.
+    // Suppress only low-priority completion while the exact agent is already
+    // visible. Approval and error events are attention boundaries and must
+    // still surface when the app happens to retain focus during an unattended
+    // run (for example while the user is away from the keyboard).
     if (
+      event === 'done' &&
       this.uiKarton.state.browser.lastOpenAgentId === agentId &&
       windowFocused
     ) {
@@ -735,9 +737,10 @@ export class NotificationSoundsService extends DisposableService {
       }
 
       // Windows does not have a Dock equivalent. Use a privacy-safe native
-      // toast for completed iterations without exposing task or workspace data.
-      if (event === 'done' && process.platform === 'win32') {
-        delivered = this.showWindowsDoneNotification(agentId) || delivered;
+      // lifecycle toast without exposing task or workspace data.
+      if (process.platform === 'win32') {
+        delivered =
+          this.showWindowsLifecycleNotification(event, agentId) || delivered;
       }
 
       if (delivered) {
@@ -752,15 +755,31 @@ export class NotificationSoundsService extends DisposableService {
   // Windows native notifications
   // ------------------------------------------------------------------
 
-  private showWindowsDoneNotification(agentId: string): boolean {
+  private showWindowsLifecycleNotification(
+    event: SoundEvent,
+    agentId: string,
+  ): boolean {
     let notification: ElectronNotification | null = null;
 
     try {
       if (!ElectronNotification.isSupported()) return false;
 
+      const copy: Record<SoundEvent, { title: string; body: string }> = {
+        done: {
+          title: 'Iteration complete',
+          body: 'The agent is ready for your input.',
+        },
+        question: {
+          title: 'Agent needs attention',
+          body: 'An approval or answer is required.',
+        },
+        error: {
+          title: 'Agent stopped with an error',
+          body: 'Open CLODEx to review the failure and retry.',
+        },
+      };
       notification = new ElectronNotification({
-        title: 'Iteration complete',
-        body: 'The agent is ready for your input.',
+        ...copy[event],
         silent: true,
       });
       if (
@@ -812,7 +831,7 @@ export class NotificationSoundsService extends DisposableService {
 
       notification.show();
       this.logger.debug(
-        '[NotificationSoundsService] Windows iteration-complete notification shown',
+        `[NotificationSoundsService] Windows ${event} notification shown`,
       );
       return true;
     } catch (error) {

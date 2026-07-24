@@ -195,16 +195,27 @@ after-file-edit
 approval-requested
 ```
 
-Prompt hooks can add context to a turn. Command hooks run with a timeout,
-restricted environment, capped output, and require both explicit command
-approval and a trusted workspace. Failures are recorded and returned without
-crashing the agent.
+Prompt hooks can add context to a turn. Command-hook definitions remain
+persistable, but renderer-triggered execution is disabled until the backend
+can mint a one-shot approval bound to the exact hook body, workspace, client,
+and expiry. Renderer booleans are never accepted as command authority.
 
-The current automatic integration runs `before-turn` and `after-turn`.
-Command, file-edit, and approval triggers are available through the service and
-settings test action but are not yet automatically emitted by every legacy
-tool path. Agent-kind hooks are represented in the contract but intentionally
-skip until a dedicated helper-agent runner is configured.
+The current automatic integration injects prompt hooks at `before-turn` and
+runs configured helper-agent hooks only at terminal `after-turn` and
+`approval-requested`. Before-turn helper-agent hooks are manual-test only: they
+do not influence the admitted message and are not run automatically. Command
+and file-edit trigger names remain in the contract for future backend
+producers, but command execution and automatic file-edit production are
+unavailable in this build. Agent-kind hooks run only through the trusted
+read-only helper-agent executor installed by the desktop composition root;
+persisted state alone cannot enable that capability.
+
+Helper-agent hooks use the active chat model with no tools. They receive only
+a bounded, redacted snapshot of recent message text, tool states, goal/error
+status, and lifecycle metadata. Their output is advisory, appears in Recent
+runs, and may raise a generic attention notification; it never grants an
+approval or executes an effect. The selected provider may count this as
+additional model usage.
 
 ## Remote control
 

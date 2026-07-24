@@ -44,6 +44,13 @@ export interface AgentStepExecutionRequest {
  * while the default implementation remains a direct `streamText()` call.
  */
 export interface AgentStepExecution {
+  /**
+   * Attests whether this execution actually used the model object supplied in
+   * `AgentStepExecutionRequest.options`. Missing/`external` provenance is
+   * fail-closed for lifecycle observers that would otherwise replay a
+   * transcript through the wrong provider route.
+   */
+  readonly modelRouteBinding?: 'request-model' | 'external';
   consumeStream(options?: {
     onError?: (error: unknown) => void;
   }): PromiseLike<void>;
@@ -108,7 +115,16 @@ export class LocalAgentStepExecutor implements AgentStepExecutor {
   ) {}
 
   public execute(request: AgentStepExecutionRequest): AgentStepExecution {
-    return this.streamTextFn(request.options);
+    const execution = this.streamTextFn(request.options);
+    return {
+      modelRouteBinding: 'request-model',
+      consumeStream: (options) => execution.consumeStream(options),
+      toUIMessageStream<UI_MESSAGE extends UIMessage>(
+        options?: UIMessageStreamOptions<UI_MESSAGE>,
+      ) {
+        return execution.toUIMessageStream<UI_MESSAGE>(options);
+      },
+    };
   }
 }
 

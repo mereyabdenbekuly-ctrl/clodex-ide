@@ -30,7 +30,10 @@ describe('LocalAgentStepExecutor', () => {
       options,
     });
 
-    expect(result).toBe(execution);
+    expect(result.modelRouteBinding).toBe('request-model');
+    expect(result.consumeStream).not.toBe(execution.consumeStream);
+    result.consumeStream();
+    expect(execution.consumeStream).toHaveBeenCalledOnce();
     expect(streamTextFn).toHaveBeenCalledOnce();
     expect(streamTextFn).toHaveBeenCalledWith(options);
   });

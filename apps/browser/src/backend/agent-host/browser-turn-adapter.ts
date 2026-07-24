@@ -1,4 +1,5 @@
 import type { AgentHost } from '@clodex/agent-core/host';
+import { findToolCallRecoverySignal } from '@clodex/agent-core/agents';
 import {
   asSchema,
   jsonSchema,
@@ -13,10 +14,15 @@ import type {
   AgentTurnJsonObject,
   AgentTurnJsonValue,
   IsolatedAgentConversationMessage,
+  IsolatedAgentRejectedToolCall,
   IsolatedAgentToolDefinition,
   IsolatedAgentUsage,
 } from './isolated-agent-turn';
-import { isAgentTurnJsonValue } from './isolated-agent-turn';
+import {
+  createIsolatedToolCallRejectionMessage,
+  isAgentTurnJsonValue,
+  rejectDuplicateIsolatedToolCallIds,
+} from './isolated-agent-turn';
 
 export const ISOLATED_READ_ONLY_TOOL_NAMES = [
   'read',
@@ -92,6 +98,7 @@ export function createBrowserIsolatedAgentTurnHandlers({
         toolName: string;
         input: AgentTurnJsonValue;
       }> = [];
+      const rejectedToolCalls: IsolatedAgentRejectedToolCall[] = [];
 
       for await (const part of result.fullStream) {
         switch (part.type) {
@@ -104,11 +111,26 @@ export function createBrowserIsolatedAgentTurnHandlers({
             onEvent({ type: 'reasoning-delta', text: part.text });
             break;
           case 'tool-call':
+            if (part.invalid) {
+              const kind =
+                findToolCallRecoverySignal([part])?.kind ?? 'invalid-input';
+              rejectedToolCalls.push({
+                toolCallId: part.toolCallId,
+                toolName: Object.hasOwn(modelTools, part.toolName)
+                  ? part.toolName
+                  : 'unknown',
+                kind,
+                message: createIsolatedToolCallRejectionMessage(kind),
+              });
+              break;
+            }
             toolCalls.push({
               toolCallId: part.toolCallId,
               toolName: part.toolName,
               input: toAgentTurnJsonValue(part.input),
             });
+            break;
+          case 'tool-error':
             break;
           case 'finish-step':
             finishReason = String(part.finishReason);
@@ -130,10 +152,19 @@ export function createBrowserIsolatedAgentTurnHandlers({
         }
       }
 
+      const normalizedCalls = rejectDuplicateIsolatedToolCallIds(
+        toolCalls,
+        rejectedToolCalls,
+        new Set(Object.keys(modelTools)),
+      );
+
       return {
         text,
         reasoning,
-        toolCalls,
+        toolCalls: normalizedCalls.toolCalls,
+        ...(normalizedCalls.rejectedToolCalls.length > 0
+          ? { rejectedToolCalls: normalizedCalls.rejectedToolCalls }
+          : {}),
         finishReason,
         rawFinishReason,
         usage,

@@ -24,6 +24,7 @@ async function writeAtomically(
   persistedState.desktopAutomation.currentApp = null;
   persistedState.desktopAutomation.pendingApprovals = [];
   persistedState.desktopAutomation.killSwitchRegistered = false;
+  persistedState.hookRuntime.helperAgentRunnerConfigured = false;
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   try {
     await fs.writeFile(
@@ -65,6 +66,10 @@ export class AgentOsStateStore {
     store.state.desktopAutomation.currentApp = null;
     store.state.desktopAutomation.pendingApprovals = [];
     store.state.desktopAutomation.killSwitchRegistered = false;
+    // A persisted boolean must never manufacture an executable helper-agent
+    // capability. The composition root has to install the runner again for
+    // every process lifetime.
+    store.state.hookRuntime.helperAgentRunnerConfigured = false;
     store.state.remoteControl.pendingApprovals = [];
     store.state.remoteControl.serverUrl = null;
     store.state.remoteControl.pairingUrl = null;

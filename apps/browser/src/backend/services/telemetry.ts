@@ -1110,6 +1110,13 @@ export class TelemetryService extends DisposableService {
   private readonly modelTracingEnabled: boolean;
   private readonly posthogApiKey: string;
   private readonly anonymousDistinctId = `clodex-anonymous-${randomUUID()}`;
+  private readonly modelTraceBindings = new WeakMap<
+    object,
+    {
+      sourceModel: LanguageModelV3;
+      properties?: Parameters<typeof withTracing>[2];
+    }
+  >();
   private userProperties: UserProperties = {};
   private pendingAppLaunchedCapture: Promise<void> | null = null;
   private missingApiKeyLogged = false;
@@ -1290,9 +1297,15 @@ export class TelemetryService extends DisposableService {
     model: LanguageModelV3,
     properties?: Parameters<typeof withTracing>[2],
   ): LanguageModelV3 {
-    if (!this.modelTracingEnabled) return model;
+    if (!this.modelTracingEnabled) {
+      this.modelTraceBindings.set(model, { sourceModel: model, properties });
+      return model;
+    }
     const telemetryLevel = this.getTelemetryLevel();
-    if (telemetryLevel !== 'full' || !this.posthogClient) return model;
+    if (telemetryLevel !== 'full' || !this.posthogClient) {
+      this.modelTraceBindings.set(model, { sourceModel: model, properties });
+      return model;
+    }
 
     const distinctId = this.getDistinctId();
 
@@ -1322,7 +1335,33 @@ export class TelemetryService extends DisposableService {
       });
     }
 
+    this.modelTraceBindings.set(wrappedModel, {
+      sourceModel: model,
+      properties,
+    });
+
     return wrappedModel;
+  }
+
+  /**
+   * Re-wrap an already admitted provider model with a fresh trace without
+   * resolving credentials, endpoints, aliases, or provider configuration
+   * again. This is the only safe trace fork for delayed internal observers.
+   */
+  public forkTracing(
+    model: LanguageModelV3,
+    properties?: Parameters<typeof withTracing>[2],
+  ): LanguageModelV3 {
+    const binding = this.modelTraceBindings.get(model);
+    const base = binding?.properties;
+    return this.withTracing(binding?.sourceModel ?? model, {
+      ...(base ?? {}),
+      ...(properties ?? {}),
+      posthogProperties: {
+        ...(base?.posthogProperties ?? {}),
+        ...(properties?.posthogProperties ?? {}),
+      },
+    });
   }
 
   public captureAppLaunched(): void {

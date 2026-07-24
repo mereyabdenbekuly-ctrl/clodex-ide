@@ -299,6 +299,7 @@ describe('BrowserAgentStepExecutor', () => {
     });
 
     const execution = await executor.execute(request);
+    expect(execution.modelRouteBinding).toBe('request-model');
     const uiStream = execution.toUIMessageStream({
       generateMessageId: () => 'message-1',
     });
@@ -440,6 +441,297 @@ describe('BrowserAgentStepExecutor', () => {
       }),
     );
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('never executes a tool call rejected by repairToolCall in the isolated runtime', async () => {
+    const process = createInMemoryProcess();
+    const needsApproval = vi.fn(async () => true);
+    const execute = vi.fn(async () => '# must not run');
+    const onFinish = vi.fn();
+    const request = createRequest({
+      tools: {
+        read: tool({
+          inputSchema: z.object({ path: z.string() }),
+          needsApproval,
+          execute,
+        }),
+      },
+      onFinish,
+    });
+    const recoveryError = new Error(
+      'Recoverable tool call rejection (truncated-input): rejected before execution',
+    );
+    const streamTextFn = vi.fn(() => ({
+      fullStream: createStream([
+        {
+          type: 'tool-call',
+          toolCallId: 'tool-invalid',
+          toolName: 'read',
+          input: '{"path":"an oversized value cut off',
+          invalid: true,
+          error: recoveryError,
+        },
+        {
+          type: 'tool-error',
+          toolCallId: 'tool-invalid',
+          toolName: 'read',
+          input: '{"path":"an oversized value cut off',
+          error: recoveryError,
+        },
+        {
+          type: 'finish',
+          finishReason: 'stop',
+          rawFinishReason: 'stop',
+          totalUsage: emptyUsage(8, 2),
+        },
+      ]),
+    })) as unknown as typeof import('ai').streamText;
+    const executor = new BrowserAgentStepExecutor({
+      process,
+      logger,
+      isEnabled: () => true,
+      assertLocalExecutionAllowed: allowLocalExecution,
+      streamTextFn,
+    });
+
+    const execution = await executor.execute(request);
+    const [chunks] = await Promise.all([
+      collectStream(execution.toUIMessageStream()),
+      execution.consumeStream(),
+    ]);
+
+    expect(needsApproval).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(chunks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool-input-available',
+          toolCallId: 'tool-invalid',
+          toolName: 'read',
+          input: {},
+        }),
+        expect.objectContaining({
+          type: 'tool-output-error',
+          toolCallId: 'tool-invalid',
+          errorText: expect.stringContaining(
+            'Recoverable tool call rejection (truncated-input)',
+          ),
+        }),
+      ]),
+    );
+    expect(onFinish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.arrayContaining([
+          expect.objectContaining({
+            type: 'tool-call',
+            toolCallId: 'tool-invalid',
+            toolName: 'read',
+            invalid: true,
+            input: {},
+          }),
+          expect.objectContaining({
+            type: 'tool-error',
+            toolCallId: 'tool-invalid',
+            toolName: 'read',
+            input: {},
+          }),
+        ]),
+      }),
+    );
+    expect(JSON.stringify(onFinish.mock.calls)).not.toContain(
+      'an oversized value cut off',
+    );
+    expect(JSON.stringify(chunks)).not.toContain('an oversized value cut off');
+  });
+
+  it('rejects duplicate provider ids before isolated approval or execution', async () => {
+    const process = createInMemoryProcess();
+    const needsApproval = vi.fn(async () => false);
+    const execute = vi.fn(async () => '# must not run');
+    const onFinish = vi.fn();
+    const request = createRequest({
+      tools: {
+        read: tool({
+          inputSchema: z.object({ path: z.string() }),
+          needsApproval,
+          execute,
+        }),
+      },
+      onFinish,
+    });
+    const streamTextFn = vi.fn(() => ({
+      fullStream: createStream([
+        {
+          type: 'tool-call',
+          toolCallId: 'duplicate-id',
+          toolName: 'read',
+          input: { path: 'one.md' },
+        },
+        {
+          type: 'tool-call',
+          toolCallId: 'duplicate-id',
+          toolName: 'read',
+          input: { path: 'two.md' },
+        },
+        {
+          type: 'finish',
+          finishReason: 'tool-calls',
+          rawFinishReason: 'tool-calls',
+          totalUsage: emptyUsage(8, 2),
+        },
+      ]),
+    })) as unknown as typeof import('ai').streamText;
+    const executor = new BrowserAgentStepExecutor({
+      process,
+      logger,
+      isEnabled: () => true,
+      assertLocalExecutionAllowed: allowLocalExecution,
+      streamTextFn,
+    });
+
+    const execution = await executor.execute(request);
+    const [chunks] = await Promise.all([
+      collectStream(execution.toUIMessageStream()),
+      execution.consumeStream(),
+    ]);
+
+    expect(needsApproval).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(chunks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool-input-available',
+          toolCallId: 'duplicate-id',
+          input: {},
+        }),
+        expect.objectContaining({
+          type: 'tool-output-error',
+          toolCallId: 'duplicate-id',
+          errorText: expect.stringContaining('reused a tool-call identifier'),
+        }),
+      ]),
+    );
+    expect(onFinish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolCalls: [],
+        content: expect.arrayContaining([
+          expect.objectContaining({
+            type: 'tool-call',
+            toolCallId: 'duplicate-id',
+            invalid: true,
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it('claims each admitted isolated tool call exactly once at the host boundary', async () => {
+    const execute = vi.fn(async () => '# Project');
+    const replayResults: unknown[] = [];
+    const process = {
+      canExecuteAgentWorkloads: true,
+      executeAgentTurn: vi.fn(
+        async (
+          turnRequest: IsolatedAgentTurnRequest,
+          options: {
+            signal?: AbortSignal;
+            onEvent?: (event: IsolatedAgentTurnEvent) => void;
+            handlers?: AgentTurnHostHandlers;
+          },
+        ) => {
+          if (!options.handlers) throw new Error('missing handlers');
+          const { maxSteps: _maxSteps, ...modelRequest } = turnRequest;
+          const signal = options.signal ?? new AbortController().signal;
+          const modelResult = await options.handlers.callModel(modelRequest, {
+            signal,
+            onEvent: () => {},
+          });
+          const call = modelResult.toolCalls[0]!;
+          const callRequest = {
+            agentInstanceId: turnRequest.agentInstanceId,
+            call,
+            messages: turnRequest.messages,
+          };
+          const first = await options.handlers.callTool(callRequest, {
+            signal,
+          });
+          replayResults.push(
+            await options.handlers.callTool(callRequest, { signal }),
+          );
+          if (!('output' in first)) {
+            throw new Error('first admitted tool call did not complete');
+          }
+          return {
+            status: 'completed' as const,
+            text: '',
+            messages: turnRequest.messages,
+            steps: [
+              {
+                index: 1,
+                text: '',
+                reasoning: '',
+                finishReason: modelResult.finishReason,
+                usage: modelResult.usage,
+                toolCalls: modelResult.toolCalls,
+                toolResults: [
+                  {
+                    toolCallId: call.toolCallId,
+                    toolName: call.toolName,
+                    output: first.output,
+                  },
+                ],
+                toolErrors: [],
+                approvalRequests: [],
+              },
+            ],
+          };
+        },
+      ),
+    };
+    const request = createRequest({
+      tools: {
+        read: tool({
+          inputSchema: z.object({ path: z.string() }),
+          execute,
+        }),
+      },
+    });
+    const streamTextFn = vi.fn(() => ({
+      fullStream: createStream([
+        {
+          type: 'tool-call',
+          toolCallId: 'admitted-once',
+          toolName: 'read',
+          input: { path: 'README.md' },
+        },
+        {
+          type: 'finish',
+          finishReason: 'tool-calls',
+          totalUsage: emptyUsage(8, 2),
+        },
+      ]),
+    })) as unknown as typeof import('ai').streamText;
+    const executor = new BrowserAgentStepExecutor({
+      process,
+      logger,
+      isEnabled: () => true,
+      assertLocalExecutionAllowed: allowLocalExecution,
+      streamTextFn,
+    });
+
+    const execution = await executor.execute(request);
+    await Promise.all([
+      collectStream(execution.toUIMessageStream()),
+      execution.consumeStream(),
+    ]);
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(replayResults).toEqual([
+      {
+        status: 'error',
+        message: expect.stringContaining('not uniquely admitted'),
+      },
+    ]);
   });
 
   it('does not replay a dispatched step locally after a worker failure', async () => {

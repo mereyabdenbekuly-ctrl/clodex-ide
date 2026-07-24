@@ -1,4 +1,5 @@
 import type {
+  AgentNotificationContext,
   AgentNotificationEvent,
   BaseAgentToolboxView,
 } from '../../agents/base-agent';
@@ -87,6 +88,7 @@ export interface AgentManagerHooksOptions {
   onAgentEvent?: (
     event: AgentNotificationEvent,
     agentId: string,
+    context: AgentNotificationContext,
   ) => void | Promise<void>;
   /**
    * Optional host-owned durable lifecycle for explicit tool-approval

@@ -20,6 +20,103 @@ export interface IsolatedAgentToolCall {
   input: AgentTurnJsonValue;
 }
 
+export type IsolatedAgentToolCallRejectionKind =
+  | 'truncated-input'
+  | 'invalid-input'
+  | 'unknown-tool';
+
+export interface IsolatedAgentRejectedToolCall {
+  toolCallId: string;
+  /** Host-verified advertised name, otherwise the literal `unknown`. */
+  toolName: string;
+  kind: IsolatedAgentToolCallRejectionKind;
+  /** Bounded canonical diagnostic; never includes the rejected input. */
+  message: string;
+}
+
+export function createIsolatedToolCallRejectionMessage(
+  kind: IsolatedAgentToolCallRejectionKind,
+): string {
+  const guidance =
+    kind === 'truncated-input'
+      ? 'The call was not executed because its arguments were incomplete. Retry with smaller independent calls and split large edits into chunks.'
+      : kind === 'unknown-tool'
+        ? 'The call was not executed because the requested tool is unavailable. Use only tools advertised by the host.'
+        : 'The call was not executed because its arguments were invalid. Regenerate one complete schema-valid input.';
+  return `Recoverable tool call rejection (${kind}): ${guidance}`;
+}
+
+const DUPLICATE_TOOL_CALL_ID_REJECTION_MESSAGE =
+  'Recoverable tool call rejection (invalid-input): The call was not executed because the provider reused a tool-call identifier within one model step. Regenerate the calls with unique identifiers.';
+
+/**
+ * Removes every executable call whose provider id is ambiguous within one
+ * model step. The check includes already-rejected calls so a provider cannot
+ * pair one invalid call with one executable call under the same id.
+ *
+ * Duplicate ids collapse approval state, UI parts, timings, and evidence when
+ * they are allowed to cross the host boundary. Emit one bounded rejection per
+ * duplicated id instead; never reflect provider inputs into the diagnostic.
+ */
+export function rejectDuplicateIsolatedToolCallIds(
+  toolCalls: readonly IsolatedAgentToolCall[],
+  rejectedToolCalls: readonly IsolatedAgentRejectedToolCall[] | undefined,
+  allowedToolNames: ReadonlySet<string>,
+): {
+  toolCalls: IsolatedAgentToolCall[];
+  rejectedToolCalls: IsolatedAgentRejectedToolCall[];
+} {
+  const rejected = rejectedToolCalls ?? [];
+  const occurrences = new Map<string, number>();
+  const orderedIds: string[] = [];
+  for (const call of [...toolCalls, ...rejected]) {
+    if (!occurrences.has(call.toolCallId)) orderedIds.push(call.toolCallId);
+    occurrences.set(
+      call.toolCallId,
+      (occurrences.get(call.toolCallId) ?? 0) + 1,
+    );
+  }
+
+  const duplicateIds = new Set(
+    orderedIds.filter((toolCallId) => (occurrences.get(toolCallId) ?? 0) > 1),
+  );
+  if (duplicateIds.size === 0) {
+    return {
+      toolCalls: [...toolCalls],
+      rejectedToolCalls: [...rejected],
+    };
+  }
+
+  const allCalls = [...toolCalls, ...rejected];
+  const duplicateRejections = orderedIds
+    .filter((toolCallId) => duplicateIds.has(toolCallId))
+    .map((toolCallId): IsolatedAgentRejectedToolCall => {
+      const names = new Set(
+        allCalls
+          .filter((call) => call.toolCallId === toolCallId)
+          .map((call) => call.toolName),
+      );
+      const onlyName = names.size === 1 ? names.values().next().value : null;
+      return {
+        toolCallId,
+        toolName:
+          typeof onlyName === 'string' && allowedToolNames.has(onlyName)
+            ? onlyName
+            : 'unknown',
+        kind: 'invalid-input',
+        message: DUPLICATE_TOOL_CALL_ID_REJECTION_MESSAGE,
+      };
+    });
+
+  return {
+    toolCalls: toolCalls.filter((call) => !duplicateIds.has(call.toolCallId)),
+    rejectedToolCalls: [
+      ...rejected.filter((call) => !duplicateIds.has(call.toolCallId)),
+      ...duplicateRejections,
+    ],
+  };
+}
+
 export interface IsolatedAgentFileEditBatchMember {
   memberId: string;
   toolCallId: string;
@@ -99,6 +196,7 @@ export interface IsolatedAgentModelCallResult {
   text: string;
   reasoning: string;
   toolCalls: IsolatedAgentToolCall[];
+  rejectedToolCalls?: IsolatedAgentRejectedToolCall[];
   finishReason: string;
   rawFinishReason?: string;
   usage: IsolatedAgentUsage;
@@ -136,6 +234,7 @@ export interface IsolatedAgentTurnStepResult {
   usage: IsolatedAgentUsage;
   providerMetadata?: AgentTurnJsonObject;
   toolCalls: IsolatedAgentToolCall[];
+  rejectedToolCalls?: IsolatedAgentRejectedToolCall[];
   toolResults: Array<{
     toolCallId: string;
     toolName: string;
@@ -281,6 +380,9 @@ export function isIsolatedAgentModelCallResult(
     typeof value.reasoning === 'string' &&
     Array.isArray(value.toolCalls) &&
     value.toolCalls.every(isIsolatedAgentToolCall) &&
+    (value.rejectedToolCalls === undefined ||
+      (Array.isArray(value.rejectedToolCalls) &&
+        value.rejectedToolCalls.every(isIsolatedAgentRejectedToolCall))) &&
     typeof value.finishReason === 'string' &&
     (value.rawFinishReason === undefined ||
       typeof value.rawFinishReason === 'string') &&
@@ -424,6 +526,20 @@ function isIsolatedAgentToolCall(
   );
 }
 
+function isIsolatedAgentRejectedToolCall(
+  value: unknown,
+): value is IsolatedAgentRejectedToolCall {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.toolCallId) &&
+    isNonEmptyString(value.toolName) &&
+    (value.kind === 'truncated-input' ||
+      value.kind === 'invalid-input' ||
+      value.kind === 'unknown-tool') &&
+    typeof value.message === 'string'
+  );
+}
+
 function isIsolatedAgentFileEditBatchMetadata(
   value: unknown,
   call: IsolatedAgentToolCall,
@@ -499,6 +615,9 @@ function isIsolatedAgentTurnStepResult(
       isAgentTurnJsonObject(value.providerMetadata)) &&
     Array.isArray(value.toolCalls) &&
     value.toolCalls.every(isIsolatedAgentToolCall) &&
+    (value.rejectedToolCalls === undefined ||
+      (Array.isArray(value.rejectedToolCalls) &&
+        value.rejectedToolCalls.every(isIsolatedAgentRejectedToolCall))) &&
     Array.isArray(value.toolResults) &&
     value.toolResults.every(
       (result) =>

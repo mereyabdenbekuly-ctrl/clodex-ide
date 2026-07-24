@@ -304,6 +304,55 @@ describe('executeIsolatedAgentTurn', () => {
     expect(handlers.callTool).not.toHaveBeenCalled();
   });
 
+  it('rejects duplicate provider tool-call ids before any local effect', async () => {
+    const handlers: AgentTurnHostHandlers = {
+      callModel: vi.fn(
+        async (): Promise<IsolatedAgentModelCallResult> => ({
+          text: '',
+          reasoning: '',
+          toolCalls: [
+            {
+              toolCallId: 'duplicate-id',
+              toolName: 'read',
+              input: { path: 'one.md' },
+            },
+            {
+              toolCallId: 'duplicate-id',
+              toolName: 'read',
+              input: { path: 'two.md' },
+            },
+          ],
+          finishReason: 'tool-calls',
+          usage: {},
+        }),
+      ),
+      callTool: vi.fn(async () => ({ output: 'must not run' })),
+    };
+    const events: IsolatedAgentTurnEvent[] = [];
+
+    const result = await executeIsolatedAgentTurn(request, {
+      handlers,
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(handlers.callTool).not.toHaveBeenCalled();
+    expect(result.steps[0]?.toolCalls).toEqual([]);
+    expect(result.steps[0]?.rejectedToolCalls).toEqual([
+      expect.objectContaining({
+        toolCallId: 'duplicate-id',
+        toolName: 'read',
+        kind: 'invalid-input',
+        message: expect.stringContaining('reused a tool-call identifier'),
+      }),
+    ]);
+    expect(events.filter((event) => event.type === 'tool-call')).toHaveLength(
+      1,
+    );
+    expect(events.filter((event) => event.type === 'tool-error')).toHaveLength(
+      1,
+    );
+  });
+
   it('pauses the turn when the main host requests tool approval', async () => {
     const handlers: AgentTurnHostHandlers = {
       callModel: vi.fn(async () => ({

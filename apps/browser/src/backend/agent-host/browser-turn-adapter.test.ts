@@ -6,6 +6,7 @@ import {
   createBrowserIsolatedAgentTurnHandlers,
   getBrowserIsolatedReadOnlyToolDefinitions,
 } from './browser-turn-adapter';
+import { executeIsolatedAgentTurn } from './isolated-agent-turn-runtime';
 import type { IsolatedAgentModelCallRequest } from './isolated-agent-turn';
 
 const modelRequest: IsolatedAgentModelCallRequest = {
@@ -274,6 +275,163 @@ describe('browser isolated agent turn adapter', () => {
         },
       ),
     ).rejects.toThrow('requires approval');
+  });
+
+  it('keeps invalid model tool calls out of the read-only execution lane', async () => {
+    const needsApproval = vi.fn(async () => false);
+    const execute = vi.fn(async () => '# must not run');
+    const readTool = tool({
+      inputSchema: z.object({ path: z.string() }),
+      needsApproval,
+      execute,
+    });
+    const getWithOptions = vi.fn(async () => ({
+      model: {},
+      providerOptions: {},
+      headers: {},
+      contextWindowSize: 10_000,
+      providerMode: 'custom' as const,
+    }));
+    const recoveryError = new Error(
+      'Recoverable tool call rejection (truncated-input): rejected before execution',
+    );
+    const streamTextFn = vi.fn(() => ({
+      fullStream: createStream([
+        {
+          type: 'tool-call',
+          toolCallId: 'tool-invalid',
+          toolName: 'read',
+          input: '{"path":"raw oversized input',
+          invalid: true,
+          error: recoveryError,
+        },
+        {
+          type: 'tool-error',
+          toolCallId: 'tool-invalid',
+          toolName: 'read',
+          input: '{"path":"raw oversized input',
+          error: recoveryError,
+        },
+        {
+          type: 'finish',
+          finishReason: 'stop',
+          totalUsage: {},
+        },
+      ]),
+    })) as unknown as typeof import('ai').streamText;
+    const handlers = createBrowserIsolatedAgentTurnHandlers({
+      host: {
+        models: { getWithOptions } as unknown as AgentHost['models'],
+      },
+      toolbox: {
+        getTool: vi.fn(async () => readTool),
+      },
+      allowedToolNames: ['read'],
+      streamTextFn,
+    });
+    const events: unknown[] = [];
+
+    const result = await executeIsolatedAgentTurn(
+      { ...modelRequest, maxSteps: 1 },
+      {
+        handlers,
+        onEvent: (event) => events.push(event),
+      },
+    );
+
+    expect(needsApproval).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.steps[0]?.toolCalls).toEqual([]);
+    expect(result.steps[0]?.rejectedToolCalls).toEqual([
+      expect.objectContaining({
+        toolCallId: 'tool-invalid',
+        toolName: 'read',
+        kind: 'truncated-input',
+      }),
+    ]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool-call',
+          call: expect.objectContaining({
+            toolCallId: 'tool-invalid',
+            input: {},
+          }),
+        }),
+        expect.objectContaining({
+          type: 'tool-error',
+          toolCallId: 'tool-invalid',
+        }),
+      ]),
+    );
+    expect(JSON.stringify({ result, events })).not.toContain(
+      'raw oversized input',
+    );
+  });
+
+  it('rejects duplicate provider ids before read-only tool execution', async () => {
+    const needsApproval = vi.fn(async () => false);
+    const execute = vi.fn(async () => '# must not run');
+    const readTool = tool({
+      inputSchema: z.object({ path: z.string() }),
+      needsApproval,
+      execute,
+    });
+    const streamTextFn = vi.fn(() => ({
+      fullStream: createStream([
+        {
+          type: 'tool-call',
+          toolCallId: 'duplicate-id',
+          toolName: 'read',
+          input: { path: 'one.md' },
+        },
+        {
+          type: 'tool-call',
+          toolCallId: 'duplicate-id',
+          toolName: 'read',
+          input: { path: 'two.md' },
+        },
+        {
+          type: 'finish',
+          finishReason: 'tool-calls',
+          totalUsage: {},
+        },
+      ]),
+    })) as unknown as typeof import('ai').streamText;
+    const handlers = createBrowserIsolatedAgentTurnHandlers({
+      host: {
+        models: {
+          getWithOptions: vi.fn(async () => ({
+            model: {},
+            providerOptions: {},
+            headers: {},
+            contextWindowSize: 10_000,
+            providerMode: 'custom' as const,
+          })),
+        } as unknown as AgentHost['models'],
+      },
+      toolbox: {
+        getTool: vi.fn(async () => readTool),
+      },
+      allowedToolNames: ['read'],
+      streamTextFn,
+    });
+
+    const result = await executeIsolatedAgentTurn(
+      { ...modelRequest, maxSteps: 1 },
+      { handlers },
+    );
+
+    expect(needsApproval).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.steps[0]?.toolCalls).toEqual([]);
+    expect(result.steps[0]?.rejectedToolCalls).toEqual([
+      expect.objectContaining({
+        toolCallId: 'duplicate-id',
+        toolName: 'read',
+        kind: 'invalid-input',
+      }),
+    ]);
   });
 });
 

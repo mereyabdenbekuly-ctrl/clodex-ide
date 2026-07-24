@@ -161,10 +161,13 @@ describe('ExecutionTargetRouter', () => {
 
   it('keeps the router outermost for an admitted automatic Swarm turn', async () => {
     const ordinary = createExecutor();
-    const automaticExecution = createExecution([
-      { type: 'text-delta', id: 'swarm', delta: 'done' },
-      { type: 'finish' },
-    ]);
+    const automaticExecution = Object.assign(
+      createExecution([
+        { type: 'text-delta', id: 'swarm', delta: 'done' },
+        { type: 'finish' },
+      ]),
+      { modelRouteBinding: 'external' as const },
+    );
     const handler = vi.fn(async () => automaticExecution);
     const localWithAutomaticSwarm = createAutomaticSwarmStepExecutor({
       delegate: ordinary.executor,
@@ -181,6 +184,7 @@ describe('ExecutionTargetRouter', () => {
     });
 
     const execution = await router.execute(createRequest('local'));
+    expect(execution.modelRouteBinding).toBe('external');
     await collectStream(execution.toUIMessageStream());
 
     expect(handler).toHaveBeenCalledWith(

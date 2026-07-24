@@ -66,6 +66,59 @@ type ProviderApiError = {
   providerCode?: string;
 };
 
+type ResolvedLanguageModelV3 = Extract<
+  ModelWithOptions['model'],
+  { specificationVersion: 'v3' }
+>;
+
+type ToolCallExecutionOccurrence = {
+  /** Host-minted identity. Provider-supplied call ids are never ledger ids. */
+  readonly id: string;
+  /** Untrusted provider correlation data retained only as event metadata. */
+  readonly providerToolCallId: string;
+  durationMs?: number;
+};
+
+type DuplicateToolCallRejection = {
+  readonly executionToolCallId: string;
+  readonly providerToolCallId: string;
+};
+
+type ModelToolCallIdentityState = {
+  readonly occurrenceCounts: Map<string, number>;
+  /**
+   * Active streamed UI slots. Their order is never trusted for authorization:
+   * if more than one slot exists for one raw id, every slot is pre-rejected.
+   */
+  readonly activeOccurrences: Map<string, string[]>;
+  readonly pendingTerminalOccurrences: Map<string, string[]>;
+  /** Provider approval events reference a prior tool call independently of results. */
+  readonly pendingApprovalOccurrences: Map<string, string[]>;
+  /** Overlapping streamed inputs cannot be correlated by an already reused raw id. */
+  readonly ambiguousInputProviderIds: Set<string>;
+  /** Delayed provider approvals/results cannot be correlated after raw-id reuse. */
+  readonly ambiguousReferenceProviderIds: Set<string>;
+};
+
+type ToolCallLifecycleStage =
+  | 'input-start'
+  | 'input-delta'
+  | 'input-available'
+  | 'needs-approval'
+  | 'execute';
+
+type ToolCallAdmission = {
+  readonly toolName: string;
+  readonly occurrence: ToolCallExecutionOccurrence;
+  highestStageRank: number;
+  primaryNeedsApproval: boolean;
+  duplicateRejection?: Error;
+};
+
+type ToolCallAdmissionDecision =
+  | { readonly kind: 'primary'; readonly admission: ToolCallAdmission }
+  | { readonly kind: 'duplicate'; readonly error: Error };
+
 function getMessageText(message: AgentMessage): string {
   return message.parts
     .filter(
@@ -123,7 +176,11 @@ import {
   type ExtraMentionRenderer,
 } from './shared/message-conversion';
 import { generateSimpleTitle } from './shared/title-generation';
-import { repairToolCall } from './shared/repair-tool-call';
+import {
+  findToolCallRecoverySignal,
+  repairToolCall,
+  type ToolCallRecoveryKind,
+} from './shared/repair-tool-call';
 import {
   generateSimpleCompressedHistory,
   estimateMessageTokens,
@@ -237,6 +294,17 @@ export interface BaseAgentCaches {
  * - `error` — the agent's step failed.
  */
 export type AgentNotificationEvent = 'done' | 'question' | 'error';
+export type AgentNotificationContext = {
+  /** Concrete model pinned for the step that emitted this event. */
+  modelId: string;
+  /** Exact in-process route used by the step; never serialized to clients. */
+  modelWithOptions: ModelWithOptions | null;
+};
+export type AgentStepSettlement = {
+  outcome: 'idle' | 'completed' | 'failed' | 'superseded';
+  /** Immutable state captured before settlement wakes can start a newer turn. */
+  state: AgentState;
+};
 
 /**
  * Constructor dependencies for {@link BaseAgent}.
@@ -322,6 +390,7 @@ export interface BaseAgentDependencies<
   notificationEventHandler?: (
     event: AgentNotificationEvent,
     agentId: string,
+    context: AgentNotificationContext,
   ) => void | Promise<void>;
   /**
    * Host-provided execution seam for one model/tool step. Defaults to a
@@ -685,11 +754,23 @@ export abstract class BaseAgent<
   private _pendingToolCapabilityScopeId: string | null = null;
   private _stepStartTime = 0;
   private _stepProviderMode = '';
+  private _stepModelWithOptions: ModelWithOptions | null = null;
   private _stepCodingPlanId: string | undefined;
   private _stepRequestedModelId = '';
   private _stepResolvedModelId = '';
   private _stepTaskRole: ModelTaskRole = 'analysis';
-  private _toolCallDurations = new Map<string, number>();
+  private _toolCallExecutions = new Map<string, ToolCallExecutionOccurrence>();
+  private _toolCallAdmissions = new Map<string, ToolCallAdmission>();
+  private _toolCallProviderIds = new Map<string, string>();
+  private _preRejectedToolCalls = new Map<string, Error>();
+  private _duplicateToolCallRejectionsByError = new WeakMap<
+    object,
+    DuplicateToolCallRejection
+  >();
+  private _duplicateToolCallRejectionsByMessage = new Map<
+    string,
+    DuplicateToolCallRejection
+  >();
   private _memoryWriter: AgentMemoryWriter | null = null;
   private _memoryWriteTimer: ReturnType<typeof setTimeout> | null = null;
   private _pendingMemoryWriteReason: MemoryWriteReason | null = null;
@@ -744,8 +825,8 @@ export abstract class BaseAgent<
    */
   private _activeStepRun: {
     readonly generation: number;
-    readonly settled: Promise<'completed' | 'failed' | 'superseded'>;
-    readonly resolve: (outcome: 'completed' | 'failed' | 'superseded') => void;
+    readonly settled: Promise<AgentStepSettlement>;
+    readonly resolve: (settlement: AgentStepSettlement) => void;
   } | null = null;
 
   /**
@@ -766,13 +847,35 @@ export abstract class BaseAgent<
   private _pendingContinue: boolean | null = null;
 
   /**
-   * Set only for runtime recovery after a suspend/resume or event-loop stall.
-   * It appends a transient model-only `continue` user message for the next
-   * step without writing anything to visible/persisted chat history.
+   * Automatic recovery is intentionally bounded per visible user turn. A
+   * malformed/truncated tool call was never executed, so retrying is safe,
+   * but an unbounded model loop would make unattended runs hang forever.
    */
-  private _pendingSyntheticContinuation: {
-    reason: 'system-resumed' | 'event-loop-stalled';
+  private static readonly MAX_TOOL_CALL_RECOVERY_ATTEMPTS = 2;
+  private _toolCallRecoveryTurnId: string | null = null;
+  private _toolCallRecoveryAttempts = 0;
+  private _pendingToolCallRecoveryExhaustion: {
+    readonly message: string;
   } | null = null;
+
+  /**
+   * Appends a transient model-only user message for recovery without writing
+   * anything to visible/persisted chat history. Runtime interruptions use a
+   * plain continuation; invalid tool calls use an explicit compact/chunk
+   * instruction and retain the normal approval pipeline.
+   */
+  private _pendingSyntheticContinuation:
+    | {
+        reason: 'system-resumed' | 'event-loop-stalled';
+      }
+    | {
+        reason: 'tool-call-recovery';
+        kind: ToolCallRecoveryKind;
+        toolNames: readonly string[];
+        attempt: number;
+        maxAttempts: number;
+      }
+    | null = null;
 
   /**
    * Tracks approval IDs for which we have already emitted a
@@ -830,6 +933,7 @@ export abstract class BaseAgent<
   private readonly notificationEventHandler?: (
     event: AgentNotificationEvent,
     agentId: string,
+    context: AgentNotificationContext,
   ) => void | Promise<void>;
   private readonly stepExecutor: AgentStepExecutor;
 
@@ -1167,7 +1271,7 @@ export abstract class BaseAgent<
       | undefined;
     try {
       if (originatingStep) {
-        const settlementOutcome = await originatingStep.settled;
+        const { outcome: settlementOutcome } = await originatingStep.settled;
         if (settlementOutcome !== 'completed') {
           throw new Error(
             `Tool approval response '${approvalId}' cannot commit because its originating step ${settlementOutcome}`,
@@ -1409,6 +1513,18 @@ export abstract class BaseAgent<
       );
     }
     return { agentStateFlushedAt, memoryFlushedAt };
+  }
+
+  /**
+   * Waits for the step that is active at call time to reach its terminal
+   * settlement. Host lifecycle observers use this after an immediate
+   * done/error notification so they never inspect a half-drained UI stream.
+   */
+  public async waitForCurrentStepSettlement(): Promise<AgentStepSettlement> {
+    const activeStep = this._activeStepRun;
+    return activeStep
+      ? await activeStep.settled
+      : { outcome: 'idle', state: this.state.get() };
   }
 
   /**
@@ -2260,7 +2376,10 @@ export abstract class BaseAgent<
    */
   private emitNotificationEvent(event: AgentNotificationEvent): void {
     void Promise.resolve(
-      this.notificationEventHandler?.(event, this.instanceId),
+      this.notificationEventHandler?.(event, this.instanceId, {
+        modelId: this._stepResolvedModelId || this.state.get().activeModelId,
+        modelWithOptions: this._stepModelWithOptions,
+      }),
     ).catch((error) => {
       this.host.logger.debug(
         `[BaseAgent:${this.instanceId}] Notification event handler failed: ${
@@ -2463,14 +2582,10 @@ export abstract class BaseAgent<
     // Increment step generation so stale callbacks from previous steps are
     // ignored. Capture it in a local const for the closures below.
     const stepGen = ++this._stepGeneration;
-    let resolveStepSettlement!: (
-      outcome: 'completed' | 'failed' | 'superseded',
-    ) => void;
-    const stepSettlement = new Promise<'completed' | 'failed' | 'superseded'>(
-      (resolve) => {
-        resolveStepSettlement = resolve;
-      },
-    );
+    let resolveStepSettlement!: (settlement: AgentStepSettlement) => void;
+    const stepSettlement = new Promise<AgentStepSettlement>((resolve) => {
+      resolveStepSettlement = resolve;
+    });
     const activeStepRun = {
       generation: stepGen,
       settled: stepSettlement,
@@ -2500,6 +2615,7 @@ export abstract class BaseAgent<
         this._stepGeneration++;
         this._pendingContinue = null;
         this._pendingSyntheticContinuation = null;
+        this._pendingToolCallRecoveryExhaustion = null;
         this._pendingToolCapabilityScopeId = null;
         try {
           this.stepAbortController?.abort();
@@ -2519,7 +2635,16 @@ export abstract class BaseAgent<
       if (this._activeStepRun === activeStepRun) {
         this._activeStepRun = null;
       }
-      activeStepRun.resolve(outcome);
+      activeStepRun.resolve({
+        outcome,
+        // Capture before resolving the promise. Earlier registered queue-wake
+        // callbacks may run first, but they can no longer change the state
+        // observed by lifecycle monitoring for this step.
+        // AgentStore publishes immutable Immer snapshots. Retaining this
+        // exact reference is O(1), and later turns replace rather than mutate
+        // it, so lifecycle observers cannot drift into newer history.
+        state: this.state.get(),
+      });
     }
   }
 
@@ -2540,6 +2665,8 @@ export abstract class BaseAgent<
 
     const pending = this._pendingContinue;
     this._pendingContinue = null;
+    const recoveryExhaustion = this._pendingToolCallRecoveryExhaustion;
+    this._pendingToolCallRecoveryExhaustion = null;
     const hasLateQueuedFollowUp =
       pending === false && this.state.get().queuedMessages.length > 0;
     const shouldScheduleContinuation =
@@ -2559,6 +2686,15 @@ export abstract class BaseAgent<
       const hasAssistantMessage = this.state
         .get()
         .history.some((m) => m.role === 'assistant');
+      if (recoveryExhaustion && !stepHasApprovalRequest) {
+        this.state.commands.recordStepError({
+          error: { message: recoveryExhaustion.message },
+          markUnread: 'mark-unread',
+        });
+        this.onIdle();
+        this.emitNotificationEvent('error');
+        return true;
+      }
       this.state.commands.recordStepError({
         error: undefined,
         markUnread: 'if-assistant-history',
@@ -2582,7 +2718,7 @@ export abstract class BaseAgent<
    */
   private scheduleQueuedMessageWake(
     originatingStep: {
-      readonly settled: Promise<'completed' | 'failed' | 'superseded'>;
+      readonly settled: Promise<AgentStepSettlement>;
     } | null,
   ): void {
     const wake = () => {
@@ -2594,7 +2730,7 @@ export abstract class BaseAgent<
       return;
     }
 
-    void originatingStep.settled.then((outcome) => {
+    void originatingStep.settled.then(({ outcome }) => {
       // A priority lifecycle action (notably Stop) owns a superseded step.
       // It must not be undone by an older queued-message wake.
       if (outcome !== 'superseded') wake();
@@ -2606,9 +2742,19 @@ export abstract class BaseAgent<
     stepGen: number,
   ): Promise<'completed' | 'failed' | 'superseded'> {
     this._stepStartTime = Date.now();
+    // Clear the previous turn's route before resolving this step. If model
+    // preparation fails, lifecycle observers receive incomplete provenance
+    // and fail closed rather than replaying transcript data through a stale
+    // provider binding.
+    this._stepRequestedModelId = '';
+    this._stepResolvedModelId = '';
+    this._stepProviderMode = '';
+    this._stepModelWithOptions = null;
+    this._stepCodingPlanId = undefined;
     // Reset continuation flag at the start of every step so a leftover
     // value from a prior aborted step cannot leak into the tail.
     this._pendingContinue = null;
+    this._pendingToolCallRecoveryExhaustion = null;
 
     // Tracks whether the just-finished step ended on an open tool-approval
     // request. Used by the idle tail to suppress the `done` notification
@@ -2687,6 +2833,7 @@ export abstract class BaseAgent<
           routed_model_id: stepModelId,
         },
       );
+      if (this._stepGeneration !== stepGen) return 'superseded';
       this._stepProviderMode = modelWithOptions.providerMode;
       this._stepCodingPlanId = modelWithOptions.connectedCodingPlanId;
     } catch (error) {
@@ -2723,7 +2870,7 @@ export abstract class BaseAgent<
       if (this._stepGeneration !== stepGen) return 'superseded';
       tools = await this.getToolsForStep();
       if (this._stepGeneration !== stepGen) return 'superseded';
-      this._toolCallDurations.clear();
+      this.resetToolCallExecutionTracking();
       tools = this.wrapToolsWithTiming(tools);
       tools = this.wrapToolsWithOutputBudget(tools);
       if (modelWithOptions.stripStrictFromTools) {
@@ -2755,6 +2902,10 @@ export abstract class BaseAgent<
 
     if (isApprovalContinuation)
       modelMessages = this.ensureToolApprovalResponseIsLast(modelMessages);
+
+    const stepModel = this.wrapModelWithToolCallIdentityFence(
+      modelWithOptions.model,
+    );
 
     // Debug: analyse cache stability of the final model messages before the LLM call.
     this._cacheAnalyzer.trackStep(modelMessages);
@@ -2791,7 +2942,7 @@ export abstract class BaseAgent<
           },
         },
         options: {
-          model: modelWithOptions.model,
+          model: stepModel,
           providerOptions: modelWithOptions.providerOptions,
           headers: modelWithOptions.headers,
           messages: modelMessages,
@@ -3013,6 +3164,9 @@ export abstract class BaseAgent<
           seed: resolvedConfig.seed,
         },
       });
+      if (this._stepGeneration !== stepGen) return 'superseded';
+      this._stepModelWithOptions =
+        stream.modelRouteBinding === 'request-model' ? modelWithOptions : null;
     } catch (rawError) {
       if (this._stepGeneration !== stepGen) return 'superseded';
       if (
@@ -3714,6 +3868,75 @@ export abstract class BaseAgent<
   }
 
   /**
+   * Arms one automatic next-step retry for a tool call rejected before
+   * execution. The budget is scoped to the latest visible user message and
+   * therefore cannot create an unbounded unattended repair loop.
+   */
+  private prepareToolCallRecovery(
+    result: StepResult<ToolSet>,
+  ): 'none' | 'retry' | 'exhausted' {
+    const signal = findToolCallRecoverySignal(result.content);
+    if (!signal) return 'none';
+
+    const latestUserMessageId =
+      [...this.state.get().history]
+        .reverse()
+        .find((message) => message.role === 'user')?.id ?? null;
+    if (latestUserMessageId !== this._toolCallRecoveryTurnId) {
+      this._toolCallRecoveryTurnId = latestUserMessageId;
+      this._toolCallRecoveryAttempts = 0;
+    }
+
+    const maxAttempts = BaseAgent.MAX_TOOL_CALL_RECOVERY_ATTEMPTS;
+    // Invalid tool-call names are model-generated data. Do not reflect them
+    // into telemetry, logs, or recovery prompts unless the host explicitly
+    // proves they came from its advertised tool set. This generic marker is
+    // enough for recovery and avoids a model-controlled telemetry channel.
+    const safeToolNames = ['unknown'] as const;
+    if (this._toolCallRecoveryAttempts >= maxAttempts) {
+      const message =
+        `Automatic tool-call recovery stopped after ${maxAttempts} attempts in this user turn. ` +
+        'The rejected call was not executed. Continue manually or ask the model to split the operation into smaller calls.';
+      this._pendingSyntheticContinuation = null;
+      this._pendingToolCallRecoveryExhaustion = { message };
+      this.host.logger.warn(
+        `[BaseAgent:${this.instanceId}] ${message} kind=${signal.kind}, tools=unknown`,
+      );
+      this.host.telemetry?.capture('agent-tool-call-recovery-exhausted', {
+        agent_type: this.agentType,
+        agent_instance_id: this.instanceId,
+        model_id: this._stepResolvedModelId || this.state.get().activeModelId,
+        recovery_kind: signal.kind,
+        tool_names: [...safeToolNames],
+        attempt_count: this._toolCallRecoveryAttempts,
+      });
+      return 'exhausted';
+    }
+
+    const attempt = ++this._toolCallRecoveryAttempts;
+    this._pendingSyntheticContinuation = {
+      reason: 'tool-call-recovery',
+      kind: signal.kind,
+      toolNames: safeToolNames,
+      attempt,
+      maxAttempts,
+    };
+    this.host.logger.warn(
+      `[BaseAgent:${this.instanceId}] Scheduling bounded tool-call recovery ${attempt}/${maxAttempts}. kind=${signal.kind}, tools=unknown`,
+    );
+    this.host.telemetry?.capture('agent-tool-call-recovery-scheduled', {
+      agent_type: this.agentType,
+      agent_instance_id: this.instanceId,
+      model_id: this._stepResolvedModelId || this.state.get().activeModelId,
+      recovery_kind: signal.kind,
+      tool_names: [...safeToolNames],
+      attempt,
+      max_attempts: maxAttempts,
+    });
+    return 'retry';
+  }
+
+  /**
    * Checks, if the agent should immediately run a new step after last step execution.
    *
    * Conditions for running a new step are:
@@ -3771,14 +3994,6 @@ export abstract class BaseAgent<
       return false;
     }
 
-    //Also return a no-continue if one of the called tools is a "finish" tool and only the "finish" tool was called
-    if (r.toolCalls.length === 1 && r.toolCalls[0]!.toolName === 'finish') {
-      this.host.logger.debug(
-        `[BaseAgent:${this.instanceId}] Only the "finish" tool was called`,
-      );
-      return false;
-    }
-
     // Check if there are any open tool approval requests
     if (r.content.some((p) => p.type === 'tool-approval-request')) {
       this.host.logger.debug(
@@ -3790,14 +4005,29 @@ export abstract class BaseAgent<
     // If the user does not want to continue, we don't run a new step
     if (!userWantsToContinue) return false;
 
+    // Invalid tool-call parts represent calls rejected before execution. Give
+    // the model a bounded chance to regenerate compact/schema-valid inputs,
+    // regardless of provider-specific finishReason values (some providers
+    // report `stop` rather than `tool-calls` for a truncated call).
+    const toolCallRecovery = this.prepareToolCallRecovery(r);
+    if (toolCallRecovery === 'retry') return true;
+    if (toolCallRecovery === 'exhausted') return false;
+
+    // A valid, sole finish call terminates the child agent. Invalid finish
+    // calls are handled by the bounded recovery branch above instead.
+    if (r.toolCalls.length === 1 && r.toolCalls[0]!.toolName === 'finish') {
+      this.host.logger.debug(
+        `[BaseAgent:${this.instanceId}] Only the "finish" tool was called`,
+      );
+      return false;
+    }
+
     // We assume that approved tool calls are executed and results are attached,
     // because this is what AI-SDK with controlled tool execution promises us
 
-    // When the model hits the output token limit, its response is truncated.
-    // Tool calls with truncated JSON will have been caught by
-    // experimental_repairToolCall, which throws a clear error. The SDK
-    // surfaces that as a tool-result with errorText in history, so the
-    // model can see exactly what went wrong on the next step.
+    // When the model hits the output token limit without emitting an invalid
+    // tool-call part, continue once more so it can finish its response. The
+    // invalid-tool path above owns the separately bounded compact/chunk retry.
     if (r.finishReason === 'length') {
       this.host.logger.warn(
         `[BaseAgent:${this.instanceId}] Output truncated (finishReason=length). Model will see error results and retry.`,
@@ -4073,6 +4303,34 @@ export abstract class BaseAgent<
     this._pendingSyntheticContinuation = null;
 
     const lastMessage = modelMessages.at(-1);
+    if (continuation.reason === 'tool-call-recovery') {
+      // A real queued/admitted user message always wins over autonomous
+      // recovery. A trailing tool-result is expected here and may safely be
+      // followed by this transient user instruction.
+      if (lastMessage?.role === 'user') {
+        this.host.logger.info(
+          `[BaseAgent:${this.instanceId}] Tool-call recovery not appended because model context already ends with user input.`,
+        );
+        return modelMessages;
+      }
+
+      const toolList = continuation.toolNames.length
+        ? continuation.toolNames.map((name) => `"${name}"`).join(', ')
+        : 'the rejected tool';
+      const compactInstruction =
+        continuation.kind === 'truncated-input'
+          ? 'Do not repeat the oversized payload. Split the intended operation into smaller independent tool calls; for large edits, apply bounded chunks and re-read current state between chunks.'
+          : 'Regenerate a complete schema-valid input. Keep the call small, and split the intended operation if one payload would be large.';
+      const recoveryPrompt =
+        `Automatic recovery ${continuation.attempt}/${continuation.maxAttempts}: the previous call to ${toolList} was rejected before execution. ` +
+        `${compactInstruction} Do not claim the rejected effect occurred. Preserve every normal approval and authorization requirement; recovery does not pre-approve any tool call.`;
+
+      this.host.logger.info(
+        `[BaseAgent:${this.instanceId}] Appending bounded tool-call recovery instruction. attempt=${continuation.attempt}/${continuation.maxAttempts}, kind=${continuation.kind}, previousLastRole=${lastMessage?.role ?? 'none'}`,
+      );
+      return [...modelMessages, { role: 'user', content: recoveryPrompt }];
+    }
+
     if (lastMessage?.role === 'user' || lastMessage?.role === 'tool') {
       this.host.logger.info(
         `[BaseAgent:${this.instanceId}] Synthetic continuation not appended because model context already ends with ${lastMessage.role}. reason=${continuation.reason}`,
@@ -4511,12 +4769,10 @@ export abstract class BaseAgent<
   private async continueAfterToolApprovalResponse(input: {
     readonly lifecycleGeneration: number;
     readonly originatingStepGeneration: number;
-    readonly originatingStepSettlement?: Promise<
-      'completed' | 'failed' | 'superseded'
-    >;
+    readonly originatingStepSettlement?: Promise<AgentStepSettlement>;
   }): Promise<void> {
     const settlementOutcome = input.originatingStepSettlement
-      ? await input.originatingStepSettlement
+      ? (await input.originatingStepSettlement).outcome
       : 'completed';
     if (settlementOutcome === 'failed') {
       const invalidation =
@@ -4767,6 +5023,7 @@ export abstract class BaseAgent<
     // recovery path sets a fresh one after calling internalStop().
     this._pendingContinue = null;
     this._pendingSyntheticContinuation = null;
+    this._pendingToolCallRecoveryExhaustion = null;
     this._pendingToolCapabilityScopeId = null;
     try {
       this.stepAbortController?.abort();
@@ -4776,7 +5033,10 @@ export abstract class BaseAgent<
     // detach the old run so a replacement step is not held hostage by a
     // provider stream that ignores abort. The old run's identity-checked
     // finally block cannot clear a newer run.
-    this._activeStepRun?.resolve('superseded');
+    this._activeStepRun?.resolve({
+      outcome: 'superseded',
+      state: this.state.get(),
+    });
     this._activeStepRun = null;
     if (this._recoveredReplayExecutionId !== null) {
       this.rememberClosedRecoveredReplayExecution(
@@ -5222,6 +5482,386 @@ export abstract class BaseAgent<
     return stripStrictFromToolSet(tools);
   }
 
+  private resetToolCallExecutionTracking(): void {
+    this._toolCallExecutions.clear();
+    this._toolCallAdmissions.clear();
+    this._toolCallProviderIds.clear();
+    this._preRejectedToolCalls.clear();
+    this._duplicateToolCallRejectionsByError = new WeakMap();
+    this._duplicateToolCallRejectionsByMessage.clear();
+  }
+
+  private createToolCallExecutionOccurrence(
+    providerToolCallId: string,
+  ): ToolCallExecutionOccurrence {
+    return {
+      id: `tool-occurrence:${randomUUID()}`,
+      providerToolCallId,
+    };
+  }
+
+  private createDuplicateToolCallRejection(
+    executionToolCallId: string,
+    providerToolCallId: string,
+  ): Error {
+    // The random reference is an issued, step-local capability rather than a
+    // recognizable prefix. Local AI-SDK execution preserves Error identity;
+    // isolated execution may serialize only `.message`, so retain both forms
+    // and accept only an exact value minted by this BaseAgent instance.
+    const message = `Tool call rejected before execution (reference ${randomUUID()})`;
+    const rejection = { executionToolCallId, providerToolCallId };
+    const error = new Error(message);
+    this._duplicateToolCallRejectionsByError.set(error, rejection);
+    this._duplicateToolCallRejectionsByMessage.set(message, rejection);
+    return error;
+  }
+
+  private admitToolCallLifecycleStage(
+    toolName: string,
+    executionToolCallId: string,
+    stage: ToolCallLifecycleStage,
+  ): ToolCallAdmissionDecision {
+    const providerToolCallId =
+      this._toolCallProviderIds.get(executionToolCallId) ?? executionToolCallId;
+    const preRejected = this._preRejectedToolCalls.get(executionToolCallId);
+    if (preRejected) return { kind: 'duplicate', error: preRejected };
+    const stageRank =
+      stage === 'input-start'
+        ? 0
+        : stage === 'input-delta'
+          ? 1
+          : stage === 'input-available'
+            ? 2
+            : stage === 'needs-approval'
+              ? 3
+              : 4;
+    let admission = this._toolCallAdmissions.get(executionToolCallId);
+    if (!admission) {
+      const occurrence =
+        this.createToolCallExecutionOccurrence(providerToolCallId);
+      admission = {
+        toolName,
+        occurrence,
+        highestStageRank: stageRank,
+        primaryNeedsApproval: false,
+      };
+      this._toolCallAdmissions.set(executionToolCallId, admission);
+      this._toolCallExecutions.set(executionToolCallId, occurrence);
+      return { kind: 'primary', admission };
+    }
+
+    // One admitted call advances monotonically through input, approval, and
+    // execution. Re-entering an already reached (or earlier) non-delta stage
+    // is a second call reusing the provider id, and must be rejected before
+    // needsApproval can restage a shell/MCP capability.
+    const duplicate =
+      admission.toolName !== toolName ||
+      (stage !== 'input-delta' && stageRank <= admission.highestStageRank) ||
+      (stage === 'input-delta' && admission.highestStageRank > stageRank) ||
+      (stage === 'execute' &&
+        admission.primaryNeedsApproval &&
+        admission.duplicateRejection !== undefined);
+    if (duplicate) {
+      admission.duplicateRejection ??= this.createDuplicateToolCallRejection(
+        executionToolCallId,
+        providerToolCallId,
+      );
+      return { kind: 'duplicate', error: admission.duplicateRejection };
+    }
+    admission.highestStageRank = Math.max(
+      admission.highestStageRank,
+      stageRank,
+    );
+    return { kind: 'primary', admission };
+  }
+
+  private isHostRejectedDuplicateToolError(
+    part: Extract<
+      StepResult<ToolSet>['content'][number],
+      { type: 'tool-error' }
+    >,
+  ): boolean {
+    const error = part.error;
+    const byIdentity =
+      error && typeof error === 'object'
+        ? this._duplicateToolCallRejectionsByError.get(error)
+        : undefined;
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === 'string'
+          ? error
+          : null;
+    const rejection =
+      byIdentity ??
+      (message
+        ? this._duplicateToolCallRejectionsByMessage.get(message)
+        : undefined);
+    return rejection?.executionToolCallId === part.toolCallId;
+  }
+
+  private takeToolCallExecutionOccurrence(
+    executionToolCallId: string,
+    providerToolCallId = executionToolCallId,
+  ): ToolCallExecutionOccurrence {
+    const local = this._toolCallExecutions.get(executionToolCallId);
+    if (local) {
+      this._toolCallExecutions.delete(executionToolCallId);
+      return local;
+    }
+    if (
+      this._stepModelWithOptions === null &&
+      /^clodex-external:[a-f0-9]{64}:(?:call|rejected|orphan-(?:result|error|approval)):\d+(?::\d+)?$/.test(
+        executionToolCallId,
+      )
+    ) {
+      // External executors reconstruct terminal results after a crash/resume.
+      // Their namespace is a host-minted hash of durable execution/sequence
+      // identity, so reusing the execution id here restores EvidenceMemory
+      // idempotency without ever trusting the raw provider correlation id.
+      return {
+        id: `tool-occurrence:external:${executionToolCallId}`,
+        providerToolCallId,
+      };
+    }
+    // External/provider-executed results have no local wrapper record. Mint a
+    // fresh occurrence for every content part so duplicate provider ids can
+    // never collapse two effects in EvidenceMemory.
+    return this.createToolCallExecutionOccurrence(providerToolCallId);
+  }
+
+  private allocateModelToolCallIdentity(
+    providerToolCallId: string,
+    state: ModelToolCallIdentityState,
+  ): string {
+    const occurrence = state.occurrenceCounts.get(providerToolCallId) ?? 0;
+    state.occurrenceCounts.set(providerToolCallId, occurrence + 1);
+    let executionToolCallId = providerToolCallId;
+    const providerIdAlreadyObserved =
+      this._toolCallProviderIds.has(executionToolCallId);
+    if (occurrence > 0 || providerIdAlreadyObserved) {
+      do {
+        executionToolCallId = `clodex_${randomUUID().replaceAll('-', '')}`;
+      } while (this._toolCallProviderIds.has(executionToolCallId));
+    }
+    this._toolCallProviderIds.set(executionToolCallId, providerToolCallId);
+    if (
+      occurrence > 0 ||
+      providerIdAlreadyObserved ||
+      state.ambiguousInputProviderIds.has(providerToolCallId)
+    ) {
+      this.rejectModelToolCallIdentity(executionToolCallId, providerToolCallId);
+    }
+    return executionToolCallId;
+  }
+
+  private rejectModelToolCallIdentity(
+    executionToolCallId: string,
+    providerToolCallId: string,
+  ): void {
+    if (this._preRejectedToolCalls.has(executionToolCallId)) return;
+    this._preRejectedToolCalls.set(
+      executionToolCallId,
+      this.createDuplicateToolCallRejection(
+        executionToolCallId,
+        providerToolCallId,
+      ),
+    );
+  }
+
+  private rejectAmbiguousModelToolCallPart<T>(
+    delivery: 'generate' | 'stream',
+  ): T {
+    const error = new Error(
+      'Ambiguous duplicate provider tool-call correlation rejected',
+    );
+    if (delivery === 'generate') throw error;
+    return { type: 'error', error } as T;
+  }
+
+  private rewriteModelToolCallIdentityPart<T>(
+    part: T,
+    state: ModelToolCallIdentityState,
+    delivery: 'generate' | 'stream',
+  ): T {
+    if (!part || typeof part !== 'object') return part;
+    const record = part as Record<string, unknown>;
+    const type = record.type;
+    if (typeof type !== 'string') {
+      return part;
+    }
+    const usesStreamInputId =
+      type === 'tool-input-start' ||
+      type === 'tool-input-delta' ||
+      type === 'tool-input-end';
+    const providerToolCallId = usesStreamInputId
+      ? record.id
+      : record.toolCallId;
+    if (typeof providerToolCallId !== 'string') return part;
+
+    let executionToolCallId: string | undefined;
+    if (type === 'tool-input-start') {
+      const active = state.activeOccurrences.get(providerToolCallId) ?? [];
+      if (active.length > 0) {
+        state.ambiguousInputProviderIds.add(providerToolCallId);
+        state.ambiguousReferenceProviderIds.add(providerToolCallId);
+        for (const activeExecutionToolCallId of active) {
+          this.rejectModelToolCallIdentity(
+            activeExecutionToolCallId,
+            providerToolCallId,
+          );
+        }
+      }
+      executionToolCallId = this.allocateModelToolCallIdentity(
+        providerToolCallId,
+        state,
+      );
+      active.push(executionToolCallId);
+      state.activeOccurrences.set(providerToolCallId, active);
+    } else if (type === 'tool-input-delta' || type === 'tool-input-end') {
+      const active = state.activeOccurrences.get(providerToolCallId);
+      executionToolCallId = active?.at(-1);
+      if (!executionToolCallId) {
+        executionToolCallId = this.allocateModelToolCallIdentity(
+          providerToolCallId,
+          state,
+        );
+        state.activeOccurrences.set(providerToolCallId, [executionToolCallId]);
+      }
+    } else if (type === 'tool-call') {
+      const active = state.activeOccurrences.get(providerToolCallId);
+      // When a provider overlaps two inputs under one raw id there is no
+      // trustworthy way to correlate the later final calls. Consume an
+      // arbitrary UI slot only so visible inputs can reach a terminal state;
+      // every such slot is pre-rejected before approval or execution.
+      executionToolCallId =
+        active?.shift() ??
+        this.allocateModelToolCallIdentity(providerToolCallId, state);
+      if (active?.length === 0)
+        state.activeOccurrences.delete(providerToolCallId);
+      if (state.ambiguousInputProviderIds.has(providerToolCallId)) {
+        this.rejectModelToolCallIdentity(
+          executionToolCallId,
+          providerToolCallId,
+        );
+      }
+      const isRejected = this._preRejectedToolCalls.has(executionToolCallId);
+      if (isRejected) {
+        state.ambiguousReferenceProviderIds.add(providerToolCallId);
+        if (record.providerExecuted === true) {
+          return this.rejectAmbiguousModelToolCallPart(delivery);
+        }
+      } else {
+        const pending =
+          state.pendingTerminalOccurrences.get(providerToolCallId) ?? [];
+        if (pending.length > 0) {
+          state.ambiguousReferenceProviderIds.add(providerToolCallId);
+        }
+        pending.push(executionToolCallId);
+        state.pendingTerminalOccurrences.set(providerToolCallId, pending);
+        const pendingApprovals =
+          state.pendingApprovalOccurrences.get(providerToolCallId) ?? [];
+        if (pendingApprovals.length > 0) {
+          state.ambiguousReferenceProviderIds.add(providerToolCallId);
+        }
+        pendingApprovals.push(executionToolCallId);
+        state.pendingApprovalOccurrences.set(
+          providerToolCallId,
+          pendingApprovals,
+        );
+      }
+    } else if (type === 'tool-approval-request') {
+      const pendingApprovals =
+        state.pendingApprovalOccurrences.get(providerToolCallId);
+      if (
+        state.ambiguousReferenceProviderIds.has(providerToolCallId) ||
+        pendingApprovals?.length !== 1
+      ) {
+        return this.rejectAmbiguousModelToolCallPart(delivery);
+      }
+      executionToolCallId = pendingApprovals.shift();
+      state.pendingApprovalOccurrences.delete(providerToolCallId);
+    } else if (type === 'tool-result') {
+      const pending = state.pendingTerminalOccurrences.get(providerToolCallId);
+      if (
+        state.ambiguousReferenceProviderIds.has(providerToolCallId) ||
+        pending?.length !== 1
+      ) {
+        return this.rejectAmbiguousModelToolCallPart(delivery);
+      }
+      executionToolCallId = pending[0]!;
+      if (record.preliminary !== true) {
+        state.pendingTerminalOccurrences.delete(providerToolCallId);
+        const pendingApprovals =
+          state.pendingApprovalOccurrences.get(providerToolCallId);
+        const approvalIndex = pendingApprovals?.indexOf(executionToolCallId);
+        if (approvalIndex !== undefined && approvalIndex >= 0) {
+          pendingApprovals?.splice(approvalIndex, 1);
+        }
+        if (pendingApprovals?.length === 0) {
+          state.pendingApprovalOccurrences.delete(providerToolCallId);
+        }
+      }
+    }
+
+    if (!executionToolCallId) return part;
+    return (
+      usesStreamInputId
+        ? { ...record, id: executionToolCallId }
+        : { ...record, toolCallId: executionToolCallId }
+    ) as T;
+  }
+
+  private wrapModelWithToolCallIdentityFence(
+    model: ModelWithOptions['model'],
+  ): ModelWithOptions['model'] {
+    if (typeof model === 'string' || model.specificationVersion !== 'v3') {
+      return model;
+    }
+    const modelV3: ResolvedLanguageModelV3 = model;
+    const createState = (): ModelToolCallIdentityState => ({
+      occurrenceCounts: new Map(),
+      activeOccurrences: new Map(),
+      pendingTerminalOccurrences: new Map(),
+      pendingApprovalOccurrences: new Map(),
+      ambiguousInputProviderIds: new Set(),
+      ambiguousReferenceProviderIds: new Set(),
+    });
+    const doGenerate: typeof modelV3.doGenerate = async (options) => {
+      const result = await modelV3.doGenerate(options);
+      const state = createState();
+      return {
+        ...result,
+        content: result.content.map((part) =>
+          this.rewriteModelToolCallIdentityPart(part, state, 'generate'),
+        ),
+      };
+    };
+    const doStream: typeof modelV3.doStream = async (options) => {
+      const result = await modelV3.doStream(options);
+      const state = createState();
+      return {
+        ...result,
+        stream: result.stream.pipeThrough(
+          new TransformStream({
+            transform: (part, controller) => {
+              controller.enqueue(
+                this.rewriteModelToolCallIdentityPart(part, state, 'stream'),
+              );
+            },
+          }),
+        ),
+      };
+    };
+    return new Proxy(modelV3, {
+      get(target, property, receiver) {
+        if (property === 'doGenerate') return doGenerate;
+        if (property === 'doStream') return doStream;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+  }
+
   private wrapToolsWithTiming(tools: Partial<ToolSet>): Partial<ToolSet> {
     const wrapped: Partial<ToolSet> = {};
     for (const [name, t] of Object.entries(tools)) {
@@ -5229,10 +5869,72 @@ export abstract class BaseAgent<
         (wrapped as Record<string, unknown>)[name] = t;
         continue;
       }
+      const toolRecord = t as Record<string, unknown>;
       const originalExecute = t.execute;
-      (wrapped as Record<string, unknown>)[name] = {
+      const originalOnInputStart =
+        typeof toolRecord.onInputStart === 'function'
+          ? (toolRecord.onInputStart as (options: {
+              toolCallId: string;
+            }) => unknown)
+          : null;
+      const originalOnInputDelta =
+        typeof toolRecord.onInputDelta === 'function'
+          ? (toolRecord.onInputDelta as (options: {
+              toolCallId: string;
+              inputTextDelta: string;
+            }) => unknown)
+          : null;
+      const originalOnInputAvailable =
+        typeof toolRecord.onInputAvailable === 'function'
+          ? (toolRecord.onInputAvailable as (options: {
+              toolCallId: string;
+              input: unknown;
+            }) => unknown)
+          : null;
+      const originalNeedsApproval = toolRecord.needsApproval;
+      const wrappedTool: Record<string, unknown> = {
         ...t,
+        onInputStart: async (options: { toolCallId: string }) => {
+          const decision = this.admitToolCallLifecycleStage(
+            name,
+            options.toolCallId,
+            'input-start',
+          );
+          if (decision.kind === 'duplicate') return;
+          await originalOnInputStart?.(options);
+        },
+        onInputDelta: async (options: {
+          toolCallId: string;
+          inputTextDelta: string;
+        }) => {
+          const decision = this.admitToolCallLifecycleStage(
+            name,
+            options.toolCallId,
+            'input-delta',
+          );
+          if (decision.kind === 'duplicate') return;
+          await originalOnInputDelta?.(options);
+        },
+        onInputAvailable: async (options: {
+          toolCallId: string;
+          input: unknown;
+        }) => {
+          const decision = this.admitToolCallLifecycleStage(
+            name,
+            options.toolCallId,
+            'input-available',
+          );
+          if (decision.kind === 'duplicate') return;
+          await originalOnInputAvailable?.(options);
+        },
         execute: async (input: unknown, options: { toolCallId: string }) => {
+          const decision = this.admitToolCallLifecycleStage(
+            name,
+            options.toolCallId,
+            'execute',
+          );
+          if (decision.kind === 'duplicate') throw decision.error;
+          const { occurrence } = decision.admission;
           const start = Date.now();
           try {
             return await (
@@ -5242,10 +5944,46 @@ export abstract class BaseAgent<
               ) => Promise<unknown>
             )(input, options);
           } finally {
-            this._toolCallDurations.set(options.toolCallId, Date.now() - start);
+            occurrence.durationMs = Date.now() - start;
           }
         },
       };
+      if (typeof originalNeedsApproval === 'function') {
+        wrappedTool.needsApproval = async (
+          input: unknown,
+          options: { toolCallId: string },
+        ) => {
+          const decision = this.admitToolCallLifecycleStage(
+            name,
+            options.toolCallId,
+            'needs-approval',
+          );
+          if (decision.kind === 'duplicate') return false;
+          const needsApproval = await (
+            originalNeedsApproval as (
+              input: unknown,
+              options: { toolCallId: string },
+            ) => boolean | PromiseLike<boolean>
+          )(input, options);
+          decision.admission.primaryNeedsApproval = needsApproval;
+          return needsApproval;
+        };
+      } else if (typeof originalNeedsApproval === 'boolean') {
+        wrappedTool.needsApproval = async (
+          _input: unknown,
+          options: { toolCallId: string },
+        ) => {
+          const decision = this.admitToolCallLifecycleStage(
+            name,
+            options.toolCallId,
+            'needs-approval',
+          );
+          if (decision.kind === 'duplicate') return false;
+          decision.admission.primaryNeedsApproval = originalNeedsApproval;
+          return originalNeedsApproval;
+        };
+      }
+      (wrapped as Record<string, unknown>)[name] = wrappedTool;
     }
     return wrapped;
   }
@@ -5320,9 +6058,46 @@ export abstract class BaseAgent<
     const modelId = this._stepResolvedModelId || this.state.get().activeModelId;
     const isFull = this.host.telemetry?.level === 'full';
 
-    for (const part of result.content) {
+    for (let index = 0; index < result.content.length; index += 1) {
+      const part = result.content[index]!;
       if (part.type !== 'tool-result' && part.type !== 'tool-error') continue;
       if (part.toolName === 'finish') continue;
+
+      const previous = result.content[index - 1];
+      if (
+        part.type === 'tool-error' &&
+        previous?.type === 'tool-call' &&
+        previous.invalid === true &&
+        previous.toolCallId === part.toolCallId &&
+        (previous.error === part.error ||
+          (previous.error instanceof Error
+            ? previous.error.message
+            : String(previous.error)) ===
+            (part.error instanceof Error
+              ? part.error.message
+              : String(part.error)))
+      ) {
+        continue;
+      }
+      if (
+        part.type === 'tool-error' &&
+        this.isHostRejectedDuplicateToolError(part)
+      ) {
+        continue;
+      }
+      const serializedProviderToolCallId = (
+        part as unknown as Record<string, unknown>
+      ).providerToolCallId;
+      const providerToolCallId =
+        typeof serializedProviderToolCallId === 'string' &&
+        serializedProviderToolCallId.length > 0
+          ? serializedProviderToolCallId
+          : (this._toolCallProviderIds.get(part.toolCallId) ?? part.toolCallId);
+      const occurrence = this.takeToolCallExecutionOccurrence(
+        part.toolCallId,
+        providerToolCallId,
+      );
+      const durationMs = occurrence.durationMs;
 
       const inputObj =
         typeof part.input === 'object' && part.input !== null ? part.input : {};
@@ -5334,8 +6109,7 @@ export abstract class BaseAgent<
         } catch {}
       }
 
-      const durationMs = this._toolCallDurations.get(part.toolCallId);
-      this.recordToolEvidence(part, durationMs);
+      this.recordToolEvidence(part, occurrence);
 
       if (part.type === 'tool-result') {
         this.host.telemetry?.capture('tool-call-executed', {
@@ -5369,7 +6143,7 @@ export abstract class BaseAgent<
       }
     }
 
-    this._toolCallDurations.clear();
+    this.resetToolCallExecutionTracking();
   }
 
   private recordToolEvidence(
@@ -5377,21 +6151,27 @@ export abstract class BaseAgent<
       StepResult<ToolSet>['content'][number],
       { type: 'tool-result' | 'tool-error' }
     >,
-    durationMs: number | undefined,
+    occurrence: ToolCallExecutionOccurrence,
   ): void {
+    const durationMs = occurrence.durationMs;
+    const occurrenceId = occurrence.id;
     const input = asRecord(part.input);
     const basePayload: Record<string, EvidenceMemoryJson> = {
       toolName: part.toolName,
-      toolCallId: part.toolCallId,
+      toolOccurrenceId: occurrenceId,
+      providerToolCallId: occurrence.providerToolCallId,
+      // Backward-compatible raw correlation field. It is metadata only; all
+      // evidence identity and idempotency keys use `toolOccurrenceId`.
+      toolCallId: occurrence.providerToolCallId,
       durationMs: durationMs ?? null,
     };
     const toolSource = {
       source: 'tool_call',
-      sourceId: part.toolCallId,
+      sourceId: occurrenceId,
     };
     this.recordEvidenceEvent('tool_started', basePayload, {
       ...toolSource,
-      ingestionKey: `tool:${part.toolCallId}:started`,
+      ingestionKey: `tool:${occurrenceId}:started`,
       timestamp:
         durationMs === undefined
           ? undefined
@@ -5406,7 +6186,7 @@ export abstract class BaseAgent<
         },
         {
           ...toolSource,
-          ingestionKey: `tool:${part.toolCallId}:failed`,
+          ingestionKey: `tool:${occurrenceId}:failed`,
         },
       );
       return;
@@ -5415,7 +6195,7 @@ export abstract class BaseAgent<
     const output = asRecord(part.output);
     this.recordEvidenceEvent('tool_completed', basePayload, {
       ...toolSource,
-      ingestionKey: `tool:${part.toolCallId}:completed`,
+      ingestionKey: `tool:${occurrenceId}:completed`,
     });
     const path =
       firstString(input, ['path', 'file_path', 'filePath', 'source']) ?? null;
@@ -5431,7 +6211,7 @@ export abstract class BaseAgent<
         },
         {
           ...toolSource,
-          ingestionKey: `tool:${part.toolCallId}:file-read`,
+          ingestionKey: `tool:${occurrenceId}:file-read`,
         },
       );
       return;
@@ -5446,7 +6226,7 @@ export abstract class BaseAgent<
         },
         {
           ...toolSource,
-          ingestionKey: `tool:${part.toolCallId}:file-written`,
+          ingestionKey: `tool:${occurrenceId}:file-written`,
         },
       );
       return;
@@ -5460,7 +6240,7 @@ export abstract class BaseAgent<
         },
         {
           ...toolSource,
-          ingestionKey: `tool:${part.toolCallId}:file-deleted`,
+          ingestionKey: `tool:${occurrenceId}:file-deleted`,
         },
       );
       return;
@@ -5475,7 +6255,7 @@ export abstract class BaseAgent<
         },
         {
           ...toolSource,
-          ingestionKey: `tool:${part.toolCallId}:lint`,
+          ingestionKey: `tool:${occurrenceId}:lint`,
         },
       );
       return;
@@ -5493,13 +6273,13 @@ export abstract class BaseAgent<
     };
     this.recordEvidenceEvent('shell_executed', shellPayload, {
       ...toolSource,
-      ingestionKey: `tool:${part.toolCallId}:shell`,
+      ingestionKey: `tool:${occurrenceId}:shell`,
     });
     const specializedType = classifyVerificationCommand(command);
     if (specializedType) {
       this.recordEvidenceEvent(specializedType, shellPayload, {
         ...toolSource,
-        ingestionKey: `tool:${part.toolCallId}:${specializedType}`,
+        ingestionKey: `tool:${occurrenceId}:${specializedType}`,
       });
     }
   }

@@ -212,6 +212,32 @@ function toNativeMiniMaxModelId(modelId: string): string {
   return modelId;
 }
 
+function guardRevocableModelRoute(
+  model: LanguageModelV3,
+  isValid: () => boolean,
+): LanguageModelV3 {
+  const assertValid = () => {
+    if (!isValid()) {
+      throw new Error('Model route was revoked before request dispatch');
+    }
+  };
+  const doGenerate: LanguageModelV3['doGenerate'] = (options) => {
+    assertValid();
+    return model.doGenerate(options);
+  };
+  const doStream: LanguageModelV3['doStream'] = (options) => {
+    assertValid();
+    return model.doStream(options);
+  };
+  return new Proxy(model, {
+    get(target, property, receiver) {
+      if (property === 'doGenerate') return doGenerate;
+      if (property === 'doStream') return doStream;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
 /**
  * Middleware that tells the SDK all HTTP(S) URLs are natively supported by the
  * clodex gateway. Without this the SDK downloads every image/file URL and
@@ -242,6 +268,13 @@ export type ModelWithOptions = {
    * `tools.0.custom.strict: Extra inputs are not permitted`.
    */
   stripStrictFromTools?: boolean;
+  routeLease?: {
+    isValid(): boolean;
+    forkTrace?(
+      traceId: string,
+      metadata?: Record<string, unknown>,
+    ): ModelWithOptions;
+  };
 };
 
 export interface OfficialOpenAIRealtimeEndpoint {
@@ -265,6 +298,7 @@ export class ModelProviderService {
   private readonly preferencesService: PreferencesService;
   private readonly credentialsService?: CredentialsService;
   private readonly providerRegistry = new AIProviderRegistry();
+  private routeRevision = 0;
 
   public constructor(
     telemetryService: TelemetryService,
@@ -276,6 +310,18 @@ export class ModelProviderService {
     this.authService = authService;
     this.preferencesService = preferencesService;
     this.credentialsService = credentialsService;
+    preferencesService.addListener?.(() => {
+      this.routeRevision += 1;
+    });
+    authService.registerAuthStateChangeCallback?.(() => {
+      this.routeRevision += 1;
+    });
+    authService.registerCredentialEpochChangeCallback?.(() => {
+      this.routeRevision += 1;
+    });
+    credentialsService?.addProviderApiKeyListener?.(() => {
+      this.routeRevision += 1;
+    });
     if (credentialsService) {
       for (const adapter of createBuiltInProviderAdapters(credentialsService)) {
         this.providerRegistry.register(adapter);
@@ -880,10 +926,8 @@ export class ModelProviderService {
     otherPostHogProperties?: Record<string, unknown>,
   ): ModelWithOptions {
     try {
-      return this.createModelWithOptions(
-        modelId,
-        traceId,
-        otherPostHogProperties,
+      return this.bindRouteLease(
+        this.createModelWithOptions(modelId, traceId, otherPostHogProperties),
       );
     } catch (error) {
       this.report(error as Error, 'getModelWithOptions', { modelId });
@@ -897,16 +941,25 @@ export class ModelProviderService {
     otherPostHogProperties?: Record<string, unknown>,
   ): Promise<ModelWithOptions> {
     try {
+      const admittedRevision = this.routeRevision;
       const clodexApiKeyOverride =
         await this.prepareClodexGatewayApiKeyForModel(
           modelId,
           otherPostHogProperties,
         );
-      return this.createModelWithOptions(
-        modelId,
-        traceId,
-        otherPostHogProperties,
-        clodexApiKeyOverride,
+      if (this.routeRevision !== admittedRevision) {
+        throw new Error(
+          'Model route authority changed while credentials were resolving; retry the request against the current route',
+        );
+      }
+      return this.bindRouteLease(
+        this.createModelWithOptions(
+          modelId,
+          traceId,
+          otherPostHogProperties,
+          clodexApiKeyOverride,
+        ),
+        admittedRevision,
       );
     } catch (error) {
       this.report(error as Error, 'getModelWithOptionsAsync', { modelId });
@@ -958,6 +1011,45 @@ export class ModelProviderService {
     }
 
     return this.authService.ensureModelAccessToken();
+  }
+
+  private bindRouteLease(
+    options: ModelWithOptions,
+    admittedRevision = this.routeRevision,
+  ): ModelWithOptions {
+    const isValid = () => this.routeRevision === admittedRevision;
+    const { routeLease: _previousLease, ...exactRoute } = options;
+    return {
+      ...exactRoute,
+      model: guardRevocableModelRoute(exactRoute.model, isValid),
+      routeLease: {
+        isValid,
+        forkTrace: (traceId, metadata) => {
+          if (!isValid()) {
+            throw new Error(
+              'Cannot fork a revoked model route; resolve a new route instead',
+            );
+          }
+          const tracedModel = this.telemetryService.forkTracing(
+            exactRoute.model,
+            {
+              posthogTraceId: traceId,
+              posthogProperties: {
+                posthogTraceId: traceId,
+                ...(omitModelRequestMetadata(metadata) ?? {}),
+              },
+            },
+          );
+          return this.bindRouteLease(
+            {
+              ...exactRoute,
+              model: tracedModel,
+            },
+            admittedRevision,
+          );
+        },
+      },
+    };
   }
 
   private providerUsesClodexGateway(provider: ModelProvider): boolean {

@@ -129,7 +129,7 @@ afterEach(() => {
   platformSpy.mockRestore();
 });
 
-describe('NotificationSoundsService Windows completion notifications', () => {
+describe('NotificationSoundsService Windows lifecycle notifications', () => {
   it('shows generic privacy-safe copy for a completed background iteration', async () => {
     const service = await createService();
 
@@ -159,6 +159,40 @@ describe('NotificationSoundsService Windows completion notifications', () => {
     expect(electronMocks.notifications).toHaveLength(0);
   });
 
+  it.each([
+    {
+      event: 'question' as const,
+      title: 'Agent needs attention',
+      body: 'An approval or answer is required.',
+    },
+    {
+      event: 'error' as const,
+      title: 'Agent stopped with an error',
+      body: 'Open CLODEx to review the failure and retry.',
+    },
+  ])('shows a privacy-safe $event toast even when the agent window remains focused', async ({
+    event,
+    title,
+    body,
+  }) => {
+    const service = await createService({
+      focused: true,
+      visibleAgentId: 'agent-1',
+    });
+
+    service.notifyAgentEvent(event, 'agent-1');
+
+    expect(electronMocks.notifications).toHaveLength(1);
+    expect(electronMocks.notifications[0]?.options).toEqual({
+      title,
+      body,
+      silent: true,
+    });
+    expect(
+      JSON.stringify(electronMocks.notifications[0]?.options),
+    ).not.toContain('agent-1');
+  });
+
   it('uses a delivered toast for the existing done-event debounce', async () => {
     const service = await createService();
 
@@ -166,6 +200,30 @@ describe('NotificationSoundsService Windows completion notifications', () => {
     service.notifyAgentEvent('done', 'agent-2');
 
     expect(electronMocks.notifications).toHaveLength(1);
+  });
+
+  it('never lets a recent done toast suppress approval or error attention', async () => {
+    const service = await createService();
+
+    service.notifyAgentEvent('done', 'agent-1');
+    service.notifyAgentEvent('question', 'agent-1');
+    service.notifyAgentEvent('error', 'agent-1');
+
+    expect(electronMocks.notifications).toHaveLength(3);
+    expect(
+      electronMocks.notifications.map(
+        (notification) => notification.show.mock.calls.length,
+      ),
+    ).toEqual([1, 1, 1]);
+    expect(
+      electronMocks.notifications.map((notification) =>
+        String(notification.options.title),
+      ),
+    ).toEqual([
+      'Iteration complete',
+      'Agent needs attention',
+      'Agent stopped with an error',
+    ]);
   });
 
   it('serializes done delivery while asynchronous sound loading is in flight', async () => {

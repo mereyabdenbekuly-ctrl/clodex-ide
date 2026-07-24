@@ -1,7 +1,9 @@
 import type {
   AgentManagerStartupPolicy,
   AgentManagerToolboxPort,
+  AgentNotificationContext,
   AgentNotificationEvent,
+  AgentStepSettlement,
   PreparedAgentSessionCheckpointState,
   AgentStepExecutor,
   AgentStore,
@@ -139,6 +141,7 @@ export class AgentManagerService extends DisposableService {
     notificationEventHandler?: (
       event: AgentNotificationEvent,
       agentId: string,
+      context: AgentNotificationContext,
     ) => void | Promise<void>,
     enrichHistoryEntries?: (
       entries: AgentHistoryEntry[],
@@ -275,6 +278,12 @@ export class AgentManagerService extends DisposableService {
     return await this.manager.prepareSessionCheckpoint(agentInstanceId);
   }
 
+  public async waitForAgentStepSettlement(
+    agentInstanceId: string,
+  ): Promise<AgentStepSettlement> {
+    return await this.manager.waitForAgentStepSettlement(agentInstanceId);
+  }
+
   public async replayRecoveredUiChunk(
     agentInstanceId: string,
     input: Parameters<AgentManager['replayRecoveredUiChunk']>[1],
@@ -330,11 +339,6 @@ export class AgentManagerService extends DisposableService {
 
             const ctx: CommandContext = { callerId: callingClientId };
             const result = await this.commandRegistry.dispatch(name, ctx, rest);
-            if (name === 'agents.sendUserMessage') {
-              await this.lifecycleHookRunner?.('after-turn', {
-                values: { agentInstanceId: rest[0] },
-              });
-            }
             this.debugEventSink?.({
               channel: 'agent',
               level: 'info',

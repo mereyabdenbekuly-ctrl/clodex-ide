@@ -1,5 +1,7 @@
 import type {
+  AgentNotificationContext,
   AgentNotificationEvent,
+  AgentStepSettlement,
   BaseAgent,
   BaseAgentDependencies,
   BaseAgentToolboxView,
@@ -252,6 +254,7 @@ export class AgentManager extends DisposableService {
   private readonly onAgentEvent?: (
     event: AgentNotificationEvent,
     agentId: string,
+    context: AgentNotificationContext,
   ) => void | Promise<void>;
   /** Host-neutral prepare/commit/invalidate seam for tool approvals. */
   private readonly toolApprovalLifecycle?: ToolApprovalLifecycleHooks;
@@ -510,6 +513,16 @@ export class AgentManager extends DisposableService {
       pendingApprovalCount: Object.keys(state.pendingApprovals).length,
     });
     return { ...flushed, agentStateFlushedAt, wasLive: true };
+  }
+
+  public async waitForAgentStepSettlement(
+    instanceId: string,
+  ): Promise<AgentStepSettlement> {
+    const live = this.activeAgents.get(instanceId);
+    if (!live) {
+      throw new Error(`Cannot settle unknown live agent: ${instanceId}`);
+    }
+    return await live.waitForCurrentStepSettlement();
   }
 
   public async replayRecoveredUiChunk(

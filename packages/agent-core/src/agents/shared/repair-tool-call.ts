@@ -1,5 +1,20 @@
 import { NoSuchToolError, type Tool } from 'ai';
 
+export type ToolCallRecoveryKind =
+  | 'truncated-input'
+  | 'invalid-input'
+  | 'unknown-tool';
+
+export type ToolCallRecoverySignal = {
+  readonly kind: ToolCallRecoveryKind;
+  readonly toolNames: readonly string[];
+};
+
+const TOOL_CALL_RECOVERY_KIND_PROPERTY = 'clodexToolCallRecoveryKind';
+const TOOL_CALL_RECOVERY_MESSAGE_PREFIX = 'Recoverable tool call rejection';
+const MAX_RECOVERY_TOOL_NAME_CHARS = 128;
+const localRecoveryKinds = new WeakMap<object, ToolCallRecoveryKind>();
+
 /**
  * Shape we actually consume from a zod validation issue. Kept structural so
  * the helper doesn't depend on a specific zod major/minor version.
@@ -40,23 +55,144 @@ export type RepairToolCallArgs = {
   error: unknown;
 };
 
+function annotateRecoverableError(
+  error: unknown,
+  kind: ToolCallRecoveryKind,
+  message: string,
+): null {
+  if (error && typeof error === 'object') {
+    // WeakMap classification survives frozen/provider-owned Error objects
+    // without mutating them. Remote executors fall back to the message or to
+    // the generic invalid-input classification.
+    localRecoveryKinds.set(error, kind);
+  }
+  if (error instanceof Error) {
+    try {
+      error.message = `${TOOL_CALL_RECOVERY_MESSAGE_PREFIX} (${kind}): ${message}`;
+      Object.defineProperty(error, TOOL_CALL_RECOVERY_KIND_PROPERTY, {
+        configurable: true,
+        enumerable: false,
+        value: kind,
+      });
+    } catch {
+      // Returning null is the safety boundary. Never turn a provider-owned or
+      // frozen parse error into a fatal ToolCallRepairError merely because its
+      // diagnostic message could not be annotated.
+    }
+  }
+  return null;
+}
+
+function parseRecoveryKind(value: unknown): ToolCallRecoveryKind | null {
+  if (
+    value === 'truncated-input' ||
+    value === 'invalid-input' ||
+    value === 'unknown-tool'
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function recoveryKindFromError(error: unknown): ToolCallRecoveryKind | null {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+
+  // AI SDK and remote step executors may wrap/serialize the original error.
+  // Walk a small, fixed cause chain and support both the private property and
+  // the bounded human-readable message. Never inspect tool input here.
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (seen.has(current)) break;
+    seen.add(current);
+
+    if (typeof current === 'string') {
+      const match = current.match(
+        /^Recoverable tool call rejection \(([^)]+)\):/,
+      );
+      return parseRecoveryKind(match?.[1]);
+    }
+
+    if (!current || typeof current !== 'object') break;
+    const record = current as Record<string, unknown>;
+    const localKind = localRecoveryKinds.get(current);
+    if (localKind) return localKind;
+    const propertyKind = parseRecoveryKind(
+      record[TOOL_CALL_RECOVERY_KIND_PROPERTY],
+    );
+    if (propertyKind) return propertyKind;
+
+    const message = record.message;
+    if (typeof message === 'string') {
+      const match = message.match(
+        /^Recoverable tool call rejection \(([^)]+)\):/,
+      );
+      const messageKind = parseRecoveryKind(match?.[1]);
+      if (messageKind) return messageKind;
+    }
+
+    current = record.cause;
+  }
+
+  return null;
+}
+
+/**
+ * Finds invalid tool-call parts that are safe to retry because the rejected
+ * call was never executed. The returned signal is intentionally tiny: it
+ * contains no model-generated input or names and is safe for
+ * logs/telemetry/prompts.
+ */
+export function findToolCallRecoverySignal(
+  content: readonly unknown[],
+): ToolCallRecoverySignal | null {
+  let selectedKind: ToolCallRecoveryKind | null = null;
+
+  for (const value of content) {
+    if (!value || typeof value !== 'object') continue;
+    const part = value as Record<string, unknown>;
+    if (part.type !== 'tool-call' || part.invalid !== true) continue;
+
+    const kind = recoveryKindFromError(part.error) ?? 'invalid-input';
+
+    // Truncation gets priority because it needs an explicit compact/chunk
+    // instruction. Otherwise retain the first concrete classification.
+    if (kind === 'truncated-input' || selectedKind === null) {
+      selectedKind = kind;
+    }
+  }
+
+  return selectedKind ? { kind: selectedKind, toolNames: ['unknown'] } : null;
+}
+
 /**
  * Handler passed to `streamText({ experimental_repairToolCall })`.
  *
- * Returns `null` when the error is unrepairable (unknown tool); otherwise
- * throws with a descriptive message so the AI SDK surfaces it to the model
- * as tool-result `errorText`. The thrown error MUST contain enough signal
- * for the model to fix its next call — a generic "schema mismatch" sentence
- * leaves the agent in a retry loop with the same malformed payload.
+ * This callback deliberately never reconstructs or executes a partial call:
+ * completing truncated JSON could turn an incomplete file/shell operation
+ * into an unintended effect. Instead it annotates the SDK's original parse
+ * error and returns `null`. AI SDK then records a non-executed invalid tool
+ * result, and BaseAgent performs a bounded model retry with compact/chunking
+ * instructions through the normal approval pipeline.
  */
 export async function repairToolCall({
   toolCall,
   tools,
   error,
 }: RepairToolCallArgs): Promise<null> {
-  // Model hallucinated a tool name — unrepairable.
-  if (NoSuchToolError.isInstance(error)) return null;
+  // Model hallucinated a tool name. Do not guess a replacement: publish a
+  // non-executed rejection and let the bounded next-step recovery choose from
+  // the tools actually advertised to the model.
+  if (NoSuchToolError.isInstance(error)) {
+    return annotateRecoverableError(
+      error,
+      'unknown-tool',
+      'The requested tool is not available. Retry using one of the tools currently provided by the host.',
+    );
+  }
 
+  const verifiedToolName = Object.hasOwn(tools, toolCall.toolName)
+    ? toolCall.toolName.slice(0, MAX_RECOVERY_TOOL_NAME_CHARS)
+    : 'unknown';
   const inputLen = toolCall.input?.length ?? 0;
   let parsed: unknown;
   let jsonValid = false;
@@ -70,12 +206,16 @@ export async function repairToolCall({
   if (!jsonValid) {
     // Distinguish empty/tiny input from genuinely truncated long input.
     if (inputLen < 10) {
-      throw new Error(
-        `Tool call for "${toolCall.toolName}" had empty or near-empty input. The model failed to generate the required parameters.`,
+      return annotateRecoverableError(
+        error,
+        'invalid-input',
+        `The call to "${verifiedToolName}" was not executed because its arguments were empty or malformed. Regenerate one complete, schema-valid JSON object.`,
       );
     }
-    throw new Error(
-      'Tool call inputs were too long and most likely exceeded maximum token output limits. Create more compact tool calls, i.e. by chunking edits into smaller pieces.',
+    return annotateRecoverableError(
+      error,
+      'truncated-input',
+      `The call to "${verifiedToolName}" was not executed because its JSON arguments were incomplete, usually after exceeding the model output limit. Retry with smaller independent calls and split large edits into chunks.`,
     );
   }
 
@@ -104,8 +244,10 @@ export async function repairToolCall({
       result = undefined;
     }
     if (result && !result.success && result.error) {
-      throw new Error(
-        `Schema validation failed for "${toolCall.toolName}":\n${formatZodIssues(
+      return annotateRecoverableError(
+        error,
+        'invalid-input',
+        `Schema validation failed for "${verifiedToolName}":\n${formatZodIssues(
           result.error.issues,
         )}\nReview the tool's parameter requirements and retry with corrected input.`,
       );
@@ -114,7 +256,9 @@ export async function repairToolCall({
 
   // Schema says the input is valid but AI SDK still flagged it — extremely
   // rare. Fall back to the original generic error.
-  throw new Error(
-    `Tool call inputs for "${toolCall.toolName}" did not match the expected schema. Check the tool's parameter requirements and try again.`,
+  return annotateRecoverableError(
+    error,
+    'invalid-input',
+    `Inputs for "${verifiedToolName}" did not match the expected schema. Check the parameter requirements and retry with a smaller valid input.`,
   );
 }

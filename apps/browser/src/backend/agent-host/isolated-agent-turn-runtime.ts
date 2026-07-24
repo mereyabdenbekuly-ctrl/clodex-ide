@@ -7,6 +7,7 @@ import type {
   IsolatedAgentTurnResult,
   IsolatedAgentTurnStepResult,
 } from './isolated-agent-turn';
+import { rejectDuplicateIsolatedToolCallIds } from './isolated-agent-turn';
 
 export interface IsolatedAgentTurnRuntimeOptions {
   signal?: AbortSignal;
@@ -31,7 +32,7 @@ export async function executeIsolatedAgentTurn(
     throwIfAborted(options.signal);
     options.onEvent?.({ type: 'step-started', step });
 
-    const modelResult = await options.handlers.callModel(
+    const rawModelResult = await options.handlers.callModel(
       {
         agentInstanceId: request.agentInstanceId,
         modelId: request.modelId,
@@ -51,6 +52,21 @@ export async function executeIsolatedAgentTurn(
     );
     throwIfAborted(options.signal);
 
+    // Treat the isolated process and model provider as untrusted ingress.
+    // Ambiguous ids are rejected before any needsApproval/execute path can
+    // observe them, including the case where one valid and one invalid call
+    // share an id.
+    const normalizedCalls = rejectDuplicateIsolatedToolCallIds(
+      rawModelResult.toolCalls,
+      rawModelResult.rejectedToolCalls,
+      allowedToolNames,
+    );
+    const modelResult = {
+      ...rawModelResult,
+      toolCalls: normalizedCalls.toolCalls,
+      rejectedToolCalls: normalizedCalls.rejectedToolCalls,
+    };
+
     text += modelResult.text;
     messages.push({
       role: 'assistant',
@@ -67,11 +83,35 @@ export async function executeIsolatedAgentTurn(
       usage: modelResult.usage,
       providerMetadata: modelResult.providerMetadata,
       toolCalls: modelResult.toolCalls,
+      rejectedToolCalls: modelResult.rejectedToolCalls ?? [],
       toolResults: [],
       toolErrors: [],
       approvalRequests: [],
     };
     steps.push(stepResult);
+
+    // Preserve a safe UI/history trace for rejected calls without ever
+    // adding them to the executable toolCalls array. This lets BaseAgent's
+    // bounded recovery append its compact/chunk instruction after a tool
+    // error rather than mistaking the original user message for the tail.
+    for (const rejected of modelResult.rejectedToolCalls ?? []) {
+      options.onEvent?.({
+        type: 'tool-call',
+        step,
+        call: {
+          toolCallId: rejected.toolCallId,
+          toolName: rejected.toolName,
+          input: {},
+        },
+      });
+      options.onEvent?.({
+        type: 'tool-error',
+        step,
+        toolCallId: rejected.toolCallId,
+        toolName: rejected.toolName,
+        message: rejected.message,
+      });
+    }
 
     for (const call of modelResult.toolCalls) {
       if (!allowedToolNames.has(call.toolName)) {

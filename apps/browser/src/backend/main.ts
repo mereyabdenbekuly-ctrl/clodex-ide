@@ -67,6 +67,10 @@ import {
 import { CloudTaskTeleportController } from './services/cloud-task-teleport';
 import { createSwarmRuntime } from './services/swarm-runtime';
 import { AgentOsService } from './services/agent-os';
+import {
+  createHelperAgentHookRunner,
+  renderHelperAgentSnapshot,
+} from './services/agent-os/helper-agent-runner';
 import { GuardianService } from './services/guardian';
 import { toGuardianAssessmentObservation } from './services/guardian/audit';
 import { createNetworkGuardianRequest } from './services/guardian/requests';
@@ -623,8 +627,73 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
     agentTypeRegistry,
     assetCacheService,
     processedImageCacheService,
-    (event, agentId) =>
-      notificationSoundsService.notifyAgentEvent(event, agentId),
+    (event, agentId, notificationContext) => {
+      notificationSoundsService.notifyAgentEvent(event, agentId);
+
+      const trigger =
+        event === 'question'
+          ? 'approval-requested'
+          : event === 'done' || event === 'error'
+            ? 'after-turn'
+            : null;
+      const service = agentOsService;
+      if (!trigger || !service) return;
+
+      void (async () => {
+        // Both approval and terminal notifications can arrive before the UI
+        // stream has fully drained. Capture one immutable backend snapshot at
+        // the settlement boundary and bind it to the exact in-process model
+        // route used by the originating step.
+        const settlement =
+          await agentManagerService.waitForAgentStepSettlement(agentId);
+        const state = settlement.state;
+        if (
+          settlement.outcome === 'idle' ||
+          settlement.outcome === 'superseded' ||
+          (event === 'question' &&
+            !state.history.some((message) =>
+              message.parts.some(
+                (part) =>
+                  (part as { state?: unknown }).state === 'approval-requested',
+              ),
+            ))
+        ) {
+          return { promptText: '', runs: [] };
+        }
+        const values = {
+          agentInstanceId: agentId,
+          outcome: event,
+        };
+        const snapshot = renderHelperAgentSnapshot(agentId, state, { values });
+        return await service.runHooks(trigger, {
+          values,
+          trustedLifecycle: {
+            modelId: notificationContext.modelId,
+            modelWithOptions: notificationContext.modelWithOptions,
+            snapshot,
+          },
+        });
+      })()
+        .then((result) => {
+          if (event !== 'done') return;
+          const needsAttention = result.runs.some(
+            (run) =>
+              run.status === 'failed' ||
+              (run.status === 'succeeded' &&
+                Boolean(run.output?.trim()) &&
+                run.output?.trim().toUpperCase() !== 'OK'),
+          );
+          if (needsAttention) {
+            notificationSoundsService.notifyAgentEvent('question', agentId);
+          }
+        })
+        .catch((error) => {
+          logger.warn(
+            `[AgentOsService] ${trigger} lifecycle hooks failed`,
+            error,
+          );
+        });
+    },
     enrichAgentHistoryEntries,
     executionTargetRouter,
     (handler) => {
@@ -1460,6 +1529,13 @@ export async function main({ launchOptions: { verbose } }: MainParameters) {
       }
     },
   });
+  await agentOsService.hooks.setHelperAgentRunner(
+    createHelperAgentHookRunner({
+      models: agentCoreHost.models,
+      getAgentState: (agentId) =>
+        agentCoreSeam.store.get().agents.instances[agentId]?.state,
+    }),
+  );
   // Browser production composition intentionally has no trusted bootstrap
   // provider yet. Construct the boundary explicitly so every authority-bearing
   // operation remains fail-closed and the production gate stays default-off.

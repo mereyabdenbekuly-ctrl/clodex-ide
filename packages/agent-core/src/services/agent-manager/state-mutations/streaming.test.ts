@@ -151,7 +151,13 @@ describe('state-mutations/streaming', () => {
     const store = new AgentStore(emptySystemState());
     upsertAgentInstance(store, 'a1', makeEnvelope(baseState([])));
 
-    const onApprovalRequested = vi.fn();
+    const onApprovalRequested = vi.fn(() => {
+      const committed = store.get().agents.instances.a1!.state.history[0]!;
+      expect(committed.parts[0]).toMatchObject({
+        state: 'approval-requested',
+        approval: { id: 'ap_1' },
+      });
+    });
     const incoming: AgentMessage = {
       id: 'asst-1',
       role: 'assistant',

@@ -275,6 +275,7 @@ describe('ProductionCloudExecutionTargetAdapter', () => {
     });
 
     const step = await adapter.execute(request);
+    expect(step.modelRouteBinding).toBe('external');
     await Promise.all([
       collect(step.toUIMessageStream()),
       step.consumeStream(),
@@ -309,7 +310,7 @@ describe('ProductionCloudExecutionTargetAdapter', () => {
     const now = 1_000_000;
     const revokeCredential = vi.fn(async () => {});
     const broker = createBroker(now, revokeCredential);
-    const onFinish = vi.fn(async () => {});
+    const onFinish = vi.fn(async (_result: unknown) => {});
     const request = createRequest(onFinish);
     const execution = createStartedExecution(now);
     const events: CloudTaskStreamEvent[] = [
@@ -361,7 +362,7 @@ describe('ProductionCloudExecutionTargetAdapter', () => {
         sequence: 6,
         executionId: execution.executionId,
         type: 'completed',
-        result: createTurnResult(),
+        result: createTurnResultWithDuplicateToolCallIds(),
       },
     ];
     const startExecution = vi.fn(async () => execution);
@@ -453,6 +454,51 @@ describe('ProductionCloudExecutionTargetAdapter', () => {
       },
     ]);
     expect(onFinish).toHaveBeenCalledOnce();
+    const finished = onFinish.mock.calls[0]?.[0] as {
+      toolCalls: Array<{
+        toolCallId: string;
+        providerToolCallId: string;
+        input: unknown;
+      }>;
+      toolResults: Array<{
+        toolCallId: string;
+        providerToolCallId: string;
+        input: unknown;
+        output: unknown;
+      }>;
+    };
+    const callIds = finished.toolCalls.map((call) => call.toolCallId);
+    const resultIds = finished.toolResults.map((result) => result.toolCallId);
+    expect(new Set(callIds).size).toBe(2);
+    expect(new Set(resultIds).size).toBe(2);
+    expect(resultIds).toEqual(callIds);
+    expect(callIds).toEqual([
+      expect.stringMatching(/^clodex-external:/),
+      expect.stringMatching(/^clodex-external:/),
+    ]);
+    expect(finished.toolCalls.map((call) => call.input)).toEqual([
+      { path: 'one.md' },
+      { path: 'two.md' },
+    ]);
+    expect(finished.toolCalls.map((call) => call.providerToolCallId)).toEqual([
+      'provider-duplicate',
+      'provider-duplicate',
+    ]);
+    expect(
+      finished.toolResults.map((result) => ({
+        providerToolCallId: result.providerToolCallId,
+        input: result.input,
+      })),
+    ).toEqual([
+      {
+        providerToolCallId: 'provider-duplicate',
+        input: { path: 'one.md' },
+      },
+      {
+        providerToolCallId: 'provider-duplicate',
+        input: { path: 'two.md' },
+      },
+    ]);
     expect(revokeCredential).toHaveBeenCalledOnce();
     expect(artifactDownloader.download).toHaveBeenCalledOnce();
     expect(resumeStore.save).toHaveBeenCalledTimes(events.length + 1);
@@ -482,6 +528,105 @@ describe('ProductionCloudExecutionTargetAdapter', () => {
       durationMs: expect.any(Number),
       reason: undefined,
     });
+  });
+
+  it('reconstructs stable external identities when completion replays after a callback crash', async () => {
+    const now = 1_000_000;
+    const execution = createStartedExecution(now);
+    const onFinish = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('simulated crash after completion'))
+      .mockResolvedValueOnce(undefined);
+    const request = createRequest(onFinish);
+    const afterSequences: number[] = [];
+    let streamAttempt = 0;
+    const completed: CloudTaskStreamEvent = {
+      sequence: 2,
+      executionId: execution.executionId,
+      type: 'completed',
+      result: createTurnResultWithDuplicateToolCallIds(),
+    };
+    const controlPlane = {
+      ...createControlPlane(now),
+      startExecution: vi.fn(async () => execution),
+      streamExecution: vi.fn(
+        (
+          _execution: CloudTaskStartedExecution,
+          _token: string,
+          afterSequence: number,
+        ) => {
+          afterSequences.push(afterSequence);
+          streamAttempt += 1;
+          return asyncEvents(
+            streamAttempt === 1
+              ? [
+                  {
+                    sequence: 1,
+                    executionId: execution.executionId,
+                    type: 'usage',
+                    durationMs: 10,
+                    costMicros: 10,
+                  },
+                  completed,
+                ]
+              : [completed],
+          );
+        },
+      ),
+    };
+    const resumeStore = {
+      load: vi.fn(async () => 0),
+      save: vi.fn(
+        async (_execution: CloudTaskStartedExecution, _sequence: number) => {},
+      ),
+      clear: vi.fn(async () => {}),
+      listPending: vi.fn(async () => []),
+      clearByExecutionId: vi.fn(async () => {}),
+    };
+    const adapter = new ProductionCloudExecutionTargetAdapter({
+      controlPlane,
+      secretBroker: createBroker(
+        now,
+        vi.fn(async () => {}),
+      ),
+      getAccountAccessToken: () => 'account-token',
+      resolvePolicy: () => POLICY,
+      serializeRequest: vi.fn(async () => createSerializedTurn()),
+      resumeStore,
+      now: () => now,
+    });
+
+    const step = await adapter.execute(request);
+    await Promise.all([
+      collect(step.toUIMessageStream()),
+      step.consumeStream(),
+    ]);
+
+    expect(afterSequences).toEqual([0, 1]);
+    expect(onFinish).toHaveBeenCalledTimes(2);
+    const first = onFinish.mock.calls[0]?.[0] as {
+      response: { id: string };
+      toolCalls: Array<{ toolCallId: string; providerToolCallId: string }>;
+      toolResults: Array<{ toolCallId: string; providerToolCallId: string }>;
+    };
+    const replay = onFinish.mock.calls[1]?.[0] as typeof first;
+    expect(replay.response.id).toBe(first.response.id);
+    expect(replay.toolCalls).toEqual(first.toolCalls);
+    expect(replay.toolResults).toEqual(first.toolResults);
+    expect(new Set(first.toolCalls.map((call) => call.toolCallId)).size).toBe(
+      2,
+    );
+    expect(first.toolResults.map((result) => result.toolCallId)).toEqual(
+      first.toolCalls.map((call) => call.toolCallId),
+    );
+    expect(first.toolCalls.map((call) => call.providerToolCallId)).toEqual([
+      'provider-duplicate',
+      'provider-duplicate',
+    ]);
+    expect(resumeStore.save.mock.calls.map(([, sequence]) => sequence)).toEqual(
+      [0, 1, 2],
+    );
+    expect(resumeStore.clear).toHaveBeenCalledOnce();
   });
 
   it('cancels execution when reported cost exceeds the local policy', async () => {
@@ -1427,6 +1572,70 @@ function createTurnResult(): IsolatedAgentTurnResult {
         },
         toolCalls: [],
         toolResults: [],
+        toolErrors: [],
+        approvalRequests: [],
+      },
+    ],
+  };
+}
+
+function createTurnResultWithDuplicateToolCallIds(): IsolatedAgentTurnResult {
+  return {
+    status: 'completed',
+    text: '',
+    messages: [
+      {
+        role: 'assistant',
+        text: '',
+        toolCalls: [
+          {
+            toolCallId: 'provider-duplicate',
+            toolName: 'read',
+            input: { path: 'one.md' },
+          },
+          {
+            toolCallId: 'provider-duplicate',
+            toolName: 'read',
+            input: { path: 'two.md' },
+          },
+        ],
+      },
+    ],
+    steps: [
+      {
+        index: 1,
+        text: '',
+        reasoning: '',
+        finishReason: 'tool-calls',
+        usage: {
+          inputTokens: 1,
+          outputTokens: 1,
+          totalTokens: 2,
+        },
+        toolCalls: [
+          {
+            toolCallId: 'provider-duplicate',
+            toolName: 'read',
+            input: { path: 'one.md' },
+          },
+          {
+            toolCallId: 'provider-duplicate',
+            toolName: 'read',
+            input: { path: 'two.md' },
+          },
+        ],
+        toolResults: [
+          {
+            toolCallId: 'provider-duplicate',
+            toolName: 'read',
+            output: 'one',
+          },
+          {
+            toolCallId: 'provider-duplicate',
+            toolName: 'read',
+            output: 'two',
+          },
+        ],
         toolErrors: [],
         approvalRequests: [],
       },

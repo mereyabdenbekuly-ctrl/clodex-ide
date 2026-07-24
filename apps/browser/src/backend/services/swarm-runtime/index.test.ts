@@ -410,6 +410,7 @@ describe('automatic Ultra admitted-step routing', () => {
 
     const execution = await handler(request);
     expect(execution).not.toBeNull();
+    expect(execution?.modelRouteBinding).toBe('external');
     expect(runSwarmWorkflow).not.toHaveBeenCalled();
     await expect(drainAutomaticExecution(execution!)).resolves.toBe(0);
 

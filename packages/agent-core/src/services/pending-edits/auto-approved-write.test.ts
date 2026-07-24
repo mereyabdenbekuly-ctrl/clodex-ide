@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import {
   mkdirSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -81,8 +82,11 @@ function captureBinding(
 ): AutoApprovedFileBinding {
   const physicalWorkspaceRoot = realpathSync(workspaceRoot);
   const physicalTarget = realpathSync(target);
-  const workspaceStat = statSync(physicalWorkspaceRoot);
-  const targetStat = statSync(physicalTarget);
+  // Production captures this capability with lstat().  Keep the test seam
+  // identical: on Windows, identity values obtained through stat() and
+  // lstat() are not interchangeable across every canonical/short-path alias.
+  const workspaceStat = lstatSync(physicalWorkspaceRoot);
+  const targetStat = lstatSync(physicalTarget);
   return {
     dev: targetStat.dev,
     ino: targetStat.ino,
