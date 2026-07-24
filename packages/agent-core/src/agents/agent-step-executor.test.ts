@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { LocalAgentStepExecutor } from './agent-step-executor';
+import {
+  LocalAgentStepExecutor,
+  resolveAgentToolCapabilityScopes,
+} from './agent-step-executor';
 
 describe('LocalAgentStepExecutor', () => {
   it('delegates to streamText without changing the options object', () => {
@@ -30,5 +33,34 @@ describe('LocalAgentStepExecutor', () => {
     expect(result).toBe(execution);
     expect(streamTextFn).toHaveBeenCalledOnce();
     expect(streamTextFn).toHaveBeenCalledWith(options);
+  });
+
+  it('keeps approval continuation scope stable and later scopes distinct', () => {
+    const initial = resolveAgentToolCapabilityScopes({
+      agentInstanceId: 'agent-1',
+      stepGeneration: 11,
+      historyMessageIds: ['user-1'],
+      isApprovalContinuation: false,
+      pendingApprovalScopeId: null,
+    });
+    const continuation = resolveAgentToolCapabilityScopes({
+      agentInstanceId: 'agent-1',
+      stepGeneration: 12,
+      historyMessageIds: ['user-1', 'assistant-approval'],
+      isApprovalContinuation: true,
+      pendingApprovalScopeId: initial.currentScopeId,
+    });
+    const laterResponse = resolveAgentToolCapabilityScopes({
+      agentInstanceId: 'agent-1',
+      stepGeneration: 13,
+      historyMessageIds: ['user-1', 'assistant-approval', 'user-2'],
+      isApprovalContinuation: false,
+      pendingApprovalScopeId: null,
+    });
+
+    expect(continuation.approvalOriginScopeId).toBe(initial.currentScopeId);
+    expect(continuation.currentScopeId).not.toBe(initial.currentScopeId);
+    expect(laterResponse.currentScopeId).not.toBe(continuation.currentScopeId);
+    expect(initial.currentScopeId).toMatch(/^[a-f0-9]{64}$/);
   });
 });

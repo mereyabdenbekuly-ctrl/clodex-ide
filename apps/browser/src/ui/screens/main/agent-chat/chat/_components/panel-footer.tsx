@@ -1843,7 +1843,7 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
   if (!allowUserInput) return null;
 
   return (
-    <footer className="z-20 flex shrink-0 flex-col items-stretch gap-1 px-3 pb-3">
+    <footer className="z-20 flex shrink-0 flex-col items-stretch gap-1 px-3 pt-[calc(var(--status-card-height,0px)+1px)] pb-3">
       <MessageAttachmentsProvider elements={[]} attachments={fileAttachments}>
         <div
           className={cn(

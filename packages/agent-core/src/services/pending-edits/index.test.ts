@@ -73,6 +73,163 @@ describe('PendingEditService', () => {
     );
   });
 
+  it('applies a proposal at most once when decisions race', async () => {
+    const { service, store } = createService();
+    const absolutePath = path.join('/workspace', 'src', 'concurrent.ts');
+    let releaseApply: (() => void) | undefined;
+    const apply = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseApply = resolve;
+        }),
+    );
+
+    const decisionPromise = service.requestApproval({
+      toolCallId: 'tc-concurrent-accept',
+      lockOwnerId: 'first-owner',
+      agentInstanceId: 'agent-1',
+      absolutePath,
+      relativePath: 'src/concurrent.ts',
+      oldContent: 'before',
+      newContent: 'after',
+      apply,
+    });
+
+    const firstAccept = service.acceptEdit('tc-concurrent-accept');
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+
+    const repeatedAccept = service.acceptEdit('tc-concurrent-accept');
+    service.rejectEdit('tc-concurrent-accept');
+    service.abortAgentEdits('agent-1');
+
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(
+      store.get().toolbox['agent-1']?.pendingProposedEdits ?? [],
+    ).toHaveLength(1);
+
+    const blockedDecision = await service.requestApproval({
+      toolCallId: 'tc-concurrent-replacement',
+      lockOwnerId: 'second-owner',
+      agentInstanceId: 'agent-1',
+      absolutePath,
+      relativePath: 'src/concurrent.ts',
+      oldContent: 'before',
+      newContent: 'replacement',
+      apply: vi.fn(async () => {}),
+    });
+    expect(blockedDecision).toMatchObject({ status: 'rejected' });
+
+    releaseApply?.();
+    await Promise.all([firstAccept, repeatedAccept]);
+
+    await expect(decisionPromise).resolves.toMatchObject({
+      status: 'accepted',
+    });
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+  });
+
+  it('keeps rejection as the first and only decision', async () => {
+    const { service } = createService();
+    const apply = vi.fn(async () => {});
+
+    const decisionPromise = service.requestApproval({
+      toolCallId: 'tc-reject-first',
+      agentInstanceId: 'agent-1',
+      absolutePath: path.join('/workspace', 'src', 'reject-first.ts'),
+      relativePath: 'src/reject-first.ts',
+      oldContent: 'before',
+      newContent: 'after',
+      apply,
+    });
+
+    service.rejectEdit('tc-reject-first');
+    await service.acceptEdit('tc-reject-first');
+
+    await expect(decisionPromise).resolves.toMatchObject({
+      status: 'rejected',
+    });
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('rejects a reused proposal ID until its first decision fully resolves', async () => {
+    const { service, store } = createService();
+    const firstPath = path.join('/workspace', 'src', 'reused-id.ts');
+    const replacementPath = path.join(
+      '/workspace',
+      'src',
+      'reused-id-replacement.ts',
+    );
+    let releaseFirstApply: (() => void) | undefined;
+
+    const firstDecisionPromise = service.requestApproval({
+      toolCallId: 'tc-reused-id',
+      lockOwnerId: 'first-owner',
+      agentInstanceId: 'agent-1',
+      absolutePath: firstPath,
+      relativePath: 'src/reused-id.ts',
+      oldContent: 'before',
+      newContent: 'first',
+      apply: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirstApply = resolve;
+          }),
+      ),
+    });
+    const firstAccept = service.acceptEdit('tc-reused-id');
+    await vi.waitFor(() => expect(releaseFirstApply).toBeDefined());
+
+    const blockedReplacementDecision = await service.requestApproval({
+      toolCallId: 'tc-reused-id',
+      lockOwnerId: 'replacement-owner',
+      agentInstanceId: 'agent-1',
+      absolutePath: replacementPath,
+      relativePath: 'src/reused-id-replacement.ts',
+      oldContent: 'before',
+      newContent: 'replacement',
+      apply: vi.fn(async () => {}),
+    });
+    expect(blockedReplacementDecision).toMatchObject({
+      status: 'rejected',
+    });
+    expect(blockedReplacementDecision.message).toContain(
+      'already awaiting resolution',
+    );
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits).toHaveLength(
+      1,
+    );
+
+    releaseFirstApply?.();
+    await firstAccept;
+    await expect(firstDecisionPromise).resolves.toMatchObject({
+      status: 'accepted',
+    });
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+
+    const replacementDecisionPromise = service.requestApproval({
+      toolCallId: 'tc-reused-id',
+      lockOwnerId: 'replacement-owner',
+      agentInstanceId: 'agent-1',
+      absolutePath: replacementPath,
+      relativePath: 'src/reused-id-replacement.ts',
+      oldContent: 'before',
+      newContent: 'replacement',
+      apply: vi.fn(async () => {}),
+    });
+    service.rejectEdit('tc-reused-id');
+    await expect(replacementDecisionPromise).resolves.toMatchObject({
+      status: 'rejected',
+    });
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+  });
+
   it('locks a file until the pending decision resolves', async () => {
     const { service } = createService();
     const absolutePath = path.join('/workspace', 'shared.ts');

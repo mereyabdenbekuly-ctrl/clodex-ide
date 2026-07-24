@@ -37,6 +37,9 @@ export {
 } from './base-agent';
 export {
   LocalAgentStepExecutor,
+  resolveAgentToolCapabilityScopes,
+  TOOL_CAPABILITY_APPROVAL_ORIGIN_SCOPE_CONTEXT_KEY,
+  TOOL_CAPABILITY_CURRENT_SCOPE_CONTEXT_KEY,
   localAgentStepExecutor,
   type AgentStepExecution,
   type AgentStepExecutionContext,

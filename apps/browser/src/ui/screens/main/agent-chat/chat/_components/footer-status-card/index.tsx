@@ -47,6 +47,7 @@ import {
   buildLogChannelSections,
   type LogChannelDisplayEntry,
 } from './log-channel-section';
+import { removeProposalDuplicateDiffArtifacts } from './diff-lifecycle';
 import { getPlanUIPhases, type LivePlanData } from '@shared/plan-lifecycle';
 import { useSendImplement } from '@ui/hooks/use-send-implement';
 import { useSwarmMode } from '@ui/hooks/use-swarm-mode';
@@ -80,6 +81,13 @@ function compareAgentEntries(
       return false;
   }
   return true;
+}
+
+function getProposedDecisionKey(
+  agentInstanceId: string,
+  pendingEditId: string,
+): string {
+  return JSON.stringify([agentInstanceId, pendingEditId]);
 }
 
 export function StatusCard() {
@@ -355,6 +363,47 @@ export function StatusCard() {
   const [optimisticHunkIds, setOptimisticHunkIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const proposedDecisionClaimsRef = useRef(
+    new Map<string, { agentInstanceId: string; claim: symbol }>(),
+  );
+  const [proposedDecisionIds, setProposedDecisionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  const resolveProposedEdit = useCallback(
+    async (pendingEditId: string, decision: 'accept' | 'reject') => {
+      if (!openAgentId) return;
+      const decisionKey = getProposedDecisionKey(openAgentId, pendingEditId);
+      if (proposedDecisionClaimsRef.current.has(decisionKey)) return;
+
+      const claim = Symbol(pendingEditId);
+      proposedDecisionClaimsRef.current.set(decisionKey, {
+        agentInstanceId: openAgentId,
+        claim,
+      });
+      setProposedDecisionIds(new Set(proposedDecisionClaimsRef.current.keys()));
+
+      try {
+        if (decision === 'accept') await acceptPendingEdit(pendingEditId);
+        else await rejectPendingEdit(pendingEditId);
+      } catch {
+        // Keep the proposal visible and re-enable its actions so the user can
+        // retry if the procedure transport failed before resolving it.
+      } finally {
+        // Agent switches prune old claims. Do not let an older request's
+        // completion remove a newer claim that happens to reuse the same ID.
+        if (
+          proposedDecisionClaimsRef.current.get(decisionKey)?.claim === claim
+        ) {
+          proposedDecisionClaimsRef.current.delete(decisionKey);
+          setProposedDecisionIds(
+            new Set(proposedDecisionClaimsRef.current.keys()),
+          );
+        }
+      }
+    },
+    [acceptPendingEdit, openAgentId, rejectPendingEdit],
+  );
 
   // Filter out diffs whose hunks have all been optimistically acted upon
   const effectivePendingDiffs = useMemo(() => {
@@ -363,6 +412,23 @@ export function StatusCard() {
       (diff) => !getHunkIds(diff).every((id) => optimisticHunkIds.has(id)),
     );
   }, [formattedPendingDiffs, optimisticHunkIds]);
+
+  const { pendingDiffs: visiblePendingDiffs, diffSummary: visibleDiffSummary } =
+    useMemo(
+      () =>
+        removeProposalDuplicateDiffArtifacts({
+          proposedEdits: pendingProposedEdits,
+          pendingDiffs: effectivePendingDiffs,
+          diffSummary: formattedDiffSummary,
+        }),
+      [pendingProposedEdits, effectivePendingDiffs, formattedDiffSummary],
+    );
+
+  const proposedDecisionPending = pendingProposedEdits.some((edit) =>
+    openAgentId
+      ? proposedDecisionIds.has(getProposedDecisionKey(openAgentId, edit.id))
+      : false,
+  );
 
   // Reconcile: once the server state no longer contains any of our
   // optimistic IDs, clear them so we stop filtering.
@@ -380,6 +446,13 @@ export function StatusCard() {
   // Clear optimistic state on agent switch
   useEffect(() => {
     setOptimisticHunkIds(new Set());
+    for (const [decisionKey, decisionClaim] of Array.from(
+      proposedDecisionClaimsRef.current.entries(),
+    )) {
+      if (decisionClaim.agentInstanceId !== openAgentId)
+        proposedDecisionClaimsRef.current.delete(decisionKey);
+    }
+    setProposedDecisionIds(new Set(proposedDecisionClaimsRef.current.keys()));
   }, [openAgentId]);
 
   // Build workspace-md sections — one per mount
@@ -620,19 +693,20 @@ export function StatusCard() {
       resolvedMounts,
       activeMounts: workspaceMounts,
       activeMountPaths,
+      decisionPending: proposedDecisionPending,
       onReject: (pendingEditId) => {
-        rejectPendingEdit(pendingEditId).catch(() => {});
+        void resolveProposedEdit(pendingEditId, 'reject');
       },
       onAccept: (pendingEditId) => {
-        acceptPendingEdit(pendingEditId).catch(() => {});
+        void resolveProposedEdit(pendingEditId, 'accept');
       },
       onOpenDiffReview: openDiffReviewPage,
     });
     if (proposedEditSection) result.push(proposedEditSection);
 
     const fileDiffSection = FileDiffSection({
-      pendingDiffs: effectivePendingDiffs,
-      diffSummary: formattedDiffSummary,
+      pendingDiffs: visiblePendingDiffs,
+      diffSummary: visibleDiffSummary,
       resolvedMounts,
       activeMounts: workspaceMounts,
       activeMountPaths,
@@ -681,15 +755,15 @@ export function StatusCard() {
     messageQueue,
     deleteQueuedMessage,
     flushQueue,
-    effectivePendingDiffs,
+    visiblePendingDiffs,
     pendingProposedEdits,
-    formattedDiffSummary,
+    visibleDiffSummary,
+    proposedDecisionPending,
+    resolveProposedEdit,
     resolvedMounts,
     activeMountPaths,
     rejectAllPendingEdits,
     acceptAllPendingEdits,
-    rejectPendingEdit,
-    acceptPendingEdit,
     openDiffReviewPage,
     pendingUserQuestion,
     submitUserQuestionStep,
@@ -698,8 +772,8 @@ export function StatusCard() {
     t,
   ]);
 
-  // Sync card height with CSS variable for ChatHistory padding
-  useEffect(() => {
+  // Reserve the card's measured height above the composer before paint.
+  useLayoutEffect(() => {
     const card = cardRef.current;
     if (!card) return;
 

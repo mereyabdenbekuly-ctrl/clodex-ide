@@ -47,6 +47,7 @@ export interface PendingProposedEditSectionProps {
   resolvedMounts: Mount[];
   activeMounts: MountEntry[];
   activeMountPaths: Set<string>;
+  decisionPending: boolean;
   onReject: (pendingEditId: string) => void;
   onAccept: (pendingEditId: string) => void;
   onOpenDiffReview: (fileId: string) => void;
@@ -489,6 +490,7 @@ export function PendingProposedEditSection(
     resolvedMounts,
     activeMounts,
     activeMountPaths,
+    decisionPending,
     onReject,
     onAccept,
     onOpenDiffReview,
@@ -534,11 +536,15 @@ export function PendingProposedEditSection(
           )}
         </span>
 
-        <div className="flex shrink-0 flex-row items-center justify-start gap-1">
+        <div
+          className="flex shrink-0 flex-row items-center justify-start gap-1"
+          aria-busy={decisionPending}
+        >
           <Button
             variant="ghost"
             size="xs"
             className="cursor-pointer"
+            disabled={decisionPending}
             onClick={(e) => {
               e.stopPropagation();
               for (const edit of proposedEdits) onReject(edit.id);
@@ -551,6 +557,7 @@ export function PendingProposedEditSection(
             variant="primary"
             size="xs"
             className="cursor-pointer"
+            disabled={decisionPending}
             onClick={(e) => {
               e.stopPropagation();
               for (const edit of proposedEdits) onAccept(edit.id);

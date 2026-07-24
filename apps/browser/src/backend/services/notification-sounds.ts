@@ -1,6 +1,7 @@
 /**
- * NotificationSoundsService — plays sounds and optionally bounces the macOS
- * dock icon when explicit agent notification events are emitted:
+ * NotificationSoundsService — plays sounds, optionally bounces the macOS
+ * dock icon, and shows a Windows completion toast when explicit agent
+ * notification events are emitted:
  *   - Done (agent finishes work)        → done sound + short dock bounce
  *   - Waiting for user (question/approval) → question sound + long dock bounce
  *   - Error                             → error sound + long dock bounce
@@ -12,17 +13,23 @@
  * for every notification event.
  *
  * Dock bouncing only applies on macOS and only when the window is not focused.
- * Uses 'informational' (single short bounce) for all events — macOS does not
- * expose a duration API; 'critical' would bounce indefinitely.
+ * Windows completion toasts use generic copy and never expose agent content.
+ * Dock bouncing uses 'informational' (single short bounce) for all events —
+ * macOS does not expose a duration API; 'critical' would bounce indefinitely.
  *
  * Notifications are suppressed when:
- * - A sound played less than 10 seconds ago (debounce resets on window focus)
+ * - A notification was delivered less than 10 seconds ago (debounce resets on
+ *   window focus)
  * - The triggering agent is currently visible AND the window is focused
  *   (user is actively looking at that agent, so the change is self-evident)
  */
 
-import { app, type BaseWindow } from 'electron';
-import type { WebContents } from 'electron';
+import {
+  app,
+  type BaseWindow,
+  Notification as ElectronNotification,
+  type WebContents,
+} from 'electron';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -156,9 +163,21 @@ export class NotificationSoundsService extends DisposableService {
   /** Reference to the main window for focus checks. */
   private windowRef: (() => BaseWindow | null) | null = null;
 
-  /** Debounce: timestamp of the last sound played (ms since epoch).
+  /** Brings the originating agent forward after a native notification click. */
+  private focusAgentHandler:
+    | ((agentId: string) => void | Promise<void>)
+    | null = null;
+
+  /** Keep native notifications alive until Electron reports completion. */
+  private readonly activeWindowsNotifications = new Set<ElectronNotification>();
+  private readonly MAX_ACTIVE_WINDOWS_NOTIFICATIONS = 32;
+
+  /** Serializes done delivery across asynchronous sound playback. */
+  private doneNotificationInFlight = false;
+
+  /** Debounce: timestamp of the last notification delivered (ms since epoch).
    *  Reset to 0 when the window regains focus. */
-  private lastSoundPlayedAt = 0;
+  private lastNotificationDeliveredAt = 0;
 
   /** Cooldown between consecutive low-priority done notifications. */
   private readonly DEBOUNCE_MS = 10_000;
@@ -229,6 +248,12 @@ export class NotificationSoundsService extends DisposableService {
 
   setWindowRef(ref: () => BaseWindow | null): void {
     this.windowRef = ref;
+  }
+
+  setFocusAgentHandler(
+    handler: (agentId: string) => void | Promise<void>,
+  ): void {
+    this.focusAgentHandler = handler;
   }
 
   /** Push discovered packs to a callback (e.g. to sync into GlobalConfig). */
@@ -595,6 +620,15 @@ export class NotificationSoundsService extends DisposableService {
   // ------------------------------------------------------------------
 
   protected onTeardown(): void {
+    for (const notification of this.activeWindowsNotifications) {
+      try {
+        notification.close();
+      } catch {
+        /* best-effort native notification cleanup */
+      }
+    }
+    this.activeWindowsNotifications.clear();
+    this.doneNotificationInFlight = false;
     this.players.clear();
     this.logger.debug('[NotificationSoundsService] Teardown complete');
   }
@@ -658,14 +692,14 @@ export class NotificationSoundsService extends DisposableService {
 
     // Reset debounce cooldown if the user has focused the window.
     if (windowFocused) {
-      this.lastSoundPlayedAt = 0;
+      this.lastNotificationDeliveredAt = 0;
     }
 
     // Debounce low-priority done notifications only. Approval/question/error
     // must not be suppressed by a previous done sound.
     if (
       event === 'done' &&
-      Date.now() - this.lastSoundPlayedAt < this.DEBOUNCE_MS
+      Date.now() - this.lastNotificationDeliveredAt < this.DEBOUNCE_MS
     ) {
       return;
     }
@@ -680,22 +714,115 @@ export class NotificationSoundsService extends DisposableService {
       return;
     }
 
-    let delivered = false;
-
-    // Play sound if enabled.
-    if (this.soundsEnabled) {
-      delivered = (await this.playSound(event)) || delivered;
+    if (event === 'done') {
+      if (this.doneNotificationInFlight) return;
+      this.doneNotificationInFlight = true;
     }
 
-    // Bounce dock if enabled and on macOS and window is not focused.
-    if (this.dockBounceEnabled && process.platform === 'darwin') {
-      if (!windowFocused) {
-        delivered = this.bounceDock(event) || delivered;
+    try {
+      let delivered = false;
+
+      // Play sound if enabled.
+      if (this.soundsEnabled) {
+        delivered = (await this.playSound(event)) || delivered;
       }
-    }
 
-    if (delivered) {
-      this.lastSoundPlayedAt = Date.now();
+      // Bounce dock if enabled and on macOS and window is not focused.
+      if (this.dockBounceEnabled && process.platform === 'darwin') {
+        if (!windowFocused) {
+          delivered = this.bounceDock(event) || delivered;
+        }
+      }
+
+      // Windows does not have a Dock equivalent. Use a privacy-safe native
+      // toast for completed iterations without exposing task or workspace data.
+      if (event === 'done' && process.platform === 'win32') {
+        delivered = this.showWindowsDoneNotification(agentId) || delivered;
+      }
+
+      if (delivered) {
+        this.lastNotificationDeliveredAt = Date.now();
+      }
+    } finally {
+      if (event === 'done') this.doneNotificationInFlight = false;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Windows native notifications
+  // ------------------------------------------------------------------
+
+  private showWindowsDoneNotification(agentId: string): boolean {
+    let notification: ElectronNotification | null = null;
+
+    try {
+      if (!ElectronNotification.isSupported()) return false;
+
+      notification = new ElectronNotification({
+        title: 'Iteration complete',
+        body: 'The agent is ready for your input.',
+        silent: true,
+      });
+      if (
+        this.activeWindowsNotifications.size >=
+        this.MAX_ACTIVE_WINDOWS_NOTIFICATIONS
+      ) {
+        const oldest = this.activeWindowsNotifications.values().next().value;
+        if (oldest) {
+          this.activeWindowsNotifications.delete(oldest);
+          try {
+            oldest.close();
+          } catch {
+            /* bounded retention remains enforced even if native close fails */
+          }
+        }
+      }
+      this.activeWindowsNotifications.add(notification);
+
+      const cleanup = (): void => {
+        if (notification) {
+          this.activeWindowsNotifications.delete(notification);
+        }
+      };
+
+      notification.once('close', cleanup);
+      notification.once('failed', (_event, error) => {
+        cleanup();
+        this.logger.debug(
+          `[NotificationSoundsService] Windows notification failed: ${error}`,
+        );
+      });
+      notification.once('click', () => {
+        cleanup();
+        const focusAgent = this.focusAgentHandler;
+        if (!focusAgent) return;
+
+        try {
+          void Promise.resolve(focusAgent(agentId)).catch((error) => {
+            this.logger.debug(
+              `[NotificationSoundsService] Notification click focus failed: ${(error as Error).message}`,
+            );
+          });
+        } catch (error) {
+          this.logger.debug(
+            `[NotificationSoundsService] Notification click focus failed: ${(error as Error).message}`,
+          );
+        }
+      });
+
+      notification.show();
+      this.logger.debug(
+        '[NotificationSoundsService] Windows iteration-complete notification shown',
+      );
+      return true;
+    } catch (error) {
+      if (notification) {
+        this.activeWindowsNotifications.delete(notification);
+      }
+      this.logger.debug(
+        `[NotificationSoundsService] Windows notification unavailable: ${(error as Error).message}`,
+      );
+      return false;
     }
   }
 

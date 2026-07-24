@@ -14,6 +14,7 @@ import type {
 } from '../engine/types';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type { ToolApprovalMode } from '@clodex/agent-core/types/tool-approval';
 import {
   createShellCapabilityAction,
@@ -23,6 +24,12 @@ import {
 
 /** Max lines of recent shell output fed to the smart-approval classifier. */
 const SMART_APPROVAL_TAIL_LINES = 30;
+const TOOL_CAPABILITY_CURRENT_SCOPE_CONTEXT_KEY =
+  'toolCapabilityCurrentScopeId';
+const TOOL_CAPABILITY_APPROVAL_ORIGIN_SCOPE_CONTEXT_KEY =
+  'toolCapabilityApprovalOriginScopeId';
+const CREATE_SHELL_SESSION_TOOL_NAME = 'createShellSession';
+const EXECUTE_SHELL_COMMAND_TOOL_NAME = 'executeShellCommand';
 
 function mapWaitUntil(
   wu: ExecuteShellCommandToolInput['wait_until'],
@@ -302,6 +309,176 @@ function toClassifierCwdPrefix(
   return absoluteCwdToMountPrefix(absoluteCwd, getMountedPaths) ?? '';
 }
 
+function readCapabilityScope(context: unknown, key: string): string | null {
+  const value =
+    context && typeof context === 'object'
+      ? (context as Record<string, unknown>)[key]
+      : undefined;
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+    ? value
+    : null;
+}
+
+interface ShellToolApprovalBinding {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+}
+
+type ShellApprovalContinuationState = 'none' | 'approved' | 'blocked';
+
+function resolveShellApprovalContinuationState(
+  messages: readonly unknown[] | undefined,
+  binding: ShellToolApprovalBinding,
+): ShellApprovalContinuationState {
+  if (!messages) return 'none';
+  const lastMessage = messages.at(-1);
+  if (!lastMessage || typeof lastMessage !== 'object') return 'none';
+  const lastRecord = lastMessage as Record<string, unknown>;
+  if (lastRecord.role !== 'tool' || !Array.isArray(lastRecord.content)) {
+    return 'none';
+  }
+
+  const lastParts = lastRecord.content as unknown[];
+  let relevantResponses = 0;
+  let exactApprovals = 0;
+
+  for (const candidate of lastParts) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const response = candidate as Record<string, unknown>;
+    if (
+      response.type !== 'tool-approval-response' ||
+      typeof response.approvalId !== 'string'
+    ) {
+      continue;
+    }
+
+    const requestMatches: Array<{
+      message: Record<string, unknown>;
+      content: unknown[];
+      request: Record<string, unknown>;
+    }> = [];
+    for (const message of messages.slice(0, -1)) {
+      if (!message || typeof message !== 'object') continue;
+      const messageRecord = message as Record<string, unknown>;
+      if (!Array.isArray(messageRecord.content)) continue;
+      for (const part of messageRecord.content) {
+        if (!part || typeof part !== 'object') continue;
+        const request = part as Record<string, unknown>;
+        if (
+          request.type === 'tool-approval-request' &&
+          request.approvalId === response.approvalId
+        ) {
+          requestMatches.push({
+            message: messageRecord,
+            content: messageRecord.content,
+            request,
+          });
+        }
+      }
+    }
+
+    const bindingRequests = requestMatches.filter(
+      ({ request }) => request.toolCallId === binding.toolCallId,
+    );
+    if (bindingRequests.length === 0) continue;
+    relevantResponses++;
+
+    // Approval IDs and tool-call IDs are provider-controlled. Only an exact,
+    // unique request -> call binding is trusted; reused or conflicting IDs
+    // fail closed instead of letting approval for another tool authorize shell.
+    if (
+      requestMatches.length !== 1 ||
+      bindingRequests.length !== 1 ||
+      response.approved !== true
+    ) {
+      return 'blocked';
+    }
+
+    const requestMatch = bindingRequests[0];
+    if (!requestMatch || requestMatch.message.role !== 'assistant') {
+      return 'blocked';
+    }
+    const matchingToolCalls = requestMatch.content.filter((part) => {
+      if (!part || typeof part !== 'object') return false;
+      const record = part as Record<string, unknown>;
+      return (
+        record.type === 'tool-call' && record.toolCallId === binding.toolCallId
+      );
+    }) as Record<string, unknown>[];
+    if (
+      matchingToolCalls.length !== 1 ||
+      matchingToolCalls[0]?.toolName !== binding.toolName ||
+      !isDeepStrictEqual(matchingToolCalls[0]?.input, binding.input)
+    ) {
+      return 'blocked';
+    }
+    exactApprovals++;
+  }
+
+  if (relevantResponses === 0) return 'none';
+  if (
+    relevantResponses !== 1 ||
+    exactApprovals !== 1 ||
+    lastParts.some((part) => {
+      if (!part || typeof part !== 'object') return false;
+      const record = part as Record<string, unknown>;
+      return (
+        record.type === 'tool-result' &&
+        record.toolCallId === binding.toolCallId
+      );
+    })
+  ) {
+    return 'blocked';
+  }
+  return 'approved';
+}
+
+function requireCurrentToolCapabilityScopeId(options: {
+  experimental_context?: unknown;
+}): string {
+  const currentScopeId = readCapabilityScope(
+    options.experimental_context,
+    TOOL_CAPABILITY_CURRENT_SCOPE_CONTEXT_KEY,
+  );
+  if (!currentScopeId) {
+    throw new Error('Shell capability scope unavailable; execution blocked');
+  }
+  return currentScopeId;
+}
+
+function resolveToolCapabilityConsumeContext(
+  options: {
+    experimental_context?: unknown;
+    messages?: readonly unknown[];
+  },
+  binding: ShellToolApprovalBinding,
+): { scopeId: string; humanApprovalEvidence: boolean } {
+  const currentScopeId = requireCurrentToolCapabilityScopeId(options);
+  const approvalState = resolveShellApprovalContinuationState(
+    options.messages,
+    binding,
+  );
+  if (approvalState === 'blocked') {
+    throw new Error(
+      'Shell approval evidence is ambiguous or denied; execution blocked',
+    );
+  }
+  if (approvalState === 'approved') {
+    const approvalOriginScopeId = readCapabilityScope(
+      options.experimental_context,
+      TOOL_CAPABILITY_APPROVAL_ORIGIN_SCOPE_CONTEXT_KEY,
+    );
+    if (!approvalOriginScopeId) {
+      throw new Error(
+        'Shell approval origin scope unavailable; execution blocked',
+      );
+    }
+    return { scopeId: approvalOriginScopeId, humanApprovalEvidence: true };
+  }
+  return { scopeId: currentScopeId, humanApprovalEvidence: false };
+}
+
 export const createShellSession = (
   shellService: ShellExecutionBackend,
   agentInstanceId: string,
@@ -312,25 +489,25 @@ export const createShellSession = (
     description: CREATE_SHELL_SESSION_DESCRIPTION,
     inputSchema: createShellSessionToolInputSchema,
     strict: false,
-    needsApproval: async (
-      input: CreateShellSessionToolInput,
-      { toolCallId },
-    ) => {
+    needsApproval: async (input: CreateShellSessionToolInput, options) => {
+      const { toolCallId } = options;
       if (!capabilitySecurity) {
         throw new Error(
           'Shell capability broker unavailable; session creation blocked',
         );
       }
       const cwd = resolveCwd(input.cwd, getMountedPaths);
-      await capabilitySecurity.stage({
+      const authorization = await capabilitySecurity.stage({
         agentInstanceId,
         toolCallId,
+        scopeId: requireCurrentToolCapabilityScopeId(options),
         action: createShellSessionCapabilityAction(input, cwd),
         authorization: 'policy-approved',
       });
-      return false;
+      return authorization === 'human-required';
     },
-    execute: async (params: CreateShellSessionToolInput, { toolCallId }) => {
+    execute: async (params: CreateShellSessionToolInput, options) => {
+      const { toolCallId } = options;
       try {
         if (!capabilitySecurity) {
           throw new Error(
@@ -338,9 +515,15 @@ export const createShellSession = (
           );
         }
         const cwd = resolveCwd(params.cwd, getMountedPaths);
+        const consumeContext = resolveToolCapabilityConsumeContext(options, {
+          toolCallId,
+          toolName: CREATE_SHELL_SESSION_TOOL_NAME,
+          input: params,
+        });
         await capabilitySecurity.consume({
           agentInstanceId,
           toolCallId,
+          ...consumeContext,
           action: createShellSessionCapabilityAction(params, cwd),
         });
         const sessionId = await shellService.createSession(
@@ -372,10 +555,8 @@ export const executeShellCommand = (
     description: EXECUTE_SHELL_COMMAND_DESCRIPTION,
     inputSchema: executeShellCommandToolInputSchema,
     strict: false,
-    needsApproval: async (
-      input: ExecuteShellCommandToolInput,
-      { toolCallId },
-    ) => {
+    needsApproval: async (input: ExecuteShellCommandToolInput, options) => {
+      const { toolCallId } = options;
       const currentCwd = shellService.getSessionCurrentCwd(input.session_id);
       const classifierCommand = input.command ?? input.stdin ?? '';
       const isPassiveOperation =
@@ -386,13 +567,15 @@ export const executeShellCommand = (
           : toClassifierCwdPrefix(currentCwd, getMountedPaths);
       const capabilityAction = createShellCapabilityAction(input, cwdPrefix);
       const finishDecision = async (needsApproval: boolean) => {
-        await capabilitySecurity?.stage({
+        if (!capabilitySecurity) return needsApproval;
+        const authorization = await capabilitySecurity.stage({
           agentInstanceId,
           toolCallId,
+          scopeId: requireCurrentToolCapabilityScopeId(options),
           action: capabilityAction,
           authorization: needsApproval ? 'human-required' : 'policy-approved',
         });
-        return needsApproval;
+        return authorization === 'human-required';
       };
 
       // Closing an agent-owned terminal is always safe to allow. It only
@@ -493,10 +676,8 @@ export const executeShellCommand = (
 
       return await finishDecision(result.needsApproval);
     },
-    execute: async (
-      params: ExecuteShellCommandToolInput,
-      { toolCallId, abortSignal },
-    ) => {
+    execute: async (params: ExecuteShellCommandToolInput, options) => {
+      const { toolCallId, abortSignal } = options;
       try {
         if (!params.session_id) {
           return {
@@ -508,6 +689,23 @@ export const executeShellCommand = (
             resolved_by: 'abort' as const,
           };
         }
+
+        const consumeCapability = async (
+          action: ReturnType<typeof createShellCapabilityAction>,
+        ): Promise<void> => {
+          if (!capabilitySecurity) return;
+          const consumeContext = resolveToolCapabilityConsumeContext(options, {
+            toolCallId,
+            toolName: EXECUTE_SHELL_COMMAND_TOOL_NAME,
+            input: params,
+          });
+          await capabilitySecurity.consume({
+            agentInstanceId,
+            toolCallId,
+            ...consumeContext,
+            action,
+          });
+        };
 
         // Stdin mode — write raw bytes, capture output
         if (params.stdin !== undefined) {
@@ -527,11 +725,9 @@ export const executeShellCommand = (
           const cwdPrefix = currentCwd
             ? toClassifierCwdPrefix(currentCwd, getMountedPaths)
             : '';
-          await capabilitySecurity?.consume({
-            agentInstanceId,
-            toolCallId,
-            action: createShellCapabilityAction(params, cwdPrefix),
-          });
+          await consumeCapability(
+            createShellCapabilityAction(params, cwdPrefix),
+          );
           const expandedStdin = expandCEscapes(params.stdin);
           const result = await shellService.executeInSession(
             agentInstanceId,
@@ -549,11 +745,7 @@ export const executeShellCommand = (
 
         // Kill mode — terminate session immediately
         if (params.kill) {
-          await capabilitySecurity?.consume({
-            agentInstanceId,
-            toolCallId,
-            action: createShellCapabilityAction(params, ''),
-          });
+          await consumeCapability(createShellCapabilityAction(params, ''));
           const killed = await shellService.killSession(params.session_id);
           return {
             session_id: params.session_id,
@@ -573,11 +765,7 @@ export const executeShellCommand = (
           isPoll || !currentCwd
             ? ''
             : toClassifierCwdPrefix(currentCwd, getMountedPaths);
-        await capabilitySecurity?.consume({
-          agentInstanceId,
-          toolCallId,
-          action: createShellCapabilityAction(params, cwdPrefix),
-        });
+        await consumeCapability(createShellCapabilityAction(params, cwdPrefix));
         const result = await shellService.executeInSession(
           agentInstanceId,
           toolCallId,

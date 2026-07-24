@@ -35,6 +35,9 @@ import {
 import type { AgentCtor, AgentTypeRegistry } from './agents-registry';
 import {
   localAgentStepExecutor,
+  resolveAgentToolCapabilityScopes,
+  TOOL_CAPABILITY_APPROVAL_ORIGIN_SCOPE_CONTEXT_KEY,
+  TOOL_CAPABILITY_CURRENT_SCOPE_CONTEXT_KEY,
   type AgentStepExecutor,
 } from './agent-step-executor';
 import {
@@ -678,6 +681,8 @@ export abstract class BaseAgent<
    * after a new step has already started.
    */
   private _stepGeneration = 0;
+  /** Host-only effect scope retained while an approval chain is paused. */
+  private _pendingToolCapabilityScopeId: string | null = null;
   private _stepStartTime = 0;
   private _stepProviderMode = '';
   private _stepCodingPlanId: string | undefined;
@@ -2495,6 +2500,7 @@ export abstract class BaseAgent<
         this._stepGeneration++;
         this._pendingContinue = null;
         this._pendingSyntheticContinuation = null;
+        this._pendingToolCapabilityScopeId = null;
         try {
           this.stepAbortController?.abort();
         } catch {}
@@ -2626,6 +2632,16 @@ export abstract class BaseAgent<
       this.scheduleMemorySnapshotWrite('queued-messages');
     }
     const queueFlushIndex = flushedIndex ?? -1;
+    const toolCapabilityScopes = resolveAgentToolCapabilityScopes({
+      agentInstanceId: this.instanceId,
+      stepGeneration: stepGen,
+      historyMessageIds: this.state.get().history.map((message) => message.id),
+      isApprovalContinuation,
+      pendingApprovalScopeId: this._pendingToolCapabilityScopeId,
+    });
+    // Publish before streaming begins so an approval clicked immediately after
+    // rendering can still resume in the exact originating host scope.
+    this._pendingToolCapabilityScopeId = toolCapabilityScopes.currentScopeId;
 
     // Snapshot the user-selected model id for THIS step. `updateActiveModelId` accepts
     // writes even while a step is running, so any later read of
@@ -2788,10 +2804,22 @@ export abstract class BaseAgent<
           maxRetries: resolvedConfig.maxRetries ?? 1,
           maxOutputTokens: resolvedConfig.maxOutputTokens,
           abortSignal: this.stepAbortController.signal,
+          experimental_context: {
+            [TOOL_CAPABILITY_CURRENT_SCOPE_CONTEXT_KEY]:
+              toolCapabilityScopes.currentScopeId,
+            [TOOL_CAPABILITY_APPROVAL_ORIGIN_SCOPE_CONTEXT_KEY]:
+              toolCapabilityScopes.approvalOriginScopeId,
+          },
           onAbort: () => {
             // Guard: ignore if a newer step has started (e.g. queue flush)
             if (this._stepGeneration !== stepGen) return;
             stepCallbackFailed = true;
+            if (
+              this._pendingToolCapabilityScopeId ===
+              toolCapabilityScopes.currentScopeId
+            ) {
+              this._pendingToolCapabilityScopeId = null;
+            }
             this.state.commands.setIsWorkingFalse();
           },
           onFinish: async (result) => {
@@ -2801,6 +2829,13 @@ export abstract class BaseAgent<
             stepHasApprovalRequest = result.content.some(
               (part) => part.type === 'tool-approval-request',
             );
+            if (
+              !stepHasApprovalRequest &&
+              this._pendingToolCapabilityScopeId ===
+                toolCapabilityScopes.currentScopeId
+            ) {
+              this._pendingToolCapabilityScopeId = null;
+            }
             finishedResult = result;
 
             // Log step completion details
@@ -2856,6 +2891,12 @@ export abstract class BaseAgent<
             // Guard: ignore if a newer step has started (e.g. queue flush)
             if (this._stepGeneration !== stepGen) return;
             stepCallbackFailed = true;
+            if (
+              this._pendingToolCapabilityScopeId ===
+              toolCapabilityScopes.currentScopeId
+            ) {
+              this._pendingToolCapabilityScopeId = null;
+            }
             // ev.error may not be a real Error instance (e.g. network abort
             // events, plain objects from the AI SDK). Normalize so every
             // downstream consumer (logger, PostHog, UI state) gets a proper Error.
@@ -2974,6 +3015,12 @@ export abstract class BaseAgent<
       });
     } catch (rawError) {
       if (this._stepGeneration !== stepGen) return 'superseded';
+      if (
+        this._pendingToolCapabilityScopeId ===
+        toolCapabilityScopes.currentScopeId
+      ) {
+        this._pendingToolCapabilityScopeId = null;
+      }
       const error =
         rawError instanceof Error
           ? rawError
@@ -3133,6 +3180,12 @@ export abstract class BaseAgent<
     } catch (err) {
       if (this._stepGeneration !== stepGen) {
         return 'superseded';
+      }
+      if (
+        this._pendingToolCapabilityScopeId ===
+        toolCapabilityScopes.currentScopeId
+      ) {
+        this._pendingToolCapabilityScopeId = null;
       }
       const raw = err;
       const error =
@@ -4714,6 +4767,7 @@ export abstract class BaseAgent<
     // recovery path sets a fresh one after calling internalStop().
     this._pendingContinue = null;
     this._pendingSyntheticContinuation = null;
+    this._pendingToolCapabilityScopeId = null;
     try {
       this.stepAbortController?.abort();
     } catch {}

@@ -28,6 +28,7 @@ interface PendingEditRecord {
   preview: PendingEditPreview;
   apply: () => Promise<void>;
   resolve: (decision: PendingEditDecision) => void;
+  resolutionState: 'pending' | 'settling' | 'resolved';
 }
 
 interface FileLockRecord {
@@ -115,6 +116,21 @@ export class PendingEditService {
   public requestApproval(
     request: PendingEditRequest,
   ): Promise<PendingEditDecision> {
+    // The public decision APIs address proposals by tool-call ID. Allowing a
+    // second live proposal to reuse that ID would make Accept/Reject
+    // ambiguous and can strand the first proposal's file lock when its async
+    // apply later settles. Keep the ID unique for the whole pending/settling
+    // lifetime; providers may reuse it again after the first decision has
+    // fully resolved and the record has been removed.
+    if (this.pending.has(request.toolCallId)) {
+      return Promise.resolve({
+        status: 'rejected',
+        message:
+          `Error: Pending edit ${request.toolCallId} is already awaiting resolution. ` +
+          'Wait for the current edit decision before retrying this tool call.',
+      });
+    }
+
     const ownerId = request.lockOwnerId ?? request.toolCallId;
     const lockedBy = this.fileLocks.get(request.absolutePath);
     if (lockedBy && lockedBy.ownerId !== ownerId) {
@@ -163,13 +179,14 @@ export class PendingEditService {
         preview,
         apply: request.apply,
         resolve,
+        resolutionState: 'pending',
       });
     });
   }
 
   public async acceptEdit(pendingEditId: string): Promise<void> {
     const record = this.pending.get(pendingEditId);
-    if (!record) return;
+    if (!record || !this.beginResolution(record)) return;
 
     try {
       await record.apply();
@@ -194,7 +211,7 @@ export class PendingEditService {
 
   public rejectEdit(pendingEditId: string, feedback?: string): void {
     const record = this.pending.get(pendingEditId);
-    if (!record) return;
+    if (!record || !this.beginResolution(record)) return;
 
     const message = feedback?.trim()
       ? `Action rejected by user. Feedback: ${feedback.trim()}`
@@ -205,12 +222,12 @@ export class PendingEditService {
   public abortAgentEdits(agentInstanceId: string): void {
     for (const record of [...this.pending.values()]) {
       if (record.preview.agentInstanceId !== agentInstanceId) continue;
+      if (!this.beginResolution(record)) continue;
       this.resolve(record, {
         status: 'aborted',
         message: 'Operation aborted before the user approved the edit.',
       });
     }
-    this.releaseAgentLocks(agentInstanceId);
   }
 
   public releaseLocksForOwner(ownerId: string): void {
@@ -232,22 +249,42 @@ export class PendingEditService {
     if (record?.ownerId === ownerId) this.fileLocks.delete(absolutePath);
   }
 
+  /**
+   * Atomically claim the first decision for a pending edit. JavaScript runs
+   * this synchronous state transition before `acceptEdit()` can yield to the
+   * asynchronous apply callback, so repeated Accept clicks, a concurrent
+   * Reject, or an abort cannot resolve or apply the same proposal twice.
+   */
+  private beginResolution(record: PendingEditRecord): boolean {
+    if (record.resolutionState !== 'pending') return false;
+    record.resolutionState = 'settling';
+    return true;
+  }
+
   private resolve(
     record: PendingEditRecord,
     decision: PendingEditDecision,
   ): void {
-    this.pending.delete(record.preview.id);
-    this.releaseLock(
-      record.preview.path,
-      record.preview.lockOwnerId ?? record.preview.toolCallId,
-    );
-    this.store.update((draft) => {
-      const entry = draft.toolbox[record.preview.agentInstanceId];
-      if (!entry) return;
-      entry.pendingProposedEdits = entry.pendingProposedEdits.filter(
-        (edit) => edit.id !== record.preview.id,
+    if (record.resolutionState === 'resolved') return;
+    record.resolutionState = 'resolved';
+
+    // A stale record must not delete a newer request that reused the same ID.
+    // The original promise is still resolved, but shared state is only mutated
+    // when this is the record currently owned by the service.
+    if (this.pending.get(record.preview.id) === record) {
+      this.pending.delete(record.preview.id);
+      this.releaseLock(
+        record.preview.path,
+        record.preview.lockOwnerId ?? record.preview.toolCallId,
       );
-    });
+      this.store.update((draft) => {
+        const entry = draft.toolbox[record.preview.agentInstanceId];
+        if (!entry) return;
+        entry.pendingProposedEdits = entry.pendingProposedEdits.filter(
+          (edit) => edit.id !== record.preview.id,
+        );
+      });
+    }
     record.resolve(decision);
   }
 }

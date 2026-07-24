@@ -1259,7 +1259,7 @@ export const ChatHistory = () => {
         return (
           <div
             ref={lastAssistantMessageRef}
-            className="mx-auto w-full max-w-3xl px-1.5 pb-[calc(96px+var(--status-card-height,0px))]"
+            className="mx-auto w-full max-w-3xl px-1.5 pb-[96px]"
           >
             <div className="pl-6" style={{ paddingRight }}>
               {messageComponent}
@@ -1387,7 +1387,7 @@ export const ChatHistory = () => {
   // Empty state component for suggestions
   const EmptyPlaceholder = useCallback(() => {
     return (
-      <div className="mx-auto flex h-full w-full max-w-3xl flex-col items-center justify-center gap-1 px-6 pt-8 pb-[calc(24px+var(--status-card-height,0px))] text-sm">
+      <div className="mx-auto flex h-full w-full max-w-3xl flex-col items-center justify-center gap-1 px-6 pt-8 pb-[24px] text-sm">
         <EmptyChatSuggestions
           removedSuggestionIds={removedSuggestionIds}
           onDismiss={handleRemoveSuggestion}
