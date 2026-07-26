@@ -14,6 +14,7 @@ import type { Logger } from '../../host/logger';
 import { AeadDataProtection } from '../../host/data-protection';
 import { AgentTypes } from '../../types/agent';
 import type { TaskGoal } from '../../types/agent';
+import { DEFAULT_FILE_EDIT_APPROVAL_MODE } from '../../types/file-edit-approval';
 
 /**
  * Test-DB scaffold: file-based libsql in a temp dir, schema migrated.
@@ -73,6 +74,7 @@ interface InsertArgs {
   goal?: TaskGoal | null;
   mountedWorkspaces?: string | null;
   toolApprovalMode?: string;
+  fileEditApprovalMode?: string;
   instanceConfig?: string;
   activeModelId?: string;
 }
@@ -101,6 +103,8 @@ async function insertAgentInstance(
     goal: row.goal ?? null,
     mountedWorkspaces: row.mountedWorkspaces ?? null,
     toolApprovalMode: row.toolApprovalMode ?? 'alwaysAsk',
+    fileEditApprovalMode:
+      row.fileEditApprovalMode ?? DEFAULT_FILE_EDIT_APPROVAL_MODE,
   });
 }
 
@@ -121,16 +125,16 @@ describe('AgentPersistenceDB.pruneStaleEmptyAgents', () => {
       client,
       registry: [
         {
-          version: 11,
+          version: 12,
           up: async () => {
             // No-op: the schema is initialised via `initSchemaSql` by
-            // `migrateDatabase` for fresh DBs. Schema-version 11 is current
+            // `migrateDatabase` for fresh DBs. Schema-version 12 is current
             // upstream — tests run against the same schema the app does.
           },
         },
       ],
       initSql: initSchemaSql,
-      schemaVersion: 11,
+      schemaVersion: 12,
     });
 
     persistence = new AgentPersistenceDB({
@@ -362,9 +366,9 @@ describe('AgentPersistenceDB task lifecycle', () => {
     await migrateDatabase({
       db,
       client,
-      registry: [{ version: 11, up: async () => {} }],
+      registry: [{ version: 12, up: async () => {} }],
       initSql: initSchemaSql,
-      schemaVersion: 11,
+      schemaVersion: 12,
     });
 
     persistence = new AgentPersistenceDB({
@@ -471,6 +475,7 @@ describe('AgentPersistenceDB task lifecycle', () => {
         },
         mountedWorkspaces: [{ path: '/workspace', permissions: [] }],
         toolApprovalMode: 'alwaysAsk',
+        fileEditApprovalMode: 'autoWorkspace',
       },
       sourceHistory,
     );
@@ -501,6 +506,7 @@ describe('AgentPersistenceDB task lifecycle', () => {
       forkedFromAgentId: null,
       forkedFromMessageId: null,
       archivedAt: null,
+      fileEditApprovalMode: 'autoWorkspace',
     });
     expect(source?.history.map((message) => message.id)).toEqual([
       'user-1',
@@ -528,11 +534,39 @@ describe('AgentPersistenceDB task lifecycle', () => {
       forkedFromAgentId: 'source-task',
       forkedFromMessageId: 'assistant-1',
       archivedAt: null,
+      fileEditApprovalMode: 'manual',
     });
     expect(fork?.history.map((message) => message.id)).toEqual([
       'user-1',
       'assistant-1',
     ]);
+  });
+
+  it('updates file-edit approval mode narrowly and fails closed on corrupt rows', async () => {
+    await insertAgentInstance(db, {
+      id: 'file-edit-mode-task',
+      fileEditApprovalMode: 'manual',
+    });
+
+    await expect(
+      persistence.updateFileEditApprovalMode(
+        'file-edit-mode-task',
+        'autoWorkspace',
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      persistence.updateFileEditApprovalMode('missing-task', 'autoWorkspace'),
+    ).resolves.toBe(false);
+    await expect(
+      persistence.getStoredAgentInstanceById('file-edit-mode-task'),
+    ).resolves.toMatchObject({ fileEditApprovalMode: 'autoWorkspace' });
+
+    await client.execute(
+      "UPDATE agentInstances SET file_edit_approval_mode = 'unexpected' WHERE id = 'file-edit-mode-task'",
+    );
+    await expect(
+      persistence.getStoredAgentInstanceById('file-edit-mode-task'),
+    ).resolves.toMatchObject({ fileEditApprovalMode: 'manual' });
   });
 
   it('does not overwrite immutable lifecycle metadata during normal state saves', async () => {
@@ -633,9 +667,9 @@ describe('AgentPersistenceDB data protection', () => {
     await migrateDatabase({
       db,
       client,
-      registry: [{ version: 11, up: async () => {} }],
+      registry: [{ version: 12, up: async () => {} }],
       initSql: initSchemaSql,
-      schemaVersion: 11,
+      schemaVersion: 12,
     });
   });
 
@@ -685,6 +719,7 @@ describe('AgentPersistenceDB data protection', () => {
           { path: '/private/workspace-secret', permissions: [] },
         ],
         toolApprovalMode: 'alwaysAsk',
+        fileEditApprovalMode: 'manual',
       },
       [
         {
@@ -808,6 +843,7 @@ describe('AgentPersistenceDB data protection', () => {
         { path: '/legacy/workspace-secret', permissions: [] },
       ],
       toolApprovalMode: 'alwaysAsk',
+      fileEditApprovalMode: 'manual',
     });
     await db.insert(schema.agentMessages).values({
       agentInstanceId: 'legacy-agent',
@@ -898,6 +934,7 @@ describe('AgentPersistenceDB data protection', () => {
         usedTokens: 0,
         mountedWorkspaces: [],
         toolApprovalMode: 'alwaysAsk',
+        fileEditApprovalMode: 'manual',
       },
       [],
     );
@@ -934,6 +971,7 @@ describe('AgentPersistenceDB data protection', () => {
           usedTokens: 0,
           mountedWorkspaces: [],
           toolApprovalMode: 'alwaysAsk',
+          fileEditApprovalMode: 'manual',
         },
         [],
       );

@@ -19,7 +19,8 @@ export interface AgentsSeamHandlerDeps {
  *     interacts exclusively with migrated state and carries no
  *     persistence, validation, or telemetry side effects.
  *
- * Note: `agents.setToolApprovalMode` and `agents.setActiveModelId`
+ * Note: `agents.setToolApprovalMode`, `agents.setFileEditApprovalMode`, and
+ * `agents.setActiveModelId`
  * are **not** routed through the bridge — their handlers stay on
  * `AgentManagerService` because they mix migrated state writes with
  * persistence, validation, and telemetry. Only their internal

@@ -134,6 +134,7 @@ declare global {
   interface WindowEventMap {
     'chat-message-sent': CustomEvent<{ message: AgentMessage }>;
     'chat-message-failed': CustomEvent<{ clientId: string }>;
+    'chat-message-queued': CustomEvent<{ clientId: string }>;
     'chat-swarm-completed': CustomEvent<{ clientId?: string }>;
     'chat-workspace-preparation-started': CustomEvent<{
       clientId: string;
@@ -809,6 +810,19 @@ export const ChatHistory = () => {
       pendingWorkingRef.current = false;
     };
 
+    const handleMessageQueued = (e: CustomEvent<{ clientId: string }>) => {
+      // A backend queue acknowledgement is authoritative. The message has not
+      // been admitted to model history yet, so remove any renderer-side
+      // optimistic copy and let the queue surface represent it.
+      setOptimisticMessages((prev) =>
+        prev.filter((m) => m._clientId !== e.detail.clientId),
+      );
+      setWorkspacePreparation((current) =>
+        current?.clientId === e.detail.clientId ? null : current,
+      );
+      pendingWorkingRef.current = false;
+    };
+
     const handleSwarmCompleted = (e: CustomEvent<{ clientId?: string }>) => {
       if (e.detail.clientId) {
         setOptimisticMessages((prev) =>
@@ -858,6 +872,7 @@ export const ChatHistory = () => {
 
     window.addEventListener('chat-message-sent', handleMessageSent);
     window.addEventListener('chat-message-failed', handleMessageFailed);
+    window.addEventListener('chat-message-queued', handleMessageQueued);
     window.addEventListener('chat-swarm-completed', handleSwarmCompleted);
     window.addEventListener(
       'chat-workspace-preparation-started',
@@ -871,6 +886,7 @@ export const ChatHistory = () => {
     return () => {
       window.removeEventListener('chat-message-sent', handleMessageSent);
       window.removeEventListener('chat-message-failed', handleMessageFailed);
+      window.removeEventListener('chat-message-queued', handleMessageQueued);
       window.removeEventListener('chat-swarm-completed', handleSwarmCompleted);
       window.removeEventListener(
         'chat-workspace-preparation-started',
@@ -1243,7 +1259,7 @@ export const ChatHistory = () => {
         return (
           <div
             ref={lastAssistantMessageRef}
-            className="mx-auto w-full max-w-3xl px-1.5 pb-[calc(96px+var(--status-card-height,0px))]"
+            className="mx-auto w-full max-w-3xl px-1.5 pb-[96px]"
           >
             <div className="pl-6" style={{ paddingRight }}>
               {messageComponent}
@@ -1371,7 +1387,7 @@ export const ChatHistory = () => {
   // Empty state component for suggestions
   const EmptyPlaceholder = useCallback(() => {
     return (
-      <div className="mx-auto flex h-full w-full max-w-3xl flex-col items-center justify-center gap-1 px-6 pt-8 pb-[calc(24px+var(--status-card-height,0px))] text-sm">
+      <div className="mx-auto flex h-full w-full max-w-3xl flex-col items-center justify-center gap-1 px-6 pt-8 pb-[24px] text-sm">
         <EmptyChatSuggestions
           removedSuggestionIds={removedSuggestionIds}
           onDismiss={handleRemoveSuggestion}

@@ -52,6 +52,11 @@ export class AppMenuService extends DisposableService {
     this.logger.debug('[AppMenuService] Teardown complete');
   }
   private updateApplicationMenu() {
+    if (process.platform !== 'darwin') {
+      app.applicationMenu = null;
+      return;
+    }
+
     app.applicationMenu = Menu.buildFromTemplate([
       {
         label: app.name,

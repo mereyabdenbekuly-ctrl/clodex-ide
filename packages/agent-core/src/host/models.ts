@@ -212,6 +212,24 @@ export interface ModelWithOptions {
    * `tools.0.custom.strict: Extra inputs are not permitted`.
    */
   stripStrictFromTools?: boolean;
+  /**
+   * Host-owned revocation check for delayed in-process uses of this exact
+   * route. It is never serialized; credential/endpoint/auth changes should
+   * invalidate it.
+   */
+  routeLease?: {
+    isValid(): boolean;
+    /**
+     * Rebuilds the same admitted provider route with a fresh host-owned trace.
+     * The host must reject the fork after revocation. This lets delayed
+     * internal observers retain exact route provenance without reusing the
+     * originating user-facing request's tracing middleware.
+     */
+    forkTrace?(
+      traceId: string,
+      metadata?: Record<string, unknown>,
+    ): ModelWithOptions;
+  };
 }
 
 /**

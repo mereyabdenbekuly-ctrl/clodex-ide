@@ -17,7 +17,7 @@ import {
   type IsolatedAgentTurnResult,
 } from './isolated-agent-turn';
 
-export const AGENT_HOST_PROTOCOL_VERSION = 4;
+export const AGENT_HOST_PROTOCOL_VERSION = 5;
 export const AGENT_HOST_HEARTBEAT_INTERVAL_MS = 5_000;
 
 export interface AgentRuntimeSummary {

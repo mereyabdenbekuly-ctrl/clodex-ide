@@ -13,6 +13,7 @@ import type {
   MountEntry,
   WorkspaceGitSummary,
 } from '@clodex/agent-core/types/metadata';
+import type { SendUserMessageResult } from '@clodex/agent-core/agents';
 import type { ReactSelectedElementInfo } from '../../selected-elements/react';
 import type { ApiClient } from '@clodex/api-client';
 import type { SelectedElement } from '../../selected-elements';
@@ -37,6 +38,7 @@ import type {
   HostPermissionOverrides,
   WidgetId,
   DevToolbarOriginSettings,
+  FileEditApprovalMode,
   ToolApprovalMode,
   SocialAuthProvider,
 } from './shared-types';
@@ -1594,14 +1596,14 @@ export type KartonContract = {
       sendUserMessage: (
         agentId: string,
         message: AgentMessage & { role: 'user' },
-      ) => Promise<void>;
+      ) => Promise<SendUserMessageResult>;
       /** Queue a user message AND resolve a pending question in one atomic call. */
       interruptQuestionWithMessage: (
         agentId: string,
         questionId: string,
         message: AgentMessage & { role: 'user' },
         draftAnswers: Record<string, QuestionAnswerValue>,
-      ) => Promise<void>;
+      ) => Promise<SendUserMessageResult>;
       sendToolApprovalResponse: (
         instanceId: string,
         approvalId: string,
@@ -1618,6 +1620,10 @@ export type KartonContract = {
          * "Always allow" clicks made during an approval request.
          */
         source?: 'panel-combobox' | 'inline-approval-button',
+      ) => Promise<void>;
+      setFileEditApprovalMode: (
+        instanceId: string,
+        mode: FileEditApprovalMode,
       ) => Promise<void>;
       stop: (agentId: string) => Promise<void>;
       flushQueue: (agentId: string) => Promise<void>;
@@ -2816,10 +2822,8 @@ export type KartonContract = {
         run: (
           trigger: HookTrigger,
           context?: {
-            workspacePath?: string;
-            commandApproved?: boolean;
-            workspaceTrusted?: boolean;
             values?: Record<string, unknown>;
+            manualHookId?: string;
           },
         ) => Promise<HookRunResult>;
       };

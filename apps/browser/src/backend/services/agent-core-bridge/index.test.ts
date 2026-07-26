@@ -1131,6 +1131,7 @@ describe('AgentCoreBridge (Phase 6 agent instances mirror)', () => {
       queuedMessages: [],
       activeModelId: 'claude-sonnet-4.6',
       toolApprovalMode: 'smart',
+      fileEditApprovalMode: 'manual',
       pendingApprovals: {},
       inputState: '',
       usedTokens: 0,

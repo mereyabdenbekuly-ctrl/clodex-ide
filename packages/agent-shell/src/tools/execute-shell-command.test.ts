@@ -29,6 +29,13 @@ const createShellService = (): ShellService =>
     getSessionCurrentCwd: vi.fn(() => '/tmp'),
   }) as unknown as ShellService;
 
+const capabilityContext = {
+  experimental_context: {
+    toolCapabilityCurrentScopeId: 'a'.repeat(64),
+    toolCapabilityApprovalOriginScopeId: null,
+  },
+};
+
 describe('executeShellCommand approval', () => {
   it('includes current 16-hex workspace prefixes in unknown-cwd diagnostics', async () => {
     const currentPrefix = 'w2c9ed34e414edf8e';
@@ -41,7 +48,7 @@ describe('executeShellCommand approval', () => {
           ['att', '/tmp/attachments'],
         ]),
       {
-        stage: vi.fn(async () => undefined),
+        stage: vi.fn(async ({ authorization }) => authorization),
         consume: vi.fn(async () => undefined),
       },
     );
@@ -70,7 +77,7 @@ describe('executeShellCommand approval', () => {
     const clearPendingOutputs = vi.fn();
     Object.assign(shellService, { executeInSession, clearPendingOutputs });
     const security: ShellCapabilitySecurityDeps = {
-      stage: vi.fn(async () => undefined),
+      stage: vi.fn(async ({ authorization }) => authorization),
       consume: vi.fn(async () => undefined),
     };
     const tool = executeShellCommand(
@@ -93,7 +100,11 @@ describe('executeShellCommand approval', () => {
       session_id: 'session-1',
       command: 'pnpm test',
     };
-    const options = { toolCallId: 'tool-1', messages: [] };
+    const options = {
+      toolCallId: 'tool-1',
+      messages: [],
+      ...capabilityContext,
+    };
 
     await expect(tool.needsApproval(input, options)).resolves.toBe(false);
     await tool.execute(input, options);
@@ -114,6 +125,7 @@ describe('executeShellCommand approval', () => {
       expect.objectContaining({
         agentInstanceId: 'agent-1',
         toolCallId: 'tool-1',
+        scopeId: 'a'.repeat(64),
         action: expect.objectContaining({
           operation: 'command',
           command: 'pnpm test',
@@ -124,6 +136,281 @@ describe('executeShellCommand approval', () => {
     expect(
       vi.mocked(security.consume).mock.invocationCallOrder[0],
     ).toBeLessThan(executeInSession.mock.invocationCallOrder[0]!);
+  });
+
+  it('keeps the effective human requirement when a restage strengthens authorization', async () => {
+    const shellService = createShellService();
+    const security: ShellCapabilitySecurityDeps = {
+      stage: vi.fn(async () => 'human-required'),
+      consume: vi.fn(async () => undefined),
+    };
+    const tool = executeShellCommand(
+      shellService,
+      'agent-1',
+      () => 'alwaysAllow',
+      () => new Map([['wtest', '/tmp']]),
+      createSmartApprovalDeps(),
+      undefined,
+      security,
+    );
+    if (typeof tool.needsApproval !== 'function') {
+      throw new Error('Expected executeShellCommand to define needsApproval');
+    }
+
+    await expect(
+      tool.needsApproval(
+        {
+          explanation: 'Inspect status',
+          session_id: 'session-1',
+          command: 'git status',
+        },
+        {
+          toolCallId: 'tool-1',
+          messages: [],
+          ...capabilityContext,
+        },
+      ),
+    ).resolves.toBe(true);
+  });
+
+  it('fails closed when the trusted capability scope is missing', async () => {
+    const security: ShellCapabilitySecurityDeps = {
+      stage: vi.fn(async ({ authorization }) => authorization),
+      consume: vi.fn(async () => undefined),
+    };
+    const tool = executeShellCommand(
+      createShellService(),
+      'agent-1',
+      () => 'alwaysAllow',
+      () => new Map([['wtest', '/tmp']]),
+      createSmartApprovalDeps(),
+      undefined,
+      security,
+    );
+    if (typeof tool.needsApproval !== 'function') {
+      throw new Error('Expected executeShellCommand to define needsApproval');
+    }
+
+    await expect(
+      tool.needsApproval(
+        {
+          explanation: 'Inspect status',
+          session_id: 'session-1',
+          command: 'git status',
+        },
+        { toolCallId: 'tool-1', messages: [] },
+      ),
+    ).rejects.toThrow('scope unavailable');
+  });
+
+  it('uses approval origin scope only for the approved old call', async () => {
+    const shellService = createShellService();
+    Object.assign(shellService, {
+      executeInSession: vi.fn(async () => ({
+        sessionId: 'session-1',
+        output: 'ok',
+        exitCode: 0,
+        sessionExited: false,
+        timedOut: false,
+        resolvedBy: 'exit' as const,
+      })),
+      clearPendingOutputs: vi.fn(),
+    });
+    const security: ShellCapabilitySecurityDeps = {
+      stage: vi.fn(async ({ authorization }) => authorization),
+      consume: vi.fn(async () => undefined),
+    };
+    const tool = executeShellCommand(
+      shellService,
+      'agent-1',
+      () => 'alwaysAllow',
+      () => new Map([['wtest', '/tmp']]),
+      createSmartApprovalDeps(),
+      undefined,
+      security,
+    );
+    if (
+      typeof tool.needsApproval !== 'function' ||
+      typeof tool.execute !== 'function'
+    ) {
+      throw new Error('Expected executable shell tool with approval hook');
+    }
+
+    const input = {
+      explanation: 'Run tests',
+      session_id: 'session-1',
+      command: 'pnpm test',
+    };
+    const approvalMessages = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'tool-1',
+            toolName: 'executeShellCommand',
+            input,
+          },
+          {
+            type: 'tool-approval-request',
+            approvalId: 'approval-1',
+            toolCallId: 'tool-1',
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-approval-response',
+            approvalId: 'approval-1',
+            approved: true,
+          },
+        ],
+      },
+    ];
+    const continuationContext = {
+      experimental_context: {
+        toolCapabilityCurrentScopeId: 'c'.repeat(64),
+        toolCapabilityApprovalOriginScopeId: 'b'.repeat(64),
+      },
+    };
+
+    await tool.execute(input, {
+      toolCallId: 'tool-1',
+      messages: approvalMessages,
+      ...continuationContext,
+    } as never);
+    expect(security.consume).toHaveBeenLastCalledWith(
+      expect.objectContaining({ scopeId: 'b'.repeat(64) }),
+    );
+
+    const messagesAfterApprovedResult = [
+      ...approvalMessages,
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'tool-1',
+            toolName: 'executeShellCommand',
+            output: { type: 'text', value: 'ok' },
+          },
+        ],
+      },
+    ];
+    await tool.needsApproval(input, {
+      toolCallId: 'tool-1',
+      messages: messagesAfterApprovedResult,
+      ...continuationContext,
+    } as never);
+    await tool.execute(input, {
+      toolCallId: 'tool-1',
+      messages: messagesAfterApprovedResult,
+      ...continuationContext,
+    } as never);
+
+    expect(security.stage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ scopeId: 'c'.repeat(64) }),
+    );
+    expect(security.consume).toHaveBeenLastCalledWith(
+      expect.objectContaining({ scopeId: 'c'.repeat(64) }),
+    );
+  });
+
+  it('blocks conflicting approval bindings when a provider reuses a tool call id', async () => {
+    const shellService = createShellService();
+    const executeInSession = vi.fn(async () => ({
+      sessionId: 'session-1',
+      output: 'should not run',
+      exitCode: 0,
+      sessionExited: false,
+      timedOut: false,
+      resolvedBy: 'exit' as const,
+    }));
+    Object.assign(shellService, {
+      executeInSession,
+      clearPendingOutputs: vi.fn(),
+    });
+    const security: ShellCapabilitySecurityDeps = {
+      stage: vi.fn(async ({ authorization }) => authorization),
+      consume: vi.fn(async () => undefined),
+    };
+    const tool = executeShellCommand(
+      shellService,
+      'agent-1',
+      () => 'alwaysAsk',
+      () => new Map([['wtest', '/tmp']]),
+      createSmartApprovalDeps(),
+      undefined,
+      security,
+    );
+    if (typeof tool.execute !== 'function') {
+      throw new Error('Expected executable shell tool');
+    }
+
+    const shellInput = {
+      explanation: 'Run tests',
+      session_id: 'session-1',
+      command: 'pnpm test',
+    };
+    const conflictingApprovalMessages = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'reused-tool-call',
+            toolName: 'executeShellCommand',
+            input: shellInput,
+          },
+          {
+            type: 'tool-approval-request',
+            approvalId: 'shell-approval',
+            toolCallId: 'reused-tool-call',
+          },
+          {
+            type: 'tool-call',
+            toolCallId: 'reused-tool-call',
+            toolName: 'read',
+            input: { path: 'README.md' },
+          },
+          {
+            type: 'tool-approval-request',
+            approvalId: 'read-approval',
+            toolCallId: 'reused-tool-call',
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-approval-response',
+            approvalId: 'read-approval',
+            approved: true,
+          },
+          {
+            type: 'tool-approval-response',
+            approvalId: 'shell-approval',
+            approved: false,
+          },
+        ],
+      },
+    ];
+
+    await expect(
+      tool.execute(shellInput, {
+        toolCallId: 'reused-tool-call',
+        messages: conflictingApprovalMessages,
+        experimental_context: {
+          toolCapabilityCurrentScopeId: 'c'.repeat(64),
+          toolCapabilityApprovalOriginScopeId: 'b'.repeat(64),
+        },
+      } as never),
+    ).rejects.toThrow('approval evidence is ambiguous or denied');
+    expect(security.consume).not.toHaveBeenCalled();
+    expect(executeInSession).not.toHaveBeenCalled();
   });
 
   it('blocks execution when the session cwd changes after authorization', async () => {
@@ -137,6 +424,7 @@ describe('executeShellCommand approval', () => {
     const security: ShellCapabilitySecurityDeps = {
       stage: vi.fn(async ({ action }) => {
         stagedAction = action;
+        return 'policy-approved';
       }),
       consume: vi.fn(async ({ action }) => {
         if (JSON.stringify(action) !== JSON.stringify(stagedAction)) {
@@ -168,7 +456,11 @@ describe('executeShellCommand approval', () => {
       session_id: 'session-1',
       command: 'pnpm test',
     };
-    const options = { toolCallId: 'tool-1', messages: [] };
+    const options = {
+      toolCallId: 'tool-1',
+      messages: [],
+      ...capabilityContext,
+    };
 
     await expect(tool.needsApproval(input, options)).resolves.toBe(false);
     vi.mocked(shellService.getSessionCurrentCwd).mockReturnValue('/other');
@@ -213,7 +505,7 @@ describe('executeShellCommand approval', () => {
     const shellService = createShellService();
     const smartApproval = createSmartApprovalDeps();
     const security: ShellCapabilitySecurityDeps = {
-      stage: vi.fn(async () => undefined),
+      stage: vi.fn(async ({ authorization }) => authorization),
       consume: vi.fn(async () => undefined),
     };
     const guardian = createGuardianApprovalDeps({
@@ -242,7 +534,7 @@ describe('executeShellCommand approval', () => {
           session_id: 'session-1',
           command: 'git push --force origin main',
         },
-        { toolCallId: 'tool-1', messages: [] },
+        { toolCallId: 'tool-1', messages: [], ...capabilityContext },
       ),
     ).resolves.toBe(true);
     expect(guardian.recordPendingApproval).toHaveBeenCalledWith(

@@ -21,8 +21,13 @@ function createTestModelProviderService({
   modelThinkingOverrides = {},
   customEndpoints = [],
   providerProfiles = [],
+  providerModelCatalogs = {},
   authService,
   providerApiKeys = {},
+  telemetryService,
+  onPreferencesListener,
+  onCredentialsListener,
+  onAuthCredentialListener,
 }: {
   providerModes?: Record<string, 'clodex' | 'official' | 'custom'>;
   connectedCodingPlanIds?: Record<string, string | undefined>;
@@ -35,13 +40,19 @@ function createTestModelProviderService({
   >;
   customEndpoints?: typeof defaultUserPreferences.customEndpoints;
   providerProfiles?: typeof defaultUserPreferences.providerProfiles;
+  providerModelCatalogs?: typeof defaultUserPreferences.providerModelCatalogs;
   authService?: unknown;
   providerApiKeys?: Record<string, string>;
+  telemetryService?: unknown;
+  onPreferencesListener?: (listener: () => void) => void;
+  onCredentialsListener?: (listener: () => void) => void;
+  onAuthCredentialListener?: (listener: () => void) => void;
 } = {}) {
   const preferences = structuredClone(defaultUserPreferences);
   preferences.agent.modelThinkingOverrides = modelThinkingOverrides;
   preferences.customEndpoints = customEndpoints;
   preferences.providerProfiles = providerProfiles;
+  preferences.providerModelCatalogs = providerModelCatalogs;
   for (const [provider, mode] of Object.entries(providerModes)) {
     const config =
       preferences.providerConfigs[
@@ -59,25 +70,35 @@ function createTestModelProviderService({
   }
 
   return new ModelProviderService(
-    {
+    (telemetryService ?? {
       withTracing: vi.fn((model) => model),
+      forkTracing: vi.fn((model) => model),
       captureException: vi.fn(),
-    } as any,
+    }) as any,
     (authService ?? {
       accessToken: 'clodex-token',
       modelAccessToken: 'ide-model-token',
       ensureModelAccessToken: vi.fn().mockResolvedValue('ide-model-token'),
       authState: { models: [] },
+      registerCredentialEpochChangeCallback: vi.fn((listener: () => void) => {
+        onAuthCredentialListener?.(listener);
+      }),
     }) as any,
     {
       get: vi.fn(() => preferences),
       decryptProviderApiKey: vi.fn(() => 'provider-api-key'),
       cacheProviderProfileModels: vi.fn(),
+      addListener: vi.fn((listener: () => void) => {
+        onPreferencesListener?.(listener);
+      }),
     } as any,
     {
       getProviderApiKey: vi.fn(
         (reference: string) => providerApiKeys[reference] ?? null,
       ),
+      addProviderApiKeyListener: vi.fn((listener: () => void) => {
+        onCredentialsListener?.(listener);
+      }),
     } as any,
   );
 }
@@ -85,6 +106,195 @@ function createTestModelProviderService({
 const agentStepMetadata = {
   [MODEL_REQUEST_PURPOSE_METADATA_KEY]: 'agent-step',
 };
+
+describe('model route leases', () => {
+  it('forks the admitted route onto a fresh internal-review trace and revokes both together', async () => {
+    let invalidatePreferencesRoute: (() => void) | undefined;
+    let originatingTraceConfig: Record<string, any> | undefined;
+    let admittedRouteModel: unknown;
+    const withTracing = vi.fn((model: unknown, config: Record<string, any>) => {
+      admittedRouteModel = model;
+      originatingTraceConfig = config;
+      return model;
+    });
+    const forkTracing = vi.fn((model: unknown, config: Record<string, any>) => {
+      originatingTraceConfig = {
+        ...(originatingTraceConfig ?? {}),
+        ...config,
+        posthogProperties: {
+          ...(originatingTraceConfig?.posthogProperties ?? {}),
+          ...(config.posthogProperties ?? {}),
+        },
+      };
+      return model;
+    });
+    const ensureModelAccessTokenForRoute = vi.fn(
+      async () => 'provider-scoped-route-token',
+    );
+    const service = createTestModelProviderService({
+      modelThinkingOverrides: { 'gpt-5.5': { value: 'high' } },
+      telemetryService: {
+        withTracing,
+        forkTracing,
+        captureException: vi.fn(),
+      },
+      authService: {
+        accessToken: 'clodex-session-token',
+        modelAccessToken: 'provider-scoped-route-token',
+        ensureModelAccessTokenForRoute,
+        authState: { models: [] },
+      },
+      onPreferencesListener: (listener) => {
+        invalidatePreferencesRoute = listener;
+      },
+    });
+
+    const originating = await service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'originating-agent-trace',
+      {
+        ...agentStepMetadata,
+        $model_task_role: 'analysis',
+        originating_marker: 'turn-a',
+      },
+    );
+    const forkTrace = originating.routeLease?.forkTrace;
+    expect(originating.routeLease?.isValid()).toBe(true);
+    expect(forkTrace).toBeTypeOf('function');
+
+    const forked = forkTrace?.('agent-os-hook:hook-1:review-trace', {
+      [MODEL_REQUEST_PURPOSE_METADATA_KEY]: 'internal',
+      $model_task_role: 'review',
+      model_request_purpose: 'internal',
+      task_role: 'review',
+      hook_id: 'hook-1',
+    });
+
+    expect(forked?.routeLease?.isValid()).toBe(true);
+    expect(forked?.providerMode).toBe(originating.providerMode);
+    expect(forked?.reasoningSignatureSource).toEqual(
+      originating.reasoningSignatureSource,
+    );
+    expect(ensureModelAccessTokenForRoute).toHaveBeenCalledTimes(1);
+    expect(forkTracing).toHaveBeenCalledWith(
+      admittedRouteModel,
+      expect.objectContaining({
+        posthogTraceId: 'agent-os-hook:hook-1:review-trace',
+      }),
+    );
+    expect(originatingTraceConfig).toMatchObject({
+      posthogTraceId: 'agent-os-hook:hook-1:review-trace',
+      posthogProperties: expect.objectContaining({
+        posthogTraceId: 'agent-os-hook:hook-1:review-trace',
+        originating_marker: 'turn-a',
+        model_request_purpose: 'internal',
+        task_role: 'review',
+        hook_id: 'hook-1',
+      }),
+    });
+    expect(originating.providerOptions).toMatchObject({
+      clodex: { reasoning: { effort: 'high' } },
+    });
+    expect(forked?.providerOptions).toBe(originating.providerOptions);
+
+    invalidatePreferencesRoute?.();
+    expect(originating.routeLease?.isValid()).toBe(false);
+    expect(forked?.routeLease?.isValid()).toBe(false);
+    expect(() =>
+      forkTrace?.('agent-os-hook:hook-1:revoked', {
+        [MODEL_REQUEST_PURPOSE_METADATA_KEY]: 'internal',
+      }),
+    ).toThrow('Cannot fork a revoked model route');
+    await expect(
+      Promise.resolve().then(() => originating.model.doGenerate({} as never)),
+    ).rejects.toThrow('revoked before request dispatch');
+    await expect(
+      Promise.resolve().then(() => originating.model.doStream({} as never)),
+    ).rejects.toThrow('revoked before request dispatch');
+    await expect(
+      Promise.resolve().then(() => forked?.model.doGenerate({} as never)),
+    ).rejects.toThrow('revoked before request dispatch');
+  });
+
+  it('revokes admitted routes when provider credentials change', async () => {
+    let invalidateCredentialRoute: (() => void) | undefined;
+    const service = createTestModelProviderService({
+      telemetryService: {
+        withTracing: vi.fn((model) => model),
+        forkTracing: vi.fn((model) => model),
+        captureException: vi.fn(),
+      },
+      onCredentialsListener: (listener) => {
+        invalidateCredentialRoute = listener;
+      },
+    });
+    const route = await service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'credential-bound-route',
+      agentStepMetadata,
+    );
+
+    expect(route.routeLease?.isValid()).toBe(true);
+    invalidateCredentialRoute?.();
+    expect(route.routeLease?.isValid()).toBe(false);
+  });
+
+  it('revokes admitted routes when the trusted auth credential epoch changes', async () => {
+    let invalidateAuthRoute: (() => void) | undefined;
+    const service = createTestModelProviderService({
+      onAuthCredentialListener: (listener) => {
+        invalidateAuthRoute = listener;
+      },
+    });
+    const route = await service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'auth-bound-route',
+      agentStepMetadata,
+    );
+
+    expect(route.routeLease?.isValid()).toBe(true);
+    invalidateAuthRoute?.();
+    expect(route.routeLease?.isValid()).toBe(false);
+  });
+
+  it('fails closed when route authority changes while credentials are resolving', async () => {
+    let invalidateAuthRoute: (() => void) | undefined;
+    let resolveToken: ((token: string) => void) | undefined;
+    const ensureModelAccessTokenForRoute = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveToken = resolve;
+        }),
+    );
+    const service = createTestModelProviderService({
+      authService: {
+        accessToken: 'clodex-session-token',
+        modelAccessToken: 'old-route-token',
+        ensureModelAccessTokenForRoute,
+        authState: { models: [] },
+        registerCredentialEpochChangeCallback: (listener: () => void) => {
+          invalidateAuthRoute = listener;
+        },
+      },
+    });
+
+    const route = service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'drifting-route',
+      agentStepMetadata,
+    );
+    await vi.waitFor(() =>
+      expect(ensureModelAccessTokenForRoute).toHaveBeenCalledOnce(),
+    );
+
+    invalidateAuthRoute?.();
+    resolveToken?.('stale-route-token');
+
+    await expect(route).rejects.toThrow(
+      'Model route authority changed while credentials were resolving',
+    );
+  });
+});
 
 describe('provider-qualified model routing', () => {
   it('routes an Ollama model without contacting Clodex auth', async () => {
@@ -179,6 +389,142 @@ describe('provider-qualified model routing', () => {
         'trace-openrouter',
       ).providerMode,
     ).toBe('custom');
+  });
+
+  it('uses discovered context metadata for a qualified OpenRouter model', () => {
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'openrouter-main',
+          providerType: 'openrouter',
+          displayName: 'OpenRouter',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKeyReference: 'provider.openrouter-main',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      providerModelCatalogs: {
+        'openrouter-main': [
+          {
+            id: 'moonshotai/kimi-k2.5',
+            displayName: 'Kimi K2.5',
+            providerId: 'openrouter-main',
+            capabilities: {
+              text: true,
+              images: false,
+              streaming: true,
+              functionTools: true,
+              customTools: true,
+              reasoning: true,
+              contextWindow: 262_144,
+            },
+          },
+        ],
+      },
+      providerApiKeys: {
+        'provider.openrouter-main': 'or-secret',
+      },
+    });
+
+    expect(
+      service.getModelWithOptions(
+        'openrouter-main:moonshotai/kimi-k2.5',
+        'trace-openrouter-context',
+      ).contextWindowSize,
+    ).toBe(262_144);
+  });
+
+  it('uses built-in context metadata for a known qualified model without discovery metadata', () => {
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'openrouter-main',
+          providerType: 'openrouter',
+          displayName: 'OpenRouter',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKeyReference: 'provider.openrouter-main',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      providerApiKeys: {
+        'provider.openrouter-main': 'or-secret',
+      },
+    });
+
+    expect(
+      service.getModelWithOptions(
+        'openrouter-main:moonshotai/kimi-k2.5',
+        'trace-openrouter-built-in-context',
+      ).contextWindowSize,
+    ).toBe(250_000);
+  });
+
+  it('uses a conservative budget for an unknown qualified provider model', () => {
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'local-compatible',
+          providerType: 'openai-compatible',
+          displayName: 'Local compatible',
+          baseUrl: 'http://localhost:8000/v1',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+    });
+
+    expect(
+      service.getModelWithOptions(
+        'local-compatible:vendor/unknown-model',
+        'trace-local-unknown-context',
+      ).contextWindowSize,
+    ).toBe(128_000);
+  });
+
+  it('prefers authoritative account context metadata for a qualified Clodex model', () => {
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'clodex-account',
+          providerType: 'clodex',
+          displayName: 'Clodex Cloud',
+          baseUrl: 'https://clodex.xyz/v1',
+          apiKeyReference: 'provider.clodex-account',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      authService: {
+        modelAccessToken: 'ide-model-token',
+        ensureModelAccessToken: vi.fn().mockResolvedValue('ide-model-token'),
+        authState: {
+          models: [
+            {
+              id: 'z-ai/glm-5.2',
+              provider: 'z-ai',
+              enabled: true,
+              contextWindow: 1_200_000,
+            },
+          ],
+        },
+      },
+      providerApiKeys: {
+        'provider.clodex-account': 'clodex-secret',
+      },
+    });
+
+    expect(
+      service.getModelWithOptions(
+        'clodex-account:z-ai/glm-5.2',
+        'trace-clodex-account-context',
+      ).contextWindowSize,
+    ).toBe(1_200_000);
   });
 
   it('maps direct OpenAI Terra Ultra to provider Max', () => {

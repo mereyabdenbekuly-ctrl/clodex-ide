@@ -50,6 +50,19 @@ function toUsage(value: unknown): ProviderUsage | undefined {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readPositiveInteger(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      return Math.floor(value);
+    }
+  }
+  return undefined;
+}
+
 export class OpenAICompatibleProviderAdapter implements AIProviderAdapter {
   public readonly id: string;
   public readonly name: string;
@@ -98,22 +111,48 @@ export class OpenAICompatibleProviderAdapter implements AIProviderAdapter {
       },
     );
     if (!response.ok) throw await this.responseError(response);
-    const body = (await response.json()) as { data?: Array<{ id?: unknown }> };
+    const body = (await response.json()) as { data?: unknown[] };
     return (body.data ?? [])
-      .filter((entry): entry is { id: string } => typeof entry.id === 'string')
-      .map((entry) => ({
-        id: entry.id,
-        displayName: entry.id,
-        providerId: config.id,
-        capabilities: {
-          text: true,
-          images: false,
-          streaming: true,
-          functionTools: true,
-          customTools: true,
-          reasoning: false,
-        },
-      }));
+      .filter(
+        (entry): entry is Record<string, unknown> & { id: string } =>
+          isRecord(entry) && typeof entry.id === 'string',
+      )
+      .map((entry) => {
+        const topProvider = isRecord(entry.top_provider)
+          ? entry.top_provider
+          : undefined;
+        const contextWindow = readPositiveInteger(
+          entry.context_length,
+          entry.context_window,
+          entry.contextWindow,
+          entry.max_context_length,
+          entry.max_model_len,
+          topProvider?.context_length,
+          topProvider?.context_window,
+        );
+        const maxOutputTokens = readPositiveInteger(
+          entry.max_output_tokens,
+          entry.max_completion_tokens,
+          topProvider?.max_completion_tokens,
+          topProvider?.max_output_tokens,
+        );
+
+        return {
+          id: entry.id,
+          displayName: entry.id,
+          providerId: config.id,
+          capabilities: {
+            text: true,
+            images: false,
+            streaming: true,
+            functionTools: true,
+            customTools: true,
+            reasoning: false,
+            ...(contextWindow === undefined ? {} : { contextWindow }),
+            ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+          },
+        };
+      });
   }
 
   public async createResponse(

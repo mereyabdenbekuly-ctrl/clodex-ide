@@ -4,6 +4,7 @@ import { isLogPath } from '@clodex/agent-core/logs';
 import { PlanCheckoffToolPart } from './plan-checkoff';
 import { LogEditToolPart } from './log-edit';
 import { GenericMultiEditToolPart } from './generic-multi-edit';
+import { useStableFileEditApprovalVisualState } from '../../../use-file-edit-approval-state';
 
 export type MultiEditPart = Extract<
   AgentToolUIPart,
@@ -69,11 +70,20 @@ function isPureCheckboxToggle(
 }
 
 export const MultiEditToolPart = ({ part }: { part: MultiEditPart }) => {
+  const fileEditApprovalState = useStableFileEditApprovalVisualState(
+    part.toolCallId,
+    part.state,
+  );
   const relativePath = part.input?.path ?? '';
 
   // Route to compact log-edit UI for log channel files
   if (isLogPath(relativePath)) {
-    return <LogEditToolPart part={part} />;
+    return (
+      <LogEditToolPart
+        part={part}
+        fileEditApprovalState={fileEditApprovalState}
+      />
+    );
   }
 
   // Route to compact plan-checkoff UI when:
@@ -88,8 +98,18 @@ export const MultiEditToolPart = ({ part }: { part: MultiEditPart }) => {
     (isStreaming || (Array.isArray(edits) && isPureCheckboxToggle(edits)));
 
   if (isCheckboxOnly) {
-    return <PlanCheckoffToolPart part={part} />;
+    return (
+      <PlanCheckoffToolPart
+        part={part}
+        fileEditApprovalState={fileEditApprovalState}
+      />
+    );
   }
 
-  return <GenericMultiEditToolPart part={part} />;
+  return (
+    <GenericMultiEditToolPart
+      part={part}
+      fileEditApprovalState={fileEditApprovalState}
+    />
+  );
 };

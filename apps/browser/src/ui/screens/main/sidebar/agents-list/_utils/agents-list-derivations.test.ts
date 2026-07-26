@@ -239,6 +239,7 @@ describe('agents list primitive derivations', () => {
         chat: {
           workspace: { mounts: [] },
           pendingUserQuestion: null,
+          pendingProposedEdits: [],
         },
       },
     } as unknown as Parameters<typeof deriveActiveAgentCards>[0];
@@ -256,6 +257,17 @@ describe('agents list primitive derivations', () => {
     expect(deriveActiveAgentCards(waitingState)[0]).toEqual(
       expect.objectContaining({
         activityText: 'Waiting for response...',
+        isWaitingForUser: true,
+      }),
+    );
+
+    const fileApprovalState = structuredClone(baseState);
+    fileApprovalState.toolbox.chat!.pendingProposedEdits = [
+      { status: 'pending' },
+    ] as never;
+    expect(deriveActiveAgentCards(fileApprovalState)[0]).toEqual(
+      expect.objectContaining({
+        activityText: 'Waiting for file approval...',
         isWaitingForUser: true,
       }),
     );

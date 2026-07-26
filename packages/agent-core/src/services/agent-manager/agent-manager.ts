@@ -1,8 +1,11 @@
 import type {
+  AgentNotificationContext,
   AgentNotificationEvent,
+  AgentStepSettlement,
   BaseAgent,
   BaseAgentDependencies,
   BaseAgentToolboxView,
+  SendUserMessageResult,
 } from '../../agents/base-agent';
 import type { AgentTypeRegistry } from '../../agents/agents-registry';
 import { toAgentsMap, type AgentsMap } from '../../agents/agents-map';
@@ -33,6 +36,11 @@ import {
   toolApprovalModeSchema,
   type ToolApprovalMode,
 } from '../../types/tool-approval';
+import {
+  DEFAULT_FILE_EDIT_APPROVAL_MODE,
+  fileEditApprovalModeSchema,
+  type FileEditApprovalMode,
+} from '../../types/file-edit-approval';
 import type { ExtraMentionRenderer } from '../../agents/shared/message-conversion';
 import {
   extractSlashIdsFromText,
@@ -45,6 +53,7 @@ import {
   clearTaskGoal,
   deleteAgentInstance,
   getAgentInstance,
+  setFileEditApprovalMode,
   setTaskGoal,
   setTaskGoalStatus,
   setToolApprovalMode,
@@ -179,6 +188,11 @@ interface CapturedAgentStatePersistOptions
   readonly expectedMessageBindings?: readonly CapturedAgentStatePersistMessageBinding[];
 }
 
+interface AgentStateSnapshotOverrides {
+  /** Persist an authorization transition before exposing it in live state. */
+  readonly fileEditApprovalMode?: FileEditApprovalMode;
+}
+
 export interface PreparedAgentSessionCheckpointState {
   agentStateFlushedAt: string;
   memoryFlushedAt: string;
@@ -240,6 +254,7 @@ export class AgentManager extends DisposableService {
   private readonly onAgentEvent?: (
     event: AgentNotificationEvent,
     agentId: string,
+    context: AgentNotificationContext,
   ) => void | Promise<void>;
   /** Host-neutral prepare/commit/invalidate seam for tool approvals. */
   private readonly toolApprovalLifecycle?: ToolApprovalLifecycleHooks;
@@ -298,9 +313,9 @@ export class AgentManager extends DisposableService {
   private readonly persistenceDb: AgentPersistenceDB;
   private readonly chatPersistence: ChatPersistenceService;
   /**
-   * Per-agent write tails. Each persistence callback reads AgentStore only
-   * after the preceding write settles, preventing an older overlapping save
-   * from overwriting a newer approval response snapshot.
+   * Per-agent write tails. Every state snapshot and narrow metadata update
+   * shares this queue so an older overlapping save cannot overwrite a newer
+   * authorization decision or approval response.
    */
   private readonly agentPersistenceTails = new Map<string, Promise<void>>();
 
@@ -500,6 +515,16 @@ export class AgentManager extends DisposableService {
     return { ...flushed, agentStateFlushedAt, wasLive: true };
   }
 
+  public async waitForAgentStepSettlement(
+    instanceId: string,
+  ): Promise<AgentStepSettlement> {
+    const live = this.activeAgents.get(instanceId);
+    if (!live) {
+      throw new Error(`Cannot settle unknown live agent: ${instanceId}`);
+    }
+    return await live.waitForCurrentStepSettlement();
+  }
+
   public async replayRecoveredUiChunk(
     instanceId: string,
     input: Parameters<BaseAgent<any, any>['replayRecoveredUiChunk']>[0],
@@ -657,7 +682,7 @@ export class AgentManager extends DisposableService {
     this.wrapAgentRpc(
       'agents.sendUserMessage',
       async (instanceId: string, message: AgentMessage & { role: 'user' }) => {
-        await this.sendUserMessage(instanceId, message);
+        return await this.sendUserMessage(instanceId, message);
       },
     );
     this.wrapAgentRpc(
@@ -670,16 +695,14 @@ export class AgentManager extends DisposableService {
       ) => {
         // Queue the message FIRST, then resolve the question — both in
         // one backend call so there's no race between separate RPCs.
-        try {
-          await this.sendUserMessage(instanceId, message);
-        } finally {
-          this.managerToolbox.cancelQuestion(
-            instanceId,
-            questionId,
-            'user_sent_message',
-            draftAnswers,
-          );
-        }
+        const result = await this.sendUserMessage(instanceId, message);
+        this.managerToolbox.cancelQuestion(
+          instanceId,
+          questionId,
+          'user_sent_message',
+          draftAnswers,
+        );
+        return result;
       },
     );
     this.wrapAgentRpc(
@@ -707,6 +730,13 @@ export class AgentManager extends DisposableService {
       ) => {
         const parsedMode = toolApprovalModeSchema.parse(mode);
         await this.setToolApprovalMode(instanceId, parsedMode, { source });
+      },
+    );
+    this.wrapAgentRpc(
+      'agents.setFileEditApprovalMode',
+      async (instanceId: string, mode: FileEditApprovalMode) => {
+        const parsedMode = fileEditApprovalModeSchema.parse(mode);
+        await this.setFileEditApprovalMode(instanceId, parsedMode);
       },
     );
     this.wrapAgentRpc('agents.stop', async (instanceId: string) => {
@@ -1391,6 +1421,7 @@ export class AgentManager extends DisposableService {
       queuedMessages: [],
       activeModelId: 'claude-sonnet-4.6',
       toolApprovalMode: DEFAULT_TOOL_APPROVAL_MODE,
+      fileEditApprovalMode: DEFAULT_FILE_EDIT_APPROVAL_MODE,
       pendingApprovals: {},
       inputState: initialInputState ?? '',
       usedTokens: 0,
@@ -1589,6 +1620,8 @@ export class AgentManager extends DisposableService {
           })[],
         activeModelId: resumedModelValid ? agent.activeModelId : undefined,
         toolApprovalMode: agent.toolApprovalMode ?? DEFAULT_TOOL_APPROVAL_MODE,
+        fileEditApprovalMode:
+          agent.fileEditApprovalMode ?? DEFAULT_FILE_EDIT_APPROVAL_MODE,
         inputState: migratedPersistedState.inputState,
         usedTokens: agent.usedTokens,
         goal: agent.goal,
@@ -1668,15 +1701,31 @@ export class AgentManager extends DisposableService {
     } catch (error) {
       return Promise.reject(error);
     }
+
+    return this.enqueueAgentPersistenceOperation(instanceId, () =>
+      this.persistAgentStateSnapshot(instanceId, options),
+    );
+  }
+
+  /**
+   * Serialize every durable write for one agent. Callbacks must read mutable
+   * AgentStore state only after they enter this queue; otherwise a queued
+   * operation could commit a snapshot captured before an earlier policy write.
+   */
+  private enqueueAgentPersistenceOperation<T>(
+    instanceId: string,
+    callback: () => Promise<T>,
+  ): Promise<T> {
     const previousTail =
       this.agentPersistenceTails.get(instanceId) ?? Promise.resolve();
 
     // A strict caller must observe its own failure, but a rejected write must
     // never poison the queue and prevent later recovery attempts.
-    const operation = previousTail
-      .catch(() => undefined)
-      .then(() => this.persistAgentStateSnapshot(instanceId, options));
-    const nextTail = operation.catch(() => undefined);
+    const operation = previousTail.catch(() => undefined).then(callback);
+    const nextTail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
     this.agentPersistenceTails.set(instanceId, nextTail);
     void nextTail.finally(() => {
       if (this.agentPersistenceTails.get(instanceId) === nextTail) {
@@ -1689,6 +1738,7 @@ export class AgentManager extends DisposableService {
   private async persistAgentStateSnapshot(
     instanceId: string,
     options: CapturedAgentStatePersistOptions,
+    overrides: AgentStateSnapshotOverrides = {},
   ): Promise<void> {
     // Store agent state into DB.
     // Read every mutable dependency inside the per-agent queue. Capturing the
@@ -1735,6 +1785,9 @@ export class AgentManager extends DisposableService {
         titleLockedByUser: agentState.titleLockedByUser,
         activeModelId: agentState.activeModelId,
         toolApprovalMode: agentState.toolApprovalMode as ToolApprovalMode,
+        fileEditApprovalMode:
+          overrides.fileEditApprovalMode ??
+          (agentState.fileEditApprovalMode as FileEditApprovalMode),
         createdAt:
           (firstHistoryEntry?.metadata as UserMessageMetadata | undefined)
             ?.createdAt ?? new Date(0), // Fallback should never be reached
@@ -1898,7 +1951,7 @@ export class AgentManager extends DisposableService {
   public async sendUserMessage(
     instanceId: string,
     message: AgentMessage & { role: 'user' },
-  ) {
+  ): Promise<SendUserMessageResult> {
     const agent = this.activeAgents.get(instanceId);
 
     if (!agent) {
@@ -1949,7 +2002,7 @@ export class AgentManager extends DisposableService {
     // Host `AgentMessage` carries narrowed `UserMessageMetadata`
     // (browser-specific mention kinds) while the core default widens
     // these. Cast at the seam — the runtime shape is identical.
-    await agent.sendUserMessage(message as any);
+    return await agent.sendUserMessageWithDisposition(message as any);
   }
 
   /**
@@ -2021,6 +2074,57 @@ export class AgentManager extends DisposableService {
       source: telemetry?.source ?? 'unknown',
       ...(telemetry?.toolCallId && { tool_call_id: telemetry.toolCallId }),
       ...(telemetry?.toolName && { tool_name: telemetry.toolName }),
+    });
+  }
+
+  /**
+   * Update the independent per-agent file-edit approval policy. This never
+   * changes shell, sandbox, MCP, or other tool-approval behavior.
+   */
+  public async setFileEditApprovalMode(
+    instanceId: string,
+    mode: FileEditApprovalMode,
+  ): Promise<void> {
+    await this.enqueueAgentPersistenceOperation(instanceId, async () => {
+      const agent = this.activeAgents.get(instanceId);
+      if (!agent) {
+        throw new Error(`Agent with instance id ${instanceId} not found`);
+      }
+
+      // Read inside the queue. A rapid manual -> auto -> manual sequence must
+      // observe the first queued transition rather than prematurely treating
+      // the second request as a no-op against stale live state.
+      const currentMode =
+        this.agentStore.get().agents.instances[instanceId]?.state
+          .fileEditApprovalMode ?? DEFAULT_FILE_EDIT_APPROVAL_MODE;
+      if (currentMode === mode) return;
+
+      const updated = await this.persistenceDb.updateFileEditApprovalMode(
+        instanceId,
+        mode,
+      );
+      if (!updated) {
+        // Fresh agents have no row until their first state snapshot. Create it
+        // through the normal per-agent persistence owner rather than a partial
+        // metadata insert. The override is durable before live automatic
+        // authorization is exposed, preserving fail-closed behavior.
+        await this.persistAgentStateSnapshot(
+          instanceId,
+          { throwOnError: true },
+          { fileEditApprovalMode: mode },
+        );
+      }
+
+      // Persist before exposing an automatic mode in live state. Because the
+      // narrow update shares the snapshot queue, no stale full save can write
+      // the previous mode after this transition commits.
+      setFileEditApprovalMode(this.agentStore, instanceId, mode);
+
+      this.host.telemetry?.capture('file-edit-approval-mode-changed', {
+        agent_instance_id: instanceId,
+        previous_mode: currentMode as FileEditApprovalMode,
+        new_mode: mode,
+      });
     });
   }
 

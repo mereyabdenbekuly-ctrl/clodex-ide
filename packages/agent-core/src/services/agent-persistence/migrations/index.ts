@@ -9,6 +9,7 @@ import { up as v008Up } from './v008-add-title-locked-by-user';
 import { up as v009Up } from './v009-add-tool-approval-mode';
 import { up as v010Up } from './v010-add-task-lifecycle';
 import { up as v011Up } from './v011-add-task-goal';
+import { up as v012Up } from './v012-add-file-edit-approval-mode';
 
 const registry: MigrationScript[] = [
   { version: 2, name: 'add-mounted-workspaces', up: v002Up },
@@ -21,7 +22,8 @@ const registry: MigrationScript[] = [
   { version: 9, name: 'add-tool-approval-mode', up: v009Up },
   { version: 10, name: 'add-task-lifecycle', up: v010Up },
   { version: 11, name: 'add-task-goal', up: v011Up },
+  { version: 12, name: 'add-file-edit-approval-mode', up: v012Up },
 ];
-const schemaVersion = 11;
+const schemaVersion = 12;
 
 export { registry, schemaVersion };

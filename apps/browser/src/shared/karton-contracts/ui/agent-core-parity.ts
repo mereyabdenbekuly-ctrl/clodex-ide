@@ -60,10 +60,9 @@ type Assert<T extends true> = T;
 /* ------------------------------------------------------------------ */
 
 /**
- * Delta D22 (Phase 6) — `toolApprovalMode` is store-canonical on core
- * `AgentState` as `string`; the host narrows it to the `ToolApprovalMode`
- * union via `Omit<CoreAgentState, 'activeModelId' | 'toolApprovalMode'> &
- * { activeModelId: ModelId; toolApprovalMode: ToolApprovalMode }`.
+ * Delta D22 (Phase 6) — approval modes are store-canonical strings on core
+ * `AgentState`; the host narrows them to their closed unions alongside the
+ * `activeModelId` overlay.
  *
  * Delta D14 (partial) — the host specializes `AgentMessage` with
  * `UIAgentTools` and `UserMessageMetadata`, and `activeModelId` narrows

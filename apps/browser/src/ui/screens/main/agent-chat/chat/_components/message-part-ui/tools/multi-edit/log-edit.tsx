@@ -4,8 +4,16 @@ import { ToolPartUINotCollapsible } from '../shared/tool-part-ui-not-collapsible
 import { IconBugOutline18 } from '@clodex/icons';
 import { stripMountPrefix } from '@ui/utils';
 import { LOGS_PREFIX } from '@clodex/agent-core/logs';
+import { FileEditApprovalStatus } from '../shared/file-edit-approval-waiting';
+import type { FileEditApprovalVisualState } from '../../../file-edit-approval-state';
 
-export const LogEditToolPart = ({ part }: { part: MultiEditPart }) => {
+export const LogEditToolPart = ({
+  part,
+  fileEditApprovalState = null,
+}: {
+  part: MultiEditPart;
+  fileEditApprovalState?: FileEditApprovalVisualState;
+}) => {
   const channelName = useMemo(() => {
     const raw = stripMountPrefix(part.input?.path ?? '');
     return raw
@@ -24,6 +32,15 @@ export const LogEditToolPart = ({ part }: { part: MultiEditPart }) => {
         </span>
       </span>
     ) : undefined;
+
+  if (fileEditApprovalState) {
+    return (
+      <FileEditApprovalStatus
+        relativePath={part.input?.path}
+        state={fileEditApprovalState}
+      />
+    );
+  }
 
   return (
     <ToolPartUINotCollapsible

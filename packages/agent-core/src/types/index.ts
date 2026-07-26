@@ -1,5 +1,6 @@
 export * from './agent';
 export * from './diff-history';
+export * from './file-edit-approval';
 export * from './metadata';
 export * from './models';
 export * from './pending-edits';

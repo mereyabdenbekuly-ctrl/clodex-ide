@@ -50,6 +50,10 @@ export function mergeUIMessageStream(
   },
 ): void {
   const { uiMessage, onApprovalRequested } = args;
+  const approvalRequests: Array<{
+    approvalId: string;
+    toolPart: AgentToolUIPart | DynamicToolUIPart;
+  }> = [];
   updateAgentInstanceState(store, agentInstanceId, (state) => {
     const existingMessage =
       state.history.find((message) => message.id === uiMessage.id) ??
@@ -129,12 +133,16 @@ export function mergeUIMessageStream(
           const toolPart = part as AgentToolUIPart | DynamicToolUIPart;
           const approvalId = toolPart.approval?.id;
           if (approvalId && onApprovalRequested) {
-            onApprovalRequested({ approvalId, toolPart });
+            approvalRequests.push({ approvalId, toolPart });
           }
         }
       },
     );
   });
+  // Side effects run only after AgentStore commits the merged message. This
+  // guarantees lifecycle observers see the approval/tool state that caused
+  // the callback rather than the previous snapshot.
+  for (const request of approvalRequests) onApprovalRequested?.(request);
 }
 
 export function markRecoveredCloudSequence(

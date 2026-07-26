@@ -29,11 +29,15 @@ import {
   StreamingCodeBlock,
   getLanguageFromPath,
 } from '@ui/components/ui/streaming-code-block';
+import { FileEditApprovalStatus } from '../shared/file-edit-approval-waiting';
+import type { FileEditApprovalVisualState } from '../../../file-edit-approval-state';
 
 export const GenericMultiEditToolPart = ({
   part,
+  fileEditApprovalState = null,
 }: {
   part: Extract<AgentToolUIPart, { type: 'tool-multiEdit' }>;
+  fileEditApprovalState?: FileEditApprovalVisualState;
 }) => {
   const [expanded, setExpanded] = useState(true);
   const [openAgent] = useOpenAgent();
@@ -110,6 +114,13 @@ export const GenericMultiEditToolPart = ({
   const [collapsedDiffView, setCollapsedDiffView] = useState(true);
 
   const trigger = useMemo(() => {
+    if (fileEditApprovalState)
+      return (
+        <FileEditApprovalStatus
+          relativePath={path}
+          state={fileEditApprovalState}
+        />
+      );
     if (state === 'error')
       return (
         <ErrorHeader
@@ -130,6 +141,7 @@ export const GenericMultiEditToolPart = ({
   }, [
     state,
     streaming,
+    fileEditApprovalState,
     path,
     part.input?.path,
     newLineCount,
@@ -139,6 +151,7 @@ export const GenericMultiEditToolPart = ({
 
   const content = useMemo(() => {
     if (state === 'error') return undefined;
+    if (fileEditApprovalState) return undefined;
     if (diff)
       return (
         <DiffPreview
@@ -163,6 +176,7 @@ export const GenericMultiEditToolPart = ({
     return undefined;
   }, [
     state,
+    fileEditApprovalState,
     diff,
     part.input?.edits,
     part.input?.path,

@@ -25,7 +25,9 @@ export type {
 export { type AgentsMap, toAgentsMap } from './agents-map';
 export {
   BaseAgent,
+  type AgentNotificationContext,
   type AgentNotificationEvent,
+  type AgentStepSettlement,
   type BaseAgentConfig,
   type BaseAgentDependencies,
   type BaseAgentToolboxView,
@@ -33,15 +35,23 @@ export {
   type BaseAgentStatic,
   type AgentConfig,
   type MessageId,
+  type SendUserMessageResult,
 } from './base-agent';
 export {
   LocalAgentStepExecutor,
+  resolveAgentToolCapabilityScopes,
+  TOOL_CAPABILITY_APPROVAL_ORIGIN_SCOPE_CONTEXT_KEY,
+  TOOL_CAPABILITY_CURRENT_SCOPE_CONTEXT_KEY,
   localAgentStepExecutor,
   type AgentStepExecution,
   type AgentStepExecutionContext,
   type AgentStepExecutionRequest,
   type AgentStepExecutor,
 } from './agent-step-executor';
+export {
+  findToolCallRecoverySignal,
+  type ToolCallRecoveryKind,
+} from './shared/repair-tool-call';
 export {
   agentExecutionTargets,
   agentExecutionTaskStatuses,

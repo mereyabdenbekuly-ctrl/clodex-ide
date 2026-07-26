@@ -1,4 +1,4 @@
--- VERSION: 11
+-- VERSION: 12
 
 CREATE TABLE IF NOT EXISTS meta(
   key LONGVARCHAR NOT NULL UNIQUE PRIMARY KEY,
@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS agentInstances(
   goal TEXT,
   mounted_workspaces TEXT,
   tool_approval_mode TEXT NOT NULL DEFAULT 'alwaysAsk',
+  file_edit_approval_mode TEXT NOT NULL DEFAULT 'manual',
   forked_from_agent_id TEXT,
   forked_from_message_id TEXT,
   archived_at INTEGER

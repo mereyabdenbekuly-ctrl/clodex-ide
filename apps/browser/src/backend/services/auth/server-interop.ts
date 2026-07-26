@@ -1,6 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { shell } from 'electron';
-import { createAuthClient } from 'better-auth/client';
+import {
+  type BetterAuthClientOptions as BetterAuthBaseClientOptions,
+  createAuthClient,
+} from 'better-auth/client';
 import { emailOTPClient } from 'better-auth/client/plugins';
 
 export const API_URL =
@@ -11,7 +14,7 @@ export const CLODEX_DESKTOP_CLIENT_ID =
     ? 'clodex-community-observed'
     : 'clodex-ide');
 
-type BetterAuthClientOptions = {
+type BetterAuthClientOptions = BetterAuthBaseClientOptions & {
   plugins: [ReturnType<typeof emailOTPClient>];
 };
 
@@ -80,7 +83,7 @@ export function createBetterAuthClient(
   getToken: () => string | null,
   onTokenReceived: (token: string) => void,
 ): BetterAuthClient {
-  return createAuthClient({
+  return createAuthClient<BetterAuthClientOptions>({
     baseURL: API_URL,
     basePath: '/v1/auth',
     disableDefaultFetchPlugins: true,

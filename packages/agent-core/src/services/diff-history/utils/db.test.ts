@@ -18,6 +18,7 @@ import {
   getOperationHistory,
   insertOperation,
   storeFileContent,
+  storeAutoApprovedTextEdit,
   getPendingOperationsForAgentInstanceId,
   getAllOperationsForAgentInstanceId,
   getAllPendingOperations,
@@ -206,6 +207,88 @@ describe('diff-history db utilities', () => {
 
   describe('high-level API', () => {
     const filepath = '/test/highlevel.txt';
+
+    it('persists auto-policy acceptance separately from human acceptance', async () => {
+      insertOperation(db, filepath, null, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+      insertOperation(db, filepath, null, {
+        operation: 'baseline',
+        contributor: 'policy',
+        reason: 'auto-accept',
+      });
+
+      const history = await getOperationHistory(db, filepath);
+      expect(history).toMatchObject([
+        {
+          operation: 'baseline',
+          contributor: 'user',
+          reason: 'accept',
+        },
+        {
+          operation: 'baseline',
+          contributor: 'policy',
+          reason: 'auto-accept',
+        },
+      ]);
+    });
+
+    it('stores an automatic text edit and policy receipt atomically', async () => {
+      await expect(
+        storeAutoApprovedTextEdit(db, {
+          agentInstanceId: 'agent-1',
+          filepath,
+          toolCallId: 'auto-1',
+          contentBefore: 'before',
+          contentAfter: 'after',
+        }),
+      ).resolves.toBe(true);
+
+      await expect(getOperationHistory(db, filepath)).resolves.toMatchObject([
+        {
+          operation: 'baseline',
+          contributor: 'user',
+          reason: 'init',
+        },
+        {
+          operation: 'edit',
+          contributor: 'agent-agent-1',
+          reason: 'tool-auto-1',
+        },
+        {
+          operation: 'baseline',
+          contributor: 'policy',
+          reason: 'auto-accept',
+        },
+      ]);
+    });
+
+    it('refuses automatic acceptance when the file already has pending history', async () => {
+      const pendingPath = '/test/pending-before-auto.txt';
+      await storeFileContent(db, pendingPath, Buffer.from('before'), {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      await storeFileContent(db, pendingPath, Buffer.from('older edit'), {
+        operation: 'edit',
+        contributor: 'agent-other',
+        reason: 'tool-older',
+      });
+
+      await expect(
+        storeAutoApprovedTextEdit(db, {
+          agentInstanceId: 'agent-1',
+          filepath: pendingPath,
+          toolCallId: 'auto-2',
+          contentBefore: 'older edit',
+          contentAfter: 'automatic edit',
+        }),
+      ).resolves.toBe(false);
+      expect(await getOperationHistory(db, pendingPath)).toHaveLength(2);
+    });
 
     it('storeFileContent() stores content and returns oid', async () => {
       const content = Buffer.from('stored content');

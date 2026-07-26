@@ -1,4 +1,98 @@
-import type { ChronicleEvent } from '@shared/agent-os';
+import {
+  HOST_WIRED_HOOK_TRIGGERS,
+  isHookAutomaticallyRunnable,
+  type ChronicleEvent,
+  type HookDefinition,
+  type HookRunRecord,
+} from '@shared/agent-os';
+
+export type HookExecutionAvailability = {
+  canEnable: boolean;
+  canTest: boolean;
+  explanation: string | null;
+};
+
+export function getHookExecutionAvailability(
+  hook: Pick<HookDefinition, 'trigger' | 'kind'>,
+  helperAgentRunnerConfigured: boolean,
+  activeAgentAvailable = true,
+): HookExecutionAvailability {
+  const canEnable = isHookAutomaticallyRunnable(
+    hook,
+    helperAgentRunnerConfigured,
+  );
+
+  if (hook.kind === 'agent' && !helperAgentRunnerConfigured) {
+    return {
+      canEnable: false,
+      canTest: false,
+      explanation:
+        'Inactive: this build has no trusted helper-agent runner configured.',
+    };
+  }
+
+  if (hook.kind === 'agent' && hook.trigger === 'before-turn') {
+    return {
+      canEnable: false,
+      canTest: activeAgentAvailable,
+      explanation: activeAgentAvailable
+        ? 'Manual test only: Before turn helper-agent hooks do not run automatically; use a Before turn prompt hook to affect the admitted message.'
+        : 'Manual test only: Before turn helper-agent hooks do not run automatically. Open an agent chat to test this hook.',
+    };
+  }
+
+  if (hook.kind === 'agent' && !activeAgentAvailable) {
+    return {
+      canEnable,
+      canTest: false,
+      explanation:
+        'Open an agent chat before testing this helper hook manually.',
+    };
+  }
+
+  if (hook.kind === 'command') {
+    return {
+      canEnable: false,
+      canTest: false,
+      explanation:
+        'Unavailable: command hooks require a backend-issued one-shot approval that is not implemented in this build.',
+    };
+  }
+
+  if (!HOST_WIRED_HOOK_TRIGGERS.some((trigger) => trigger === hook.trigger)) {
+    return {
+      canEnable: false,
+      canTest: true,
+      explanation:
+        'Manual test only: this lifecycle trigger has no automatic producer in this build.',
+    };
+  }
+
+  if (hook.kind === 'prompt' && hook.trigger !== 'before-turn') {
+    return {
+      canEnable: false,
+      canTest: true,
+      explanation:
+        'Manual test only: only Before turn prompt output is injected into model context.',
+    };
+  }
+
+  return { canEnable, canTest: true, explanation: null };
+}
+
+export function getHookRunDisplay(run: HookRunRecord): {
+  summary: string;
+  detail: string | null;
+  detailKind: 'error' | 'output' | null;
+} {
+  const durationMs = Math.max(0, run.finishedAt - run.startedAt);
+  const detail = run.error ?? run.output ?? null;
+  return {
+    summary: `${run.status === 'skipped' ? 'not run' : run.status} · ${durationMs} ms`,
+    detail,
+    detailKind: run.error ? 'error' : run.output ? 'output' : null,
+  };
+}
 
 export function createChronicleContext(events: ChronicleEvent[]): string {
   const context = events

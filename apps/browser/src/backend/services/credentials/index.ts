@@ -132,6 +132,7 @@ export class CredentialsService extends DisposableService {
   private saveQueue: Promise<void> = Promise.resolve();
   private mcpCustomSaveQueue: Promise<void> = Promise.resolve();
   private providerApiKeysSaveQueue: Promise<void> = Promise.resolve();
+  private readonly providerApiKeyListeners = new Set<() => void>();
   private accessTokenProvider?: () => string | undefined;
 
   private constructor(logger: Logger) {
@@ -203,18 +204,31 @@ export class CredentialsService extends DisposableService {
     return this.mcpCustomSaveQueue;
   }
 
-  private async saveProviderApiKeys(): Promise<void> {
-    this.providerApiKeysSaveQueue = this.providerApiKeysSaveQueue
+  private async mutateProviderApiKeys(
+    mutate: (draft: ProviderApiKeysStore) => boolean,
+  ): Promise<boolean> {
+    const operation = this.providerApiKeysSaveQueue
       .catch(() => undefined)
-      .then(() =>
-        writePersistedData(
+      .then(async () => {
+        const nextStore = structuredClone(this.providerApiKeysStore);
+        if (!mutate(nextStore)) return false;
+        await writePersistedData(
           PROVIDER_API_KEYS_STORAGE_NAME,
           providerApiKeysStoreSchema,
-          this.providerApiKeysStore,
+          nextStore,
           STORAGE_OPTIONS,
-        ),
-      );
-    return this.providerApiKeysSaveQueue;
+        );
+        // Publish only after the encrypted write succeeds. Readers and route
+        // listeners therefore observe one atomic credential generation.
+        this.providerApiKeysStore = nextStore;
+        this.notifyProviderApiKeyListeners();
+        return true;
+      });
+    this.providerApiKeysSaveQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await operation;
   }
 
   public async setProviderApiKey(
@@ -230,8 +244,12 @@ export class CredentialsService extends DisposableService {
       .max(32_768)
       .refine((value) => !value.includes('\0'))
       .parse(apiKey);
-    this.providerApiKeysStore[parsedReference] = { apiKey: parsedApiKey };
-    await this.saveProviderApiKeys();
+    const changed = await this.mutateProviderApiKeys((draft) => {
+      if (draft[parsedReference]?.apiKey === parsedApiKey) return false;
+      draft[parsedReference] = { apiKey: parsedApiKey };
+      return true;
+    });
+    if (!changed) return;
     this.logger.debug(
       `[CredentialsService] Stored provider API key: ${parsedReference}`,
     );
@@ -251,12 +269,36 @@ export class CredentialsService extends DisposableService {
   public async deleteProviderApiKey(reference: string): Promise<void> {
     this.assertNotDisposed();
     const parsedReference = providerCredentialReferenceSchema.parse(reference);
-    if (!(parsedReference in this.providerApiKeysStore)) return;
-    delete this.providerApiKeysStore[parsedReference];
-    await this.saveProviderApiKeys();
+    const changed = await this.mutateProviderApiKeys((draft) => {
+      if (!(parsedReference in draft)) return false;
+      delete draft[parsedReference];
+      return true;
+    });
+    if (!changed) return;
     this.logger.debug(
       `[CredentialsService] Deleted provider API key: ${parsedReference}`,
     );
+  }
+
+  public addProviderApiKeyListener(listener: () => void): void {
+    this.assertNotDisposed();
+    this.providerApiKeyListeners.add(listener);
+  }
+
+  public removeProviderApiKeyListener(listener: () => void): void {
+    this.providerApiKeyListeners.delete(listener);
+  }
+
+  private notifyProviderApiKeyListeners(): void {
+    for (const listener of this.providerApiKeyListeners) {
+      try {
+        listener();
+      } catch (error) {
+        this.logger.debug(
+          `[CredentialsService] Provider credential listener failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   }
 
   /**

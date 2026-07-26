@@ -18,6 +18,7 @@ await esbuild.build({
     'types/index': 'src/types/index.ts',
     'types/agent': 'src/types/agent.ts',
     'types/diff-history': 'src/types/diff-history.ts',
+    'types/file-edit-approval': 'src/types/file-edit-approval.ts',
     'types/metadata': 'src/types/metadata.ts',
     'types/models': 'src/types/models.ts',
     'types/tool-approval': 'src/types/tool-approval.ts',

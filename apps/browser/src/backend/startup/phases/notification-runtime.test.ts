@@ -141,6 +141,7 @@ let uiKarton: {
 let windowLayoutService: {
   getBaseWindow: ReturnType<typeof vi.fn>;
   getUIWebContents: ReturnType<typeof vi.fn>;
+  focusAgentFromExternalWindow: ReturnType<typeof vi.fn>;
 };
 let currentConfig: GlobalConfig;
 let globalConfigService: {
@@ -151,6 +152,7 @@ let globalConfigService: {
 let notificationSoundsService: {
   setWindowRef: ReturnType<typeof vi.fn>;
   setWebContentsRef: ReturnType<typeof vi.fn>;
+  setFocusAgentHandler: ReturnType<typeof vi.fn>;
   onConfigUpdated: ReturnType<typeof vi.fn>;
   listPacks: ReturnType<typeof vi.fn>;
   getPackDisplayNames: ReturnType<typeof vi.fn>;
@@ -160,6 +162,7 @@ let configListener:
   | undefined;
 let windowRef: (() => unknown) | undefined;
 let webContentsRef: (() => unknown) | undefined;
+let focusAgentHandler: ((agentId: string) => unknown) | undefined;
 
 function phaseOptions(verbose = false): NotificationRuntimePhaseOptions {
   return {
@@ -202,6 +205,7 @@ beforeEach(() => {
   windowLayoutService = {
     getBaseWindow: vi.fn(() => baseWindow),
     getUIWebContents: vi.fn(() => uiWebContents),
+    focusAgentFromExternalWindow: vi.fn().mockResolvedValue(undefined),
   };
   currentConfig = {
     appColorScheme: 'system',
@@ -232,6 +236,7 @@ beforeEach(() => {
   };
   windowRef = undefined;
   webContentsRef = undefined;
+  focusAgentHandler = undefined;
   notificationSoundsService = {
     setWindowRef: vi.fn((ref: () => unknown) => {
       mocks.calls.push('window-ref');
@@ -240,6 +245,10 @@ beforeEach(() => {
     setWebContentsRef: vi.fn((ref: () => unknown) => {
       mocks.calls.push('web-contents-ref');
       webContentsRef = ref;
+    }),
+    setFocusAgentHandler: vi.fn((handler: (agentId: string) => unknown) => {
+      mocks.calls.push('focus-agent-handler');
+      focusAgentHandler = handler;
     }),
     onConfigUpdated: vi.fn(),
     listPacks: vi.fn(() => {
@@ -299,6 +308,7 @@ describe('runNotificationRuntimePhase', () => {
       'notification-sounds',
       'window-ref',
       'web-contents-ref',
+      'focus-agent-handler',
       'config-listener',
       'list-packs',
       'pack-display-names',
@@ -352,6 +362,10 @@ describe('runNotificationRuntimePhase', () => {
     });
     expect(windowRef?.()).toBe(baseWindow);
     expect(webContentsRef?.()).toBe(uiWebContents);
+    await focusAgentHandler?.('agent-1');
+    expect(
+      windowLayoutService.focusAgentFromExternalWindow,
+    ).toHaveBeenCalledWith('agent-1');
     expect(windowLayoutService.getBaseWindow).toHaveBeenCalledTimes(1);
     expect(windowLayoutService.getUIWebContents).toHaveBeenCalledTimes(1);
   });

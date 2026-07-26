@@ -5,6 +5,7 @@ import {
   type UIMessage,
   type UIMessageStreamOptions,
 } from 'ai';
+import { createHash } from 'node:crypto';
 import type {
   AgentExecutionTarget,
   AgentTaskSnapshotSelection,
@@ -43,6 +44,13 @@ export interface AgentStepExecutionRequest {
  * while the default implementation remains a direct `streamText()` call.
  */
 export interface AgentStepExecution {
+  /**
+   * Attests whether this execution actually used the model object supplied in
+   * `AgentStepExecutionRequest.options`. Missing/`external` provenance is
+   * fail-closed for lifecycle observers that would otherwise replay a
+   * transcript through the wrong provider route.
+   */
+  readonly modelRouteBinding?: 'request-model' | 'external';
   consumeStream(options?: {
     onError?: (error: unknown) => void;
   }): PromiseLike<void>;
@@ -57,6 +65,46 @@ export interface AgentStepExecutor {
   ): AgentStepExecution | PromiseLike<AgentStepExecution>;
 }
 
+export const TOOL_CAPABILITY_CURRENT_SCOPE_CONTEXT_KEY =
+  'toolCapabilityCurrentScopeId';
+export const TOOL_CAPABILITY_APPROVAL_ORIGIN_SCOPE_CONTEXT_KEY =
+  'toolCapabilityApprovalOriginScopeId';
+
+/**
+ * Creates a host-owned scope for tool effects. Approval continuations retain
+ * the originating scope; ordinary later steps receive a distinct scope.
+ * Only host-generated identifiers are hashed, never prompt or tool content.
+ */
+export function resolveAgentToolCapabilityScopes(input: {
+  agentInstanceId: string;
+  stepGeneration: number;
+  historyMessageIds: readonly string[];
+  isApprovalContinuation: boolean;
+  pendingApprovalScopeId: string | null;
+}): {
+  currentScopeId: string;
+  approvalOriginScopeId: string | null;
+} {
+  const approvalOriginScopeId =
+    input.isApprovalContinuation &&
+    typeof input.pendingApprovalScopeId === 'string' &&
+    /^[a-f0-9]{64}$/.test(input.pendingApprovalScopeId)
+      ? input.pendingApprovalScopeId
+      : null;
+
+  const currentScopeId = createHash('sha256')
+    .update(
+      JSON.stringify({
+        schemaVersion: 1,
+        agentInstanceId: input.agentInstanceId,
+        stepGeneration: input.stepGeneration,
+        historyMessageIds: input.historyMessageIds,
+      }),
+    )
+    .digest('hex');
+  return { currentScopeId, approvalOriginScopeId };
+}
+
 /**
  * Default executor. It intentionally contains no policy and preserves the
  * existing in-process AI SDK behavior byte-for-byte.
@@ -67,7 +115,16 @@ export class LocalAgentStepExecutor implements AgentStepExecutor {
   ) {}
 
   public execute(request: AgentStepExecutionRequest): AgentStepExecution {
-    return this.streamTextFn(request.options);
+    const execution = this.streamTextFn(request.options);
+    return {
+      modelRouteBinding: 'request-model',
+      consumeStream: (options) => execution.consumeStream(options),
+      toUIMessageStream<UI_MESSAGE extends UIMessage>(
+        options?: UIMessageStreamOptions<UI_MESSAGE>,
+      ) {
+        return execution.toUIMessageStream<UI_MESSAGE>(options);
+      },
+    };
   }
 }
 

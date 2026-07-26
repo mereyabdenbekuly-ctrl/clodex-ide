@@ -115,10 +115,10 @@ A green source-tree inventory does not by itself close final distribution:
 - GSAP and `@gsap/react` use Webflow's custom standard license, not an OSI
   open-source license. The public terms snapshot is retained, but the release
   owner/counsel must confirm the product's use is permitted.
-- `@img/sharp-libvips-darwin-arm64` retains the applicable GPL/LGPL terms,
-  build-wrapper license, and exact pinned third-party notices. Final macOS
-  artifacts still must be checked for those notices and corresponding source
-  obligations.
+- The exact locked `@img/sharp-libvips-*` `1.3.2` platform packages retain the
+  applicable GPL/LGPL terms, build-wrapper license, and pinned third-party
+  notices. Final macOS and Linux artifacts still must be checked for those
+  notices and corresponding source obligations.
 - Platform-specific Windows/Linux dependency graphs may add packages and must
   pass the same strict gate on the exact final lockfile.
 - The NuGet package metadata for `VCRuntime.CefSharp.140` declares MIT for the

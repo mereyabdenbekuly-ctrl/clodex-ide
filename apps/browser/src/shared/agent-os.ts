@@ -268,6 +268,36 @@ export const hookDefinitionSchema = z.object({
 });
 export type HookDefinition = z.infer<typeof hookDefinitionSchema>;
 
+/**
+ * Lifecycle events currently emitted by the browser host. Other trigger
+ * names remain in the persisted protocol for forward compatibility and can
+ * be exercised manually, but must not be presented as automatically wired.
+ */
+export const HOST_WIRED_HOOK_TRIGGERS = [
+  'before-turn',
+  'after-turn',
+  'approval-requested',
+] as const satisfies readonly HookTrigger[];
+
+export function isHookAutomaticallyRunnable(
+  hook: Pick<HookDefinition, 'trigger' | 'kind'>,
+  helperAgentRunnerConfigured: boolean,
+): boolean {
+  if (!HOST_WIRED_HOOK_TRIGGERS.some((trigger) => trigger === hook.trigger)) {
+    return false;
+  }
+  if (hook.kind === 'prompt') return hook.trigger === 'before-turn';
+  if (hook.kind === 'agent') {
+    return (
+      helperAgentRunnerConfigured &&
+      (hook.trigger === 'after-turn' || hook.trigger === 'approval-requested')
+    );
+  }
+  // Command hooks require a fresh explicit approval and trusted-workspace
+  // assertion, neither of which an unattended lifecycle event can mint.
+  return false;
+}
+
 export const hookRunRecordSchema = z.object({
   id: z.string(),
   hookId: z.string(),
@@ -285,6 +315,17 @@ export const hookRunResultSchema = z.object({
   runs: z.array(hookRunRecordSchema),
 });
 export type HookRunResult = z.infer<typeof hookRunResultSchema>;
+
+/**
+ * Runtime-only hook capabilities. These are reset when the desktop process
+ * starts and must be asserted again by a concrete, trusted composition root.
+ * Keeping this in the projected Agent OS state lets the settings UI avoid
+ * advertising a helper-agent hook that has no executor behind it.
+ */
+export const hookRuntimeStateSchema = z.object({
+  helperAgentRunnerConfigured: z.boolean().default(false),
+});
+export type HookRuntimeState = z.infer<typeof hookRuntimeStateSchema>;
 
 export const remoteControlClientSchema = z.object({
   id: z.string(),
@@ -364,6 +405,7 @@ export const agentOsStateSchema = z.object({
   pendingSkillInstall: skillInstallPreviewSchema.nullable().default(null),
   hooks: z.array(hookDefinitionSchema).default([]),
   hookRuns: z.array(hookRunRecordSchema).default([]),
+  hookRuntime: hookRuntimeStateSchema.prefault({}),
   remoteControl: remoteControlStateSchema.prefault({}),
 });
 export type AgentOsState = z.infer<typeof agentOsStateSchema>;
@@ -379,7 +421,9 @@ export const AGENT_OS_LIMITS = {
   maxChronicleSegments: 100,
   maxDebugEvents: 500,
   maxGuardianAssessments: 100,
+  maxHooks: 20,
   maxHookRuns: 100,
+  maxConcurrentHelperRuns: 4,
   maxSkillPackageBytes: 20 * 1024 * 1024,
   maxSkillPackageFiles: 500,
   maxHookOutputBytes: 64 * 1024,

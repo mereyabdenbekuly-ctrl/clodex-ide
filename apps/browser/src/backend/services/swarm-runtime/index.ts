@@ -649,6 +649,7 @@ export function createAutomaticSwarmStepExecution({
   void completion.catch(() => {});
 
   return {
+    modelRouteBinding: 'external',
     consumeStream(options) {
       return completion.catch((error) => {
         options?.onError?.(error);

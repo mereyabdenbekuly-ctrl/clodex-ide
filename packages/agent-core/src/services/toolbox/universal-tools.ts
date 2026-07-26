@@ -3,7 +3,9 @@ import { tool } from 'ai';
 import { ClientRuntimeNode } from '@clodex/agent-runtime-node';
 import {
   copyFile,
+  lstat,
   mkdir as fsMkdir,
+  realpath,
   readdir,
   readFile,
   rename,
@@ -11,7 +13,13 @@ import {
   stat,
   unlink,
 } from '../../fs';
-import { writePendingEditToDisk } from '../pending-edits';
+import {
+  type AutoApprovedFileBinding,
+  writeAutoApprovedEditToDisk,
+  writePendingEditToDisk,
+} from '../pending-edits';
+import type { FileEditBatchParticipant } from '../../types/pending-edits';
+import { MAX_DIFF_TEXT_FILE_SIZE } from '../../types/diff-history';
 import type {
   CopyToolInput,
   DeleteToolInput,
@@ -127,6 +135,36 @@ function getToolLockOwnerId(options: unknown): string | undefined {
     : undefined;
 }
 
+function getToolAbortSignal(options: unknown): AbortSignal | undefined {
+  const abortSignal = (options as { abortSignal?: unknown } | undefined)
+    ?.abortSignal;
+  return abortSignal &&
+    typeof abortSignal === 'object' &&
+    typeof (abortSignal as AbortSignal).aborted === 'boolean' &&
+    typeof (abortSignal as AbortSignal).addEventListener === 'function' &&
+    typeof (abortSignal as AbortSignal).removeEventListener === 'function'
+    ? (abortSignal as AbortSignal)
+    : undefined;
+}
+
+function getToolFileEditBatchParticipant(
+  options: unknown,
+): FileEditBatchParticipant | undefined {
+  const participant = (
+    options as { fileEditBatchParticipant?: unknown } | undefined
+  )?.fileEditBatchParticipant;
+  if (!participant || typeof participant !== 'object') return undefined;
+  const candidate = participant as Partial<FileEditBatchParticipant>;
+  return typeof candidate.batchId === 'string' &&
+    typeof candidate.memberId === 'string' &&
+    typeof candidate.toolCallId === 'string' &&
+    typeof candidate.getState === 'function' &&
+    typeof candidate.arriveAsProposal === 'function' &&
+    typeof candidate.settle === 'function'
+    ? (participant as FileEditBatchParticipant)
+    : undefined;
+}
+
 function tempDir(deps: UniversalToolboxDeps): string {
   return path.join(deps.hostPaths.tempDir(), 'agent-temp-files');
 }
@@ -145,6 +183,271 @@ async function isDirectory(absolutePath: string): Promise<boolean> {
     return (await stat(absolutePath)).isDirectory();
   } catch {
     return false;
+  }
+}
+
+const AUTO_APPROVAL_SENSITIVE_FILENAMES = new Set([
+  '.env',
+  '.envrc',
+  '.gitattributes',
+  '.gitconfig',
+  '.git-credentials',
+  '.gitignore',
+  '.gitmodules',
+  '.netrc',
+  '.npmrc',
+  '.pypirc',
+  'agents.md',
+  'authorized_keys',
+  'claude.md',
+  'codeowners',
+  'id_dsa',
+  'id_ecdsa',
+  'id_ed25519',
+  'id_rsa',
+  'identity',
+  'kubeconfig',
+  'package.json',
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lock',
+  'bun.lockb',
+  'cargo.toml',
+  'cargo.lock',
+  'pyproject.toml',
+  'poetry.lock',
+]);
+
+const AUTO_APPROVAL_SENSITIVE_SEGMENTS = new Set([
+  '.aws',
+  '.azure',
+  '.clodex',
+  '.docker',
+  '.git',
+  '.github',
+  '.gitlab',
+  '.gnupg',
+  '.kube',
+  '.ssh',
+]);
+
+const AUTO_APPROVAL_SENSITIVE_EXTENSIONS = new Set([
+  '.key',
+  '.pem',
+  '.p12',
+  '.pfx',
+  '.jks',
+  '.keystore',
+]);
+
+function isSensitiveAutoApprovalPath(relativePath: string): boolean {
+  const normalized = relativePath.replaceAll('\\', '/').toLowerCase();
+  const segments = normalized.split('/').filter(Boolean);
+  const basename = segments.at(-1) ?? '';
+  return (
+    segments.some((segment) => AUTO_APPROVAL_SENSITIVE_SEGMENTS.has(segment)) ||
+    segments.some(
+      (segment, index) =>
+        segment === '.config' &&
+        (segments[index + 1] === 'gcloud' || segments[index + 1] === 'gh'),
+    ) ||
+    basename.startsWith('.env.') ||
+    AUTO_APPROVAL_SENSITIVE_FILENAMES.has(basename) ||
+    AUTO_APPROVAL_SENSITIVE_EXTENSIONS.has(path.extname(basename)) ||
+    /(?:credential|credentials|secret|secrets|private[-_.]?key)/u.test(basename)
+  );
+}
+
+function isSafeAutoApprovalText(content: string): boolean {
+  return (
+    !content.includes('\0') &&
+    Buffer.byteLength(content, 'utf8') <= MAX_DIFF_TEXT_FILE_SIZE
+  );
+}
+
+function comparableFilesystemPath(value: string): string {
+  const normalized = path.normalize(path.resolve(value));
+  return process.platform === 'win32' || process.platform === 'darwin'
+    ? normalized.toLowerCase()
+    : normalized;
+}
+
+async function hasUnsafeAutoApprovalPathComponent(
+  resolved: ReturnType<typeof resolveToolPath>,
+): Promise<boolean> {
+  const relative = path.relative(resolved.mountRoot, resolved.absolutePath);
+  if (
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    return true;
+  }
+
+  const segments = relative.split(path.sep).filter(Boolean);
+  let cursor = resolved.mountRoot;
+  const pathsToInspect = [resolved.mountRoot];
+  for (const segment of segments) {
+    cursor = path.join(cursor, segment);
+    pathsToInspect.push(cursor);
+  }
+
+  for (let index = 0; index < pathsToInspect.length; index++) {
+    const candidate = pathsToInspect[index]!;
+    let candidateStat: Awaited<ReturnType<typeof lstat>>;
+    try {
+      candidateStat = await lstat(candidate);
+    } catch {
+      // Auto-policy is for existing regular files only. Missing paths and
+      // permission/IO failures require manual review rather than treating an
+      // uninspected component as safe.
+      return true;
+    }
+    if (candidateStat.isSymbolicLink()) return true;
+    const isFinal = index === pathsToInspect.length - 1;
+    if (!isFinal && !candidateStat.isDirectory()) return true;
+    if (
+      isFinal &&
+      candidate !== resolved.mountRoot &&
+      (!candidateStat.isFile() ||
+        candidateStat.nlink !== 1 ||
+        (candidateStat.mode & 0o111) !== 0 ||
+        (process.platform !== 'win32' && (candidateStat.mode & 0o222) === 0))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function isAutoApprovalEligible(
+  deps: UniversalToolboxDeps,
+  resolved: ReturnType<typeof resolveToolPath>,
+  beforeState: Awaited<ReturnType<typeof captureFileState>>,
+  newContent: string,
+): Promise<boolean> {
+  if (beforeState.isExternal || !isSafeAutoApprovalText(newContent)) {
+    return false;
+  }
+  // Creation remains manual: without directory-handle-relative open/link
+  // primitives there is no portable way to make parent-path authorization
+  // and creation one atomic operation across Windows, macOS and Linux.
+  if (
+    beforeState.content === null ||
+    !isSafeAutoApprovalText(beforeState.content)
+  ) {
+    return false;
+  }
+  const workspaceRoot = findWorkspaceRootForPath(deps, resolved.absolutePath);
+  if (
+    !workspaceRoot ||
+    comparableFilesystemPath(workspaceRoot) !==
+      comparableFilesystemPath(resolved.mountRoot) ||
+    isSensitiveAutoApprovalPath(resolved.relativePath) ||
+    isSensitiveAutoApprovalPath(resolved.mountRoot) ||
+    (await hasUnsafeAutoApprovalPathComponent(resolved))
+  ) {
+    return false;
+  }
+  let authorizedTarget: CapturedAutoApprovedTarget;
+  try {
+    authorizedTarget = await captureAutoApprovedTargetIdentity(resolved);
+  } catch {
+    return false;
+  }
+  if (
+    isSensitiveAutoApprovalPath(authorizedTarget.physicalTarget) ||
+    isSensitiveAutoApprovalPath(authorizedTarget.physicalWorkspaceRoot)
+  ) {
+    return false;
+  }
+  if (!deps.diffHistoryService) return false;
+  const [trackable, cleanHistory] = await Promise.all([
+    deps.diffHistoryService.canSafelyTrackFilepath(
+      resolved.absolutePath,
+      workspaceRoot,
+    ),
+    deps.diffHistoryService.canSafelyAutoAcceptFile(resolved.absolutePath),
+  ]);
+  return trackable && cleanHistory;
+}
+
+type CapturedAutoApprovedTarget = AutoApprovedFileBinding;
+
+async function captureAutoApprovedTargetIdentity(
+  resolved: ReturnType<typeof resolveToolPath>,
+): Promise<CapturedAutoApprovedTarget> {
+  const [physicalMountRoot, physicalTarget] = await Promise.all([
+    realpath(resolved.mountRoot),
+    realpath(resolved.absolutePath),
+  ]);
+  const relative = path.relative(physicalMountRoot, physicalTarget);
+  if (
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error('Automatic edit target resolved outside its workspace.');
+  }
+
+  const [lexicalMountStat, physicalMountStat, lexicalStat, physicalStat] =
+    await Promise.all([
+      lstat(resolved.mountRoot),
+      lstat(physicalMountRoot),
+      lstat(resolved.absolutePath),
+      lstat(physicalTarget),
+    ]);
+  if (
+    !lexicalMountStat.isDirectory() ||
+    lexicalMountStat.isSymbolicLink() ||
+    !physicalMountStat.isDirectory() ||
+    lexicalMountStat.dev !== physicalMountStat.dev ||
+    lexicalMountStat.ino !== physicalMountStat.ino ||
+    !lexicalStat.isFile() ||
+    lexicalStat.isSymbolicLink() ||
+    lexicalStat.nlink !== 1 ||
+    !physicalStat.isFile() ||
+    physicalStat.nlink !== 1 ||
+    lexicalStat.dev !== physicalStat.dev ||
+    lexicalStat.ino !== physicalStat.ino
+  ) {
+    throw new Error('Automatic edit target changed during authorization.');
+  }
+  return {
+    dev: lexicalStat.dev,
+    ino: lexicalStat.ino,
+    workspaceRoot: resolved.mountRoot,
+    physicalWorkspaceRoot: physicalMountRoot,
+    physicalTarget,
+    workspaceRootIdentity: {
+      dev: lexicalMountStat.dev,
+      ino: lexicalMountStat.ino,
+    },
+  };
+}
+
+async function assertPendingTextBaselineUnchanged(
+  deps: UniversalToolboxDeps,
+  absolutePath: string,
+  beforeState: Awaited<ReturnType<typeof captureFileState>>,
+): Promise<void> {
+  if (beforeState.isExternal) return;
+  const currentState = await captureFileState(absolutePath, tempDir(deps));
+  try {
+    if (
+      currentState.isExternal ||
+      currentState.content !== beforeState.content
+    ) {
+      throw new Error(
+        'File changed after the edit was proposed; review the latest content and retry.',
+      );
+    }
+  } finally {
+    if (currentState.isExternal) {
+      void cleanupTempFile(currentState.tempPath);
+    }
   }
 }
 
@@ -266,12 +569,15 @@ async function registerSingleEdit(
 ): Promise<WithDiff<object>['_diff']> {
   if (!deps.diffHistoryService) return null;
 
+  let tempFilesToCleanup: string[] = [];
   try {
-    const { editContent, tempFilesToCleanup } = await buildAgentFileEditContent(
+    const built = await buildAgentFileEditContent(
       beforeState,
       afterState,
       tempDir(deps),
     );
+    const { editContent } = built;
+    tempFilesToCleanup = built.tempFilesToCleanup;
 
     if (!editContent.isExternal && editContent.contentAfter !== null) {
       void deps.mutations?.onTextFileWritten?.(
@@ -293,14 +599,14 @@ async function registerSingleEdit(
       workspaceRoot: findWorkspaceRootForPath(deps, absolutePath),
       ...editContent,
     });
-
-    for (const tempFile of tempFilesToCleanup) void cleanupTempFile(tempFile);
   } catch (error) {
     deps.logger?.error('[UniversalToolbox] Failed to register agent edit', {
       error,
       path: absolutePath,
       toolCallId,
     });
+  } finally {
+    for (const tempFile of tempFilesToCleanup) void cleanupTempFile(tempFile);
   }
 
   return !beforeState.isExternal && !afterState.isExternal
@@ -431,14 +737,17 @@ function invalidateProjectIndexPath(
 
 async function proposeSinglePathEdit<T extends object>(
   deps: UniversalToolboxDeps,
-  absolutePath: string,
-  relativePath: string,
+  resolved: ReturnType<typeof resolveToolPath>,
   toolCallId: string,
   lockOwnerId: string | undefined,
+  abortSignal: AbortSignal | undefined,
+  fileEditBatchParticipant: FileEditBatchParticipant | undefined,
   beforeState: Awaited<ReturnType<typeof captureFileState>>,
   newContent: string,
   result: T,
 ): Promise<WithDiff<T>> {
+  const { absolutePath, relativePath } = resolved;
+  const textBaseline = beforeState.isExternal ? null : beforeState.content;
   const _diff = !beforeState.isExternal
     ? { before: beforeState.content ?? '', after: newContent }
     : null;
@@ -455,32 +764,279 @@ async function proposeSinglePathEdit<T extends object>(
     toolCallId,
     agentInstanceId: deps.agentInstanceId,
     lockOwnerId,
+    abortSignal,
+    fileEditBatchParticipant,
     absolutePath,
     relativePath,
-    oldContent: beforeState.isExternal ? null : beforeState.content,
+    oldContent: textBaseline,
     newContent,
-    apply: async () => {
-      deps.diffHistoryService?.ignoreFileForWatcher(absolutePath);
+    // Lazy evaluation lets manual-review proposals publish immediately. In
+    // auto mode the service starts this preflight concurrently for every
+    // file-edit call while preserving proposal admission order.
+    autoApprovalEligible: () =>
+      isAutoApprovalEligible(deps, resolved, beforeState, newContent),
+    apply: async ({ decisionSource }) => {
+      if (decisionSource === 'human') {
+        deps.diffHistoryService?.ignoreFileForWatcher(absolutePath);
+      }
+      let autoEditReceipt: Awaited<
+        ReturnType<typeof writeAutoApprovedEditToDisk>
+      > | null = null;
+      let autoWatcherToken: string | null = null;
+      let autoEvidenceCommitted = false;
+      let autoReceiptSettled = false;
       try {
-        await writePendingEditToDisk(absolutePath, newContent);
-        const afterState = await captureFileState(absolutePath, tempDir(deps));
-        await registerSingleEdit(
+        const permission =
+          !beforeState.isExternal && beforeState.content === null
+            ? 'create'
+            : 'write';
+        const currentResolution = resolveToolPath(
+          deps,
+          resolved.inputPath,
+          permission,
+        );
+        if (
+          comparableFilesystemPath(currentResolution.absolutePath) !==
+            comparableFilesystemPath(absolutePath) ||
+          comparableFilesystemPath(currentResolution.mountRoot) !==
+            comparableFilesystemPath(resolved.mountRoot)
+        ) {
+          throw new Error(
+            'Workspace authority changed after the edit was proposed; retry the edit.',
+          );
+        }
+        await assertPendingTextBaselineUnchanged(
           deps,
           absolutePath,
-          toolCallId,
           beforeState,
-          afterState,
         );
-        await deps.diffHistoryService?.acceptPendingEditsForAgentFile?.(
-          deps.agentInstanceId,
-          absolutePath,
-        );
-        invalidateProjectIndexPath(deps, absolutePath);
+        if (
+          decisionSource === 'auto-policy' &&
+          !(await isAutoApprovalEligible(
+            deps,
+            currentResolution,
+            beforeState,
+            newContent,
+          ))
+        ) {
+          throw new Error(
+            'Automatic edit policy no longer permits this file; review it manually.',
+          );
+        }
+
+        if (decisionSource === 'auto-policy') {
+          if (textBaseline === null) {
+            throw new Error('Automatic creation is not permitted.');
+          }
+          if (!deps.diffHistoryService) {
+            throw new Error(
+              'Automatic file edit requires durable diff-history evidence.',
+            );
+          }
+          autoWatcherToken =
+            deps.diffHistoryService.beginAutoApprovedWriteWatcher(
+              absolutePath,
+              newContent,
+            );
+          const targetIdentity =
+            await captureAutoApprovedTargetIdentity(currentResolution);
+          autoEditReceipt = await writeAutoApprovedEditToDisk(
+            absolutePath,
+            textBaseline,
+            newContent,
+            targetIdentity,
+          );
+          if (!(await autoEditReceipt.verify())) {
+            throw new Error(
+              'Automatic edit target changed before policy evidence could be recorded; review the latest content.',
+            );
+          }
+        } else {
+          await writePendingEditToDisk(absolutePath, newContent);
+        }
+        if (decisionSource === 'auto-policy') {
+          if (
+            !deps.diffHistoryService ||
+            beforeState.isExternal ||
+            beforeState.content === null ||
+            !autoEditReceipt ||
+            !autoWatcherToken
+          ) {
+            throw new Error(
+              'Automatic file edit could not produce bounded text evidence.',
+            );
+          }
+          const tracked =
+            await deps.diffHistoryService.registerAutoApprovedTextEdit({
+              agentInstanceId: deps.agentInstanceId,
+              path: absolutePath,
+              toolCallId,
+              workspaceRoot: findWorkspaceRootForPath(deps, absolutePath),
+              contentBefore: beforeState.content,
+              // Never attribute an arbitrary path read to the agent. The
+              // receipt carries the exact bytes written and verified by the
+              // guarded writer; a user atomic-save before verification fails
+              // closed instead of being signed as an agent/policy effect.
+              contentAfter: autoEditReceipt.contentAfter,
+            });
+          if (!tracked) {
+            throw new Error(
+              'Automatic file edit was not durably recorded with policy evidence.',
+            );
+          }
+          autoEvidenceCommitted = true;
+          const reconciliation =
+            await deps.diffHistoryService.reconcileAutoApprovedWriteWatcher(
+              absolutePath,
+              autoWatcherToken,
+              autoEditReceipt.contentAfter,
+            );
+          const stillExactAgentEffect = await autoEditReceipt.verify();
+          if (reconciliation !== 'exact' || !stillExactAgentEffect) {
+            const rolledBack = await autoEditReceipt.rollback();
+            autoReceiptSettled = true;
+            const rollbackReconciliation =
+              await deps.diffHistoryService.reconcileAutoApprovedWriteWatcher(
+                absolutePath,
+                autoWatcherToken,
+                autoEditReceipt.contentAfter,
+              );
+            deps.logger?.warn(
+              '[UniversalToolbox] Concurrent user save was preserved or path drift was rolled back after automatic edit evidence committed',
+              {
+                toolCallId,
+                path: absolutePath,
+                rolledBack,
+                reconciliation,
+                rollbackReconciliation,
+              },
+            );
+            throw new Error(
+              rollbackReconciliation === 'failed'
+                ? 'Automatic edit evidence was committed, but the drifted disk state could not be reconciled safely after rollback.'
+                : 'A concurrent user save or path change replaced the automatic edit after its evidence was recorded. The exact agent effect was rolled back through its held file handle and the current path state was preserved; review the file before retrying.',
+            );
+          }
+          const receiptCommitted = await autoEditReceipt.commit();
+          if (!receiptCommitted) {
+            const rolledBack = await autoEditReceipt.rollback();
+            autoReceiptSettled = true;
+            const rollbackReconciliation =
+              await deps.diffHistoryService.reconcileAutoApprovedWriteWatcher(
+                absolutePath,
+                autoWatcherToken,
+                autoEditReceipt.contentAfter,
+              );
+            deps.logger?.warn(
+              '[UniversalToolbox] Automatic edit binding drifted during final receipt commit',
+              {
+                toolCallId,
+                path: absolutePath,
+                rolledBack,
+                rollbackReconciliation,
+              },
+            );
+            throw new Error(
+              rollbackReconciliation === 'failed'
+                ? 'Automatic edit binding changed during final commit and the current disk state could not be reconciled safely.'
+                : 'Automatic edit binding changed during final commit. The exact agent effect was rolled back and the current path state was recorded; review the file before retrying.',
+            );
+          }
+          autoReceiptSettled = true;
+          if (autoEditReceipt.cleanupError) {
+            deps.logger?.warn(
+              '[UniversalToolbox] Automatic edit was committed but file-handle cleanup failed',
+              {
+                error: autoEditReceipt.cleanupError,
+                toolCallId,
+                path: absolutePath,
+              },
+            );
+          }
+          try {
+            void deps.mutations?.onTextFileWritten?.(
+              deps.agentInstanceId,
+              absolutePath,
+              autoEditReceipt.contentAfter,
+            );
+            invalidateProjectIndexPath(deps, absolutePath);
+          } catch (error) {
+            deps.logger?.error(
+              '[UniversalToolbox] Automatic edit committed but local projection refresh failed',
+              { error, toolCallId, path: absolutePath },
+            );
+          }
+        } else {
+          const afterState = await captureFileState(
+            absolutePath,
+            tempDir(deps),
+          );
+          await registerSingleEdit(
+            deps,
+            absolutePath,
+            toolCallId,
+            beforeState,
+            afterState,
+          );
+          await deps.diffHistoryService?.acceptPendingEditsForAgentFile?.(
+            deps.agentInstanceId,
+            absolutePath,
+          );
+          invalidateProjectIndexPath(deps, absolutePath);
+        }
+      } catch (error) {
+        if (
+          decisionSource === 'auto-policy' &&
+          autoEditReceipt &&
+          !autoReceiptSettled
+        ) {
+          const rolledBack = await autoEditReceipt.rollback();
+          autoReceiptSettled = true;
+          if (!rolledBack) {
+            deps.logger?.error(
+              '[UniversalToolbox] Automatic edit rollback skipped because the file changed again',
+              { toolCallId, path: absolutePath },
+            );
+          }
+          if (
+            autoEvidenceCommitted &&
+            autoWatcherToken &&
+            deps.diffHistoryService
+          ) {
+            const rollbackReconciliation =
+              await deps.diffHistoryService.reconcileAutoApprovedWriteWatcher(
+                absolutePath,
+                autoWatcherToken,
+                autoEditReceipt.contentAfter,
+              );
+            if (rollbackReconciliation === 'failed') {
+              deps.logger?.error(
+                '[UniversalToolbox] Failed to reconcile disk state after post-evidence automatic edit rollback',
+                { toolCallId, path: absolutePath },
+              );
+            }
+          }
+        }
+        throw error;
       } finally {
-        setTimeout(
-          () => deps.diffHistoryService?.unignoreFileForWatcher(absolutePath),
-          500,
-        );
+        if (decisionSource === 'human') {
+          setTimeout(
+            () => deps.diffHistoryService?.unignoreFileForWatcher(absolutePath),
+            500,
+          );
+        } else if (autoWatcherToken && deps.diffHistoryService) {
+          if (autoEvidenceCommitted) {
+            deps.diffHistoryService.completeAutoApprovedWriteWatcher(
+              absolutePath,
+              autoWatcherToken,
+            );
+          } else {
+            await deps.diffHistoryService.cancelAutoApprovedWriteWatcher(
+              absolutePath,
+              autoWatcherToken,
+            );
+          }
+        }
       }
     },
   });
@@ -837,10 +1393,11 @@ export async function writeToolExecute(
   }
   return proposeSinglePathEdit(
     deps,
-    resolved.absolutePath,
-    resolved.relativePath,
+    resolved,
     getToolCallId(options),
     getToolLockOwnerId(options),
+    getToolAbortSignal(options),
+    getToolFileEditBatchParticipant(options),
     beforeState,
     cleanContent,
     { message },
@@ -894,10 +1451,11 @@ export async function multiEditToolExecute(
   }
   return proposeSinglePathEdit(
     deps,
-    resolved.absolutePath,
-    resolved.relativePath,
+    resolved,
     getToolCallId(options),
     getToolLockOwnerId(options),
+    getToolAbortSignal(options),
+    getToolFileEditBatchParticipant(options),
     beforeState,
     content,
     {

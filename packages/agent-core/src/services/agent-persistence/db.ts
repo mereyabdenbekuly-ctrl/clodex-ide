@@ -34,6 +34,10 @@ import {
   type AgentMessage,
 } from '../../types/agent';
 import type { ToolApprovalMode } from '../../types/tool-approval';
+import {
+  DEFAULT_FILE_EDIT_APPROVAL_MODE,
+  type FileEditApprovalMode,
+} from '../../types/file-edit-approval';
 import { serializeAgentStatePersistMessage } from '../../agents/state-persistence';
 
 export interface AgentPersistenceDBDeps {
@@ -914,6 +918,33 @@ export class AgentPersistenceDB {
     }
   }
 
+  /**
+   * Updates only the per-agent file-edit approval mode. The narrow update is
+   * safe for agents with no persisted message history.
+   *
+   * @returns true if a row was updated, false if the agent is not persisted.
+   */
+  public async updateFileEditApprovalMode(
+    id: string,
+    mode: FileEditApprovalMode,
+  ): Promise<boolean> {
+    this._logger.debug(
+      `[AgentPersistenceDB] Updating file-edit approval mode for agent: ${id}`,
+    );
+    try {
+      const result = await this._db
+        .update(schema.agentInstances)
+        .set({ fileEditApprovalMode: mode })
+        .where(eq(schema.agentInstances.id, id));
+      return (result as unknown as { rowsAffected: number }).rowsAffected > 0;
+    } catch (error) {
+      this._logger.error(
+        `[AgentPersistenceDB] Failed to update file-edit approval mode: ${(error as Error).message}`,
+      );
+      throw error;
+    }
+  }
+
   public async setAgentArchived(
     id: string,
     archived: boolean,
@@ -985,6 +1016,9 @@ export class AgentPersistenceDB {
           : null,
         mountedWorkspaces: source.mountedWorkspaces,
         toolApprovalMode: source.toolApprovalMode,
+        // A fork creates a distinct authorization context. Automatic edit
+        // approval must be opted into explicitly on the new agent.
+        fileEditApprovalMode: DEFAULT_FILE_EDIT_APPROVAL_MODE,
         forkedFromAgentId: sourceId,
         forkedFromMessageId: throughMessageId ?? null,
         archivedAt: null,

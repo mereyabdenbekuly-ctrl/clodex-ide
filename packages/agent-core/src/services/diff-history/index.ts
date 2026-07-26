@@ -51,6 +51,7 @@ import {
   streamContent,
   getLatestOperationIdxPerFilepath,
   getAgentInstanceIdsWithOperationsForFilepath,
+  storeAutoApprovedTextEdit,
 } from './utils/db';
 import {
   acceptAndRejectHunks as acceptAndRejectHunksUtils,
@@ -91,6 +92,34 @@ export type AgentFileEdit = {
       tempPathToAfterContent: string | null;
     }
 );
+
+export interface AutoApprovedTextEdit {
+  agentInstanceId: string;
+  path: string;
+  toolCallId: string;
+  workspaceRoot?: string | null;
+  contentBefore: string;
+  contentAfter: string;
+}
+
+interface AutoApprovedWatcherExpectation {
+  token: string;
+  agentContent: string;
+  suppressedContent: string;
+  phase: 'preparing' | 'committed';
+  userSaveRecorded: boolean;
+  temporaryWatch: boolean;
+  cleanupTimer: ReturnType<typeof setTimeout> | null;
+  tail: Promise<void>;
+}
+
+type StoredWatcherState =
+  | { kind: 'text'; content: string }
+  | { kind: 'external' }
+  | { kind: 'missing' };
+
+const AUTO_APPROVED_WATCHER_STALE_MS = 30_000;
+const AUTO_APPROVED_WATCHER_SETTLE_MS = 500;
 
 /**
  * Coarse category of a filesystem path used as the telemetry-safe
@@ -180,6 +209,11 @@ export class DiffHistoryService extends DisposableService {
   private watcher: FSWatcher | null = null;
   private filesIgnoredByWatcher: Set<string> = new Set();
   private currentlyWatchedFiles: Set<string> = new Set();
+  private autoApprovedWatcherExpectations = new Map<
+    string,
+    AutoApprovedWatcherExpectation
+  >();
+  private autoApprovedWatcherToken = 0;
   private dbDriver: Client;
   private db: LibSQLDatabase<typeof schema>;
   private hydratedAgentInstanceIds = new Set<string>();
@@ -382,25 +416,6 @@ export class DiffHistoryService extends DisposableService {
     // procedures through `CommandRegistry` and dispatches to this
     // service's `acceptAndRejectHunks(...)`.
 
-    const storeFileAndAddOperation = async (
-      path: string,
-      meta: OperationMeta,
-    ) => {
-      const stats = await stat(path);
-      let isExternal = false;
-      // If file is too large, do **not** create a buffer and store as external
-      if (stats.size > MAX_DIFF_TEXT_FILE_SIZE)
-        return await this.storeExternalFile(path, meta);
-
-      const fileContent = await readFile(path, 'utf8');
-      const bufferContent = Buffer.from(fileContent, 'utf8');
-      if (await isBinaryFile(bufferContent)) isExternal = true;
-
-      if (!isExternal)
-        await storeFileContent(this.db, path, bufferContent, meta);
-      else await this.storeExternalFile(path, meta);
-    };
-
     this.watcher = watch([], {
       persistent: true,
       atomic: true,
@@ -420,19 +435,16 @@ export class DiffHistoryService extends DisposableService {
         // file that still has pending ops — doing so would leave
         // a stale current snapshot that never self-heals and could
         // clobber user changes on Accept.
-        try {
-          await storeFileAndAddOperation(path, {
-            operation: 'edit',
-            contributor: 'user',
-            reason: 'user-save',
-          });
-        } catch (error) {
-          this.logError(`Failed to read file: ${path}`, error);
-          return;
+        const expectation = this.autoApprovedWatcherExpectations.get(path);
+        if (expectation) {
+          const handled = await this.enqueueAutoApprovedWatcherTask(
+            expectation,
+            async () => this.handleExpectedAutoApprovedWatcherChange(path),
+          );
+          if (handled) return;
         }
+        if (!(await this.recordCurrentPathAsUserSave(path))) return;
         this.logDebug(`File changed: ${path}`);
-        this._opsSeq++;
-        await this.updateAgentsAffectedByFilepath(path);
       })
       .on('unlink', async (path) => {
         // Same rationale as the `change` handler above: re-running
@@ -440,14 +452,31 @@ export class DiffHistoryService extends DisposableService {
         // for files that were legitimately tracked but later fell
         // into an ignored path.
         if (this.filesIgnoredByWatcher.has(path)) return;
-        await insertOperation(this.db, path, null, {
-          operation: 'edit',
-          contributor: 'user',
-          reason: 'user-save',
-        });
+        const expectation = this.autoApprovedWatcherExpectations.get(path);
+        if (expectation) {
+          const handled = await this.enqueueAutoApprovedWatcherTask(
+            expectation,
+            async () => {
+              if (expectation.phase === 'preparing') return true;
+              try {
+                await this.persistUserSaveState(path, { kind: 'missing' });
+                expectation.userSaveRecorded = true;
+                expectation.suppressedContent = '';
+                this._opsSeq++;
+                await this.updateAgentsAffectedByFilepath(path);
+              } catch (error) {
+                this.logError(
+                  `Failed to reconcile concurrent unlink for ${path}`,
+                  error,
+                );
+              }
+              return true;
+            },
+          );
+          if (handled) return;
+        }
+        if (!(await this.recordCurrentPathAsUserSave(path, true))) return;
         this.logDebug(`File unlinked: ${path}`);
-        this._opsSeq++;
-        await this.updateAgentsAffectedByFilepath(path);
       });
 
     // Phase 5 (D5): agent-instance lifecycle is observed via the
@@ -625,6 +654,7 @@ export class DiffHistoryService extends DisposableService {
   private async shouldTrackFilepath(
     filepath: string,
     workspaceRoot?: string | null,
+    failOpen = true,
   ): Promise<boolean> {
     try {
       // Phase 1: synchronous segment denylist. Hot path for runaway
@@ -654,8 +684,76 @@ export class DiffHistoryService extends DisposableService {
         `shouldTrackFilepath failed for ${filepath} — failing open`,
         error,
       );
-      return true;
+      return failOpen;
     }
+  }
+
+  /**
+   * Fail-closed preflight for automatic text edits. Unlike the historical
+   * registration path, an ignore-policy failure must never authorize a write
+   * that would have no durable diff/undo evidence.
+   */
+  public async canSafelyTrackFilepath(
+    filepath: string,
+    workspaceRoot?: string | null,
+  ): Promise<boolean> {
+    return this.shouldTrackFilepath(filepath, workspaceRoot, false);
+  }
+
+  /** Auto-policy may only establish a baseline for a clean file history. */
+  public async canSafelyAutoAcceptFile(filepath: string): Promise<boolean> {
+    try {
+      return !(await hasPendingEditsForFilepath(this.db, filepath));
+    } catch (error) {
+      this.logError(
+        `Automatic edit pending-history check failed for ${filepath}`,
+        error,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Atomically stores one bounded text edit together with a distinct
+   * standing-policy acceptance receipt. Existing pending history fails closed
+   * so this operation cannot accept unrelated earlier edits on the file.
+   */
+  public async registerAutoApprovedTextEdit(
+    edit: AutoApprovedTextEdit,
+  ): Promise<boolean> {
+    if (
+      !(await this.shouldTrackFilepath(edit.path, edit.workspaceRoot, false))
+    ) {
+      return false;
+    }
+
+    const prev = this._toolCallEditCounts.get(edit.toolCallId) ?? 0;
+    if (prev >= this.MAX_EDITS_PER_TOOL_CALL) return false;
+
+    const stored = await storeAutoApprovedTextEdit(this.db, {
+      agentInstanceId: edit.agentInstanceId,
+      filepath: edit.path,
+      toolCallId: edit.toolCallId,
+      contentBefore: edit.contentBefore,
+      contentAfter: edit.contentAfter,
+    });
+    if (!stored) return false;
+
+    this._toolCallEditCounts.set(edit.toolCallId, prev + 1);
+    this._opsSeq++;
+    try {
+      await this.updateHydratedAgentState(edit.agentInstanceId, [edit.path]);
+      await this.unwatchResolvedFiles([edit.path]);
+    } catch (error) {
+      // The SQLite transaction above is the authority boundary. Projection or
+      // watcher refresh failure must not make the caller roll back disk after
+      // durable edit + policy evidence already committed.
+      this.logError(
+        `Automatic edit evidence committed but projection refresh failed for ${edit.path}`,
+        error,
+      );
+    }
+    return true;
   }
 
   /**
@@ -687,13 +785,13 @@ export class DiffHistoryService extends DisposableService {
    * directory operations causes partial undo on the tail entries.
    *
    * @param edit - The edit to register
-   * @returns void
+   * @returns `true` when durable diff evidence was written.
    */
-  public async registerAgentEdit(edit: AgentFileEdit) {
+  public async registerAgentEdit(edit: AgentFileEdit): Promise<boolean> {
     // Guard 1: gitignore / hardcoded-denylist filter.
     if (!(await this.shouldTrackFilepath(edit.path, edit.workspaceRoot))) {
       this.logDebug(`Skipping ignored path: ${edit.path}`);
-      return;
+      return false;
     }
 
     // Guard 2: per-tool-call fan-out cap. Single runaway tool call can
@@ -728,10 +826,11 @@ export class DiffHistoryService extends DisposableService {
           cap: this.MAX_EDITS_PER_TOOL_CALL,
         });
       }
-      return;
+      return false;
     }
 
     await this._writeEditOp(edit);
+    return true;
   }
 
   /**
@@ -923,6 +1022,136 @@ export class DiffHistoryService extends DisposableService {
     await this.unwatchResolvedFiles([filepath]);
   }
 
+  private enqueueAutoApprovedWatcherTask<T>(
+    expectation: AutoApprovedWatcherExpectation,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    const run = expectation.tail.then(task, task);
+    expectation.tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async captureCurrentWatcherState(
+    filepath: string,
+  ): Promise<StoredWatcherState> {
+    try {
+      const stats = await stat(filepath);
+      if (stats.size > MAX_DIFF_TEXT_FILE_SIZE) return { kind: 'external' };
+      const buffer = await readFile(filepath);
+      if (buffer.length > MAX_DIFF_TEXT_FILE_SIZE) return { kind: 'external' };
+      if (await isBinaryFile(buffer)) return { kind: 'external' };
+      return { kind: 'text', content: buffer.toString('utf8') };
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        (error as { code?: unknown }).code === 'ENOENT'
+      ) {
+        return { kind: 'missing' };
+      }
+      throw error;
+    }
+  }
+
+  private async persistUserSaveState(
+    filepath: string,
+    state: StoredWatcherState,
+  ): Promise<void> {
+    const meta: OperationMeta = {
+      operation: 'edit',
+      contributor: 'user',
+      reason: 'user-save',
+    };
+    if (state.kind === 'missing') {
+      await insertOperation(this.db, filepath, null, meta);
+    } else if (state.kind === 'external') {
+      await this.storeExternalFile(filepath, meta);
+    } else {
+      await storeFileContent(
+        this.db,
+        filepath,
+        Buffer.from(state.content, 'utf8'),
+        meta,
+      );
+    }
+  }
+
+  private async recordCurrentPathAsUserSave(
+    filepath: string,
+    knownMissing = false,
+  ): Promise<boolean> {
+    try {
+      const state = knownMissing
+        ? ({ kind: 'missing' } as const)
+        : await this.captureCurrentWatcherState(filepath);
+      await this.persistUserSaveState(filepath, state);
+      this._opsSeq++;
+      await this.updateAgentsAffectedByFilepath(filepath);
+      return true;
+    } catch (error) {
+      this.logError(`Failed to record user save for ${filepath}`, error);
+      return false;
+    }
+  }
+
+  private async handleExpectedAutoApprovedWatcherChange(
+    filepath: string,
+  ): Promise<boolean> {
+    const expectation = this.autoApprovedWatcherExpectations.get(filepath);
+    if (!expectation) return false;
+
+    let state: StoredWatcherState;
+    try {
+      state = await this.captureCurrentWatcherState(filepath);
+    } catch (error) {
+      this.logError(
+        `Failed to inspect automatic edit watcher event for ${filepath}`,
+        error,
+      );
+      return true;
+    }
+
+    if (expectation.phase === 'preparing') {
+      // Before durable agent/policy evidence exists, only observe the current
+      // state. Recording a user-save here would create an orphan edit with no
+      // baseline if the guarded write subsequently rolls back.
+      if (state.kind === 'text') expectation.suppressedContent = state.content;
+      return true;
+    }
+
+    if (
+      state.kind === 'text' &&
+      ((!expectation.userSaveRecorded &&
+        state.content === expectation.agentContent) ||
+        (expectation.userSaveRecorded &&
+          state.content === expectation.suppressedContent))
+    ) {
+      // Suppress only the exact agent effect (or the watcher echo of a user
+      // state already reconciled below). Any different bytes are user-owned.
+      return true;
+    }
+
+    try {
+      await this.persistUserSaveState(filepath, state);
+      expectation.userSaveRecorded = true;
+      if (state.kind === 'text') {
+        expectation.suppressedContent = state.content;
+      }
+      this._opsSeq++;
+      await this.updateAgentsAffectedByFilepath(filepath);
+    } catch (error) {
+      this.logError(
+        `Failed to reconcile concurrent user save for ${filepath}`,
+        error,
+      );
+    }
+    return true;
+  }
+
   private async updateAllHydratedAgentStates(): Promise<void> {
     for (const id of this.hydratedAgentInstanceIds)
       await this.updateDiffKartonState(id);
@@ -1072,6 +1301,7 @@ export class DiffHistoryService extends DisposableService {
   private async unwatchResolvedFiles(filepaths: string[]): Promise<void> {
     for (const filepath of filepaths) {
       if (!this.currentlyWatchedFiles.has(filepath)) continue;
+      if (this.autoApprovedWatcherExpectations.has(filepath)) continue;
       const stillPending = await hasPendingEditsForFilepath(this.db, filepath);
       if (!stillPending) {
         this.watcher?.unwatch(filepath);
@@ -1165,8 +1395,9 @@ export class DiffHistoryService extends DisposableService {
     const pendingOperations = await getAllPendingOperations(this.db);
     // Uncached: this path aggregates pending ops across ALL agents for hunk
     // lookup (not per-agent), so it does not share a cache key with the
-    // per-agent computation. This call fires only on explicit user
-    // accept/reject actions, which are infrequent.
+    // per-agent computation. This path is exclusively explicit human
+    // accept/reject; automatic policy uses registerAutoApprovedTextEdit so it
+    // cannot accidentally accept unrelated file history.
     const pendingDiffs = await this.computeFileDiffsUncached(
       null,
       pendingOperations,
@@ -1275,6 +1506,11 @@ export class DiffHistoryService extends DisposableService {
     const newContentIsNull =
       !fileResult.isExternal && fileResult.newBaseline === null;
     const isExternal = fileResult.isExternal;
+    const acceptanceMeta: OperationMeta = {
+      operation: 'baseline',
+      contributor: 'user',
+      reason: 'accept',
+    };
 
     // Not necessary to store new content if it's null or if it's an external file
     if (newContentIsNull || isExternal)
@@ -1282,18 +1518,14 @@ export class DiffHistoryService extends DisposableService {
         this.db,
         filePath,
         isExternal ? (fileResult.newBaselineOid ?? null) : null,
-        {
-          operation: 'baseline',
-          contributor: 'user',
-          reason: 'accept',
-        },
+        acceptanceMeta,
       );
 
     await storeFileContent(
       this.db,
       filePath,
       Buffer.from(fileResult.newBaseline!, 'utf8'),
-      { operation: 'baseline', contributor: 'user', reason: 'accept' },
+      acceptanceMeta,
     );
   }
 
@@ -1820,6 +2052,10 @@ export class DiffHistoryService extends DisposableService {
   protected onTeardown(): Promise<void> | void {
     this.unsubscribeStore?.();
     this.unsubscribeStore = null;
+    for (const expectation of this.autoApprovedWatcherExpectations.values()) {
+      if (expectation.cleanupTimer) clearTimeout(expectation.cleanupTimer);
+    }
+    this.autoApprovedWatcherExpectations.clear();
     this.watcher?.close();
     this.dbDriver.close();
     this.filesIgnoredByWatcher.clear();
@@ -1831,6 +2067,162 @@ export class DiffHistoryService extends DisposableService {
     this._toolCallTruncatedWarned.clear();
     this._ignoreCache.clear();
     this._mountPathsResolver = null;
+  }
+
+  /**
+   * Temporarily watches one auto-policy target without the broad watcher mute
+   * used by manual apply/reject flows. Only the exact expected agent bytes are
+   * suppressed; different bytes remain user-owned and are reconciled after the
+   * policy receipt is durable.
+   */
+  public beginAutoApprovedWriteWatcher(
+    filepath: string,
+    expectedContent: string,
+  ): string {
+    if (this.autoApprovedWatcherExpectations.has(filepath)) {
+      throw new Error(`Automatic edit watcher already active for ${filepath}`);
+    }
+
+    const token = `auto-write-${++this.autoApprovedWatcherToken}`;
+    const expectation: AutoApprovedWatcherExpectation = {
+      token,
+      agentContent: expectedContent,
+      suppressedContent: expectedContent,
+      phase: 'preparing',
+      userSaveRecorded: false,
+      temporaryWatch: !this.currentlyWatchedFiles.has(filepath),
+      cleanupTimer: null,
+      tail: Promise.resolve(),
+    };
+    this.autoApprovedWatcherExpectations.set(filepath, expectation);
+    this.ensureWatched(filepath);
+    expectation.cleanupTimer = setTimeout(() => {
+      void this.releaseAutoApprovedWriteWatcher(filepath, token).catch(
+        (error) =>
+          this.logError(
+            `Failed to expire automatic edit watcher for ${filepath}`,
+            error,
+          ),
+      );
+    }, AUTO_APPROVED_WATCHER_STALE_MS);
+    return token;
+  }
+
+  /**
+   * Marks the SQLite agent/policy receipt durable and reconciles the exact
+   * current path state. A concurrent user save is appended as `user-save`
+   * rather than being attributed to the agent or overwritten by rollback.
+   */
+  public async reconcileAutoApprovedWriteWatcher(
+    filepath: string,
+    token: string,
+    expectedContent: string,
+  ): Promise<'exact' | 'reconciled' | 'failed'> {
+    const expectation = this.autoApprovedWatcherExpectations.get(filepath);
+    if (!expectation || expectation.token !== token) {
+      // A stale timeout must not prevent post-commit reconciliation. We no
+      // longer have one-shot suppression, but can still synchronize the disk
+      // state before returning control to the model.
+      try {
+        const state = await this.captureCurrentWatcherState(filepath);
+        if (state.kind === 'text' && state.content === expectedContent) {
+          return 'exact';
+        }
+        await this.persistUserSaveState(filepath, state);
+        this._opsSeq++;
+        await this.updateAgentsAffectedByFilepath(filepath);
+        return 'reconciled';
+      } catch (error) {
+        this.logError(
+          `Failed to reconcile expired automatic edit watcher for ${filepath}`,
+          error,
+        );
+        return 'failed';
+      }
+    }
+
+    return await this.enqueueAutoApprovedWatcherTask(expectation, async () => {
+      if (expectedContent !== expectation.agentContent) {
+        this.logError(
+          `Automatic edit watcher content mismatch for ${filepath}`,
+          new Error('Watcher token is not bound to the supplied content.'),
+        );
+        return 'failed';
+      }
+      expectation.phase = 'committed';
+      try {
+        const state = await this.captureCurrentWatcherState(filepath);
+        if (state.kind === 'text' && state.content === expectedContent) {
+          expectation.suppressedContent = expectedContent;
+          expectation.userSaveRecorded = false;
+          return 'exact';
+        }
+        if (
+          state.kind === 'text' &&
+          expectation.userSaveRecorded &&
+          state.content === expectation.suppressedContent
+        ) {
+          return 'reconciled';
+        }
+
+        await this.persistUserSaveState(filepath, state);
+        expectation.userSaveRecorded = true;
+        if (state.kind === 'text')
+          expectation.suppressedContent = state.content;
+        this._opsSeq++;
+        await this.updateAgentsAffectedByFilepath(filepath);
+        return 'reconciled';
+      } catch (error) {
+        this.logError(
+          `Failed to reconcile automatic edit watcher for ${filepath}`,
+          error,
+        );
+        return 'failed';
+      }
+    });
+  }
+
+  /** Keep the content-aware guard briefly so delayed chokidar events settle. */
+  public completeAutoApprovedWriteWatcher(
+    filepath: string,
+    token: string,
+  ): void {
+    const expectation = this.autoApprovedWatcherExpectations.get(filepath);
+    if (!expectation || expectation.token !== token) return;
+    expectation.phase = 'committed';
+    if (expectation.cleanupTimer) clearTimeout(expectation.cleanupTimer);
+    expectation.cleanupTimer = setTimeout(() => {
+      void this.releaseAutoApprovedWriteWatcher(filepath, token).catch(
+        (error) =>
+          this.logError(
+            `Failed to settle automatic edit watcher for ${filepath}`,
+            error,
+          ),
+      );
+    }, AUTO_APPROVED_WATCHER_SETTLE_MS);
+  }
+
+  /** Cancel a pre-commit expectation after rollback/failure. */
+  public async cancelAutoApprovedWriteWatcher(
+    filepath: string,
+    token: string,
+  ): Promise<void> {
+    await this.releaseAutoApprovedWriteWatcher(filepath, token);
+  }
+
+  private async releaseAutoApprovedWriteWatcher(
+    filepath: string,
+    token: string,
+  ): Promise<void> {
+    const expectation = this.autoApprovedWatcherExpectations.get(filepath);
+    if (!expectation || expectation.token !== token) return;
+    await expectation.tail;
+    if (this.autoApprovedWatcherExpectations.get(filepath) !== expectation) {
+      return;
+    }
+    if (expectation.cleanupTimer) clearTimeout(expectation.cleanupTimer);
+    this.autoApprovedWatcherExpectations.delete(filepath);
+    await this.unwatchResolvedFiles([filepath]);
   }
 
   public ignoreFileForWatcher(path: string): void {

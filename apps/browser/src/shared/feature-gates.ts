@@ -234,7 +234,7 @@ export const FEATURE_GATES: Record<FeatureGateId, FeatureGateDefinition> = {
     id: 'agent-hooks',
     name: 'Agent hooks',
     description:
-      'Adds prompt, command, and agent hooks around turn, command, file edit, and approval lifecycles.',
+      'Adds before-turn prompt injection and helper-agent turn/approval monitoring when a trusted runner is configured.',
     stage: 'experimental',
     defaultEnabled: false,
     availableIn: ALL_RELEASE_CHANNELS,

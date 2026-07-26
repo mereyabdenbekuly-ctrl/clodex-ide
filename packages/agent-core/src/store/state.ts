@@ -121,7 +121,10 @@ export type ToolboxAgentState<
    * and on-disk blobs.
    */
   pendingFileDiffs: FileDiff[];
-  /** @persistence ephemeral — proposed write/multiEdit changes awaiting explicit user approval. */
+  /**
+   * @persistence ephemeral — manual-review write/multiEdit proposals only.
+   * Auto-policy edits use the same lifecycle but are never published here.
+   */
   pendingProposedEdits: PendingEditPreview[];
   /**
    * @persistence persisted-side — same source as `pendingFileDiffs`;

@@ -148,6 +148,47 @@ describe('TelemetryService official privacy contract', () => {
     await service.teardown();
   });
 
+  it('forks tracing from the exact admitted model and merges trace metadata', async () => {
+    const { service } = makeHarness('full');
+    const sourceModel = { modelId: 'exact-route-model' } as never;
+    const originatingWrapper = { modelId: 'originating-wrapper' } as never;
+    const forkedWrapper = { modelId: 'forked-wrapper' } as never;
+    withTracingMock
+      .mockReturnValueOnce(originatingWrapper)
+      .mockReturnValueOnce(forkedWrapper);
+
+    const originating = service.withTracing(sourceModel, {
+      posthogTraceId: 'agent-step-trace',
+      posthogProperties: {
+        modelId: 'exact-route-model',
+        originating_marker: 'turn-a',
+      },
+    });
+    const forked = service.forkTracing(originating, {
+      posthogTraceId: 'agent-os-helper-trace',
+      posthogProperties: {
+        posthogTraceId: 'agent-os-helper-trace',
+        model_request_purpose: 'internal',
+        task_role: 'review',
+      },
+    });
+
+    expect(forked).toBe(forkedWrapper);
+    expect(withTracingMock).toHaveBeenCalledTimes(2);
+    expect(withTracingMock.mock.calls[1]?.[0]).toBe(sourceModel);
+    expect(withTracingMock.mock.calls[1]?.[2]).toMatchObject({
+      posthogTraceId: 'agent-os-helper-trace',
+      posthogProperties: expect.objectContaining({
+        modelId: 'exact-route-model',
+        originating_marker: 'turn-a',
+        posthogTraceId: 'agent-os-helper-trace',
+        model_request_purpose: 'internal',
+        task_role: 'review',
+      }),
+    });
+    await service.teardown();
+  });
+
   it('requires full telemetry for exception payloads', async () => {
     const { service, setLevel } = makeHarness('anonymous');
 

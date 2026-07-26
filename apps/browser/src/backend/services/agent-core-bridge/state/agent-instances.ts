@@ -13,7 +13,7 @@ import type { ModelSettings } from '@shared/karton-contracts/ui/shared-types';
  * The core {@link AgentInstanceEnvelope} keeps `state` and
  * `requiredModelCapabilities` deliberately wide so different hosts can
  * specialize them. Re-typing both here surfaces the branded
- * `activeModelId` / `toolApprovalMode` (D14 / D22) and the structured
+ * `activeModelId` / approval-mode fields and the structured
  * Karton `ModelSettings['capabilities']` at the controller boundary;
  * the underlying store is unaffected because the host state is a
  * structural subtype of the core state.

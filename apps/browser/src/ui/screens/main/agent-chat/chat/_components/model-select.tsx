@@ -61,6 +61,10 @@ import {
 } from '@shared/model-effort-routing';
 import { getQualifiedBuiltInThinkingPresentation } from './model-select-thinking';
 import { enablePatches, produceWithPatches } from 'immer';
+import {
+  formatModelContextWindow,
+  resolveModelContextWindow,
+} from '@shared/model-context-window';
 
 enablePatches();
 
@@ -240,6 +244,10 @@ function createClodexModelOption(
         getThinkingDefaultOptionsForModel(thinkingModel, preferences),
       )
     : null;
+  const contextWindow = resolveModelContextWindow({
+    modelId: model.id,
+    clodexModels: [model],
+  });
 
   return {
     modelId: model.id,
@@ -247,7 +255,7 @@ function createClodexModelOption(
     description:
       catalogModel?.modelDescription ??
       `${providerLabel} model from the active Clodex key.`,
-    context: catalogModel?.modelContext ?? providerLabel,
+    context: formatModelContextWindow(contextWindow?.tokens),
     thinkingEnabled: thinkingDisplay !== null,
     thinkingLabel: thinkingDisplay?.label,
     thinkingModel,
@@ -411,9 +419,7 @@ export const ModelSelect = memo(function ModelSelect({
             modelId: qualifiedModelId,
             displayName: model.displayName,
             description: `${activeProviderProfile.displayName} model`,
-            context: model.capabilities.contextWindow
-              ? `${Math.round(model.capabilities.contextWindow / 1000)}k context`
-              : activeProviderProfile.displayName,
+            context: formatModelContextWindow(model.capabilities.contextWindow),
             thinkingEnabled: thinkingSupport.thinkingEnabled,
             thinkingLabel:
               thinkingDisplay?.label ??
@@ -497,7 +503,7 @@ export const ModelSelect = memo(function ModelSelect({
         modelId: model.modelId,
         displayName: model.displayName,
         description: model.description,
-        context: `${Math.round(model.contextWindowSize / 1000)}k context`,
+        context: formatModelContextWindow(model.contextWindowSize),
         thinkingEnabled: !!model.thinkingEnabled,
         thinkingLabel: model.thinkingEnabled ? 'Thinking' : undefined,
         providerLabel:

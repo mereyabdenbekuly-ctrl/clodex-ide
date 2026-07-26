@@ -34,6 +34,8 @@ export type ShellCapabilityAuthorization = 'policy-approved' | 'human-required';
 export interface StageShellCapabilityInput {
   agentInstanceId: string;
   toolCallId: string;
+  /** Host-owned scope for one agent step / approval continuation chain. */
+  scopeId: string;
   action: ShellCapabilityAction;
   authorization: ShellCapabilityAuthorization;
 }
@@ -41,6 +43,9 @@ export interface StageShellCapabilityInput {
 export interface ConsumeShellCapabilityInput {
   agentInstanceId: string;
   toolCallId: string;
+  scopeId: string;
+  /** Trusted host evidence that this exact call was affirmatively approved. */
+  humanApprovalEvidence: boolean;
   action: ShellCapabilityAction;
 }
 
@@ -50,7 +55,10 @@ export interface ConsumeShellCapabilityInput {
  * once immediately before a PTY is spawned or receives bytes.
  */
 export interface ShellCapabilitySecurityDeps {
-  stage(input: StageShellCapabilityInput): void | Promise<void>;
+  /** Returns the effective fail-closed authorization after restaging. */
+  stage(
+    input: StageShellCapabilityInput,
+  ): ShellCapabilityAuthorization | Promise<ShellCapabilityAuthorization>;
   consume(input: ConsumeShellCapabilityInput): void | Promise<void>;
 }
 

@@ -92,6 +92,20 @@ function hasTrustedSessionProvenance(
   return credentials.clientId == null;
 }
 
+function credentialAuthorityMatches(
+  left: StoredCredentials,
+  right: StoredCredentials,
+): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.token === right.token &&
+    left.protocolVersion === right.protocolVersion &&
+    left.provenance === right.provenance &&
+    left.clientId === right.clientId &&
+    left.activeKeyId === right.activeKeyId
+  );
+}
+
 export type AuthState = KartonContract['state']['userAccount'];
 
 type AuthUser = NonNullable<AuthState['user']>;
@@ -379,6 +393,7 @@ export class AuthService extends DisposableService {
   private credentialsIntentVersion = 0;
   private credentialsWriteQueue: Promise<void> = Promise.resolve();
   private authChangeCallbacks: ((newAuthState: AuthState) => void)[] = [];
+  private readonly credentialEpochChangeCallbacks = new Set<() => void>();
   private pendingHandoffAuth: PendingHandoffAuth | null = null;
   private activeLoopbackAuthServer: LoopbackAuthServer | null = null;
 
@@ -399,7 +414,7 @@ export class AuthService extends DisposableService {
       (token) => {
         if (this.activeOtpAttemptEpoch !== null) {
           if (this.activeOtpAttemptEpoch === this.authLifecycleEpoch) {
-            this._credentials = { token };
+            this.replaceLiveCredentials({ token });
             this.logger.debug('[AuthService] Captured provisional OTP token');
           } else {
             this.logger.warn('[AuthService] Ignored a stale OTP token');
@@ -417,7 +432,7 @@ export class AuthService extends DisposableService {
           ...trustedCredentials,
           token,
         };
-        this._credentials = credentials;
+        this.replaceLiveCredentials(credentials);
         // During initial OTP authentication the response token arrives before
         // the flow can attach trusted provenance. Keep it main-process-only
         // until verifyOtp durably stores the versioned session. Refreshes of an
@@ -459,14 +474,29 @@ export class AuthService extends DisposableService {
     credentials: StoredCredentials,
   ): Promise<boolean> {
     const intentVersion = ++this.credentialsIntentVersion;
-    this._credentials = credentials;
+    this.replaceLiveCredentials(credentials);
     const persisted = await this.writeCredentials(credentials);
     if (persisted) {
       this.durableCredentials = credentials;
     } else if (intentVersion === this.credentialsIntentVersion) {
-      this._credentials = this.durableCredentials;
+      this.replaceLiveCredentials(this.durableCredentials);
     }
     return persisted;
+  }
+
+  private replaceLiveCredentials(credentials: StoredCredentials): void {
+    const changed = !credentialAuthorityMatches(this._credentials, credentials);
+    this._credentials = credentials;
+    if (!changed) return;
+    for (const callback of this.credentialEpochChangeCallbacks) {
+      try {
+        callback();
+      } catch (error) {
+        this.logger.debug(
+          `[AuthService] Credential epoch listener failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   }
 
   private getTrustedCredentials(): NonNullable<StoredCredentials> | null {
@@ -681,6 +711,7 @@ export class AuthService extends DisposableService {
     this.uiKarton.removeServerProcedureHandler('userAccount.selectKey');
     this.uiKarton.removeServerProcedureHandler('userAccount.validateApiKeys');
     this.authChangeCallbacks = [];
+    this.credentialEpochChangeCallbacks.clear();
 
     this.logger.debug('[AuthService] Teardown complete');
   }
@@ -747,7 +778,7 @@ export class AuthService extends DisposableService {
       const user = data?.user;
       const currentToken = this._credentials?.token;
       if (!user || !currentToken) {
-        this._credentials = this.durableCredentials;
+        this.replaceLiveCredentials(this.durableCredentials);
         return { error: 'CLODEx did not return a complete session.' };
       }
 
@@ -775,7 +806,7 @@ export class AuthService extends DisposableService {
       if (this.activeOtpAttemptEpoch === attemptEpoch) {
         this.activeOtpAttemptEpoch = null;
       }
-      this._credentials = this.durableCredentials;
+      this.replaceLiveCredentials(this.durableCredentials);
     }
   }
 
@@ -798,7 +829,7 @@ export class AuthService extends DisposableService {
     const { resolve } = pending;
     this.pendingHandoffAuth = null;
     pending.abortController.abort();
-    this._credentials = this.durableCredentials;
+    this.replaceLiveCredentials(this.durableCredentials);
     void this.writeCredentials(this.durableCredentials);
     void this.disposeActiveLoopbackAuthServer();
     resolve(result);
@@ -844,7 +875,7 @@ export class AuthService extends DisposableService {
     const persisted = await this.writeCredentials(credentials);
     if (!persisted) {
       if (intentVersion === this.credentialsIntentVersion) {
-        this._credentials = this.durableCredentials;
+        this.replaceLiveCredentials(this.durableCredentials);
       }
       throw new Error('Failed to store the authenticated session.');
     }
@@ -853,13 +884,13 @@ export class AuthService extends DisposableService {
       (shouldCommit && !shouldCommit())
     ) {
       if (intentVersion === this.credentialsIntentVersion) {
-        this._credentials = this.durableCredentials;
+        this.replaceLiveCredentials(this.durableCredentials);
         await this.writeCredentials(this.durableCredentials);
       }
       throw new Error('Sign-in was cancelled.');
     }
     this.durableCredentials = credentials;
-    this._credentials = credentials;
+    this.replaceLiveCredentials(credentials);
     this.authLifecycleEpoch += 1;
 
     this.updateAuthState((draft) => {
@@ -1779,7 +1810,7 @@ export class AuthService extends DisposableService {
 
   private async refreshSession(): Promise<void> {
     if (!isAccountAuthEnabled) {
-      this._credentials = null;
+      this.replaceLiveCredentials(null);
       this.ideModelToken = null;
       this.clearModelAccessTokenCache();
       this.clodexUserModels = [];
@@ -1989,7 +2020,7 @@ export class AuthService extends DisposableService {
     // Keep the current process signed out even if durable storage is
     // temporarily unavailable. The error notification below makes it explicit
     // that restart persistence could not be guaranteed.
-    this._credentials = null;
+    this.replaceLiveCredentials(null);
     this.ideModelToken = null;
     this.clearModelAccessTokenCache();
     this.clodexUserModels = [];
@@ -2075,5 +2106,14 @@ export class AuthService extends DisposableService {
     this.authChangeCallbacks = this.authChangeCallbacks.filter(
       (c) => c !== callback,
     );
+  }
+
+  public registerCredentialEpochChangeCallback(callback: () => void): void {
+    this.assertNotDisposed();
+    this.credentialEpochChangeCallbacks.add(callback);
+  }
+
+  public unregisterCredentialEpochChangeCallback(callback: () => void): void {
+    this.credentialEpochChangeCallbacks.delete(callback);
   }
 }
