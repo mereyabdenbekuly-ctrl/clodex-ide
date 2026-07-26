@@ -178,56 +178,56 @@ export function getReadyCommunityRelease(
  */
 export const COMMUNITY_RELEASE: CommunityReleaseManifest = {
   status: 'verified',
-  name: 'CLODEx Community Observed 14',
-  version: '1.16.0-communityobserved14',
-  tag: 'v1.16.0-communityobserved14',
+  name: 'CLODEx Community Observed 15',
+  version: '1.16.0-communityobserved15',
+  tag: 'v1.16.0-communityobserved15',
   releaseUrl:
-    'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved14',
+    'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved15',
   checksumsUrl:
-    'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/SHA256SUMS.txt',
+    'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/SHA256SUMS.txt',
   evidenceUrl:
-    'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed-1.16.0-communityobserved14-evidence.zip',
-  sourceCommit: '0ea2e51368410d2d197d14f34c0c0640bc16323f',
+    'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/clodex-community-observed-1.16.0-communityobserved15-evidence.zip',
+  sourceCommit: 'c9ef56fc5f8bd68007373b6c7fb98943ac8a8438',
   sourceUrl:
-    'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/0ea2e51368410d2d197d14f34c0c0640bc16323f',
-  buildRunId: '29840259012',
+    'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/c9ef56fc5f8bd68007373b6c7fb98943ac8a8438',
+  buildRunId: '30203394727',
   buildRunUrl:
-    'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29840259012',
+    'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/30203394727',
   downloads: [
     {
       id: 'macos-arm64',
       platform: 'macOS',
       architecture: 'Apple Silicon',
       format: 'DMG',
-      href: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed-1.16.0-communityobserved14-arm64.dmg',
+      href: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/clodex-community-observed-1.16.0-communityobserved15-arm64.dmg',
     },
     {
       id: 'macos-x64',
       platform: 'macOS',
       architecture: 'Intel',
       format: 'DMG',
-      href: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed-1.16.0-communityobserved14-x64.dmg',
+      href: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/clodex-community-observed-1.16.0-communityobserved15-x64.dmg',
     },
     {
       id: 'windows-x64',
       platform: 'Windows',
       architecture: 'x64',
       format: 'EXE',
-      href: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed-1.16.0-communityobserved14-x64-setup.exe',
+      href: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/clodex-community-observed-1.16.0-communityobserved15-x64-setup.exe',
     },
     {
       id: 'linux-deb-x64',
       platform: 'Debian / Ubuntu',
       architecture: 'x64',
       format: 'DEB',
-      href: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed_1.16.0-communityobserved14_amd64.deb',
+      href: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/clodex-community-observed_1.16.0-communityobserved15_amd64.deb',
     },
     {
       id: 'linux-rpm-x64',
       platform: 'Fedora / RHEL',
       architecture: 'x64',
       format: 'RPM',
-      href: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed-1.16.0.communityobserved14-1.x86_64.rpm',
+      href: 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/clodex-community-observed-1.16.0.communityobserved15-1.x86_64.rpm',
     },
   ],
 };
