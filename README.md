@@ -8,7 +8,7 @@
 ### One task. One durable engineering workspace.
 
 [![Website](https://img.shields.io/badge/website-ide.clodex.xyz-00d88a?style=flat-square)](https://ide.clodex.xyz)
-[![Community build](https://img.shields.io/badge/community_observed-1.16.0--communityobserved14-00d88a?style=flat-square)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved14)
+[![Community build](https://img.shields.io/badge/community_observed-1.16.0--communityobserved15-00d88a?style=flat-square)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved15)
 [![CI](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/workflows/monorepo-ci.yml/badge.svg?branch=main)](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/workflows/monorepo-ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-111827?style=flat-square)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-22.23.1-43853d?style=flat-square)
@@ -19,11 +19,11 @@ work. It keeps code, Git, terminal, browser, models, and MCP tools inside one
 durable desktop workspace, with approval and review surfaces for sensitive
 actions.
 
-The source and the verified cross-platform **Community Observed 14 Technical
+The source and the verified cross-platform **Community Observed 15 Technical
 Preview** are available for macOS, Windows, and Linux.
 
 <p align="center">
-  <strong><a href="https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved14">Download Community Observed 14</a></strong>
+  <strong><a href="https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved15">Download Community Observed 15</a></strong>
   ·
   <a href="#free-product-scope">See the Free product scope</a>
   ·
@@ -40,15 +40,20 @@ Preview** are available for macOS, Windows, and Linux.
 | --- | --- | --- |
 | Keep task history and recover work after restarts instead of rebuilding context from scratch. | Move between files, diffs, Git, terminal, browser, and MCP without leaving the task. | Sign in with CLODEx, bring your own provider key, use a compatible endpoint, or connect local Ollama. |
 
-> **Current Free Technical Preview:** Community Observed 14 was built from
+> **Current Free Technical Preview:** Community Observed 15 was built from
 > exact canonical source
-> [`0ea2e51368410d2d197d14f34c0c0640bc16323f`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/0ea2e51368410d2d197d14f34c0c0640bc16323f)
-> by [Actions run `29840259012`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29840259012),
+> [`c9ef56fc5f8bd68007373b6c7fb98943ac8a8438`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/c9ef56fc5f8bd68007373b6c7fb98943ac8a8438)
+> by [Actions run `30203394727`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/30203394727),
 > passed the enforced Free/managed and packaged-byte gates, and is published as
 > the immutable
-> [`v1.16.0-communityobserved14`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved14)
+> [`v1.16.0-communityobserved15`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved15)
 > prerelease. It is still unsigned/ad-hoc and not notarized; see the warning
 > below before installing.
+
+Community Observed 15 is the first bridge-enabled build. In **Settings →
+About**, **Check for Updates** performs a user-triggered, fail-closed release
+check and can open a newer immutable Community release page in the external
+browser. It never downloads or installs an update automatically.
 
 ## Why CLODEx
 
@@ -75,7 +80,7 @@ The product principle is simple:
 
 The following capabilities define the open, local Community product scope.
 Release notes remain the source of truth for what is present and accepted in a
-specific packaged artifact. Community Observed 14 is the current verified
+specific packaged artifact. Community Observed 15 is the current verified
 cross-platform Technical Preview.
 
 | Area | Free product scope |
@@ -87,7 +92,7 @@ cross-platform Technical Preview.
 | **MCP** | User-configured stdio and remote MCP servers, HTTP/SSE transports, OAuth flows, tools, resources, prompts, and approval-aware execution. |
 | **Account access** | Secure CLODEx.xyz sign-in through the system browser with an RFC 8252 loopback callback, state, and PKCE S256. |
 | **Language and privacy** | English and Русский (beta), plus a required first-launch allow-or-decline choice for optional product statistics. |
-| **Distribution** | Community Observed 14 provides macOS Apple Silicon, macOS Intel, Windows x64, Debian/Ubuntu x64, and Fedora/RHEL x64 tester packages. |
+| **Distribution** | Community Observed 15 provides macOS Apple Silicon, macOS Intel, Windows x64, Debian/Ubuntu x64, and Fedora/RHEL x64 tester packages. |
 
 ### A typical workflow
 
@@ -126,8 +131,8 @@ the public security model and data-handling contract.
 | Claim | Public evidence |
 | --- | --- |
 | The Free/managed product boundary is explicit and must fail closed for Community packaging | [Free Product Contract](./docs/COMMUNITY_FREE_PRODUCT_CONTRACT.md) · boundary policy and CI checks in this repository |
-| The current tester binaries come from one pinned public source revision and build run | [Source `0ea2e513`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/0ea2e51368410d2d197d14f34c0c0640bc16323f) · [Actions run `29840259012`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29840259012) |
-| The current installers passed the enforced packaging boundary and byte audit | [Community Observed 14 release](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved14) · `SHA256SUMS.txt` · validation manifests and SBOMs in the evidence archive |
+| The current tester binaries come from one pinned public source revision and build run | [Source `c9ef56fc`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/c9ef56fc5f8bd68007373b6c7fb98943ac8a8438) · [Actions run `30203394727`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/30203394727) |
+| The current installers passed the enforced packaging boundary and byte audit | [Community Observed 15 release](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved15) · `SHA256SUMS.txt` · validation manifests and SBOMs in the evidence archive |
 | The repository includes CI, provenance, contribution, and secret-scanning controls | [GitHub Actions](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions) · [DCO](./DCO) · [security policy](./SECURITY.md) |
 | The project documents its upstream lineage and redistribution obligations | [CLODEx vs Stagewise](./CLODEX_VS_UPSTREAM.md) · [Third-party notices](./THIRD-PARTY-NOTICES.md) |
 
@@ -135,26 +140,26 @@ The evidence archive intentionally distinguishes observed evidence from claims
 about external effects. A validation report proves what it actually checked;
 it does not turn a preview into a stable product.
 
-## Download Community Observed 14
+## Download Community Observed 15
 
 The current Community Free Technical Preview is
-[`1.16.0-communityobserved14`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved14),
+[`1.16.0-communityobserved15`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved15),
 built from exact source
-[`0ea2e51368410d2d197d14f34c0c0640bc16323f`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/0ea2e51368410d2d197d14f34c0c0640bc16323f)
-by [GitHub Actions run `29840259012`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29840259012).
+[`c9ef56fc5f8bd68007373b6c7fb98943ac8a8438`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/c9ef56fc5f8bd68007373b6c7fb98943ac8a8438)
+by [GitHub Actions run `30203394727`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/30203394727).
 
 | Platform | Package | Download |
 | --- | --- | --- |
-| macOS Apple Silicon | ARM64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed-1.16.0-communityobserved14-arm64.dmg) |
-| macOS Intel | x64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed-1.16.0-communityobserved14-x64.dmg) |
-| Windows | x64 EXE | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed-1.16.0-communityobserved14-x64-setup.exe) |
-| Debian / Ubuntu | x64 DEB | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed_1.16.0-communityobserved14_amd64.deb) |
-| Fedora / RHEL | x64 RPM | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed-1.16.0.communityobserved14-1.x86_64.rpm) |
+| macOS Apple Silicon | ARM64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/clodex-community-observed-1.16.0-communityobserved15-arm64.dmg) |
+| macOS Intel | x64 DMG | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/clodex-community-observed-1.16.0-communityobserved15-x64.dmg) |
+| Windows | x64 EXE | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/clodex-community-observed-1.16.0-communityobserved15-x64-setup.exe) |
+| Debian / Ubuntu | x64 DEB | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/clodex-community-observed_1.16.0-communityobserved15_amd64.deb) |
+| Fedora / RHEL | x64 RPM | [Download](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/clodex-community-observed-1.16.0.communityobserved15-1.x86_64.rpm) |
 
 Verify the selected installer with
-[`SHA256SUMS.txt`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/SHA256SUMS.txt).
+[`SHA256SUMS.txt`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/SHA256SUMS.txt).
 The
-[evidence archive](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved14/clodex-community-observed-1.16.0-communityobserved14-evidence.zip)
+[evidence archive](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/download/v1.16.0-communityobserved15/clodex-community-observed-1.16.0-communityobserved15-evidence.zip)
 contains the platform validation manifests, CycloneDX SBOMs, warnings, internal
 bundle checksums, and the root byte-audit report. The checksum file covers the
 five unchanged installer assets and the evidence archive.
@@ -227,7 +232,7 @@ public issue.
 The capabilities listed in [Free product scope](#free-product-scope) define the
 baseline Community product contract. Source-tree experiments and feature-gated
 surfaces are not part of that baseline promise. Release notes are the source of
-truth for each published build. Community Observed 14 is the current verified
+truth for each published build. Community Observed 15 is the current verified
 Technical Preview; its release notes and evidence define its exact artifact
 scope.
 

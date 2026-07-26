@@ -30,16 +30,18 @@ manual release-discovery link, not an updater asset or an auto-update channel.
 
 ## Current public Technical Preview
 
-Community Observed 14 (`1.16.0-communityobserved14`) is built from exact source
-[`0ea2e51368410d2d197d14f34c0c0640bc16323f`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/0ea2e51368410d2d197d14f34c0c0640bc16323f)
-by [Actions run `29840259012`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/29840259012)
+Community Observed 15 (`1.16.0-communityobserved15`) is built from exact source
+[`c9ef56fc5f8bd68007373b6c7fb98943ac8a8438`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/c9ef56fc5f8bd68007373b6c7fb98943ac8a8438)
+by [Actions run `30203394727`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/30203394727)
 and published under
-[`v1.16.0-communityobserved14`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved14).
+[`v1.16.0-communityobserved15`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved15).
 
 The packaged Free/managed boundary, byte-level audit, artifact identity, and
 metadata gates passed. This is still an unsigned/ad-hoc, non-notarized test
 prerelease and is excluded from auto-update and official preview/canary/stable
-acceptance.
+acceptance. It is the first published bridge-enabled build: its Settings → About
+page can perform an explicit manual check for a later compatible immutable
+Community release, while download and installation remain manual.
 
 ## Unsigned community trust boundary
 
