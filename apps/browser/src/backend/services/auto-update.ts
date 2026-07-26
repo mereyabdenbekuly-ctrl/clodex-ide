@@ -25,6 +25,11 @@ import {
   resolveUpdateChannel,
   resolveUpdatePlatform,
 } from './auto-update-config';
+import {
+  CommunityManualUpdateError,
+  discoverCommunityManualUpdate,
+  isCommunityManualUpdateSupported,
+} from './community-manual-update';
 
 declare const __APP_RELEASE_CHANNEL__:
   | 'dev'
@@ -57,7 +62,11 @@ export class AutoUpdateService extends DisposableService {
 
   // Check for updates every 30 minutes
   private readonly UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+  private readonly MANUAL_UPDATE_CHECK_COOLDOWN_MS = 15 * 1000;
   private updateCheckIntervalId: ReturnType<typeof setInterval> | null = null;
+  private manualUpdateCheckPromise: Promise<void> | null = null;
+  private manualUpdateAbortController: AbortController | null = null;
+  private manualUpdateNextCheckAt = 0;
 
   private constructor(
     logger: Logger,
@@ -105,6 +114,39 @@ export class AutoUpdateService extends DisposableService {
   }
 
   private async initialize(): Promise<void> {
+    if (
+      __APP_DISTRIBUTION_MODE__ === 'community-unsigned' ||
+      __APP_DISTRIBUTION_MODE__ === 'community-observed'
+    ) {
+      if (
+        !isCommunityManualUpdateSupported({
+          distributionMode: __APP_DISTRIBUTION_MODE__,
+          currentVersion: __APP_VERSION__,
+          releaseChannel: __APP_RELEASE_CHANNEL__,
+          platform: __APP_PLATFORM__,
+          architecture: __APP_ARCH__,
+        })
+      ) {
+        this.logger.warn(
+          '[AutoUpdateService] Manual community update bridge is unsupported for this build identity',
+        );
+        this.setAutoUpdateState('unsupported', null);
+        return;
+      }
+
+      this.logger.debug(
+        `[AutoUpdateService] Enabling user-triggered manual update checks for ${__APP_DISTRIBUTION_MODE__}`,
+      );
+      this.setAutoUpdateState('manual-idle', null);
+      this.uiKarton.registerServerProcedureHandler(
+        'autoUpdate.checkForUpdates',
+        async (_callingClientId: string) => {
+          await this.checkForUpdates();
+        },
+      );
+      return;
+    }
+
     if (!__APP_AUTO_UPDATE_ENABLED__) {
       this.logger.debug(
         `[AutoUpdateService] Auto-updates disabled for ${__APP_DISTRIBUTION_MODE__} distribution`,
@@ -137,6 +179,7 @@ export class AutoUpdateService extends DisposableService {
       this.logger.warn(
         '[AutoUpdateService] Could not build feed URL, auto-updates disabled',
       );
+      this.setAutoUpdateState('unsupported', null);
       return;
     }
 
@@ -157,14 +200,14 @@ export class AutoUpdateService extends DisposableService {
       // Wait 10 seconds before first check
       setTimeout(() => {
         if (!this.disposed) {
-          this.checkForUpdates();
+          void this.checkForUpdates();
         }
       }, 10000);
 
       // Set up periodic update checks
       this.updateCheckIntervalId = setInterval(() => {
         if (!this.disposed) {
-          this.checkForUpdates();
+          void this.checkForUpdates();
         }
       }, this.UPDATE_CHECK_INTERVAL_MS);
 
@@ -179,7 +222,7 @@ export class AutoUpdateService extends DisposableService {
       this.uiKarton.registerServerProcedureHandler(
         'autoUpdate.checkForUpdates',
         async (_callingClientId: string) => {
-          this.checkForUpdates();
+          await this.checkForUpdates();
         },
       );
       this.uiKarton.registerServerProcedureHandler(
@@ -226,12 +269,12 @@ export class AutoUpdateService extends DisposableService {
       // Re-start periodic checks if they were stopped after a previous download
       if (!this.updateCheckIntervalId) {
         this.updateCheckIntervalId = setInterval(() => {
-          if (!this.disposed) this.checkForUpdates();
+          if (!this.disposed) void this.checkForUpdates();
         }, this.UPDATE_CHECK_INTERVAL_MS);
       }
 
       // Trigger an immediate check with the new channel
-      this.checkForUpdates();
+      void this.checkForUpdates();
     } catch (error) {
       this.logger.error(
         '[AutoUpdateService] Failed to reconfigure feed URL after channel change',
@@ -410,8 +453,28 @@ export class AutoUpdateService extends DisposableService {
   /**
    * Manually trigger an update check
    */
-  public checkForUpdates(): void {
+  public async checkForUpdates(): Promise<void> {
     this.assertNotDisposed();
+
+    if (
+      __APP_DISTRIBUTION_MODE__ === 'community-unsigned' ||
+      __APP_DISTRIBUTION_MODE__ === 'community-observed'
+    ) {
+      if (
+        !isCommunityManualUpdateSupported({
+          distributionMode: __APP_DISTRIBUTION_MODE__,
+          currentVersion: __APP_VERSION__,
+          releaseChannel: __APP_RELEASE_CHANNEL__,
+          platform: __APP_PLATFORM__,
+          architecture: __APP_ARCH__,
+        })
+      ) {
+        this.setAutoUpdateState('unsupported', null);
+        return;
+      }
+      await this.checkForCommunityManualUpdate();
+      return;
+    }
 
     if (!__APP_AUTO_UPDATE_ENABLED__) {
       this.logger.debug(
@@ -444,6 +507,76 @@ export class AutoUpdateService extends DisposableService {
         error,
       );
       this.report(error as Error, 'checkForUpdates');
+    }
+  }
+
+  private async checkForCommunityManualUpdate(): Promise<void> {
+    if (this.manualUpdateCheckPromise) {
+      await this.manualUpdateCheckPromise;
+      return;
+    }
+
+    const now = Date.now();
+    if (now < this.manualUpdateNextCheckAt) {
+      this.logger.debug(
+        `[AutoUpdateService] Manual community update check is cooling down for ${this.manualUpdateNextCheckAt - now}ms`,
+      );
+      return;
+    }
+
+    const check = this.performCommunityManualUpdateCheck();
+    this.manualUpdateCheckPromise = check;
+    try {
+      await check;
+    } finally {
+      if (this.manualUpdateCheckPromise === check) {
+        this.manualUpdateCheckPromise = null;
+        this.manualUpdateNextCheckAt =
+          Date.now() + this.MANUAL_UPDATE_CHECK_COOLDOWN_MS;
+      }
+    }
+  }
+
+  private async performCommunityManualUpdateCheck(): Promise<void> {
+    this.setAutoUpdateState('manual-checking', null);
+    const controller = new AbortController();
+    this.manualUpdateAbortController = controller;
+    try {
+      const result = await discoverCommunityManualUpdate({
+        distributionMode: __APP_DISTRIBUTION_MODE__ as
+          | 'community-unsigned'
+          | 'community-observed',
+        currentVersion: __APP_VERSION__,
+        platform: __APP_PLATFORM__,
+        architecture: __APP_ARCH__,
+        signal: controller.signal,
+      });
+      if (this.disposed) return;
+
+      if (result.status === 'current') {
+        this.setAutoUpdateState('manual-current', null);
+        return;
+      }
+      this.setAutoUpdateState('manual-available', {
+        releaseName: result.releaseName,
+        releasePageUrl: result.releasePageUrl,
+      });
+    } catch (error) {
+      if (this.disposed || controller.signal.aborted) return;
+      const errorCode =
+        error instanceof CommunityManualUpdateError ? error.code : 'unexpected';
+      this.logger.warn(
+        `[AutoUpdateService] Manual community update check failed (${errorCode})`,
+      );
+      this.setAutoUpdateState(
+        'manual-error',
+        null,
+        'Could not check for updates. Check your connection and try again.',
+      );
+    } finally {
+      if (this.manualUpdateAbortController === controller) {
+        this.manualUpdateAbortController = null;
+      }
     }
   }
 
@@ -491,8 +624,17 @@ export class AutoUpdateService extends DisposableService {
       | 'ready'
       | 'not-available'
       | 'error'
+      | 'manual-idle'
+      | 'manual-checking'
+      | 'manual-available'
+      | 'manual-current'
+      | 'manual-error'
       | 'unsupported',
-    updateInfo?: { releaseName?: string; releaseNotes?: string } | null,
+    updateInfo?: {
+      releaseName?: string;
+      releaseNotes?: string;
+      releasePageUrl?: string;
+    } | null,
     errorMessage?: string | null,
   ): void {
     this.uiKarton.setState((draft) => {
@@ -504,7 +646,24 @@ export class AutoUpdateService extends DisposableService {
     });
   }
 
-  protected onTeardown(): void {
+  protected async onTeardown(): Promise<void> {
+    const manualUpdateCheck = this.manualUpdateCheckPromise;
+    this.manualUpdateAbortController?.abort();
+    this.manualUpdateAbortController = null;
+    if (manualUpdateCheck) {
+      try {
+        await manualUpdateCheck;
+      } catch (error) {
+        this.logger.debug(
+          '[AutoUpdateService] In-flight manual update check settled with an error during teardown',
+          error,
+        );
+      } finally {
+        if (this.manualUpdateCheckPromise === manualUpdateCheck) {
+          this.manualUpdateCheckPromise = null;
+        }
+      }
+    }
     if (this.updateCheckIntervalId) {
       clearInterval(this.updateCheckIntervalId);
       this.updateCheckIntervalId = null;

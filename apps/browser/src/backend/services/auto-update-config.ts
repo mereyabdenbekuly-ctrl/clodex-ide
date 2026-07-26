@@ -8,7 +8,7 @@ export type UpdateArchitecture = 'arm64' | 'x64';
 export function isAutoUpdateEnabledForDistribution(
   distributionMode: AppDistributionMode,
 ): boolean {
-  return distributionMode !== 'community-unsigned';
+  return distributionMode === 'official';
 }
 
 export function resolveUpdatePlatform(platform: string): UpdatePlatform {
