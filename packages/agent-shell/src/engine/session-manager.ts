@@ -323,7 +323,7 @@ interface PendingCommand {
   bufferSnapshot?: string;
   /** Sanitized regex match captured from raw output when buffer matching fails. */
   rawPatternSnapshot?: string;
-  /** Whether the first command-output start marker has already set markLine. */
+  /** Whether this pending call has observed or attached to command output. */
   hasCommandStart: boolean;
   /** Idle-detection state (see `DEFAULT_IDLE_MS`). */
   idleTimerHandle: NodeJS.Timeout | null;
@@ -532,11 +532,14 @@ export class SessionManager {
     });
 
     parser.on('integrationDetected', () => {
-      // The bash/zsh integration scripts guard `133;D` emission on
-      // `__clodex_command_executed`, which is 0 at init, so no
-      // "sourcing D" ever arrives. Integration detection means the shell
-      // is at its first prompt — ready to accept user commands.
+      // Any OSC 133 marker proves that integration is active, but B/C can
+      // arrive while the init script is still running. Readiness is opened by
+      // promptStart below, when the shell has actually reached a prompt.
       session.shellIntegrationActive = true;
+    });
+
+    parser.on('promptStart', () => {
+      if (!session.shellIntegrationActive) return;
       this.markReady(session);
       if (session.detectTimerHandle) {
         clearTimeout(session.detectTimerHandle);
@@ -545,6 +548,26 @@ export class SessionManager {
     });
 
     parser.on('commandDone', (event) => {
+      const commandId = this.sessionCommandMap.get(sessionId);
+      const pending = commandId
+        ? this.pendingCommands.get(commandId)
+        : undefined;
+
+      /*
+       * Bash and zsh can deliver the integration script's final OSC 133;D
+       * after the prompt marker has released a queued user command. Do not
+       * let that stale completion resolve the new command: its own OSC 133;C
+       * must have been observed first. PowerShell keeps the existing D-only
+       * fallback for hosts where PSReadLine cannot emit C. Sentinel completion
+       * is handled separately below and is unaffected.
+       */
+      if (
+        pending &&
+        !pending.hasCommandStart &&
+        this.shell.type !== 'powershell'
+      ) {
+        return;
+      }
       this.resolveCurrentCommand(sessionId, event.exitCode);
     });
 
@@ -561,8 +584,10 @@ export class SessionManager {
       const newMark = session.logger?.getMarkPosition();
       if (newMark !== undefined) {
         pending.markLine = newMark;
-        pending.hasCommandStart = true;
       }
+      // Command-start tracking is also the lifecycle gate for logger-less
+      // sessions, so it must not depend on a terminal buffer being present.
+      pending.hasCommandStart = true;
     });
 
     parser.on('sentinelDone', (id, exitCode) => {
@@ -679,7 +704,13 @@ export class SessionManager {
         waitUntil: request.waitUntil,
         rawOutput: '',
         rawOutputCapped: false,
-        hasCommandStart: false,
+        // Raw input and empty polling calls can attach to a command whose C
+        // marker was consumed by an earlier tool call. Preserve completion
+        // semantics for those calls while requiring normal commands to
+        // observe their own fresh C marker.
+        hasCommandStart:
+          (request.rawInput || request.command.length === 0) &&
+          session.parser.inCommandOutput,
         idleTimerHandle: null,
         idleMs,
       };
