@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "status": "ENGINEERING_REVIEWED",
-  "reviewedAt": "2026-07-21",
+  "reviewedAt": "2026-07-26",
   "legalConclusion": false,
   "policy": "Exact package@version overrides only. An override may fill missing text or missing/Unknown license metadata; it may not contradict a non-empty package declaration. Hash or identity drift fails closed.",
   "entries": [
@@ -429,93 +429,343 @@
     },
     {
       "package": "@img/sharp-libvips-darwin-arm64",
-      "version": "1.2.4",
+      "version": "1.3.2",
       "license": "LGPL-3.0-or-later",
       "reviewStatus": "ENGINEERING_REVIEWED",
-      "reviewedAt": "2026-07-15",
+      "reviewedAt": "2026-07-26",
       "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
       "packageSource": {
         "registry": "npm",
-        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.2.4.tgz",
-        "integrity": "sha512-zqjjo7RatFfFoP0MkQ51jfuFZBnVE2pRiaydKJ1G/rHZvnsrHAOcQALIi9sA5co5xenQdTugCvtb1cuf78Vf4g==",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.3.2.tgz",
+        "integrity": "sha512-9J6ypZFpQBj4YnePGoq/S38w6nz+vqg5WZLrLGY4YuSemdMq47GMLBPO42MzwdGwpg/agZ7xzZcFHa48xlywfg==",
+        "sha256": "529c803101fd8b3b9f7b0056c87ba3e3c97b3b9aac8730db34f555b677dd8ca1",
+        "bytes": 8254556,
         "repository": {
           "url": "git+https://github.com/lovell/sharp-libvips.git",
           "type": "git",
           "directory": "npm/darwin-arm64"
         },
-        "gitHead": "20b5e899954907a3039d6e3d4c200aaa0ec52c4c"
+        "gitHead": "4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6"
       },
       "licenseTextSource": {
         "type": "repository-file",
-        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.2.4-LGPL-and-notices.txt",
-        "sha256": "a368601679e1370ed88084e6fb77170d5e101af845b53a3dd7a8df6d15235285",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.3.2-LGPL-and-notices.txt",
+        "sha256": "fbd9122500b3de526a4abe9290466ecff94876b78df40b94234a56f46bede08d",
         "sourceReferences": [
-          "https://github.com/lovell/sharp-libvips/tree/20b5e899954907a3039d6e3d4c200aaa0ec52c4c/npm/darwin-arm64",
-          "https://github.com/lovell/sharp-libvips/blob/20b5e899954907a3039d6e3d4c200aaa0ec52c4c/THIRD-PARTY-NOTICES.md",
+          "https://github.com/lovell/sharp-libvips/tree/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/npm/darwin-arm64",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/LICENSE",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/GPL-3.0-only.txt",
           "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
         ]
       },
-      "notes": "Includes GPL/LGPL terms, the build-wrapper Apache terms, and exact pinned third-party notices for the prebuilt libvips distribution."
+      "notes": "Includes exact immutable GPL/LGPL terms, the build-wrapper Apache-2.0 terms, and the third-party notices pinned to the published 1.3.2 gitHead. Exact npm tarball bytes were independently re-fetched and verified against the lockfile SHA-512 SRI and the recorded SHA-256."
     },
     {
       "package": "@img/sharp-libvips-darwin-x64",
-      "version": "1.2.4",
+      "version": "1.3.2",
       "license": "LGPL-3.0-or-later",
       "reviewStatus": "ENGINEERING_REVIEWED",
-      "reviewedAt": "2026-07-15",
+      "reviewedAt": "2026-07-26",
       "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
       "packageSource": {
         "registry": "npm",
-        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.2.4.tgz",
-        "integrity": "sha512-1IOd5xfVhlGwX+zXv2N93k0yMONvUlANylbJw1eTah8K/Jtpi15KC+WSiaX/nBmbm2HxRM1gZ0nSdjSsrZbGKg==",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.3.2.tgz",
+        "integrity": "sha512-m2pW1n6cns9VaubNwsZ+c3CRYjxNQWgJ5gPlnL1nbBcpkBvFm6SCFN5o0psFHI8w9n11NKhFkeEDns98tiqbEw==",
+        "sha256": "5756aba421c88cdd45af13bf1cbf7ff39a074d4d014cac29bbd11387dc566692",
+        "bytes": 8838419,
         "repository": {
           "url": "git+https://github.com/lovell/sharp-libvips.git",
           "type": "git",
           "directory": "npm/darwin-x64"
         },
-        "gitHead": "20b5e899954907a3039d6e3d4c200aaa0ec52c4c"
+        "gitHead": "4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6"
       },
       "licenseTextSource": {
         "type": "repository-file",
-        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.2.4-LGPL-and-notices.txt",
-        "sha256": "a368601679e1370ed88084e6fb77170d5e101af845b53a3dd7a8df6d15235285",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.3.2-LGPL-and-notices.txt",
+        "sha256": "fbd9122500b3de526a4abe9290466ecff94876b78df40b94234a56f46bede08d",
         "sourceReferences": [
-          "https://github.com/lovell/sharp-libvips/tree/20b5e899954907a3039d6e3d4c200aaa0ec52c4c/npm/darwin-x64",
-          "https://github.com/lovell/sharp-libvips/blob/20b5e899954907a3039d6e3d4c200aaa0ec52c4c/THIRD-PARTY-NOTICES.md",
+          "https://github.com/lovell/sharp-libvips/tree/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/npm/darwin-x64",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/LICENSE",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/GPL-3.0-only.txt",
           "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
         ]
       },
-      "notes": "Includes GPL/LGPL terms, the build-wrapper Apache terms, and exact pinned third-party notices for the prebuilt libvips distribution. Exact release-matrix platform package; license text is shared by the same upstream version."
+      "notes": "Includes exact immutable GPL/LGPL terms, the build-wrapper Apache-2.0 terms, and the third-party notices pinned to the published 1.3.2 gitHead. Exact npm tarball bytes were independently re-fetched and verified against the lockfile SHA-512 SRI and the recorded SHA-256."
     },
     {
-      "package": "@img/sharp-libvips-linux-x64",
-      "version": "1.2.4",
+      "package": "@img/sharp-libvips-linux-arm",
+      "version": "1.3.2",
       "license": "LGPL-3.0-or-later",
       "reviewStatus": "ENGINEERING_REVIEWED",
-      "reviewedAt": "2026-07-15",
+      "reviewedAt": "2026-07-26",
       "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
       "packageSource": {
         "registry": "npm",
-        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.2.4.tgz",
-        "integrity": "sha512-tJxiiLsmHc9Ax1bz3oaOYBURTXGIRDODBqhveVHonrHJ9/+k89qbLl0bcJns+e4t4rvaNBxaEZsFtSfAdquPrw==",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm/-/sharp-libvips-linux-arm-1.3.2.tgz",
+        "integrity": "sha512-1eMLzy92I4J6rmi4mAT8yC3HxOtniyGELlzGbNMLLeqe052ahFQ0h6LFq+lh5DsDIdYViIDst08abvSbcEdLXQ==",
+        "sha256": "70a81251cdc63a7ee046a7a3a21a10f71efa5d8775db33b2220063194a473a36",
+        "bytes": 6989716,
+        "repository": {
+          "url": "git+https://github.com/lovell/sharp-libvips.git",
+          "type": "git",
+          "directory": "npm/linux-arm"
+        },
+        "gitHead": "4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.3.2-LGPL-and-notices.txt",
+        "sha256": "fbd9122500b3de526a4abe9290466ecff94876b78df40b94234a56f46bede08d",
+        "sourceReferences": [
+          "https://github.com/lovell/sharp-libvips/tree/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/npm/linux-arm",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/LICENSE",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/GPL-3.0-only.txt",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
+        ]
+      },
+      "notes": "Includes exact immutable GPL/LGPL terms, the build-wrapper Apache-2.0 terms, and the third-party notices pinned to the published 1.3.2 gitHead. Exact npm tarball bytes were independently re-fetched and verified against the lockfile SHA-512 SRI and the recorded SHA-256."
+    },
+    {
+      "package": "@img/sharp-libvips-linux-arm64",
+      "version": "1.3.2",
+      "license": "LGPL-3.0-or-later",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-26",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm64/-/sharp-libvips-linux-arm64-1.3.2.tgz",
+        "integrity": "sha512-dqVSFynCox4C/J8kT16V7SIFAns0IjgLwkvYT7p8LQVmJ5OS5b6tI9IGflxTeuBS//zXeFIUbwt5dwxyZ17cnA==",
+        "sha256": "8e57184950f004478587574f84d2b042b888ed2a4679e2c0e801ecd809a36404",
+        "bytes": 8390734,
+        "repository": {
+          "url": "git+https://github.com/lovell/sharp-libvips.git",
+          "type": "git",
+          "directory": "npm/linux-arm64"
+        },
+        "gitHead": "4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.3.2-LGPL-and-notices.txt",
+        "sha256": "fbd9122500b3de526a4abe9290466ecff94876b78df40b94234a56f46bede08d",
+        "sourceReferences": [
+          "https://github.com/lovell/sharp-libvips/tree/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/npm/linux-arm64",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/LICENSE",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/GPL-3.0-only.txt",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
+        ]
+      },
+      "notes": "Includes exact immutable GPL/LGPL terms, the build-wrapper Apache-2.0 terms, and the third-party notices pinned to the published 1.3.2 gitHead. Exact npm tarball bytes were independently re-fetched and verified against the lockfile SHA-512 SRI and the recorded SHA-256."
+    },
+    {
+      "package": "@img/sharp-libvips-linux-ppc64",
+      "version": "1.3.2",
+      "license": "LGPL-3.0-or-later",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-26",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-linux-ppc64/-/sharp-libvips-linux-ppc64-1.3.2.tgz",
+        "integrity": "sha512-3z0NHDxD6n5I9gc05U1eW1AyRm+Gznzq3naMrthPNqE6oYykcogW0l/jfpJdjYnuNl8R7yI9pNbE1XiUeyq0Aw==",
+        "sha256": "7de4f64c8e17fa7af969bc24e7d314b390458cb037572d5da50937d11afbdecc",
+        "bytes": 8168901,
+        "repository": {
+          "url": "git+https://github.com/lovell/sharp-libvips.git",
+          "type": "git",
+          "directory": "npm/linux-ppc64"
+        },
+        "gitHead": "4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.3.2-LGPL-and-notices.txt",
+        "sha256": "fbd9122500b3de526a4abe9290466ecff94876b78df40b94234a56f46bede08d",
+        "sourceReferences": [
+          "https://github.com/lovell/sharp-libvips/tree/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/npm/linux-ppc64",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/LICENSE",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/GPL-3.0-only.txt",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
+        ]
+      },
+      "notes": "Includes exact immutable GPL/LGPL terms, the build-wrapper Apache-2.0 terms, and the third-party notices pinned to the published 1.3.2 gitHead. Exact npm tarball bytes were independently re-fetched and verified against the lockfile SHA-512 SRI and the recorded SHA-256."
+    },
+    {
+      "package": "@img/sharp-libvips-linux-riscv64",
+      "version": "1.3.2",
+      "license": "LGPL-3.0-or-later",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-26",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-linux-riscv64/-/sharp-libvips-linux-riscv64-1.3.2.tgz",
+        "integrity": "sha512-bsb4rI+NldGOsXuej2r8OdSS8+zXDVaCWxyWrcv6kneTOlgAHtZABRzBBCwdsPiD90J4myNJuHpg6kA20ImW/w==",
+        "sha256": "1197715fb6c4ea599f567f7ce6e03910eed142e9494d5394b0c34db136e74615",
+        "bytes": 7504527,
+        "repository": {
+          "url": "git+https://github.com/lovell/sharp-libvips.git",
+          "type": "git",
+          "directory": "npm/linux-riscv64"
+        },
+        "gitHead": "4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.3.2-LGPL-and-notices.txt",
+        "sha256": "fbd9122500b3de526a4abe9290466ecff94876b78df40b94234a56f46bede08d",
+        "sourceReferences": [
+          "https://github.com/lovell/sharp-libvips/tree/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/npm/linux-riscv64",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/LICENSE",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/GPL-3.0-only.txt",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
+        ]
+      },
+      "notes": "Includes exact immutable GPL/LGPL terms, the build-wrapper Apache-2.0 terms, and the third-party notices pinned to the published 1.3.2 gitHead. Exact npm tarball bytes were independently re-fetched and verified against the lockfile SHA-512 SRI and the recorded SHA-256."
+    },
+    {
+      "package": "@img/sharp-libvips-linux-s390x",
+      "version": "1.3.2",
+      "license": "LGPL-3.0-or-later",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-26",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-linux-s390x/-/sharp-libvips-linux-s390x-1.3.2.tgz",
+        "integrity": "sha512-/ABshyj8gCpyIrNXnHn4LorDJ0HHm1VhXPBlxZ8zAtfVPAaSafXPGn+sUSIRiwaSBy0mmFjSjiXI5mkcwdChKQ==",
+        "sha256": "61e2bebddaa7121056806ffbdbff0f8c58239f2fbc26b3bfef368f012698997a",
+        "bytes": 7208941,
+        "repository": {
+          "url": "git+https://github.com/lovell/sharp-libvips.git",
+          "type": "git",
+          "directory": "npm/linux-s390x"
+        },
+        "gitHead": "4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.3.2-LGPL-and-notices.txt",
+        "sha256": "fbd9122500b3de526a4abe9290466ecff94876b78df40b94234a56f46bede08d",
+        "sourceReferences": [
+          "https://github.com/lovell/sharp-libvips/tree/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/npm/linux-s390x",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/LICENSE",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/GPL-3.0-only.txt",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
+        ]
+      },
+      "notes": "Includes exact immutable GPL/LGPL terms, the build-wrapper Apache-2.0 terms, and the third-party notices pinned to the published 1.3.2 gitHead. Exact npm tarball bytes were independently re-fetched and verified against the lockfile SHA-512 SRI and the recorded SHA-256."
+    },
+    {
+      "package": "@img/sharp-libvips-linux-x64",
+      "version": "1.3.2",
+      "license": "LGPL-3.0-or-later",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-26",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.3.2.tgz",
+        "integrity": "sha512-ITPEtgffGJ0S6G9dRyw/366tJQqFRcHWPHhC+Stpg3Z8AEMrDrTr2lhdz4f/Y/HMbRh//7Z5mBzEpVdi62Oc3w==",
+        "sha256": "8cf0eafeaca832b68942fe1a770fb5f3b490504d3a9f2e3f56ee8784c9d65c45",
+        "bytes": 8111385,
         "repository": {
           "url": "git+https://github.com/lovell/sharp-libvips.git",
           "type": "git",
           "directory": "npm/linux-x64"
         },
-        "gitHead": "20b5e899954907a3039d6e3d4c200aaa0ec52c4c"
+        "gitHead": "4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6"
       },
       "licenseTextSource": {
         "type": "repository-file",
-        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.2.4-LGPL-and-notices.txt",
-        "sha256": "a368601679e1370ed88084e6fb77170d5e101af845b53a3dd7a8df6d15235285",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.3.2-LGPL-and-notices.txt",
+        "sha256": "fbd9122500b3de526a4abe9290466ecff94876b78df40b94234a56f46bede08d",
         "sourceReferences": [
-          "https://github.com/lovell/sharp-libvips/tree/20b5e899954907a3039d6e3d4c200aaa0ec52c4c/npm/linux-x64",
-          "https://github.com/lovell/sharp-libvips/blob/20b5e899954907a3039d6e3d4c200aaa0ec52c4c/THIRD-PARTY-NOTICES.md",
+          "https://github.com/lovell/sharp-libvips/tree/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/npm/linux-x64",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/LICENSE",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/GPL-3.0-only.txt",
           "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
         ]
       },
-      "notes": "Includes GPL/LGPL terms, the build-wrapper Apache terms, and exact pinned third-party notices for the prebuilt libvips distribution. Exact release-matrix platform package; license text is shared by the same upstream version."
+      "notes": "Includes exact immutable GPL/LGPL terms, the build-wrapper Apache-2.0 terms, and the third-party notices pinned to the published 1.3.2 gitHead. Exact npm tarball bytes were independently re-fetched and verified against the lockfile SHA-512 SRI and the recorded SHA-256."
+    },
+    {
+      "package": "@img/sharp-libvips-linuxmusl-arm64",
+      "version": "1.3.2",
+      "license": "LGPL-3.0-or-later",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-26",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-arm64/-/sharp-libvips-linuxmusl-arm64-1.3.2.tgz",
+        "integrity": "sha512-zE9EdiUzUmg5mDT5a1rk5fYJ6GWPloTwWBYDS14naqHsL+EaMpDj1AWnpLgh3u0YCORv2Tt50wrcrpYqkP97Kw==",
+        "sha256": "3c1b81fd5e9d8a3ce5d129833efbf14f594600db186f1b33ee4f79b594518754",
+        "bytes": 8406899,
+        "repository": {
+          "url": "git+https://github.com/lovell/sharp-libvips.git",
+          "type": "git",
+          "directory": "npm/linuxmusl-arm64"
+        },
+        "gitHead": "4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.3.2-LGPL-and-notices.txt",
+        "sha256": "fbd9122500b3de526a4abe9290466ecff94876b78df40b94234a56f46bede08d",
+        "sourceReferences": [
+          "https://github.com/lovell/sharp-libvips/tree/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/npm/linuxmusl-arm64",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/LICENSE",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/GPL-3.0-only.txt",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
+        ]
+      },
+      "notes": "Includes exact immutable GPL/LGPL terms, the build-wrapper Apache-2.0 terms, and the third-party notices pinned to the published 1.3.2 gitHead. Exact npm tarball bytes were independently re-fetched and verified against the lockfile SHA-512 SRI and the recorded SHA-256."
+    },
+    {
+      "package": "@img/sharp-libvips-linuxmusl-x64",
+      "version": "1.3.2",
+      "license": "LGPL-3.0-or-later",
+      "reviewStatus": "ENGINEERING_REVIEWED",
+      "reviewedAt": "2026-07-26",
+      "basis": "PINNED_COMBINED_LICENSE_AND_NOTICES",
+      "packageSource": {
+        "registry": "npm",
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-x64/-/sharp-libvips-linuxmusl-x64-1.3.2.tgz",
+        "integrity": "sha512-m0lrLiUt+lBYnCFr8qV/65yMR4E/c7/wf78I5eKTdkEakFAlZ9QlzEM3QIhhAwVeUhLAHLcCq7a7Vszq/oFNZQ==",
+        "sha256": "61688d3fde672d625702135e7c21a6f17d6db9993dc9f6557673f14d47bc8ffd",
+        "bytes": 8148037,
+        "repository": {
+          "url": "git+https://github.com/lovell/sharp-libvips.git",
+          "type": "git",
+          "directory": "npm/linuxmusl-x64"
+        },
+        "gitHead": "4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6"
+      },
+      "licenseTextSource": {
+        "type": "repository-file",
+        "path": "docs/provenance/dependency-license-texts/sharp-libvips-1.3.2-LGPL-and-notices.txt",
+        "sha256": "fbd9122500b3de526a4abe9290466ecff94876b78df40b94234a56f46bede08d",
+        "sourceReferences": [
+          "https://github.com/lovell/sharp-libvips/tree/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/npm/linuxmusl-x64",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/LICENSE",
+          "https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/THIRD-PARTY-NOTICES.md",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/GPL-3.0-only.txt",
+          "https://github.com/spdx/license-list-data/blob/98f5c2939d624d338d9fbc159d97f0994c7cfaf3/text/LGPL-3.0-or-later.txt"
+        ]
+      },
+      "notes": "Includes exact immutable GPL/LGPL terms, the build-wrapper Apache-2.0 terms, and the third-party notices pinned to the published 1.3.2 gitHead. Exact npm tarball bytes were independently re-fetched and verified against the lockfile SHA-512 SRI and the recorded SHA-256."
     },
     {
       "package": "@libsql/client",
