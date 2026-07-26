@@ -14,6 +14,11 @@ type SettlementState = {
   }>;
 };
 
+type StepSettlement = {
+  outcome: 'completed' | 'failed' | 'superseded';
+  state: SettlementState;
+};
+
 type SettlementHarness = {
   _stepGeneration: number;
   _pendingContinue: boolean | null;
@@ -34,7 +39,7 @@ type SettlementHarness = {
     stepHasApprovalRequest: boolean,
   ) => boolean;
   scheduleQueuedMessageWake: (originatingStep: {
-    settled: Promise<'completed' | 'failed' | 'superseded'>;
+    settled: Promise<StepSettlement>;
   }) => void;
 };
 
@@ -178,17 +183,15 @@ describe('BaseAgent queued follow-up settlement', () => {
       history: [],
     };
     const harness = createSettlementHarness(state);
-    let settle!: (outcome: 'completed' | 'failed' | 'superseded') => void;
-    const settled = new Promise<'completed' | 'failed' | 'superseded'>(
-      (resolve) => {
-        settle = resolve;
-      },
-    );
+    let settle!: (settlement: StepSettlement) => void;
+    const settled = new Promise<StepSettlement>((resolve) => {
+      settle = resolve;
+    });
 
     harness.agent.scheduleQueuedMessageWake({ settled });
     expect(harness.runStep).not.toHaveBeenCalled();
 
-    settle('completed');
+    settle({ outcome: 'completed', state });
     await settled;
     await Promise.resolve();
 
@@ -209,7 +212,7 @@ describe('BaseAgent queued follow-up settlement', () => {
     const harness = createSettlementHarness(state);
 
     harness.agent.scheduleQueuedMessageWake({
-      settled: Promise.resolve('superseded'),
+      settled: Promise.resolve({ outcome: 'superseded', state }),
     });
     await Promise.resolve();
 

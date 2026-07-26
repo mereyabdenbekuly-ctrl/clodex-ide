@@ -105,7 +105,13 @@ describe('guarded automatic file writes', () => {
   let filePath: string;
 
   beforeEach(() => {
-    root = mkdtempSync(path.join(tmpdir(), 'agent-core-auto-write-'));
+    // Windows runners may expose tmpdir() through an 8.3 alias such as
+    // C:\Users\RUNNER~1 while realpath() returns the long path. Build every
+    // fixture path from one canonical root so the test exercises production's
+    // object/path binding checks instead of an alias mismatch in the fixture.
+    root = realpathSync(
+      mkdtempSync(path.join(tmpdir(), 'agent-core-auto-write-')),
+    );
     filePath = path.join(root, 'file.txt');
     writeFileSync(filePath, 'before');
     fsMocks.open.mockReset();
