@@ -81,32 +81,40 @@ describe('auto-update config', () => {
     expect(isAutoUpdateEnabledForDistribution('community-unsigned')).toBe(
       false,
     );
+    expect(isAutoUpdateEnabledForDistribution('community-observed')).toBe(
+      false,
+    );
 
-    for (const releaseChannel of [
-      'dev',
-      'prerelease',
-      'nightly',
-      'release',
+    for (const distributionMode of [
+      'community-unsigned',
+      'community-observed',
     ] as const) {
-      expect(
-        resolveUpdateChannel({
-          distributionMode: 'community-unsigned',
-          releaseChannel,
-          version: '1.16.0-community20260716c001',
-          preference: 'beta',
-        }),
-      ).toBeNull();
-      expect(
-        buildUpdateFeedURL({
-          distributionMode: 'community-unsigned',
-          origin: 'https://updates.clodex.xyz',
-          releaseChannel,
-          version: '1.16.0-community20260716c001',
-          platform: 'darwin',
-          architecture: 'arm64',
-          preference: 'beta',
-        }),
-      ).toBeNull();
+      for (const releaseChannel of [
+        'dev',
+        'prerelease',
+        'nightly',
+        'release',
+      ] as const) {
+        expect(
+          resolveUpdateChannel({
+            distributionMode,
+            releaseChannel,
+            version: '1.16.0-communityobserved14',
+            preference: 'beta',
+          }),
+        ).toBeNull();
+        expect(
+          buildUpdateFeedURL({
+            distributionMode,
+            origin: 'https://updates.clodex.xyz',
+            releaseChannel,
+            version: '1.16.0-communityobserved14',
+            platform: 'darwin',
+            architecture: 'arm64',
+            preference: 'beta',
+          }),
+        ).toBeNull();
+      }
     }
   });
 

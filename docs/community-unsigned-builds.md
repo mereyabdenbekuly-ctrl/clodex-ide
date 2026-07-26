@@ -76,7 +76,7 @@ build and does not convert the artifact into an official release.
    hosted runners;
 7. install only from the frozen lockfile after the pnpm bootstrap policy check;
 8. keep authentication and telemetry disabled and compile no update-server
-   origin or update feed;
+   origin or automatic-update feed;
 9. run the strict dependency/attribution gate and the platform validator in
    `community-unsigned` mode;
 10. pass the exact validation manifest and source commit to the bounded
@@ -107,7 +107,8 @@ The community build workflow MUST NOT:
 - call `_release-browser.yml`, `auto-release.yml`,
   `technical-preview-release.yml`, or any release publication workflow;
 - set `UPDATE_SERVER_ORIGIN`, generate an official update feed, publish a
-  `RELEASES` feed as a supported channel, or enable the in-app updater;
+  `RELEASES` feed as a supported channel, or enable Electron `autoUpdater` or
+  background installer download/install;
 - register the official external `clodex` or `clodex-ide` protocol handlers;
 - write under `.release-evidence`, use a release promotion manifest, or emit
   `ready-as-rollback-baseline`, `ready-for-canary`, or `ready-for-stable`;
@@ -149,6 +150,28 @@ If the tag target, manifest, version, filename, size, or hash differs, the
 publication must stop. A community prerelease never satisfies Developer ID,
 notarization, Authenticode, protected acceptance, canary, or stable release
 requirements.
+
+## Manual release discovery (not auto-update)
+
+A future bridge-enabled Community Unsigned build may inspect a bounded first
+page of public GitHub release metadata after an explicit user action. It may
+expose a newer same-lane release only when the prerelease is immutable, bound to
+an exact source commit, uses the canonical GitHub page, contains exactly the
+five canonical installers plus SHA256SUMS.txt, and its bounded checksum manifest
+matches every uploaded GitHub asset digest. Legacy filename aliases and mutable
+Community prereleases are not eligible.
+
+**Open GitHub Release** opens only the verified canonical release page in the
+system browser. The bridge does not use Electron auto-update, create an update
+feed, download or select an installer, execute a package, replace application
+files, or restart the IDE. The user chooses the correct unsigned package and
+installs it manually. After an error, a separately labeled link may open only
+the canonical repository release index and does not assert compatibility.
+
+The bounded scan reports “No newer release found”; it does not make an absolute
+latest-version claim. An older installed build must still be upgraded manually
+to a build containing the bridge, and no Community prerelease becomes eligible
+for official preview, canary, stable, or rollback use through this mechanism.
 
 ## Redistribution and review gate
 

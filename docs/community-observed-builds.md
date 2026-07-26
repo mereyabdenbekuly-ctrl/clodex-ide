@@ -24,6 +24,10 @@ attestation, and redistribution approval. It stages a draft, uploads and
 verifies all seven assets, then publishes once; updater and promotion assets are
 forbidden.
 
+The IDE may discover a newer compatible Community Observed prerelease and open
+its canonical GitHub release page in the user's external browser. This is a
+manual release-discovery link, not an updater asset or an auto-update channel.
+
 ## Current public Technical Preview
 
 Community Observed 14 (`1.16.0-communityobserved14`) is built from exact source
@@ -49,12 +53,45 @@ semantics:
   browser; an RFC 8252 loopback callback is bound to the initiating IDE with
   state and PKCE S256;
 - legacy query-code and unbound bearer callbacks remain rejected;
-- auto-update, update payloads, and default OS protocol registration remain
-  disabled;
+- Electron auto-update, background update downloads, update payloads/feeds, and
+  default OS protocol registration remain disabled;
 - the separate app/bundle identity creates a separate local profile.
 
 The artifact validators and bundle assembler fail closed unless these
 properties and the exact source commit are present.
+
+## Manual release discovery (not auto-update)
+
+A bridge-enabled Community Observed build may inspect the first bounded page of
+public GitHub release metadata after an explicit user action. It considers only
+a newer release from the same Community Observed lane. The UI therefore says
+“No newer release found” rather than claiming that the installed build is
+universally up to date.
+
+Before exposing an action, the bridge requires an immutable prerelease bound to
+an exact 40-character source commit, the canonical GitHub release page, exactly
+five canonical installers plus the evidence ZIP and SHA256SUMS.txt, uploaded
+asset digests and canonical URLs, and a bounded checksum manifest whose entries
+match the GitHub digests for all six covered files. A malformed matching
+candidate fails closed. Unrelated release lanes are ignored.
+
+**Open GitHub Release** opens only that canonical release page in the system
+browser. The bridge does not use Electron auto-update, download or select an
+installer, execute a package, replace application files, restart the IDE, or
+bypass any operating-system warning. Community installers remain unsigned or
+ad-hoc signed and non-notarized. The user must choose the correct package on the
+release page and complete installation manually.
+
+The release-index fallback shown after a metadata-check error is also only an
+external browser link. It does not treat an unverified release as compatible.
+If the strict metadata and checksum checks do not produce the canonical release
+URL, the IDE exposes no release action for that result.
+
+An already-installed build cannot acquire this UI retroactively. Users of an
+older build must install one bridge-enabled Community build manually once;
+future checks from that build remain manual release discovery. Full automatic
+download, installation, and restart remain reserved for a separately signed and
+approved official release pipeline.
 
 Authentication is part of the `community-observed` distribution policy, not a
 one-off workflow override. Future observed builds must keep

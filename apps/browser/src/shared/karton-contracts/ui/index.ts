@@ -1380,10 +1380,17 @@ export type AppState = {
       | 'ready'
       | 'not-available'
       | 'error'
+      | 'manual-idle'
+      | 'manual-checking'
+      | 'manual-available'
+      | 'manual-current'
+      | 'manual-error'
       | 'unsupported';
     updateInfo: {
       releaseName?: string;
       releaseNotes?: string;
+      /** Canonical GitHub release page used by manual community updates. */
+      releasePageUrl?: string;
     } | null;
     errorMessage: string | null;
   };

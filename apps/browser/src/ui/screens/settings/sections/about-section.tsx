@@ -39,6 +39,13 @@ import {
   SettingsSectionHeader,
   SettingsSummaryCard,
 } from '../_components/settings-page';
+import {
+  COMMUNITY_RELEASES_PAGE_URL,
+  getManualAppUpdateViewModel,
+  MANUAL_UPDATE_CURRENT_LABEL,
+  MANUAL_UPDATE_RELEASE_ACTION_LABEL,
+  type ManualAppUpdateViewModel,
+} from './app-update-status-model';
 
 enablePatches();
 
@@ -51,15 +58,174 @@ interface LicenseEntry {
   licenseText: string;
 }
 
+function assertNever(value: never): never {
+  throw new Error(`Unhandled manual update view: ${String(value)}`);
+}
+
+function ManualAppUpdateStatus({
+  viewModel,
+  onCheck,
+  onOpenExternal,
+}: {
+  viewModel: ManualAppUpdateViewModel;
+  onCheck: () => void;
+  onOpenExternal: (url: string) => void;
+}) {
+  const renderStatus = () => {
+    switch (viewModel.kind) {
+      case 'checking':
+        return (
+          <Button variant="ghost" size="sm" className="rounded-lg" disabled>
+            <IconRefreshAnticlockwiseOutline18 className="size-3 animate-spin" />
+            Checking Community Releases
+          </Button>
+        );
+      case 'current':
+        return (
+          <>
+            <span className="rounded-full border border-success-solid/20 bg-success-solid/7 px-2.5 py-1 font-medium text-[10px] text-success-solid uppercase tracking-[0.06em]">
+              {MANUAL_UPDATE_CURRENT_LABEL}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-lg"
+              onClick={onCheck}
+            >
+              <IconRefreshAnticlockwiseOutline18 className="size-3" />
+              Check Again
+            </Button>
+          </>
+        );
+      case 'available': {
+        const releasePageUrl = viewModel.releasePageUrl;
+        return releasePageUrl ? (
+          <>
+            <Button
+              size="sm"
+              className="rounded-xl"
+              onClick={() => onOpenExternal(releasePageUrl)}
+            >
+              <ExternalLinkIcon className="size-3.5" />
+              {MANUAL_UPDATE_RELEASE_ACTION_LABEL}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-lg"
+              onClick={onCheck}
+            >
+              <IconRefreshAnticlockwiseOutline18 className="size-3" />
+              Check Again
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="rounded-lg"
+            onClick={onCheck}
+          >
+            <IconRefreshAnticlockwiseOutline18 className="size-3" />
+            Check Again
+          </Button>
+        );
+      }
+      case 'error':
+        return (
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-lg"
+              onClick={onCheck}
+            >
+              <IconRefreshAnticlockwiseOutline18 className="size-3" />
+              Retry
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="rounded-xl"
+              onClick={() => onOpenExternal(COMMUNITY_RELEASES_PAGE_URL)}
+            >
+              <ExternalLinkIcon className="size-3.5" />
+              View Releases
+            </Button>
+          </>
+        );
+      case 'idle':
+        return (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="rounded-lg"
+            onClick={onCheck}
+          >
+            <IconRefreshAnticlockwiseOutline18 className="size-3" />
+            Check for Updates
+          </Button>
+        );
+      default:
+        return assertNever(viewModel);
+    }
+  };
+
+  return (
+    <div className="flex max-w-md flex-col gap-2" aria-live="polite">
+      {viewModel.kind === 'available' && (
+        <div className="flex flex-col gap-1">
+          <p className="font-medium text-sm text-token-text-primary">
+            Version {viewModel.releaseName} available
+          </p>
+          {!viewModel.releasePageUrl && (
+            <p className="text-error-solid text-xs">
+              The validated release page is unavailable. Check again before
+              downloading an installer.
+            </p>
+          )}
+        </div>
+      )}
+      {viewModel.kind === 'error' && (
+        <div className="flex flex-col gap-1">
+          <p className="text-error-solid text-xs">{viewModel.errorMessage}</p>
+          <p className="text-[11px] text-token-text-tertiary leading-4">
+            No compatible release was validated. View Releases only opens the
+            public release list as a fallback.
+          </p>
+        </div>
+      )}
+      <p className="text-[11px] text-token-text-tertiary leading-4">
+        The release page opens in your external browser. Community installers
+        are unsigned and must be downloaded and installed manually; automatic
+        download, installation, and restart remain disabled.
+      </p>
+      <div className="flex flex-wrap items-center gap-3">{renderStatus()}</div>
+    </div>
+  );
+}
+
 function AppUpdateStatus() {
   const autoUpdate = useKartonState((s) => s.autoUpdate);
   const checkForUpdates = useKartonProcedure(
     (p) => p.autoUpdate.checkForUpdates,
   );
   const quitAndInstall = useKartonProcedure((p) => p.autoUpdate.quitAndInstall);
+  const openExternalUrl = useKartonProcedure((p) => p.openExternalUrl);
 
   if (autoUpdate.status === 'unsupported') {
     return null;
+  }
+
+  const manualViewModel = getManualAppUpdateViewModel(autoUpdate);
+  if (manualViewModel) {
+    return (
+      <ManualAppUpdateStatus
+        viewModel={manualViewModel}
+        onCheck={() => void checkForUpdates()}
+        onOpenExternal={(url) => void openExternalUrl(url)}
+      />
+    );
   }
 
   const renderButton = () => {
