@@ -1874,6 +1874,187 @@ test('vscode-eslint bundling rebuilds from verified bytes instead of trusting lo
   assert.match(browserIgnore, /^\.eslint-server-work\/$/mu);
 });
 
+test('sharp-libvips overrides pin the exact 1.3.2 platform matrix', () => {
+  const overrideRegistry = JSON.parse(
+    readFileSync(
+      path.join(
+        repositoryDirectory,
+        'docs/provenance/DEPENDENCY_LICENSE_OVERRIDES.json',
+      ),
+      'utf8',
+    ),
+  );
+  const expectedPackages = [
+    '@img/sharp-libvips-darwin-arm64',
+    '@img/sharp-libvips-darwin-x64',
+    '@img/sharp-libvips-linux-arm',
+    '@img/sharp-libvips-linux-arm64',
+    '@img/sharp-libvips-linux-ppc64',
+    '@img/sharp-libvips-linux-riscv64',
+    '@img/sharp-libvips-linux-s390x',
+    '@img/sharp-libvips-linux-x64',
+    '@img/sharp-libvips-linuxmusl-arm64',
+    '@img/sharp-libvips-linuxmusl-x64',
+  ];
+  const expectedTarballs = new Map([
+    [
+      '@img/sharp-libvips-darwin-arm64',
+      {
+        bytes: 8254556,
+        integrity:
+          'sha512-9J6ypZFpQBj4YnePGoq/S38w6nz+vqg5WZLrLGY4YuSemdMq47GMLBPO42MzwdGwpg/agZ7xzZcFHa48xlywfg==',
+        sha256:
+          '529c803101fd8b3b9f7b0056c87ba3e3c97b3b9aac8730db34f555b677dd8ca1',
+      },
+    ],
+    [
+      '@img/sharp-libvips-darwin-x64',
+      {
+        bytes: 8838419,
+        integrity:
+          'sha512-m2pW1n6cns9VaubNwsZ+c3CRYjxNQWgJ5gPlnL1nbBcpkBvFm6SCFN5o0psFHI8w9n11NKhFkeEDns98tiqbEw==',
+        sha256:
+          '5756aba421c88cdd45af13bf1cbf7ff39a074d4d014cac29bbd11387dc566692',
+      },
+    ],
+    [
+      '@img/sharp-libvips-linux-arm',
+      {
+        bytes: 6989716,
+        integrity:
+          'sha512-1eMLzy92I4J6rmi4mAT8yC3HxOtniyGELlzGbNMLLeqe052ahFQ0h6LFq+lh5DsDIdYViIDst08abvSbcEdLXQ==',
+        sha256:
+          '70a81251cdc63a7ee046a7a3a21a10f71efa5d8775db33b2220063194a473a36',
+      },
+    ],
+    [
+      '@img/sharp-libvips-linux-arm64',
+      {
+        bytes: 8390734,
+        integrity:
+          'sha512-dqVSFynCox4C/J8kT16V7SIFAns0IjgLwkvYT7p8LQVmJ5OS5b6tI9IGflxTeuBS//zXeFIUbwt5dwxyZ17cnA==',
+        sha256:
+          '8e57184950f004478587574f84d2b042b888ed2a4679e2c0e801ecd809a36404',
+      },
+    ],
+    [
+      '@img/sharp-libvips-linux-ppc64',
+      {
+        bytes: 8168901,
+        integrity:
+          'sha512-3z0NHDxD6n5I9gc05U1eW1AyRm+Gznzq3naMrthPNqE6oYykcogW0l/jfpJdjYnuNl8R7yI9pNbE1XiUeyq0Aw==',
+        sha256:
+          '7de4f64c8e17fa7af969bc24e7d314b390458cb037572d5da50937d11afbdecc',
+      },
+    ],
+    [
+      '@img/sharp-libvips-linux-riscv64',
+      {
+        bytes: 7504527,
+        integrity:
+          'sha512-bsb4rI+NldGOsXuej2r8OdSS8+zXDVaCWxyWrcv6kneTOlgAHtZABRzBBCwdsPiD90J4myNJuHpg6kA20ImW/w==',
+        sha256:
+          '1197715fb6c4ea599f567f7ce6e03910eed142e9494d5394b0c34db136e74615',
+      },
+    ],
+    [
+      '@img/sharp-libvips-linux-s390x',
+      {
+        bytes: 7208941,
+        integrity:
+          'sha512-/ABshyj8gCpyIrNXnHn4LorDJ0HHm1VhXPBlxZ8zAtfVPAaSafXPGn+sUSIRiwaSBy0mmFjSjiXI5mkcwdChKQ==',
+        sha256:
+          '61e2bebddaa7121056806ffbdbff0f8c58239f2fbc26b3bfef368f012698997a',
+      },
+    ],
+    [
+      '@img/sharp-libvips-linux-x64',
+      {
+        bytes: 8111385,
+        integrity:
+          'sha512-ITPEtgffGJ0S6G9dRyw/366tJQqFRcHWPHhC+Stpg3Z8AEMrDrTr2lhdz4f/Y/HMbRh//7Z5mBzEpVdi62Oc3w==',
+        sha256:
+          '8cf0eafeaca832b68942fe1a770fb5f3b490504d3a9f2e3f56ee8784c9d65c45',
+      },
+    ],
+    [
+      '@img/sharp-libvips-linuxmusl-arm64',
+      {
+        bytes: 8406899,
+        integrity:
+          'sha512-zE9EdiUzUmg5mDT5a1rk5fYJ6GWPloTwWBYDS14naqHsL+EaMpDj1AWnpLgh3u0YCORv2Tt50wrcrpYqkP97Kw==',
+        sha256:
+          '3c1b81fd5e9d8a3ce5d129833efbf14f594600db186f1b33ee4f79b594518754',
+      },
+    ],
+    [
+      '@img/sharp-libvips-linuxmusl-x64',
+      {
+        bytes: 8148037,
+        integrity:
+          'sha512-m0lrLiUt+lBYnCFr8qV/65yMR4E/c7/wf78I5eKTdkEakFAlZ9QlzEM3QIhhAwVeUhLAHLcCq7a7Vszq/oFNZQ==',
+        sha256:
+          '61688d3fde672d625702135e7c21a6f17d6db9993dc9f6557673f14d47bc8ffd',
+      },
+    ],
+  ]);
+  const entries = overrideRegistry.entries.filter((entry) =>
+    entry.package.startsWith('@img/sharp-libvips-'),
+  );
+  assert.deepEqual(
+    entries.map((entry) => `${entry.package}@${entry.version}`),
+    expectedPackages.map((packageName) => `${packageName}@1.3.2`),
+  );
+  assert.deepEqual(
+    [...new Set(entries.map((entry) => entry.packageSource.gitHead))],
+    ['4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6'],
+  );
+  assert.deepEqual(
+    [...new Set(entries.map((entry) => entry.licenseTextSource.path))],
+    [
+      'docs/provenance/dependency-license-texts/sharp-libvips-1.3.2-LGPL-and-notices.txt',
+    ],
+  );
+  const expectedLicenseTextSha256 =
+    'fbd9122500b3de526a4abe9290466ecff94876b78df40b94234a56f46bede08d';
+  assert.deepEqual(
+    [...new Set(entries.map((entry) => entry.licenseTextSource.sha256))],
+    [expectedLicenseTextSha256],
+  );
+  assert.equal(
+    createHash('sha256')
+      .update(
+        readFileSync(
+          path.join(
+            repositoryDirectory,
+            'docs/provenance/dependency-license-texts/sharp-libvips-1.3.2-LGPL-and-notices.txt',
+          ),
+        ),
+      )
+      .digest('hex'),
+    expectedLicenseTextSha256,
+  );
+  for (const entry of entries) {
+    const expectedTarball = expectedTarballs.get(entry.package);
+    assert.ok(expectedTarball);
+    assert.equal(entry.license, 'LGPL-3.0-or-later');
+    assert.equal(entry.reviewStatus, 'ENGINEERING_REVIEWED');
+    assert.deepEqual(
+      {
+        bytes: entry.packageSource.bytes,
+        integrity: entry.packageSource.integrity,
+        sha256: entry.packageSource.sha256,
+      },
+      expectedTarball,
+    );
+    assert.ok(
+      entry.licenseTextSource.sourceReferences.includes(
+        'https://github.com/lovell/sharp-libvips/blob/4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6/THIRD-PARTY-NOTICES.md',
+      ),
+    );
+  }
+});
+
 test('the exact installed repository dependency graph is strict-green', () => {
   const overrideRegistry = JSON.parse(
     readFileSync(
@@ -1902,7 +2083,7 @@ test('the exact installed repository dependency graph is strict-green', () => {
     9,
   );
   assert.equal(inventory.licenseOverrides.status, 'ENGINEERING_REVIEWED');
-  assert.equal(inventory.licenseOverrides.entryCount, 60);
+  assert.equal(inventory.licenseOverrides.entryCount, 67);
   assert.ok(inventory.licenseOverrides.appliedCount >= 40);
   assert.equal(
     overrideRegistry.entries.find(

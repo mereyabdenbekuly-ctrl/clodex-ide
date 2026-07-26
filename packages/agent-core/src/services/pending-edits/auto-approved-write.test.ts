@@ -80,8 +80,10 @@ function captureBinding(
   workspaceRoot: string,
   target: string,
 ): AutoApprovedFileBinding {
-  const physicalWorkspaceRoot = realpathSync(workspaceRoot);
-  const physicalTarget = realpathSync(target);
+  // Match the native canonicalization used by the production promises API.
+  // The non-native sync resolver can preserve a Windows 8.3 path alias.
+  const physicalWorkspaceRoot = realpathSync.native(workspaceRoot);
+  const physicalTarget = realpathSync.native(target);
   // Production captures this capability with lstat().  Keep the test seam
   // identical: on Windows, identity values obtained through stat() and
   // lstat() are not interchangeable across every canonical/short-path alias.
@@ -106,10 +108,11 @@ describe('guarded automatic file writes', () => {
 
   beforeEach(() => {
     // Windows runners may expose tmpdir() through an 8.3 alias such as
-    // C:\Users\RUNNER~1 while realpath() returns the long path. Build every
-    // fixture path from one canonical root so the test exercises production's
-    // object/path binding checks instead of an alias mismatch in the fixture.
-    root = realpathSync(
+    // C:\Users\RUNNER~1 while native realpath resolution returns the long path.
+    // Build every fixture path from one canonical root so the test exercises
+    // production's object/path binding checks instead of an alias mismatch in
+    // the fixture.
+    root = realpathSync.native(
       mkdtempSync(path.join(tmpdir(), 'agent-core-auto-write-')),
     );
     filePath = path.join(root, 'file.txt');
