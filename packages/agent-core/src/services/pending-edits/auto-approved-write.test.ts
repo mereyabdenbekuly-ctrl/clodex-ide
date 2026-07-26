@@ -102,6 +102,14 @@ function captureBinding(
   };
 }
 
+function expectWindowsRenameDenied(error: unknown): void {
+  expect(process.platform).toBe('win32');
+  expect(error).toBeInstanceOf(Error);
+  const errno = error as NodeJS.ErrnoException;
+  expect(['EPERM', 'EACCES', 'EBUSY']).toContain(errno.code);
+  expect(errno.syscall).toBe('rename');
+}
+
 describe('guarded automatic file writes', () => {
   let root: string;
   let filePath: string;
@@ -177,11 +185,18 @@ describe('guarded automatic file writes', () => {
     filePath = path.join(parentPath, 'file.txt');
     writeFileSync(filePath, 'before');
     const binding = captureBinding(workspaceRoot, filePath);
+    let relocationError: unknown;
 
     fsMocks.open.mockImplementationOnce(
       async (...args: Parameters<typeof nodeOpen>) =>
         withBeforeFirstWrite(await nodeOpen(...args), () => {
-          renameSync(parentPath, movedParentPath);
+          try {
+            renameSync(parentPath, movedParentPath);
+          } catch (error) {
+            relocationError = error;
+            if (process.platform !== 'win32') throw error;
+            return;
+          }
           symlinkSync(
             movedParentPath,
             parentPath,
@@ -190,9 +205,33 @@ describe('guarded automatic file writes', () => {
         }),
     );
 
-    await expect(
-      writeAutoApprovedEditToDisk(filePath, 'before', 'agent content', binding),
-    ).rejects.toThrow('path binding changed');
+    const operation = writeAutoApprovedEditToDisk(
+      filePath,
+      'before',
+      'agent content',
+      binding,
+    );
+    if (process.platform === 'win32') {
+      // Windows denies renaming a parent that contains the target while the
+      // target handle is held open. The denied attacker operation must not
+      // interrupt the authorized write; settlement then restores the exact
+      // baseline and releases the handle so a later rename can succeed.
+      const receipt = await operation;
+      expectWindowsRenameDenied(relocationError);
+      expect(lstatSync(parentPath).isDirectory()).toBe(true);
+      expect(() => lstatSync(movedParentPath)).toThrow();
+      expect(readFileSync(filePath, 'utf8')).toBe('agent content');
+      await expect(receipt.verify()).resolves.toBe(true);
+      await expect(receipt.rollback()).resolves.toBe(true);
+      expect(readFileSync(filePath, 'utf8')).toBe('before');
+      renameSync(parentPath, movedParentPath);
+      expect(readFileSync(path.join(movedParentPath, 'file.txt'), 'utf8')).toBe(
+        'before',
+      );
+      return;
+    }
+
+    await expect(operation).rejects.toThrow('path binding changed');
 
     expect(readFileSync(path.join(movedParentPath, 'file.txt'), 'utf8')).toBe(
       'before',
@@ -215,7 +254,29 @@ describe('guarded automatic file writes', () => {
       binding,
     );
 
-    renameSync(parentPath, movedParentPath);
+    let relocationError: unknown;
+    try {
+      renameSync(parentPath, movedParentPath);
+    } catch (error) {
+      relocationError = error;
+    }
+    if (relocationError !== undefined) {
+      // A Windows open handle pins this parent chain against rename. Verify
+      // that the receipt remains valid and can still restore the exact agent
+      // effect; platforms that permit the relocation continue through the
+      // observable-drift assertions below.
+      expectWindowsRenameDenied(relocationError);
+      expect(lstatSync(parentPath).isDirectory()).toBe(true);
+      expect(() => lstatSync(movedParentPath)).toThrow();
+      await expect(receipt.verify()).resolves.toBe(true);
+      await expect(receipt.rollback()).resolves.toBe(true);
+      expect(readFileSync(filePath, 'utf8')).toBe('before');
+      renameSync(parentPath, movedParentPath);
+      expect(readFileSync(path.join(movedParentPath, 'file.txt'), 'utf8')).toBe(
+        'before',
+      );
+      return;
+    }
     symlinkSync(
       movedParentPath,
       parentPath,

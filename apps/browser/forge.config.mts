@@ -204,7 +204,15 @@ const copyNativeDependencies = (
     const src = path.resolve(__dirname, `../../node_modules/${dependency}`);
     const dest = path.join(buildPath, 'node_modules', dependency);
     if (fs.existsSync(src)) {
-      fs.cpSync(src, dest, { recursive: true });
+      /*
+       * pnpm's hoisted dependency tree contains relative `.bin` symlinks.
+       * `fs.cpSync` resolves their targets against the source tree by default,
+       * which rewrites an otherwise internal link into the absolute workspace
+       * path. Preserve the link text so it still resolves inside the staged
+       * application. ASAR remains responsible for rejecting genuine links
+       * that escape the package.
+       */
+      fs.cpSync(src, dest, { recursive: true, verbatimSymlinks: true });
     } else {
       throw new Error(`Missing native dependency ${dependency}`);
     }
