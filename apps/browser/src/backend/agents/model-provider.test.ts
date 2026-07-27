@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   defaultUserPreferences,
   type ProviderProfile,
+  type UserPreferences,
 } from '@shared/karton-contracts/ui/shared-types';
 import { MODEL_REQUEST_PURPOSE_METADATA_KEY } from '@clodex/agent-core/host';
 import { ModelProviderService } from './model-provider';
+import type { AuthState } from '@/services/auth';
 import {
   reasoningSignatureSourceSchema,
   type ReasoningSignatureSource,
@@ -22,10 +24,12 @@ function createTestModelProviderService({
   customEndpoints = [],
   providerProfiles = [],
   providerModelCatalogs = {},
+  authState,
   authService,
   providerApiKeys = {},
   telemetryService,
   onPreferencesListener,
+  onAuthStateListener,
   onCredentialsListener,
   onAuthCredentialListener,
 }: {
@@ -41,10 +45,21 @@ function createTestModelProviderService({
   customEndpoints?: typeof defaultUserPreferences.customEndpoints;
   providerProfiles?: typeof defaultUserPreferences.providerProfiles;
   providerModelCatalogs?: typeof defaultUserPreferences.providerModelCatalogs;
+  authState?: AuthState;
   authService?: unknown;
   providerApiKeys?: Record<string, string>;
   telemetryService?: unknown;
-  onPreferencesListener?: (listener: () => void) => void;
+  onPreferencesListener?: (
+    listener: (
+      newPreferences: UserPreferences,
+      oldPreferences: UserPreferences,
+    ) => void,
+    preferences: UserPreferences,
+  ) => void;
+  onAuthStateListener?: (
+    listener: (newAuthState: AuthState) => void,
+    authState: AuthState,
+  ) => void;
   onCredentialsListener?: (listener: () => void) => void;
   onAuthCredentialListener?: (listener: () => void) => void;
 } = {}) {
@@ -69,6 +84,13 @@ function createTestModelProviderService({
     ].connectedCodingPlanId = connectedCodingPlanId as any;
   }
 
+  const defaultAuthState =
+    authState ??
+    ({
+      status: 'authenticated',
+      models: [],
+    } as AuthState);
+
   return new ModelProviderService(
     (telemetryService ?? {
       withTracing: vi.fn((model) => model),
@@ -79,7 +101,12 @@ function createTestModelProviderService({
       accessToken: 'clodex-token',
       modelAccessToken: 'ide-model-token',
       ensureModelAccessToken: vi.fn().mockResolvedValue('ide-model-token'),
-      authState: { models: [] },
+      authState: defaultAuthState,
+      registerAuthStateChangeCallback: vi.fn(
+        (listener: (newAuthState: AuthState) => void) => {
+          onAuthStateListener?.(listener, defaultAuthState);
+        },
+      ),
       registerCredentialEpochChangeCallback: vi.fn((listener: () => void) => {
         onAuthCredentialListener?.(listener);
       }),
@@ -88,9 +115,16 @@ function createTestModelProviderService({
       get: vi.fn(() => preferences),
       decryptProviderApiKey: vi.fn(() => 'provider-api-key'),
       cacheProviderProfileModels: vi.fn(),
-      addListener: vi.fn((listener: () => void) => {
-        onPreferencesListener?.(listener);
-      }),
+      addListener: vi.fn(
+        (
+          listener: (
+            newPreferences: UserPreferences,
+            oldPreferences: UserPreferences,
+          ) => void,
+        ) => {
+          onPreferencesListener?.(listener, preferences);
+        },
+      ),
     } as any,
     {
       getProviderApiKey: vi.fn(
@@ -109,7 +143,13 @@ const agentStepMetadata = {
 
 describe('model route leases', () => {
   it('forks the admitted route onto a fresh internal-review trace and revokes both together', async () => {
-    let invalidatePreferencesRoute: (() => void) | undefined;
+    let invalidatePreferencesRoute:
+      | ((
+          newPreferences: UserPreferences,
+          oldPreferences: UserPreferences,
+        ) => void)
+      | undefined;
+    let routePreferences: UserPreferences | undefined;
     let originatingTraceConfig: Record<string, any> | undefined;
     let admittedRouteModel: unknown;
     const withTracing = vi.fn((model: unknown, config: Record<string, any>) => {
@@ -144,8 +184,9 @@ describe('model route leases', () => {
         ensureModelAccessTokenForRoute,
         authState: { models: [] },
       },
-      onPreferencesListener: (listener) => {
+      onPreferencesListener: (listener, preferences) => {
         invalidatePreferencesRoute = listener;
+        routePreferences = preferences;
       },
     });
 
@@ -197,7 +238,9 @@ describe('model route leases', () => {
     });
     expect(forked?.providerOptions).toBe(originating.providerOptions);
 
-    invalidatePreferencesRoute?.();
+    const changedPreferences = structuredClone(routePreferences!);
+    changedPreferences.providerConfigs.openai.mode = 'official';
+    invalidatePreferencesRoute?.(changedPreferences, routePreferences!);
     expect(originating.routeLease?.isValid()).toBe(false);
     expect(forked?.routeLease?.isValid()).toBe(false);
     expect(() =>
@@ -214,6 +257,188 @@ describe('model route leases', () => {
     await expect(
       Promise.resolve().then(() => forked?.model.doGenerate({} as never)),
     ).rejects.toThrow('revoked before request dispatch');
+  });
+
+  it('keeps admitted routes valid across UI, thinking, and catalog preferences but revokes provider changes', async () => {
+    let notifyPreferences:
+      | ((
+          newPreferences: UserPreferences,
+          oldPreferences: UserPreferences,
+        ) => void)
+      | undefined;
+    let routePreferences: UserPreferences | undefined;
+    const service = createTestModelProviderService({
+      onPreferencesListener: (listener, preferences) => {
+        notifyPreferences = listener;
+        routePreferences = preferences;
+      },
+    });
+    const route = await service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'preference-authority-route',
+      agentStepMetadata,
+    );
+
+    const unrelatedPreferences = structuredClone(routePreferences!);
+    unrelatedPreferences.general.uiZoomPercentage += 10;
+    unrelatedPreferences.agent.modelThinkingOverrides['gpt-5.5'] = {
+      value: 'ultra',
+    };
+    unrelatedPreferences.providerModelCatalogs['openai-main'] = [
+      {
+        id: 'gpt-5.6-sol',
+        displayName: 'GPT-5.6 Sol',
+        providerId: 'openai-main',
+        capabilities: {
+          text: true,
+          images: true,
+          streaming: true,
+          functionTools: true,
+          customTools: false,
+          reasoning: true,
+          contextWindow: 1_000_000,
+        },
+      },
+    ];
+    notifyPreferences?.(unrelatedPreferences, routePreferences!);
+    expect(route.routeLease?.isValid()).toBe(true);
+
+    const providerChangedPreferences = structuredClone(unrelatedPreferences);
+    providerChangedPreferences.providerConfigs.openai.mode = 'official';
+    notifyPreferences?.(providerChangedPreferences, unrelatedPreferences);
+    expect(route.routeLease?.isValid()).toBe(false);
+  });
+
+  it('keeps admitted routes valid across public auth and same-key cosmetic refreshes', async () => {
+    let notifyAuthState: ((newAuthState: AuthState) => void) | undefined;
+    let admittedAuthState: AuthState | undefined;
+    const initialAuthState = {
+      status: 'authenticated',
+      models: [],
+      keys: [
+        {
+          id: 'gpt-key',
+          name: 'GPT',
+          group: 'GPT',
+          status: 'active',
+          expiresAt: '2099-01-01T00:00:00.000Z',
+        },
+      ],
+      activeKeyId: 'gpt-key',
+      ideToken: {
+        keyId: 'gpt-key',
+        keyName: 'GPT',
+        group: 'GPT',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      },
+    } as AuthState;
+    const service = createTestModelProviderService({
+      authState: initialAuthState,
+      onAuthStateListener: (listener, authState) => {
+        notifyAuthState = listener;
+        admittedAuthState = authState;
+      },
+    });
+    const route = await service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'balance-refresh-route',
+      agentStepMetadata,
+    );
+
+    const refreshedAuthState = structuredClone(admittedAuthState!);
+    refreshedAuthState.status = 'server_unreachable';
+    refreshedAuthState.user = {
+      id: 'user-1',
+      email: 'tester@example.com',
+      displayName: 'Updated display name',
+    };
+    refreshedAuthState.balance = {
+      amount: 41.5,
+      currency: 'USD',
+      display: '$41.50',
+      updatedAt: '2026-07-27T12:00:00.000Z',
+    };
+    refreshedAuthState.isSwitchingKey = true;
+    refreshedAuthState.keys![0]!.name = 'Renamed GPT key';
+    refreshedAuthState.keys![0]!.expiresAt = '2099-02-01T00:00:00.000Z';
+    refreshedAuthState.ideToken!.keyName = 'Renamed GPT key';
+    refreshedAuthState.ideToken!.expiresAt = '2099-02-01T00:00:00.000Z';
+    notifyAuthState?.(refreshedAuthState);
+
+    expect(route.routeLease?.isValid()).toBe(true);
+  });
+
+  it('revokes admitted routes when account model, key, or IDE key identity changes', async () => {
+    const mutations: Array<{
+      name: string;
+      apply(state: AuthState): void;
+    }> = [
+      {
+        name: 'model catalog',
+        apply(state) {
+          state.models = [
+            {
+              id: 'gpt-5.6-sol',
+              name: 'GPT-5.6 Sol',
+              provider: 'openai',
+              enabled: true,
+            },
+          ];
+        },
+      },
+      {
+        name: 'key catalog',
+        apply(state) {
+          state.keys = [
+            {
+              id: 'all-key',
+              name: 'ALL',
+              group: 'ALL',
+              isDefault: true,
+            },
+          ];
+        },
+      },
+      {
+        name: 'active key',
+        apply(state) {
+          state.activeKeyId = 'gpt-key';
+        },
+      },
+      {
+        name: 'IDE key identity',
+        apply(state) {
+          state.ideToken = {
+            keyId: 'gpt-key',
+            keyName: 'GPT',
+            group: 'GPT',
+            expiresAt: '2026-07-27T13:00:00.000Z',
+          };
+        },
+      },
+    ];
+
+    for (const mutation of mutations) {
+      let notifyAuthState: ((newAuthState: AuthState) => void) | undefined;
+      let admittedAuthState: AuthState | undefined;
+      const service = createTestModelProviderService({
+        onAuthStateListener: (listener, authState) => {
+          notifyAuthState = listener;
+          admittedAuthState = authState;
+        },
+      });
+      const route = await service.getModelWithOptionsAsync(
+        'gpt-5.5',
+        `auth-authority-${mutation.name}`,
+        agentStepMetadata,
+      );
+
+      const changedAuthState = structuredClone(admittedAuthState!);
+      mutation.apply(changedAuthState);
+      notifyAuthState?.(changedAuthState);
+
+      expect(route.routeLease?.isValid(), mutation.name).toBe(false);
+    }
   });
 
   it('revokes admitted routes when provider credentials change', async () => {

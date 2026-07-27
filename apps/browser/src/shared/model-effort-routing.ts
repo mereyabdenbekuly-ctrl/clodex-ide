@@ -11,6 +11,11 @@ export type SubmitSwarmRoute = {
   automaticUltra: boolean;
 };
 
+export type AutomaticUltraDowngrade = {
+  storageKey: string;
+  override: ModelThinkingOverride;
+};
+
 export function getThinkingOverrideModelId(
   activeModelId: string | null | undefined,
 ): string | null {
@@ -38,6 +43,41 @@ export function getThinkingOverrideStorageKey(
   activeModelId: string | null | undefined,
 ): string | null {
   return activeModelId ?? null;
+}
+
+/**
+ * Builds the persistent route-specific override used when the user clicks an
+ * automatically active Ultra/Swarm control. Ultra is an IDE orchestration
+ * preset layered on top of Max, so downgrading to Max preserves the strongest
+ * provider reasoning effort while disabling automatic Swarm on later turns.
+ */
+export function getAutomaticUltraDowngrade({
+  activeModelId,
+  override,
+  providerMode,
+}: {
+  activeModelId: string | null | undefined;
+  override: ModelThinkingOverride | undefined;
+  providerMode: ProviderEndpointMode | undefined;
+}): AutomaticUltraDowngrade | null {
+  const storageKey = getThinkingOverrideStorageKey(activeModelId);
+  const modelId = getThinkingOverrideModelId(activeModelId);
+  if (
+    !storageKey ||
+    !isGpt56UltraThinkingSelected({ modelId, override, providerMode })
+  ) {
+    return null;
+  }
+
+  return {
+    storageKey,
+    override: {
+      ...(override ?? {}),
+      enabled: true,
+      provider: providerMode === 'official' ? 'openai' : 'clodex',
+      value: 'max',
+    },
+  };
 }
 
 export function getActiveGptThinkingProviderMode(

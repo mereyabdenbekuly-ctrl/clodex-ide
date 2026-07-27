@@ -6,6 +6,7 @@ import type {
   CustomModel,
   CustomEndpoint,
   ModelThinkingOverride,
+  UserPreferences,
 } from '@shared/karton-contracts/ui/shared-types';
 import type { ReasoningSignatureSource } from '@shared/karton-contracts/ui/agent/metadata';
 import {
@@ -238,6 +239,41 @@ function guardRevocableModelRoute(
   });
 }
 
+function getPreferencesRouteAuthorityFingerprint(
+  preferences: UserPreferences,
+): string {
+  return JSON.stringify({
+    providerConfigs: preferences.providerConfigs,
+    providerProfiles: preferences.providerProfiles,
+    defaultProviderProfileId: preferences.defaultProviderProfileId,
+    customEndpoints: preferences.customEndpoints,
+    customModels: preferences.customModels,
+  });
+}
+
+function getAuthRouteAuthorityFingerprint(authState: AuthState): string {
+  return JSON.stringify({
+    models: authState.models ?? [],
+    keys: (authState.keys ?? []).map((key) => ({
+      id: key.id,
+      group: key.group,
+      status: key.status,
+      isDefault: key.isDefault,
+      modelLimitsEnabled: key.modelLimitsEnabled,
+      modelLimits: key.modelLimits,
+      protocols: key.protocols,
+      baseUrls: key.baseUrls,
+    })),
+    activeKeyId: authState.activeKeyId,
+    ideTokenKeyIdentity: authState.ideToken
+      ? {
+          keyId: authState.ideToken.keyId,
+          group: authState.ideToken.group,
+        }
+      : undefined,
+  });
+}
+
 /**
  * Middleware that tells the SDK all HTTP(S) URLs are natively supported by the
  * clodex gateway. Without this the SDK downloads every image/file URL and
@@ -310,10 +346,24 @@ export class ModelProviderService {
     this.authService = authService;
     this.preferencesService = preferencesService;
     this.credentialsService = credentialsService;
-    preferencesService.addListener?.(() => {
+    let preferencesRouteAuthority = getPreferencesRouteAuthorityFingerprint(
+      preferencesService.get(),
+    );
+    preferencesService.addListener?.((nextPreferences) => {
+      const nextRouteAuthority =
+        getPreferencesRouteAuthorityFingerprint(nextPreferences);
+      if (nextRouteAuthority === preferencesRouteAuthority) return;
+      preferencesRouteAuthority = nextRouteAuthority;
       this.routeRevision += 1;
     });
-    authService.registerAuthStateChangeCallback?.(() => {
+    let authRouteAuthority = getAuthRouteAuthorityFingerprint(
+      authService.authState,
+    );
+    authService.registerAuthStateChangeCallback?.((nextAuthState) => {
+      const nextRouteAuthority =
+        getAuthRouteAuthorityFingerprint(nextAuthState);
+      if (nextRouteAuthority === authRouteAuthority) return;
+      authRouteAuthority = nextRouteAuthority;
       this.routeRevision += 1;
     });
     authService.registerCredentialEpochChangeCallback?.(() => {

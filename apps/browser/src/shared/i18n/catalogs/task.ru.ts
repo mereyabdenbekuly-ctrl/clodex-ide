@@ -39,14 +39,15 @@ export const taskRu = {
         'Battle Agent имеет приоритет над режимом Ultra',
       clearManualLabel:
         'Отключить ручной Deep Think; режим Ultra останется активным',
-      ultraAutomaticLabel: 'Ultra автоматически включает Deep Think',
+      ultraAutomaticLabel:
+        'Переключить Ultra на Max и отключить автоматический Swarm',
       toggleLabel: 'Переключить Deep Think',
       battleOverridesUltraDescription:
         'Battle Agent имеет приоритет: для этого сообщения будет использован Battle вместо автоматического стандартного Swarm.',
       clearManualDescription:
         'Ручной Deep Think также включён. Нажмите, чтобы отключить ручной режим; Ultra останется активным.',
       ultraAutomaticDescription:
-        'Ultra активен: максимальная глубина рассуждений и автоматический стандартный Swarm. Чтобы отключить, измените режим рассуждений модели.',
+        'Включён Ultra: Max-рассуждение с автоматическим стандартным Swarm. Нажмите, чтобы перейти на Max и отключить автоматический Swarm для следующих или поставленных в очередь сообщений. Уже запущенная задача продолжится, пока вы её не остановите.',
       enabledDescription:
         'Deep Think включён: следующее сообщение будет обработано через Swarm',
       enableDescription: 'Включить Deep Think / Swarm',
@@ -57,7 +58,7 @@ export const taskRu = {
         'Для следующего сообщения Battle Agent имеет приоритет над автоматическим стандартным Swarm режима Ultra.',
       enabledDescription:
         'Battle Agent включён: модели обсудят решение перед написанием кода',
-      enableDescription: 'Включить Battle Agent',
+      enableDescription: 'Включить Battle Agent для следующего сообщения',
     },
   },
   approval: {

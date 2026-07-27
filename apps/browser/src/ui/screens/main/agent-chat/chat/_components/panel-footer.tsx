@@ -72,6 +72,7 @@ import { useGlobalDictation } from '@ui/hooks/use-global-dictation';
 import { useSwarmMode } from '@ui/hooks/use-swarm-mode';
 import {
   getActiveGptThinkingProviderMode,
+  getAutomaticUltraDowngrade,
   getModelThinkingOverride,
   getThinkingOverrideModelId,
   resolveSubmitSwarmRoute,
@@ -97,6 +98,7 @@ import {
 } from '../_lib/chat-input-events';
 import { resolveFeatureGate } from '@shared/feature-gates';
 import { useTranslation } from 'react-i18next';
+import { shouldDisableSwarmControls } from './swarm-control-state';
 
 // Stable empty arrays to avoid new-reference re-renders
 const EMPTY_HISTORY: AgentMessage[] = [];
@@ -438,6 +440,7 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
   const searchMentionFiles = useKartonProcedure(
     (p) => p.toolbox.searchMentionFiles,
   );
+  const updatePreferences = useKartonProcedure((p) => p.preferences.update);
   const mentionTabs = useKartonState((s) => s.contentTabs.tabs);
   const mentionActiveTabId = useKartonState((s) => s.contentTabs.activeTabId);
   const mentionMounts = useKartonState((s) =>
@@ -483,6 +486,40 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
       thinkingOverrideModelId,
     ],
   );
+  const handleToggleSwarmMode = useCallback(() => {
+    if (!swarmModeActive) {
+      const downgrade = getAutomaticUltraDowngrade({
+        activeModelId,
+        override: activeModelThinkingOverride,
+        providerMode: activeModelProviderMode,
+      });
+      if (downgrade) {
+        void updatePreferences([
+          {
+            op: 'add',
+            path: ['agent', 'modelThinkingOverrides', downgrade.storageKey],
+            value: downgrade.override,
+          },
+        ]).catch((error) => {
+          console.error('Failed to disable automatic Ultra Swarm:', error);
+          posthog.captureException(
+            error instanceof Error ? error : new Error(String(error)),
+            { source: 'renderer', operation: 'disableAutomaticUltraSwarm' },
+          );
+        });
+        return;
+      }
+    }
+
+    toggleSwarmMode();
+  }, [
+    activeModelId,
+    activeModelProviderMode,
+    activeModelThinkingOverride,
+    swarmModeActive,
+    toggleSwarmMode,
+    updatePreferences,
+  ]);
   // Stable ref so the mention command handler (configured once by TipTap)
   // always sees the latest setFileAttachments without re-creating the context.
   const setFileAttachmentsRef = useRef(setFileAttachments);
@@ -842,6 +879,10 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
     openAgent ? (s.toolbox[openAgent]?.pendingUserQuestion?.id ?? null) : null,
   );
   const hasPendingQuestion = pendingQuestionId !== null;
+  const swarmControlsDisabled = shouldDisableSwarmControls({
+    isAgentWorking: isWorking,
+    hasPendingQuestion,
+  });
   const pendingQuestionIdRef = useRef(pendingQuestionId);
   pendingQuestionIdRef.current = pendingQuestionId;
   const interruptQuestionWithMessage = useKartonProcedure(
@@ -1920,9 +1961,9 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
             swarmModeActive={swarmModeActive}
             automaticSwarmModeActive={submitSwarmRoute.automaticUltra}
             battleModeActive={swarmModeVariant === 'battle'}
-            onToggleSwarmMode={toggleSwarmMode}
+            onToggleSwarmMode={handleToggleSwarmMode}
             onToggleBattleMode={toggleBattleMode}
-            swarmModeDisabled={isWorking || hasPendingQuestion}
+            swarmModeDisabled={swarmControlsDisabled}
             dictationState={dictation.visible ? dictation.state : undefined}
             dictationDisabled={!dictation.available}
             onToggleDictation={dictation.visible ? dictation.toggle : undefined}

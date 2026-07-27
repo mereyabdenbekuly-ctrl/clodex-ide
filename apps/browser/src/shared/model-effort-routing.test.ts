@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getActiveGptThinkingProviderMode,
+  getAutomaticUltraDowngrade,
   getModelThinkingOverride,
   getThinkingOverrideModelId,
   getThinkingOverrideStorageKey,
@@ -42,6 +43,48 @@ describe('model effort submit routing', () => {
       variant: 'standard',
       automaticUltra: true,
     });
+  });
+
+  it('downgrades an automatic qualified Sol Ultra route to provider Max', () => {
+    const downgrade = getAutomaticUltraDowngrade({
+      activeModelId: 'clodex-main:gpt-5.6-sol',
+      override: { enabled: true, provider: 'clodex', value: 'ultra' },
+      providerMode: 'clodex',
+    });
+
+    expect(downgrade).toEqual({
+      storageKey: 'clodex-main:gpt-5.6-sol',
+      override: { enabled: true, provider: 'clodex', value: 'max' },
+    });
+    expect(
+      resolveSubmitSwarmRoute({
+        modelId: 'gpt-5.6-sol',
+        override: downgrade?.override,
+        providerMode: 'clodex',
+        manualModeActive: false,
+        manualModeVariant: null,
+      }),
+    ).toMatchObject({ enabled: false, automaticUltra: false });
+  });
+
+  it('uses the active OpenAI provider and ignores non-Ultra routes', () => {
+    expect(
+      getAutomaticUltraDowngrade({
+        activeModelId: 'openai-main:gpt-5.6-terra',
+        override: { enabled: true, value: 'ultra' },
+        providerMode: 'official',
+      }),
+    ).toEqual({
+      storageKey: 'openai-main:gpt-5.6-terra',
+      override: { enabled: true, provider: 'openai', value: 'max' },
+    });
+    expect(
+      getAutomaticUltraDowngrade({
+        activeModelId: 'clodex-main:gpt-5.6-sol',
+        override: { enabled: true, provider: 'clodex', value: 'max' },
+        providerMode: 'clodex',
+      }),
+    ).toBeNull();
   });
 
   it('preserves an explicit battle route over automatic Ultra', () => {
