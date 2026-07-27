@@ -229,13 +229,18 @@ function hasPermission(
 function assertInsideMount(absolutePath: string, mountRoot: string): void {
   const resolved = path.resolve(absolutePath);
   const root = path.resolve(mountRoot);
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+  const relativePath = path.relative(root, resolved);
+  if (
+    relativePath === '..' ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
     throw new Error('Path traversal not allowed');
   }
 }
 
 const WINDOWS_RESERVED_DEVICE_BASENAME =
-  /^(?:CON|PRN|AUX|NUL|CLOCK\$|CONIN\$|CONOUT\$|COM[1-9]|LPT[1-9])$/iu;
+  /^(?:CON|PRN|AUX|NUL|CLOCK\$|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])$/iu;
 
 function usesWindowsPathSemantics(mountRoot: string): boolean {
   return (
@@ -263,6 +268,11 @@ function assertSafeWindowsRelativePath(relativePath: string): void {
     if (WINDOWS_RESERVED_DEVICE_BASENAME.test(basename)) {
       throw new Error(
         `Windows reserved device name "${segment}" is not allowed in mount-relative paths`,
+      );
+    }
+    if (segment !== '.' && segment !== '..' && /[. ]$/u.test(segment)) {
+      throw new Error(
+        `Windows path segment "${segment}" ends in a dot or space and is not allowed because it can alias a different filesystem object`,
       );
     }
   }

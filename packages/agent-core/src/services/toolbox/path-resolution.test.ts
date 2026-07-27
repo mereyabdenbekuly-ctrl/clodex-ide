@@ -50,6 +50,23 @@ function makeDeps(
   };
 }
 
+function makeStaticMountDeps(
+  prefix: string,
+  root: string,
+): UniversalToolboxDeps {
+  const deps = makeDeps();
+  return {
+    ...deps,
+    staticMounts: [
+      {
+        prefix,
+        absolutePath: root,
+        permissions: ['read', 'write', 'create', 'delete'],
+      },
+    ],
+  };
+}
+
 function captureError(run: () => unknown): string {
   try {
     run();
@@ -201,8 +218,14 @@ describe('resolveToolPath Windows guidance', () => {
     'CONOUT$.txt',
     'COM1',
     'com9.log',
+    'COM¹',
+    'com².log',
+    'COM³...',
     'LPT1',
     'lpt9...',
+    'LPT¹',
+    'lpt².log',
+    'LPT³...',
     'src/PRN.json',
   ])('rejects Windows reserved device segment %s', (relativePath) => {
     const deps = makeDeps([
@@ -229,10 +252,30 @@ describe('resolveToolPath Windows guidance', () => {
   });
 
   it.each([
+    'file.txt.',
+    'file.txt ',
+    'src./file.ts',
+    'src /file.ts',
+    'nested/file...   ',
+  ])('rejects Windows trailing-dot/space alias segment in %s', (relativePath) => {
+    const deps = makeDeps([
+      { prefix: WORKSPACE_PREFIX, root: 'C:\\Users\\Alice\\Repo' },
+    ]);
+
+    expect(() =>
+      resolveToolPath(deps, `${WORKSPACE_PREFIX}/${relativePath}`),
+    ).toThrow('ends in a dot or space');
+  });
+
+  it.each([
     'console.ts',
     'com10.txt',
     'lpt0.log',
     'auxiliary.md',
+    'my file.txt',
+    'dir.with.dot/file name.ts',
+    '.env',
+    'archive.tar.gz',
   ])('does not overmatch ordinary Windows filename %s', (relativePath) => {
     const deps = makeDeps([
       { prefix: WORKSPACE_PREFIX, root: 'C:\\Users\\Alice\\Repo' },
@@ -273,4 +316,64 @@ describe('resolveToolPath Windows guidance', () => {
       'mount_prefix must be one exact registered prefix',
     );
   });
+});
+
+describe('resolveToolPath containment', () => {
+  it('resolves descendants of a POSIX filesystem-root mount', () => {
+    const deps = makeStaticMountDeps('wroot', '/');
+
+    expect(resolveToolPath(deps, 'wroot/tmp/example.txt')).toMatchObject({
+      mountPrefix: 'wroot',
+      mountRoot: path.resolve('/'),
+      absolutePath: path.resolve('/', 'tmp/example.txt'),
+    });
+  });
+
+  it('rejects traversal outside a non-root POSIX mount', () => {
+    const deps = makeStaticMountDeps('wproject', '/workspace/project');
+
+    expect(() => resolveToolPath(deps, 'wproject/../../outside.txt')).toThrow(
+      'Path traversal not allowed',
+    );
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'resolves descendants of a Windows drive-root mount',
+    () => {
+      const deps = makeStaticMountDeps('wdrive', 'C:\\');
+
+      expect(
+        resolveToolPath(deps, 'wdrive/Users/Alice/file.txt'),
+      ).toMatchObject({
+        mountPrefix: 'wdrive',
+        mountRoot: path.resolve('C:\\'),
+        absolutePath: path.resolve('C:\\', 'Users/Alice/file.txt'),
+      });
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'resolves descendants of a Windows UNC-share-root mount',
+    () => {
+      const uncRoot = '\\\\server\\share\\';
+      const deps = makeStaticMountDeps('wunc', uncRoot);
+
+      expect(resolveToolPath(deps, 'wunc/src/file.ts')).toMatchObject({
+        mountPrefix: 'wunc',
+        mountRoot: path.resolve(uncRoot),
+        absolutePath: path.resolve(uncRoot, 'src/file.ts'),
+      });
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'rejects traversal outside a nested Windows drive mount',
+    () => {
+      const deps = makeStaticMountDeps('wdrive', 'C:\\workspace\\project');
+
+      expect(() => resolveToolPath(deps, 'wdrive/../../outside.txt')).toThrow(
+        'Path traversal not allowed',
+      );
+    },
+  );
 });
