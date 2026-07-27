@@ -1124,11 +1124,18 @@ export class ModelProviderService {
     options: ModelWithOptions,
     admittedRevision = this.routeRevision,
     managedCredentialToken?: string,
+    managedCredentialState?: { rejected: boolean },
   ): ModelWithOptions {
-    const isValid = () => this.routeRevision === admittedRevision;
+    const exactManagedCredentialState = managedCredentialToken
+      ? (managedCredentialState ?? { rejected: false })
+      : undefined;
+    const isValid = () =>
+      this.routeRevision === admittedRevision &&
+      exactManagedCredentialState?.rejected !== true;
     const { routeLease: _previousLease, ...exactRoute } = options;
     const guardedCredentialModel = managedCredentialToken
       ? guardManagedModelCredential(exactRoute.model, () => {
+          exactManagedCredentialState!.rejected = true;
           this.authService.invalidateRejectedModelAccessToken(
             managedCredentialToken,
           );
@@ -1162,6 +1169,7 @@ export class ModelProviderService {
             },
             admittedRevision,
             managedCredentialToken,
+            exactManagedCredentialState,
           );
         },
       },

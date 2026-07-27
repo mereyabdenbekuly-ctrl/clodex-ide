@@ -1,4 +1,5 @@
 import type { KartonContract } from '@shared/karton-contracts/ui';
+import { createHash } from 'node:crypto';
 import type { KartonService } from '../karton';
 import type { Logger } from '../logger';
 import {
@@ -151,6 +152,10 @@ type ModelAccessRoute = {
   provider?: ModelProvider | string;
   modelId?: string;
 };
+
+function fingerprintModelAccessToken(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex');
+}
 
 type PendingHandoffAuth = {
   abortController: AbortController;
@@ -389,6 +394,7 @@ export class AuthService extends DisposableService {
     Promise<string | undefined>
   >();
   private modelAccessTokenCacheEpoch = 0;
+  private rejectedModelAccessTokenFingerprints = new Set<string>();
   private clodexUserModels: ClodexUserModel[] = [];
   private clodexIdeKeys: ClodexIdeKey[] = [];
 
@@ -481,11 +487,20 @@ export class AuthService extends DisposableService {
   private async persistCredentials(
     credentials: StoredCredentials,
   ): Promise<boolean> {
+    const previousDurableCredentials = this.durableCredentials;
     const intentVersion = ++this.credentialsIntentVersion;
     this.replaceLiveCredentials(credentials);
     const persisted = await this.writeCredentials(credentials);
     if (persisted) {
       this.durableCredentials = credentials;
+      if (
+        !credentialSessionAuthorityMatches(
+          previousDurableCredentials,
+          credentials,
+        )
+      ) {
+        this.rejectedModelAccessTokenFingerprints.clear();
+      }
     } else if (intentVersion === this.credentialsIntentVersion) {
       this.replaceLiveCredentials(this.durableCredentials);
     }
@@ -914,6 +929,9 @@ export class AuthService extends DisposableService {
     }
     this.durableCredentials = credentials;
     this.replaceLiveCredentials(credentials);
+    // A completed sign-in is a newly proven trusted authority even if the
+    // server happens to reuse the same session token value.
+    this.rejectedModelAccessTokenFingerprints.clear();
     this.authLifecycleEpoch += 1;
 
     this.updateAuthState((draft) => {
@@ -1104,10 +1122,23 @@ export class AuthService extends DisposableService {
     return trackedRefresh;
   }
 
+  private recordRejectedModelAccessToken(token: string): void {
+    this.rejectedModelAccessTokenFingerprints.add(
+      fingerprintModelAccessToken(token),
+    );
+  }
+
+  private wasModelAccessTokenRejected(token: string): boolean {
+    return this.rejectedModelAccessTokenFingerprints.has(
+      fingerprintModelAccessToken(token),
+    );
+  }
+
   public invalidateRejectedModelAccessToken(rejectedToken: string): boolean {
     this.assertNotDisposed();
     if (!rejectedToken) return false;
 
+    this.recordRejectedModelAccessToken(rejectedToken);
     let invalidated = false;
     if (this.ideModelToken?.token === rejectedToken) {
       this.ideModelToken = null;
@@ -1274,6 +1305,12 @@ export class AuthService extends DisposableService {
       ) {
         return undefined;
       }
+      if (this.wasModelAccessTokenRejected(issuedToken.token)) {
+        this.logger.warn(
+          '[AuthService] Discarded a managed IDE model token previously rejected for the current trusted session',
+        );
+        return undefined;
+      }
       const issuedGroup = issuedToken.group ?? selectedKey.group;
       if (
         clodexKeyIsUniversalAll(selectedKey) &&
@@ -1367,6 +1404,12 @@ export class AuthService extends DisposableService {
         cacheEpoch !== this.modelAccessTokenCacheEpoch ||
         this.getTrustedCredentials()?.token !== accessToken
       ) {
+        return undefined;
+      }
+      if (this.wasModelAccessTokenRejected(issuedToken.token)) {
+        this.logger.warn(
+          '[AuthService] Discarded a managed IDE model token previously rejected for the current trusted session',
+        );
         return undefined;
       }
       const activeKeyId = this.resolveIssuedIdeTokenSourceKeyId(

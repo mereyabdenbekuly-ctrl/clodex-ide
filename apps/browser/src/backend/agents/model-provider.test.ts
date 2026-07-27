@@ -1105,6 +1105,13 @@ describe('Clodex IDE model token refresh', () => {
       'managed-rejection',
       agentStepMetadata,
     );
+    const forkTrace = route.routeLease?.forkTrace;
+    const forked = forkTrace?.('managed-rejection-review', {
+      [MODEL_REQUEST_PURPOSE_METADATA_KEY]: 'internal',
+    });
+
+    expect(route.routeLease?.isValid()).toBe(true);
+    expect(forked?.routeLease?.isValid()).toBe(true);
 
     await expect(route.model.doStream({} as never)).rejects.toBe(
       invalidKeyError,
@@ -1113,6 +1120,17 @@ describe('Clodex IDE model token refresh', () => {
     expect(invalidateRejectedModelAccessToken).toHaveBeenCalledWith(
       rejectedToken,
     );
+    expect(route.routeLease?.isValid()).toBe(false);
+    expect(forked?.routeLease?.isValid()).toBe(false);
+    expect(() =>
+      forkTrace?.('managed-rejection-late-review', {
+        [MODEL_REQUEST_PURPOSE_METADATA_KEY]: 'internal',
+      }),
+    ).toThrow('Cannot fork a revoked model route');
+    await expect(
+      Promise.resolve().then(() => forked?.model.doGenerate({} as never)),
+    ).rejects.toThrow('revoked before request dispatch');
+    expect(rejectingModel.doGenerate).not.toHaveBeenCalled();
   });
 
   it('does not apply managed-token eviction to official BYOK routes', async () => {

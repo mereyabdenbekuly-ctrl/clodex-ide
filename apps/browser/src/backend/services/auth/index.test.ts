@@ -322,6 +322,258 @@ describe('AuthService route-specific Clodex model tokens', () => {
     expect(createIdeToken).toHaveBeenCalledTimes(3);
   });
 
+  it('does not cache a token rejected while its issuance is still in flight', async () => {
+    const { authService } = await createTestAuthService();
+    const createIdeToken = (
+      authService as unknown as {
+        clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+      }
+    ).clodexInterop.createIdeToken;
+    type IssuedToken = {
+      token: string;
+      keyId: string;
+      group: string;
+      expiresAt: string;
+    };
+    let resolvePendingToken!: (value: IssuedToken) => void;
+    createIdeToken
+      .mockImplementationOnce(
+        () =>
+          new Promise<IssuedToken>((resolve) => {
+            resolvePendingToken = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        token: 'fresh-route-token-b',
+        keyId: 'all-key',
+        group: 'CLAUDE',
+        expiresAt: '3600',
+      });
+    const route = {
+      provider: 'anthropic' as const,
+      modelId: 'claude-opus-5',
+    };
+
+    const pendingIssuance = authService.ensureModelAccessTokenForRoute(route);
+    expect(createIdeToken).toHaveBeenCalledTimes(1);
+    expect(
+      authService.invalidateRejectedModelAccessToken('rejected-route-token-a'),
+    ).toBe(false);
+    resolvePendingToken({
+      token: 'rejected-route-token-a',
+      keyId: 'all-key',
+      group: 'CLAUDE',
+      expiresAt: '3600',
+    });
+
+    await expect(pendingIssuance).resolves.toBeUndefined();
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBe('fresh-route-token-b');
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBe('fresh-route-token-b');
+    expect(createIdeToken).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let a late rejection of token A evict fresh token B', async () => {
+    const { authService } = await createTestAuthService();
+    const createIdeToken = (
+      authService as unknown as {
+        clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+      }
+    ).clodexInterop.createIdeToken;
+    createIdeToken
+      .mockResolvedValueOnce({
+        token: 'route-token-a',
+        keyId: 'all-key',
+        group: 'CLAUDE',
+        expiresAt: '3600',
+      })
+      .mockResolvedValueOnce({
+        token: 'route-token-b',
+        keyId: 'all-key',
+        group: 'CLAUDE',
+        expiresAt: '3600',
+      });
+    const route = {
+      provider: 'anthropic' as const,
+      modelId: 'claude-opus-5',
+    };
+
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBe('route-token-a');
+    expect(
+      authService.invalidateRejectedModelAccessToken('route-token-a'),
+    ).toBe(true);
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBe('route-token-b');
+
+    expect(
+      authService.invalidateRejectedModelAccessToken('route-token-a'),
+    ).toBe(false);
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBe('route-token-b');
+    expect(createIdeToken).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves rejected-token tombstones across a cache-only clear', async () => {
+    const { authService } = await createTestAuthService();
+    const createIdeToken = (
+      authService as unknown as {
+        clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+      }
+    ).clodexInterop.createIdeToken;
+    createIdeToken
+      .mockResolvedValueOnce({
+        token: 'rejected-route-token-a',
+        keyId: 'all-key',
+        group: 'CLAUDE',
+        expiresAt: '3600',
+      })
+      .mockResolvedValueOnce({
+        token: 'fresh-route-token-b',
+        keyId: 'all-key',
+        group: 'CLAUDE',
+        expiresAt: '3600',
+      });
+    const route = {
+      provider: 'anthropic' as const,
+      modelId: 'claude-opus-5',
+    };
+
+    authService.invalidateRejectedModelAccessToken('rejected-route-token-a');
+    (
+      authService as unknown as {
+        clearModelAccessTokenCache: () => void;
+      }
+    ).clearModelAccessTokenCache();
+
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBeUndefined();
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBe('fresh-route-token-b');
+    expect(createIdeToken).toHaveBeenCalledTimes(2);
+  });
+
+  it('releases rejected-token tombstones after trusted session authority changes', async () => {
+    const { authService } = await createTestAuthService();
+    const createIdeToken = (
+      authService as unknown as {
+        clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+      }
+    ).clodexInterop.createIdeToken;
+    createIdeToken.mockResolvedValueOnce({
+      token: 'route-token-reissued-for-new-session',
+      keyId: 'all-key',
+      group: 'CLAUDE',
+      expiresAt: '3600',
+    });
+    const route = {
+      provider: 'anthropic' as const,
+      modelId: 'claude-opus-5',
+    };
+
+    authService.invalidateRejectedModelAccessToken(
+      'route-token-reissued-for-new-session',
+    );
+    const current = (
+      authService as unknown as {
+        durableCredentials: Record<string, unknown>;
+      }
+    ).durableCredentials;
+    await (
+      authService as unknown as {
+        persistCredentials: (credentials: unknown) => Promise<boolean>;
+      }
+    ).persistCredentials({
+      ...current,
+      token: 'replacement-session-token',
+    });
+
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBe('route-token-reissued-for-new-session');
+    expect(createIdeToken).toHaveBeenCalledWith(
+      'replacement-session-token',
+      'all-key',
+      {
+        provider: 'anthropic',
+        modelId: 'claude-opus-5',
+        group: 'CLAUDE',
+      },
+    );
+  });
+
+  it('retains rejected-token tombstones when a session replacement is not durable', async () => {
+    const { writePersistedData } = await import('../../utils/persisted-data');
+    vi.mocked(writePersistedData).mockRejectedValueOnce(
+      new Error('credential store unavailable'),
+    );
+    const { authService } = await createTestAuthService();
+    const createIdeToken = (
+      authService as unknown as {
+        clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+      }
+    ).clodexInterop.createIdeToken;
+    createIdeToken
+      .mockResolvedValueOnce({
+        token: 'rejected-route-token-a',
+        keyId: 'all-key',
+        group: 'CLAUDE',
+        expiresAt: '3600',
+      })
+      .mockResolvedValueOnce({
+        token: 'fresh-route-token-b',
+        keyId: 'all-key',
+        group: 'CLAUDE',
+        expiresAt: '3600',
+      });
+    const route = {
+      provider: 'anthropic' as const,
+      modelId: 'claude-opus-5',
+    };
+
+    authService.invalidateRejectedModelAccessToken('rejected-route-token-a');
+    const current = (
+      authService as unknown as {
+        durableCredentials: Record<string, unknown>;
+      }
+    ).durableCredentials;
+    await expect(
+      (
+        authService as unknown as {
+          persistCredentials: (credentials: unknown) => Promise<boolean>;
+        }
+      ).persistCredentials({
+        ...current,
+        token: 'replacement-session-token',
+      }),
+    ).resolves.toBe(false);
+
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBeUndefined();
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBe('fresh-route-token-b');
+    expect(createIdeToken).toHaveBeenNthCalledWith(
+      1,
+      'session-token',
+      'all-key',
+      {
+        provider: 'anthropic',
+        modelId: 'claude-opus-5',
+        group: 'CLAUDE',
+      },
+    );
+  });
+
   it('deduplicates concurrent route-specific token refreshes', async () => {
     const { authService } = await createTestAuthService();
     const createIdeToken = (
