@@ -33,14 +33,14 @@ export const taskEn = {
     swarm: {
       battleOverridesUltraLabel: 'Battle Agent overrides Ultra Deep Think',
       clearManualLabel: 'Clear manual Deep Think; Ultra remains active',
-      ultraAutomaticLabel: 'Ultra automatically enables Deep Think',
+      ultraAutomaticLabel: 'Switch Ultra to Max and disable automatic Swarm',
       toggleLabel: 'Toggle Deep Think',
       battleOverridesUltraDescription:
         'Battle Agent overrides Ultra: this turn uses Battle instead of automatic standard Swarm.',
       clearManualDescription:
         'Manual Deep Think is also enabled. Click to clear the manual flag; Ultra will remain active.',
       ultraAutomaticDescription:
-        'Ultra active: Max reasoning with automatic standard Swarm. Change model effort to disable it.',
+        'Ultra is active: Max reasoning with automatic standard Swarm. Click to switch this model route to Max and disable automatic Swarm for later or queued turns. The current run continues until stopped.',
       enabledDescription:
         'Deep Think enabled: route the next message through Swarm',
       enableDescription: 'Enable Deep Think / Swarm',
@@ -51,7 +51,7 @@ export const taskEn = {
         'Battle Agent overrides Ultra automatic standard Swarm for the next message.',
       enabledDescription:
         'Battle Agent enabled: models will debate before coding',
-      enableDescription: 'Enable Battle Agent',
+      enableDescription: 'Enable Battle Agent for the next message',
     },
   },
   approval: {

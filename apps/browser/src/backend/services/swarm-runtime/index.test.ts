@@ -22,6 +22,7 @@ import {
   getSwarmErrorSearchText,
   isRetryableGeminiGatewayError,
   isUnavailableGatewayChannelError,
+  shouldAttemptSameProviderSwarmFallback,
   type SwarmRuntimeDependencies,
 } from './index';
 
@@ -837,5 +838,88 @@ describe('swarm gateway error classifiers', () => {
     const cyclic: { cause?: unknown } = {};
     cyclic.cause = cyclic;
     expect(() => getSwarmErrorSearchText(cyclic)).not.toThrow();
+  });
+
+  it.each([
+    new Error(
+      'Failed after 2 attempts. Last error: distributor.no_available_channel (request id: req-1)',
+    ),
+    { error: { code: 'DISTRIBUTOR.NO_AVAILABLE_CHANNEL' } },
+    {
+      lastError: {
+        responseBody: JSON.stringify({
+          error: { type: 'distributor.no-available-channel' },
+        }),
+      },
+    },
+    { cause: { message: 'No available channel for this route' } },
+  ])('recognizes unavailable distributor channel variant %#', (error) => {
+    expect(isUnavailableGatewayChannelError(error)).toBe(true);
+    expect(
+      shouldAttemptSameProviderSwarmFallback(error, 'claude-opus-4.8'),
+    ).toBe(true);
+  });
+
+  it('does not broaden unavailable-channel matching to neighboring codes', () => {
+    expect(
+      isUnavailableGatewayChannelError({
+        code: 'distributor.no_available_channels',
+      }),
+    ).toBe(false);
+    expect(
+      shouldAttemptSameProviderSwarmFallback(
+        { message: 'ordinary provider failure' },
+        'claude-opus-4.8',
+      ),
+    ).toBe(false);
+    expect(
+      shouldAttemptSameProviderSwarmFallback(
+        new Error('distributor.no_available_channel'),
+        undefined,
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    { statusCode: 500, message: 'gateway failure' },
+    { lastError: { response: { status: 503 } } },
+    { error: { code: 500, status: 'INTERNAL' } },
+    { responseBody: '{"error":{"code":"internal_error"}}' },
+    { error: { type: 'service_unavailable' } },
+    { data: { status: 'UNAVAILABLE' } },
+    new Error('Internal error'),
+    new Error('HTTP status 502'),
+    { message: 'Upstream service unavailable' },
+  ])('retries transient Gemini gateway failure %#', (error) => {
+    expect(isRetryableGeminiGatewayError(error, 'gemini-3.5-flash')).toBe(true);
+    expect(
+      shouldAttemptSameProviderSwarmFallback(error, 'gemini-3.5-flash'),
+    ).toBe(true);
+  });
+
+  it.each([
+    { statusCode: 401, message: 'Internal error: invalid API key' },
+    { response: { status: 403 }, error: { code: 'service_unavailable' } },
+    { status: 404, message: 'openai_error: model not found' },
+    { statusCode: 422, body: 'empty visible response' },
+    { error: { code: 'INVALID_ARGUMENT', message: 'openai_error' } },
+    { data: { status: 'PERMISSION_DENIED' }, message: 'Internal error' },
+    { message: 'invalid request: unsupported parameter' },
+    { message: 'ordinary provider failure' },
+  ])('does not retry nonretryable Gemini failure %#', (error) => {
+    expect(isRetryableGeminiGatewayError(error, 'gemini-3.5-flash')).toBe(
+      false,
+    );
+    expect(
+      shouldAttemptSameProviderSwarmFallback(error, 'gemini-3.5-flash'),
+    ).toBe(false);
+  });
+
+  it('keeps Gemini-only transient classification scoped to Gemini routes', () => {
+    const error = { statusCode: 503, message: 'Service Unavailable' };
+    expect(isRetryableGeminiGatewayError(error, 'gpt-5.5')).toBe(false);
+    expect(shouldAttemptSameProviderSwarmFallback(error, 'gpt-5.5')).toBe(
+      false,
+    );
   });
 });

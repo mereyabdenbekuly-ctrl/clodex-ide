@@ -1091,16 +1091,8 @@ export const ChatInputActions = memo(function ChatInputActions({
               <Button
                 size="icon-sm"
                 variant="ghost"
-                disabled={
-                  swarmModeDisabled ||
-                  (automaticSwarmModeActive && !swarmModeActive)
-                }
-                className={cn(
-                  'z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 disabled:opacity-50 data-[active=true]:bg-clodex-green-400/12 data-[active=true]:text-clodex-green-400 data-[active=true]:ring-1 data-[active=true]:ring-clodex-green-400/25',
-                  automaticSwarmModeActive &&
-                    !swarmModeActive &&
-                    'cursor-default disabled:opacity-100',
-                )}
+                disabled={swarmModeDisabled}
+                className="z-10 size-8 shrink-0 cursor-pointer rounded-full p-1 disabled:opacity-50 data-[active=true]:bg-clodex-green-400/12 data-[active=true]:text-clodex-green-400 data-[active=true]:ring-1 data-[active=true]:ring-clodex-green-400/25"
                 data-active={swarmModeActive || automaticSwarmModeActive}
                 aria-label={
                   automaticSwarmModeActive && battleModeActive

@@ -108,6 +108,116 @@ const stringifyErrorPart = (value: unknown): string => {
   }
 };
 
+const SWARM_ERROR_MAX_DEPTH = 8;
+const SWARM_ERROR_NESTED_FIELDS = [
+  'response',
+  'responseBody',
+  'body',
+  'data',
+  'error',
+  'errors',
+  'cause',
+  'lastError',
+] as const;
+
+type SwarmErrorSignals = {
+  statusCodes: Set<number>;
+  providerCodes: Set<string>;
+};
+
+const parseSwarmErrorJson = (value: string): unknown => {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+};
+
+const normalizeSwarmProviderCode = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[.\s-]+/g, '_');
+
+const getSwarmErrorSignals = (error: unknown): SwarmErrorSignals => {
+  const signals: SwarmErrorSignals = {
+    statusCodes: new Set<number>(),
+    providerCodes: new Set<string>(),
+  };
+  const seen = new WeakSet<object>();
+
+  const visit = (value: unknown, depth: number): void => {
+    if (
+      value === null ||
+      value === undefined ||
+      depth > SWARM_ERROR_MAX_DEPTH
+    ) {
+      return;
+    }
+    if (typeof value === 'string') {
+      const parsed = parseSwarmErrorJson(value);
+      if (parsed !== undefined) visit(parsed, depth + 1);
+      return;
+    }
+    if (typeof value !== 'object' || seen.has(value)) return;
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+      return;
+    }
+
+    const record = value as Record<string, unknown>;
+    for (const statusField of [
+      'status',
+      'statusCode',
+      'httpStatus',
+      'httpStatusCode',
+    ]) {
+      const rawStatus = record[statusField];
+      const status =
+        typeof rawStatus === 'number'
+          ? rawStatus
+          : typeof rawStatus === 'string' && /^\d{3}$/.test(rawStatus.trim())
+            ? Number(rawStatus)
+            : undefined;
+      if (
+        status !== undefined &&
+        Number.isInteger(status) &&
+        status >= 100 &&
+        status <= 599
+      ) {
+        signals.statusCodes.add(status);
+      } else if (typeof rawStatus === 'string' && rawStatus.trim()) {
+        signals.providerCodes.add(normalizeSwarmProviderCode(rawStatus));
+      }
+    }
+
+    for (const codeField of ['code', 'type']) {
+      const code = record[codeField];
+      if (typeof code === 'string' && code.trim()) {
+        signals.providerCodes.add(normalizeSwarmProviderCode(code));
+      } else if (
+        typeof code === 'number' &&
+        Number.isInteger(code) &&
+        code >= 100 &&
+        code <= 599
+      ) {
+        signals.statusCodes.add(code);
+      }
+    }
+
+    for (const field of SWARM_ERROR_NESTED_FIELDS) {
+      visit(record[field], depth + 1);
+    }
+  };
+
+  visit(error, 0);
+  return signals;
+};
+
 export const getSwarmErrorSearchText = (
   error: unknown,
   seen = new WeakSet<object>(),
@@ -122,13 +232,19 @@ export const getSwarmErrorSearchText = (
     error instanceof Error ? error.name : undefined,
     error instanceof Error ? error.message : undefined,
     record.message,
+    record.code,
+    record.type,
+    record.status,
+    record.statusCode,
     record.statusText,
+    record.response,
     record.responseBody,
     record.body,
     record.data,
     record.error,
     record.errors,
     record.cause,
+    record.lastError,
   ];
 
   return parts
@@ -140,21 +256,101 @@ export const getSwarmErrorSearchText = (
     .join('\n');
 };
 
+const UNAVAILABLE_GATEWAY_CHANNEL_PATTERN =
+  /(?:^|[^a-z0-9])(?:distributor[._-])?no[\s._-]+available[\s._-]+channel(?:$|[^a-z0-9])/i;
+
 export const isUnavailableGatewayChannelError = (error: unknown): boolean =>
-  /no available channel/i.test(getSwarmErrorSearchText(error));
+  UNAVAILABLE_GATEWAY_CHANNEL_PATTERN.test(getSwarmErrorSearchText(error));
+
+const GEMINI_TRANSIENT_PROVIDER_CODES = new Set([
+  'internal',
+  'internal_error',
+  'internal_server_error',
+  'provider_unavailable',
+  'server_error',
+  'service_unavailable',
+  'temporarily_unavailable',
+  'unavailable',
+]);
+
+const GEMINI_NON_RETRYABLE_PROVIDER_CODES = new Set([
+  'authentication_failed',
+  'bad_request',
+  'context_length_exceeded',
+  'context_limit',
+  'failed_precondition',
+  'forbidden',
+  'invalid_api_key',
+  'invalid_argument',
+  'invalid_request',
+  'invalid_request_error',
+  'model_not_found',
+  'not_found',
+  'payment_required',
+  'permission_denied',
+  'unauthenticated',
+  'unauthorized',
+  'unsupported_feature',
+  'unsupported_parameter',
+]);
+
+const GEMINI_TRANSIENT_MESSAGE_PATTERN =
+  /\b(?:internal(?: server)? error|service (?:temporarily )?unavailable|temporarily unavailable|upstream (?:service )?unavailable)\b/i;
+const GEMINI_HTTP_5XX_MESSAGE_PATTERN =
+  /\b(?:http(?: status)?|status(?: code)?)\s*[:=]?\s*5\d{2}\b/i;
+const GEMINI_NON_RETRYABLE_MESSAGE_PATTERN =
+  /\b(?:authentication failed|invalid api key|unauthorized|forbidden|payment required|insufficient (?:balance|credits?)|please recharge|model (?:not found|does not exist|is not enabled|is not available on your plan)|context (?:length|window)|too many tokens|invalid request|bad request|malformed request|unsupported (?:feature|parameter))\b/i;
+
+const hasNonRetryableClientStatus = (
+  statusCodes: ReadonlySet<number>,
+): boolean =>
+  [...statusCodes].some(
+    (status) =>
+      status >= 400 &&
+      status < 500 &&
+      status !== 408 &&
+      status !== 425 &&
+      status !== 429,
+  );
 
 export const isRetryableGeminiGatewayError = (
   error: unknown,
   preferredModelId: string | undefined,
 ): boolean => {
   if (!preferredModelId?.startsWith('gemini-')) return false;
+  if (isUnavailableGatewayChannelError(error)) return true;
+
   const errorSearchText = getSwarmErrorSearchText(error);
+  const signals = getSwarmErrorSignals(error);
+  if (
+    hasNonRetryableClientStatus(signals.statusCodes) ||
+    [...signals.providerCodes].some((code) =>
+      GEMINI_NON_RETRYABLE_PROVIDER_CODES.has(code),
+    ) ||
+    GEMINI_NON_RETRYABLE_MESSAGE_PATTERN.test(errorSearchText)
+  ) {
+    return false;
+  }
+
   return (
-    /no available channel/i.test(errorSearchText) ||
+    [...signals.statusCodes].some((status) => status >= 500) ||
+    [...signals.providerCodes].some((code) =>
+      GEMINI_TRANSIENT_PROVIDER_CODES.has(code),
+    ) ||
+    GEMINI_TRANSIENT_MESSAGE_PATTERN.test(errorSearchText) ||
+    GEMINI_HTTP_5XX_MESSAGE_PATTERN.test(errorSearchText) ||
     /openai[_-]?error/i.test(errorSearchText) ||
     /empty visible response/i.test(errorSearchText)
   );
 };
+
+export const shouldAttemptSameProviderSwarmFallback = (
+  error: unknown,
+  preferredModelId: string | undefined,
+): boolean =>
+  Boolean(preferredModelId) &&
+  (isUnavailableGatewayChannelError(error) ||
+    isRetryableGeminiGatewayError(error, preferredModelId));
 
 type SwarmSubmitHandler = Parameters<
   AgentManagerService['setSwarmSubmitHandler']
@@ -1633,6 +1829,11 @@ export function createSwarmRuntime({
               error,
               context.task.preferredModelId,
             );
+            const shouldAttemptSameProviderFallback =
+              shouldAttemptSameProviderSwarmFallback(
+                error,
+                context.task.preferredModelId,
+              );
             const allowBattleSynthesizerFallback =
               isBattleSynthesizerTask &&
               context.task.preferredModelId === 'gemini-3.5-flash';
@@ -1642,6 +1843,7 @@ export function createSwarmRuntime({
                 preferredModelId: context.task.preferredModelId,
                 unavailableChannel,
                 retryableGatewayError,
+                shouldAttemptSameProviderFallback,
                 errorSearchText: errorSearchText.slice(0, 4_000),
               },
             );
@@ -1650,7 +1852,8 @@ export function createSwarmRuntime({
             );
             if (
               !context.task.preferredModelId ||
-              (!retryableGatewayError && !allowBattleSynthesizerFallback)
+              (!shouldAttemptSameProviderFallback &&
+                !allowBattleSynthesizerFallback)
             ) {
               throw error;
             }
