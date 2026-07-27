@@ -279,6 +279,320 @@ describe('AuthService route-specific Clodex model tokens', () => {
     );
   });
 
+  it('evicts only cache entries carrying a relay-rejected token', async () => {
+    const { authService } = await createTestAuthService();
+    const createIdeToken = (
+      authService as unknown as {
+        clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+      }
+    ).clodexInterop.createIdeToken;
+    let issueCount = 0;
+    createIdeToken.mockImplementation(
+      async (
+        _accessToken: string,
+        keyId?: string,
+        route?: { provider?: string },
+      ) => ({
+        token: `${route?.provider}-route-token-${++issueCount}`,
+        keyId,
+        group: route?.provider === 'anthropic' ? 'CLAUDE' : 'GPT',
+        expiresAt: '3600',
+      }),
+    );
+    const openAiRoute = { provider: 'openai' as const, modelId: 'gpt-5.5' };
+    const anthropicRoute = {
+      provider: 'anthropic' as const,
+      modelId: 'claude-opus-5',
+    };
+
+    const rejectedToken =
+      await authService.ensureModelAccessTokenForRoute(openAiRoute);
+    const unaffectedToken =
+      await authService.ensureModelAccessTokenForRoute(anthropicRoute);
+    expect(
+      authService.invalidateRejectedModelAccessToken(rejectedToken ?? ''),
+    ).toBe(true);
+
+    await expect(
+      authService.ensureModelAccessTokenForRoute(anthropicRoute),
+    ).resolves.toBe(unaffectedToken);
+    await expect(
+      authService.ensureModelAccessTokenForRoute(openAiRoute),
+    ).resolves.not.toBe(rejectedToken);
+    expect(createIdeToken).toHaveBeenCalledTimes(3);
+  });
+
+  it('deduplicates concurrent route-specific token refreshes', async () => {
+    const { authService } = await createTestAuthService();
+    const createIdeToken = (
+      authService as unknown as {
+        clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+      }
+    ).clodexInterop.createIdeToken;
+    let resolveToken:
+      | ((value: {
+          token: string;
+          keyId: string;
+          group: string;
+          expiresAt: string;
+        }) => void)
+      | undefined;
+    createIdeToken.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveToken = resolve;
+        }),
+    );
+
+    const route = {
+      provider: 'anthropic' as const,
+      modelId: 'claude-opus-5',
+    };
+    const first = authService.ensureModelAccessTokenForRoute(route);
+    const second = authService.ensureModelAccessTokenForRoute(route);
+
+    expect(createIdeToken).toHaveBeenCalledTimes(1);
+    resolveToken?.({
+      token: 'shared-claude-route-token',
+      keyId: 'all-key',
+      group: 'CLAUDE',
+      expiresAt: '3600',
+    });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      'shared-claude-route-token',
+      'shared-claude-route-token',
+    ]);
+    expect(createIdeToken).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['malformed', 'not-a-date'],
+  ])('bounds route-token freshness when expiry is %s', async (_label, expiresAt) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-27T00:00:00.000Z'));
+    try {
+      const { authService } = await createTestAuthService();
+      const createIdeToken = (
+        authService as unknown as {
+          clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+        }
+      ).clodexInterop.createIdeToken;
+      let issueCount = 0;
+      createIdeToken.mockImplementation(
+        async (_accessToken: string, keyId?: string) => ({
+          token: `bounded-token-${++issueCount}`,
+          keyId,
+          group: 'CLAUDE',
+          expiresAt,
+        }),
+      );
+      const route = {
+        provider: 'anthropic' as const,
+        modelId: 'claude-opus-5',
+      };
+
+      await expect(
+        authService.ensureModelAccessTokenForRoute(route),
+      ).resolves.toBe('bounded-token-1');
+      await expect(
+        authService.ensureModelAccessTokenForRoute(route),
+      ).resolves.toBe('bounded-token-1');
+      expect(createIdeToken).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(10 * 60_000);
+
+      await expect(
+        authService.ensureModelAccessTokenForRoute(route),
+      ).resolves.toBe('bounded-token-2');
+      expect(createIdeToken).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('invalidates route tokens when the session credential authority changes', async () => {
+    const { authService } = await createTestAuthService();
+    const createIdeToken = (
+      authService as unknown as {
+        clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+      }
+    ).clodexInterop.createIdeToken;
+    createIdeToken.mockImplementation(
+      async (accessToken: string, keyId?: string) => ({
+        token: `route-token-for-${accessToken}`,
+        keyId,
+        group: 'CLAUDE',
+        expiresAt: '3600',
+      }),
+    );
+    const route = {
+      provider: 'anthropic' as const,
+      modelId: 'claude-opus-5',
+    };
+
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBe('route-token-for-session-token');
+    const current = (
+      authService as unknown as {
+        durableCredentials: Record<string, unknown>;
+      }
+    ).durableCredentials;
+    await (
+      authService as unknown as {
+        persistCredentials: (credentials: unknown) => Promise<boolean>;
+      }
+    ).persistCredentials({
+      ...current,
+      token: 'replacement-session-token',
+    });
+
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBe('route-token-for-replacement-session-token');
+    expect(createIdeToken).toHaveBeenCalledTimes(2);
+    expect(createIdeToken).toHaveBeenLastCalledWith(
+      'replacement-session-token',
+      'all-key',
+      {
+        provider: 'anthropic',
+        modelId: 'claude-opus-5',
+        group: 'CLAUDE',
+      },
+    );
+  });
+
+  it('does not let an invalidated in-flight route refresh overwrite the next credential generation', async () => {
+    const { authService } = await createTestAuthService();
+    const createIdeToken = (
+      authService as unknown as {
+        clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+      }
+    ).clodexInterop.createIdeToken;
+    type IssuedToken = {
+      token: string;
+      keyId: string;
+      group: string;
+      expiresAt: string;
+    };
+    let resolveOldToken: ((value: IssuedToken) => void) | undefined;
+    let resolveNewToken: ((value: IssuedToken) => void) | undefined;
+    createIdeToken
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOldToken = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNewToken = resolve;
+          }),
+      );
+    const route = {
+      provider: 'anthropic' as const,
+      modelId: 'claude-opus-5',
+    };
+
+    const oldRequest = authService.ensureModelAccessTokenForRoute(route);
+    const current = (
+      authService as unknown as {
+        durableCredentials: Record<string, unknown>;
+      }
+    ).durableCredentials;
+    await (
+      authService as unknown as {
+        persistCredentials: (credentials: unknown) => Promise<boolean>;
+      }
+    ).persistCredentials({
+      ...current,
+      token: 'replacement-session-token',
+    });
+    const newRequest = authService.ensureModelAccessTokenForRoute(route);
+    expect(createIdeToken).toHaveBeenCalledTimes(2);
+
+    resolveOldToken?.({
+      token: 'old-route-token',
+      keyId: 'all-key',
+      group: 'CLAUDE',
+      expiresAt: '3600',
+    });
+    await expect(oldRequest).resolves.toBeUndefined();
+
+    const joinedNewRequest = authService.ensureModelAccessTokenForRoute(route);
+    expect(createIdeToken).toHaveBeenCalledTimes(2);
+    resolveNewToken?.({
+      token: 'new-route-token',
+      keyId: 'all-key',
+      group: 'CLAUDE',
+      expiresAt: '3600',
+    });
+    await expect(Promise.all([newRequest, joinedNewRequest])).resolves.toEqual([
+      'new-route-token',
+      'new-route-token',
+    ]);
+    await expect(
+      authService.ensureModelAccessTokenForRoute(route),
+    ).resolves.toBe('new-route-token');
+    expect(createIdeToken).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidates route tokens when the selected key changes', async () => {
+    const { authService, uiKarton } = await createTestAuthService();
+    const claudeKey = {
+      id: 'claude-key',
+      name: 'CLAUDE',
+      group: 'CLAUDE',
+      isDefault: false,
+      modelLimitsEnabled: false,
+    };
+    uiKarton.state.userAccount.keys.push(claudeKey);
+    Object.assign(authService as unknown as Record<string, unknown>, {
+      clodexIdeKeys: uiKarton.state.userAccount.keys,
+    });
+    const createIdeToken = (
+      authService as unknown as {
+        clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+      }
+    ).clodexInterop.createIdeToken;
+    let issueCount = 0;
+    createIdeToken.mockImplementation(
+      async (
+        _accessToken: string,
+        keyId?: string,
+        route?: { group?: string },
+      ) => ({
+        token: `${route ? 'route' : 'generic'}-${keyId}-${++issueCount}`,
+        keyId,
+        group: route?.group ?? (keyId === 'all-key' ? 'ALL' : 'CLAUDE'),
+        expiresAt: '3600',
+      }),
+    );
+    const route = {
+      provider: 'anthropic' as const,
+      modelId: 'claude-opus-5',
+    };
+
+    const firstRouteToken =
+      await authService.ensureModelAccessTokenForRoute(route);
+    await expect(authService.selectClodexKey('claude-key')).resolves.toEqual(
+      {},
+    );
+    await expect(authService.selectClodexKey('all-key')).resolves.toEqual({});
+    const secondRouteToken =
+      await authService.ensureModelAccessTokenForRoute(route);
+
+    expect(firstRouteToken).toBe('route-all-key-1');
+    expect(secondRouteToken).toMatch(/^route-all-key-/);
+    expect(secondRouteToken).not.toBe(firstRouteToken);
+    expect(
+      createIdeToken.mock.calls.filter((call) => call[2] !== undefined),
+    ).toHaveLength(2);
+  });
+
   it('rejects a virtual ALL route token for a selected ALL key', async () => {
     const { authService } = await createTestAuthService();
     const createIdeToken = (

@@ -274,6 +274,59 @@ function getAuthRouteAuthorityFingerprint(authState: AuthState): string {
   });
 }
 
+function isManagedCredentialRejection(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 4; depth++) {
+    if (!(current instanceof Error) && !isPlainObject(current)) return false;
+    const frame = current as Record<string, unknown>;
+    const statusCode = frame.statusCode ?? frame.status;
+    if (statusCode === 401 || statusCode === 403) return true;
+
+    const errorText = [frame.message, frame.code, frame.responseBody]
+      .filter((value): value is string => typeof value === 'string')
+      .join(' ')
+      .toLowerCase();
+    if (
+      errorText.includes('invalid api key') ||
+      errorText.includes('invalid_api_key')
+    ) {
+      return true;
+    }
+
+    current = frame.lastError ?? frame.cause;
+  }
+  return false;
+}
+
+function guardManagedModelCredential(
+  model: LanguageModelV3,
+  onCredentialRejected: () => void,
+): LanguageModelV3 {
+  const doGenerate: LanguageModelV3['doGenerate'] = async (options) => {
+    try {
+      return await model.doGenerate(options);
+    } catch (error) {
+      if (isManagedCredentialRejection(error)) onCredentialRejected();
+      throw error;
+    }
+  };
+  const doStream: LanguageModelV3['doStream'] = async (options) => {
+    try {
+      return await model.doStream(options);
+    } catch (error) {
+      if (isManagedCredentialRejection(error)) onCredentialRejected();
+      throw error;
+    }
+  };
+  return new Proxy(model, {
+    get(target, property, receiver) {
+      if (property === 'doGenerate') return doGenerate;
+      if (property === 'doStream') return doStream;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
 /**
  * Middleware that tells the SDK all HTTP(S) URLs are natively supported by the
  * clodex gateway. Without this the SDK downloads every image/file URL and
@@ -1002,14 +1055,18 @@ export class ModelProviderService {
           'Model route authority changed while credentials were resolving; retry the request against the current route',
         );
       }
+      const resolved = this.createModelWithOptions(
+        modelId,
+        traceId,
+        otherPostHogProperties,
+        clodexApiKeyOverride,
+      );
       return this.bindRouteLease(
-        this.createModelWithOptions(
-          modelId,
-          traceId,
-          otherPostHogProperties,
-          clodexApiKeyOverride,
-        ),
+        resolved,
         admittedRevision,
+        clodexApiKeyOverride && resolved.providerMode === 'clodex'
+          ? clodexApiKeyOverride
+          : undefined,
       );
     } catch (error) {
       this.report(error as Error, 'getModelWithOptionsAsync', { modelId });
@@ -1066,12 +1123,20 @@ export class ModelProviderService {
   private bindRouteLease(
     options: ModelWithOptions,
     admittedRevision = this.routeRevision,
+    managedCredentialToken?: string,
   ): ModelWithOptions {
     const isValid = () => this.routeRevision === admittedRevision;
     const { routeLease: _previousLease, ...exactRoute } = options;
+    const guardedCredentialModel = managedCredentialToken
+      ? guardManagedModelCredential(exactRoute.model, () => {
+          this.authService.invalidateRejectedModelAccessToken(
+            managedCredentialToken,
+          );
+        })
+      : exactRoute.model;
     return {
       ...exactRoute,
-      model: guardRevocableModelRoute(exactRoute.model, isValid),
+      model: guardRevocableModelRoute(guardedCredentialModel, isValid),
       routeLease: {
         isValid,
         forkTrace: (traceId, metadata) => {
@@ -1096,6 +1161,7 @@ export class ModelProviderService {
               model: tracedModel,
             },
             admittedRevision,
+            managedCredentialToken,
           );
         },
       },

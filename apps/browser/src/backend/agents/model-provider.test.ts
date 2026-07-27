@@ -1074,6 +1074,83 @@ describe('official provider endpoint resolution', () => {
 });
 
 describe('Clodex IDE model token refresh', () => {
+  it('evicts a managed route token after the relay rejects it', async () => {
+    const rejectedToken = 'rejected-managed-route-token';
+    const invalidateRejectedModelAccessToken = vi.fn();
+    const invalidKeyError = Object.assign(new Error('Invalid API key'), {
+      statusCode: 401,
+    });
+    const rejectingModel = {
+      doGenerate: vi.fn().mockRejectedValue(invalidKeyError),
+      doStream: vi.fn().mockRejectedValue(invalidKeyError),
+    } as any;
+    const service = createTestModelProviderService({
+      telemetryService: {
+        withTracing: vi.fn(() => rejectingModel),
+        forkTracing: vi.fn((model) => model),
+        captureException: vi.fn(),
+      },
+      authService: {
+        accessToken: 'clodex-session-token',
+        modelAccessToken: rejectedToken,
+        ensureModelAccessTokenForRoute: vi
+          .fn()
+          .mockResolvedValue(rejectedToken),
+        invalidateRejectedModelAccessToken,
+        authState: { models: [] },
+      },
+    });
+    const route = await service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'managed-rejection',
+      agentStepMetadata,
+    );
+
+    await expect(route.model.doStream({} as never)).rejects.toBe(
+      invalidKeyError,
+    );
+    expect(invalidateRejectedModelAccessToken).toHaveBeenCalledOnce();
+    expect(invalidateRejectedModelAccessToken).toHaveBeenCalledWith(
+      rejectedToken,
+    );
+  });
+
+  it('does not apply managed-token eviction to official BYOK routes', async () => {
+    const invalidateRejectedModelAccessToken = vi.fn();
+    const invalidKeyError = Object.assign(new Error('Invalid API key'), {
+      statusCode: 401,
+    });
+    const rejectingModel = {
+      doGenerate: vi.fn().mockRejectedValue(invalidKeyError),
+      doStream: vi.fn().mockRejectedValue(invalidKeyError),
+    } as any;
+    const service = createTestModelProviderService({
+      providerModes: { openai: 'official' },
+      telemetryService: {
+        withTracing: vi.fn(() => rejectingModel),
+        forkTracing: vi.fn((model) => model),
+        captureException: vi.fn(),
+      },
+      authService: {
+        accessToken: 'clodex-session-token',
+        modelAccessToken: 'unused-managed-token',
+        ensureModelAccessTokenForRoute: vi.fn(),
+        invalidateRejectedModelAccessToken,
+        authState: { models: [] },
+      },
+    });
+    const route = await service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'official-rejection',
+      agentStepMetadata,
+    );
+
+    await expect(route.model.doStream({} as never)).rejects.toBe(
+      invalidKeyError,
+    );
+    expect(invalidateRejectedModelAccessToken).not.toHaveBeenCalled();
+  });
+
   it('refreshes the IDE model token before resolving a clodex model asynchronously', async () => {
     let token: string | undefined;
     const ensureModelAccessToken = vi.fn(async () => {

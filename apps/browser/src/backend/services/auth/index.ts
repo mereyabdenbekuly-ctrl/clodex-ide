@@ -96,13 +96,22 @@ function credentialAuthorityMatches(
   left: StoredCredentials,
   right: StoredCredentials,
 ): boolean {
+  return (
+    credentialSessionAuthorityMatches(left, right) &&
+    left?.activeKeyId === right?.activeKeyId
+  );
+}
+
+function credentialSessionAuthorityMatches(
+  left: StoredCredentials,
+  right: StoredCredentials,
+): boolean {
   if (left === null || right === null) return left === right;
   return (
     left.token === right.token &&
     left.protocolVersion === right.protocolVersion &&
     left.provenance === right.provenance &&
-    left.clientId === right.clientId &&
-    left.activeKeyId === right.activeKeyId
+    left.clientId === right.clientId
   );
 }
 
@@ -121,6 +130,9 @@ const ACCOUNT_AUTH_DISABLED_ERROR =
   'Account sign-in is disabled in this distribution.';
 const isAccountAuthEnabled = __APP_AUTH_ENABLED__;
 const IDE_MODEL_TOKEN_REFRESH_SKEW_MS = 60_000;
+// Treat server expiry as an upper bound, never as permission to retain a
+// managed credential indefinitely when expiry metadata is absent or malformed.
+const IDE_MODEL_TOKEN_MAX_CACHE_AGE_MS = 10 * 60_000;
 const isClodexAuthEnabled =
   isAccountAuthEnabled &&
   process.env.CLODEX_AUTH_ENABLED !== 'false' &&
@@ -128,6 +140,7 @@ const isClodexAuthEnabled =
 
 type IdeModelTokenCacheEntry = {
   token: string;
+  cachedAtMs: number;
   expiresAt?: string;
   keyId?: string;
   keyName?: string;
@@ -369,18 +382,13 @@ export class AuthService extends DisposableService {
   private _credentials: StoredCredentials = null;
   private clodexInterop: ClodexAuthInterop;
   private authClient: BetterAuthClient;
-  private ideModelToken: {
-    token: string;
-    expiresAt?: string;
-    keyId?: string;
-    keyName?: string;
-    group?: string;
-  } | null = null;
+  private ideModelToken: IdeModelTokenCacheEntry | null = null;
   private ideModelTokenByKeyId = new Map<string, IdeModelTokenCacheEntry>();
   private pendingIdeModelTokenRefreshes = new Map<
     string,
     Promise<string | undefined>
   >();
+  private modelAccessTokenCacheEpoch = 0;
   private clodexUserModels: ClodexUserModel[] = [];
   private clodexIdeKeys: ClodexIdeKey[] = [];
 
@@ -485,9 +493,24 @@ export class AuthService extends DisposableService {
   }
 
   private replaceLiveCredentials(credentials: StoredCredentials): void {
-    const changed = !credentialAuthorityMatches(this._credentials, credentials);
+    const previousCredentials = this._credentials;
+    const changed = !credentialAuthorityMatches(
+      previousCredentials,
+      credentials,
+    );
+    const sessionAuthorityChanged = !credentialSessionAuthorityMatches(
+      previousCredentials,
+      credentials,
+    );
     this._credentials = credentials;
     if (!changed) return;
+    // A session-token/provenance change invalidates the primary model token as
+    // well as every route token. An active-key-only persistence update keeps
+    // the freshly issued primary token but still invalidates route caches.
+    if (sessionAuthorityChanged) {
+      this.ideModelToken = null;
+    }
+    this.clearModelAccessTokenCache();
     for (const callback of this.credentialEpochChangeCallbacks) {
       try {
         callback();
@@ -972,6 +995,7 @@ export class AuthService extends DisposableService {
       );
       issuedToken = {
         ...token,
+        cachedAtMs: Date.now(),
         expiresAt: normalizeIdeTokenExpiresAt(token.expiresAt),
         keyId: activeKeyId ?? token.keyId,
         keyName: activeKey?.name ?? token.keyName,
@@ -1024,18 +1048,10 @@ export class AuthService extends DisposableService {
   }
 
   private isIdeModelTokenFresh(keyId?: string): boolean {
-    if (!this.ideModelToken?.token) return false;
-    if (
-      keyId &&
-      this.ideModelToken.keyId &&
-      String(this.ideModelToken.keyId) !== String(keyId)
-    ) {
-      return false;
-    }
-    if (!this.ideModelToken.expiresAt) return true;
-    const expiresAt = parseIdeTokenExpiresAt(this.ideModelToken.expiresAt);
-    if (expiresAt == null) return true;
-    return Date.now() + IDE_MODEL_TOKEN_REFRESH_SKEW_MS < expiresAt;
+    return this.isCachedIdeModelTokenFresh(
+      this.ideModelToken ?? undefined,
+      keyId,
+    );
   }
 
   private isCachedIdeModelTokenFresh(
@@ -1046,15 +1062,68 @@ export class AuthService extends DisposableService {
     if (keyId && token.keyId && String(token.keyId) !== String(keyId)) {
       return false;
     }
-    if (!token.expiresAt) return true;
-    const expiresAt = parseIdeTokenExpiresAt(token.expiresAt);
-    if (expiresAt == null) return true;
-    return Date.now() + IDE_MODEL_TOKEN_REFRESH_SKEW_MS < expiresAt;
+    const nowMs = Date.now();
+    if (
+      !Number.isSafeInteger(token.cachedAtMs) ||
+      token.cachedAtMs <= 0 ||
+      token.cachedAtMs > nowMs
+    ) {
+      return false;
+    }
+    const boundedExpiresAt =
+      token.cachedAtMs + IDE_MODEL_TOKEN_MAX_CACHE_AGE_MS;
+    const declaredExpiresAt = token.expiresAt
+      ? parseIdeTokenExpiresAt(token.expiresAt, nowMs)
+      : null;
+    const effectiveExpiresAt =
+      declaredExpiresAt == null
+        ? boundedExpiresAt
+        : Math.min(declaredExpiresAt, boundedExpiresAt);
+    return nowMs + IDE_MODEL_TOKEN_REFRESH_SKEW_MS < effectiveExpiresAt;
   }
 
   private clearModelAccessTokenCache(): void {
+    // In-flight issuances capture this generation so clearing the maps cannot
+    // allow a late response to repopulate a revoked credential generation.
+    this.modelAccessTokenCacheEpoch += 1;
     this.ideModelTokenByKeyId.clear();
     this.pendingIdeModelTokenRefreshes.clear();
+  }
+
+  private trackModelAccessTokenRefresh(
+    cacheKey: string,
+    refresh: Promise<string | undefined>,
+  ): Promise<string | undefined> {
+    let trackedRefresh: Promise<string | undefined>;
+    trackedRefresh = refresh.finally(() => {
+      if (this.pendingIdeModelTokenRefreshes.get(cacheKey) === trackedRefresh) {
+        this.pendingIdeModelTokenRefreshes.delete(cacheKey);
+      }
+    });
+    this.pendingIdeModelTokenRefreshes.set(cacheKey, trackedRefresh);
+    return trackedRefresh;
+  }
+
+  public invalidateRejectedModelAccessToken(rejectedToken: string): boolean {
+    this.assertNotDisposed();
+    if (!rejectedToken) return false;
+
+    let invalidated = false;
+    if (this.ideModelToken?.token === rejectedToken) {
+      this.ideModelToken = null;
+      invalidated = true;
+    }
+    for (const [cacheKey, cachedToken] of this.ideModelTokenByKeyId) {
+      if (cachedToken.token !== rejectedToken) continue;
+      this.ideModelTokenByKeyId.delete(cacheKey);
+      invalidated = true;
+    }
+    if (invalidated) {
+      this.logger.warn(
+        '[AuthService] Invalidated a managed IDE model token rejected by the relay',
+      );
+    }
+    return invalidated;
   }
 
   public get modelAccessToken(): string | undefined {
@@ -1144,10 +1213,47 @@ export class AuthService extends DisposableService {
     if (this.isCachedIdeModelTokenFresh(cached, selectedKeyId)) {
       return cached.token;
     }
+    if (cached) this.ideModelTokenByKeyId.delete(routeCacheKey);
 
     const accessToken = credentials.token;
     const authEpoch = this.authLifecycleEpoch;
+    const cacheEpoch = this.modelAccessTokenCacheEpoch;
+    const refreshCacheKey = `route:${routeCacheKey}`;
+    const pendingRefresh =
+      this.pendingIdeModelTokenRefreshes.get(refreshCacheKey);
+    if (pendingRefresh) return pendingRefresh;
 
+    return this.trackModelAccessTokenRefresh(
+      refreshCacheKey,
+      this.refreshIdeModelTokenForRouteUncached({
+        route,
+        provider,
+        selectedKey,
+        routeCacheKey,
+        accessToken,
+        authEpoch,
+        cacheEpoch,
+      }),
+    );
+  }
+
+  private async refreshIdeModelTokenForRouteUncached({
+    route,
+    provider,
+    selectedKey,
+    routeCacheKey,
+    accessToken,
+    authEpoch,
+    cacheEpoch,
+  }: {
+    route: ModelAccessRoute;
+    provider: ModelProvider;
+    selectedKey: ClodexIdeKey;
+    routeCacheKey: string;
+    accessToken: string;
+    authEpoch: number;
+    cacheEpoch: number;
+  }): Promise<string | undefined> {
     try {
       const runtimeGroup = clodexRuntimeGroupForProvider(provider);
       const issuedToken = await this.clodexInterop.createIdeToken(
@@ -1163,6 +1269,7 @@ export class AuthService extends DisposableService {
       );
       if (
         authEpoch !== this.authLifecycleEpoch ||
+        cacheEpoch !== this.modelAccessTokenCacheEpoch ||
         this.getTrustedCredentials()?.token !== accessToken
       ) {
         return undefined;
@@ -1179,6 +1286,7 @@ export class AuthService extends DisposableService {
       }
       const cachedToken: IdeModelTokenCacheEntry = {
         ...issuedToken,
+        cachedAtMs: Date.now(),
         expiresAt: normalizeIdeTokenExpiresAt(issuedToken.expiresAt),
         keyId: selectedKey.id,
         keyName: selectedKey.name ?? issuedToken.keyName,
@@ -1231,21 +1339,23 @@ export class AuthService extends DisposableService {
     if (pendingRefresh) return pendingRefresh;
 
     const authEpoch = this.authLifecycleEpoch;
-    const refresh = this.refreshIdeModelTokenUncached(
-      accessToken,
-      requestedKeyId,
-      authEpoch,
-    ).finally(() => {
-      this.pendingIdeModelTokenRefreshes.delete(refreshCacheKey);
-    });
-    this.pendingIdeModelTokenRefreshes.set(refreshCacheKey, refresh);
-    return refresh;
+    const cacheEpoch = this.modelAccessTokenCacheEpoch;
+    return this.trackModelAccessTokenRefresh(
+      refreshCacheKey,
+      this.refreshIdeModelTokenUncached(
+        accessToken,
+        requestedKeyId,
+        authEpoch,
+        cacheEpoch,
+      ),
+    );
   }
 
   private async refreshIdeModelTokenUncached(
     accessToken: string,
     requestedKeyId?: string,
     authEpoch: number = this.authLifecycleEpoch,
+    cacheEpoch: number = this.modelAccessTokenCacheEpoch,
   ): Promise<string | undefined> {
     try {
       const issuedToken = await this.clodexInterop.createIdeToken(
@@ -1254,6 +1364,7 @@ export class AuthService extends DisposableService {
       );
       if (
         authEpoch !== this.authLifecycleEpoch ||
+        cacheEpoch !== this.modelAccessTokenCacheEpoch ||
         this.getTrustedCredentials()?.token !== accessToken
       ) {
         return undefined;
@@ -1265,6 +1376,7 @@ export class AuthService extends DisposableService {
       const activeKey = this.findClodexKey(activeKeyId);
       this.ideModelToken = {
         ...issuedToken,
+        cachedAtMs: Date.now(),
         expiresAt: normalizeIdeTokenExpiresAt(issuedToken.expiresAt),
         keyId: activeKeyId ?? issuedToken.keyId,
         keyName: activeKey?.name ?? issuedToken.keyName,
@@ -1484,9 +1596,19 @@ export class AuthService extends DisposableService {
       return { error: 'Selected Clodex key is not available.' };
     }
 
+    const currentKeyId =
+      this.uiKarton.state.userAccount.activeKeyId ??
+      this.getTrustedCredentials()?.activeKeyId;
+    const keyChanged = String(currentKeyId ?? '') !== String(key.id);
+    if (keyChanged) {
+      this.ideModelToken = null;
+      this.clearModelAccessTokenCache();
+    }
+
     this.updateAuthState((draft) => {
       draft.userAccount.isSwitchingKey = true;
       draft.userAccount.activeKeyId = key.id;
+      if (keyChanged) draft.userAccount.ideToken = undefined;
     });
 
     try {
