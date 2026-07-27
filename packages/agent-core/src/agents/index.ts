@@ -35,6 +35,7 @@ export {
   type BaseAgentStatic,
   type AgentConfig,
   type MessageId,
+  type QueuedMessageUpdateResult,
   type SendUserMessageResult,
 } from './base-agent';
 export {

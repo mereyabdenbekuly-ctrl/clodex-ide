@@ -305,6 +305,9 @@ export function StatusCard() {
   const deleteQueuedMessage = useKartonProcedure(
     (p) => p.agents.deleteQueuedMessage,
   );
+  const updateQueuedMessage = useKartonProcedure(
+    (p) => p.agents.updateQueuedMessage,
+  );
 
   // Procedure to send a queued message immediately (aborts current work)
   const flushQueue = useKartonProcedure((p) => p.agents.flushQueue);
@@ -662,10 +665,19 @@ export function StatusCard() {
           'composer.queue.interruptAndSendDescription',
         ),
         remove: t('composer.queue.remove'),
+        edit: t('composer.queue.edit'),
+        save: t('composer.queue.save'),
+        cancel: t('composer.queue.cancel'),
+        noLongerQueued: t('composer.queue.noLongerQueued'),
+        updateFailed: t('composer.queue.updateFailed'),
       },
       onRemoveMessage: async (messageId) => {
         if (!openAgentId) return;
         await deleteQueuedMessage(openAgentId, messageId);
+      },
+      onUpdateMessage: async (messageId, message) => {
+        if (!openAgentId) return 'not-found';
+        return await updateQueuedMessage(openAgentId, messageId, message);
       },
       onFlush: async () => {
         if (!openAgentId) return;
@@ -758,6 +770,7 @@ export function StatusCard() {
     handleImplement,
     messageQueue,
     deleteQueuedMessage,
+    updateQueuedMessage,
     flushQueue,
     visiblePendingDiffs,
     pendingProposedEdits,

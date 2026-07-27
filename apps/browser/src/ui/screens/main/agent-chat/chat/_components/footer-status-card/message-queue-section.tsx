@@ -1,22 +1,32 @@
+import { IconArrowUpOutline24, IconTrash2Outline24 } from '@clodex/icons';
 import { Button } from '@clodex/stage-ui/components/button';
-import { IconTrash2Outline24, IconArrowUpOutline24 } from '@clodex/icons';
-import { ChevronDownIcon } from 'lucide-react';
-import { useState } from 'react';
-import { cn } from '@ui/utils';
-import type { AgentMessage } from '@shared/karton-contracts/ui/agent';
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@clodex/stage-ui/components/tooltip';
+import type { AgentMessage } from '@shared/karton-contracts/ui/agent';
 import {
   AttachmentLinkRouter,
-  parseMessageSegments,
   getAttachmentKey,
+  parseMessageSegments,
 } from '@ui/components/streamdown/attachment-links';
 import { AttachmentMetadataProvider } from '@ui/hooks/use-attachment-metadata';
+import { cn } from '@ui/utils';
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  Loader2Icon,
+  PencilIcon,
+  XIcon,
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
 import type { StatusCardSection } from './shared';
 import { getMessageText } from './shared';
+import {
+  canSaveQueuedMessageDraft,
+  replaceQueuedMessageText,
+} from './message-queue-edit-state';
 
 type MessageQueueLabels = {
   explanation: string;
@@ -24,11 +34,20 @@ type MessageQueueLabels = {
   interruptAndSend: string;
   interruptAndSendDescription: string;
   remove: string;
+  edit: string;
+  save: string;
+  cancel: string;
+  noLongerQueued: string;
+  updateFailed: string;
 };
 
 export interface QueuedMessagesSectionProps {
-  queuedMessages: AgentMessage[];
+  queuedMessages: Array<AgentMessage & { role: 'user' }>;
   onRemoveMessage: (messageId: string) => Promise<void>;
+  onUpdateMessage: (
+    messageId: string,
+    message: AgentMessage & { role: 'user' },
+  ) => Promise<'updated' | 'not-found'>;
   onFlush: () => Promise<void>;
   labels: MessageQueueLabels;
 }
@@ -36,21 +55,128 @@ export interface QueuedMessagesSectionProps {
 function MessageQueueSectionContent({
   queuedMessages,
   onRemoveMessage,
+  onUpdateMessage,
   labels,
 }: QueuedMessagesSectionProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [savingMessageId, setSavingMessageId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (
+      editingMessageId &&
+      !queuedMessages.some((message) => message.id === editingMessageId)
+    ) {
+      setEditingMessageId(null);
+      setDraft('');
+      setNotice(labels.noLongerQueued);
+    }
+  }, [editingMessageId, labels.noLongerQueued, queuedMessages]);
+
+  const cancelEdit = () => {
+    if (savingMessageId) return;
+    setEditingMessageId(null);
+    setDraft('');
+    setNotice(null);
+  };
+
+  const saveEdit = async (message: AgentMessage & { role: 'user' }) => {
+    if (!canSaveQueuedMessageDraft(draft) || savingMessageId) return;
+    setSavingMessageId(message.id);
+    setNotice(null);
+    try {
+      const result = await onUpdateMessage(
+        message.id,
+        replaceQueuedMessageText(message, draft),
+      );
+      setEditingMessageId(null);
+      setDraft('');
+      if (result === 'not-found') setNotice(labels.noLongerQueued);
+    } catch {
+      setNotice(labels.updateFailed);
+    } finally {
+      setSavingMessageId(null);
+    }
+  };
 
   return (
     <div className="pt-1" onMouseLeave={() => setHoveredIndex(null)}>
       <p className="px-2 pb-1 text-[11px] text-muted-foreground">
         {labels.explanation}
       </p>
+      {notice && (
+        <p className="px-2 pb-1 text-[11px] text-warning-foreground">
+          {notice}
+        </p>
+      )}
       {queuedMessages.map((queuedMsg, index) => {
+        const isEditing = editingMessageId === queuedMsg.id;
+        const isSaving = savingMessageId === queuedMsg.id;
         const isFirst = index === 0;
-        // Show buttons for first item when nothing is hovered, or when this specific item is hovered
         const showButtons = isFirst
           ? hoveredIndex === null || hoveredIndex === 0
           : hoveredIndex === index;
+
+        if (isEditing) {
+          return (
+            <div
+              key={queuedMsg.id}
+              className="mx-1 mb-1 rounded border border-border bg-surface-1 p-1.5"
+              onMouseEnter={() => setHoveredIndex(index)}
+            >
+              <textarea
+                autoFocus
+                value={draft}
+                disabled={isSaving}
+                aria-label={labels.edit}
+                className="min-h-16 w-full resize-y rounded bg-transparent px-1.5 py-1 text-foreground text-xs outline-none ring-1 ring-border focus:ring-clodex-green-400 disabled:opacity-60"
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    cancelEdit();
+                  } else if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    void saveEdit(queuedMsg);
+                  }
+                }}
+              />
+              <div className="mt-1 flex justify-end gap-1">
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  disabled={isSaving}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    cancelEdit();
+                  }}
+                >
+                  <XIcon className="size-3" />
+                  {labels.cancel}
+                </Button>
+                <Button
+                  variant="primary"
+                  size="xs"
+                  disabled={!canSaveQueuedMessageDraft(draft) || isSaving}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void saveEdit(queuedMsg);
+                  }}
+                >
+                  {isSaving ? (
+                    <Loader2Icon className="size-3 animate-spin" />
+                  ) : (
+                    <CheckIcon className="size-3" />
+                  )}
+                  {labels.save}
+                </Button>
+              </div>
+            </div>
+          );
+        }
 
         return (
           <div
@@ -65,17 +191,17 @@ function MessageQueueSectionContent({
               className={cn(
                 'inline-flex w-full items-center gap-0.5 overflow-x-hidden text-ellipsis whitespace-nowrap text-xs transition-[mask-image] duration-200',
                 showButtons
-                  ? 'mask-[linear-gradient(to_left,transparent_0px,transparent_56px,black_88px)]'
+                  ? 'mask-[linear-gradient(to_left,transparent_0px,transparent_76px,black_104px)]'
                   : 'mask-[linear-gradient(to_left,transparent_0px,black_24px)]',
               )}
             >
-              {parseMessageSegments(getMessageText(queuedMsg)).map((seg) =>
-                seg.kind === 'text' ? (
-                  seg.content
+              {parseMessageSegments(getMessageText(queuedMsg)).map((segment) =>
+                segment.kind === 'text' ? (
+                  segment.content
                 ) : (
                   <AttachmentLinkRouter
-                    key={getAttachmentKey(seg.linkData)}
-                    linkData={seg.linkData}
+                    key={getAttachmentKey(segment.linkData)}
+                    linkData={segment.linkData}
                   />
                 ),
               )}
@@ -91,7 +217,27 @@ function MessageQueueSectionContent({
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    onClick={() => {
+                    aria-label={labels.edit}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setEditingMessageId(queuedMsg.id);
+                      setDraft(getMessageText(queuedMsg));
+                      setNotice(null);
+                    }}
+                  >
+                    <PencilIcon className="size-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{labels.edit}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={labels.remove}
+                    onClick={(event) => {
+                      event.stopPropagation();
                       void onRemoveMessage(queuedMsg.id);
                     }}
                   >
@@ -128,7 +274,14 @@ export function MessageQueueSection(
         </div>
         <Tooltip>
           <TooltipTrigger>
-            <Button variant="ghost" size="xs" onClick={props.onFlush}>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={(event) => {
+                event.stopPropagation();
+                void props.onFlush();
+              }}
+            >
               {props.labels.interruptAndSend}
               <IconArrowUpOutline24 className="size-3" />
             </Button>
