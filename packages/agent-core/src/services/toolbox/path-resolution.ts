@@ -28,7 +28,8 @@ type WindowsPathInput =
   | { kind: 'absolute'; absolutePath: string }
   | { kind: 'device' }
   | { kind: 'drive-designator'; drive: string }
-  | { kind: 'drive-relative'; drive: string };
+  | { kind: 'drive-relative'; drive: string }
+  | { kind: 'rooted' };
 
 interface RegisteredWorkspaceAlias {
   prefix: string;
@@ -66,7 +67,11 @@ function classifyWindowsPathInput(value: string): WindowsPathInput | null {
       ? trimmed.slice(1)
       : trimmed;
   const driveMatch = withoutLeadingSlash.match(/^([A-Za-z]):/u);
-  if (!driveMatch) return null;
+  if (!driveMatch) {
+    return trimmed.startsWith('/') || trimmed.startsWith('\\')
+      ? { kind: 'rooted' }
+      : null;
+  }
 
   const drive = `${driveMatch[1]!.toUpperCase()}:`;
   if (withoutLeadingSlash.length === 2) {
@@ -170,6 +175,11 @@ function assertNoWindowsPathInput(
       `Windows device paths such as "${inputPath}" are not accepted. Use an exact registered mount-prefixed path from <symlinks>. Available mount prefixes: ${available}`,
     );
   }
+  if (windowsInput.kind === 'rooted') {
+    throw new Error(
+      `Paths beginning with "/" or "\\" are absolute/rooted paths, not mount-prefixed capability addresses. Remove the leading separator and use an exact registered prefix from <symlinks>. Available mount prefixes: ${available}`,
+    );
+  }
 
   const aliasResolution = findRegisteredWorkspaceAlias(
     deps,
@@ -196,7 +206,7 @@ function assertNoWindowsPathInput(
 }
 
 function normalizeMountPath(value: string): string {
-  return value.replaceAll('\\', '/').replace(/^\/+/, '');
+  return value.replaceAll('\\', '/');
 }
 
 function splitMountPath(value: string): {
@@ -221,6 +231,40 @@ function assertInsideMount(absolutePath: string, mountRoot: string): void {
   const root = path.resolve(mountRoot);
   if (resolved !== root && !resolved.startsWith(root + path.sep)) {
     throw new Error('Path traversal not allowed');
+  }
+}
+
+const WINDOWS_RESERVED_DEVICE_BASENAME =
+  /^(?:CON|PRN|AUX|NUL|CLOCK\$|CONIN\$|CONOUT\$|COM[1-9]|LPT[1-9])$/iu;
+
+function usesWindowsPathSemantics(mountRoot: string): boolean {
+  return (
+    process.platform === 'win32' ||
+    /^[A-Za-z]:[\\/]/u.test(mountRoot) ||
+    mountRoot.startsWith('\\\\') ||
+    mountRoot.startsWith('//')
+  );
+}
+
+function assertSafeWindowsRelativePath(relativePath: string): void {
+  for (const segment of relativePath.split('/')) {
+    if (!segment) continue;
+    if (segment.includes(':')) {
+      throw new Error(
+        `Windows alternate data stream syntax is not allowed in mount-relative path segment "${segment}"`,
+      );
+    }
+
+    const withoutTrailingDotsOrSpaces = segment.replace(/[. ]+$/u, '');
+    const basename = (withoutTrailingDotsOrSpaces.split('.')[0] ?? '').replace(
+      /[. ]+$/u,
+      '',
+    );
+    if (WINDOWS_RESERVED_DEVICE_BASENAME.test(basename)) {
+      throw new Error(
+        `Windows reserved device name "${segment}" is not allowed in mount-relative paths`,
+      );
+    }
   }
 }
 
@@ -309,6 +353,10 @@ export function resolveToolPath(
     throw new Error(
       `Mount ${prefix} not found. Available mounts: ${listAvailableMountPrefixes(deps).join(', ')}`,
     );
+  }
+
+  if (usesWindowsPathSemantics(mountRoot)) {
+    assertSafeWindowsRelativePath(relativePath);
   }
 
   if (!hasPermission(permissions, permission)) {

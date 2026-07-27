@@ -177,6 +177,74 @@ describe('resolveToolPath Windows guidance', () => {
     expect(message).not.toContain('Mount C: not found');
   });
 
+  it.each([
+    '/wposix/src/app.ts',
+    '\\wposix\\src\\app.ts',
+    '/apps/generated/index.html',
+    '\\apps\\generated\\index.html',
+  ])('rejects a leading separator instead of reinterpreting %s as a mount path', (input) => {
+    const message = captureError(() => resolveToolPath(makeDeps(), input));
+    expect(message).toContain(
+      'Paths beginning with "/" or "\\" are absolute/rooted paths',
+    );
+  });
+
+  it.each([
+    'CON',
+    'con.txt',
+    'PRN.json',
+    'AUX   ',
+    'NUL.',
+    'CLOCK$.log',
+    'CONIN$',
+    'CONOUT$.txt',
+    'COM1',
+    'com9.log',
+    'LPT1',
+    'lpt9...',
+    'src/PRN.json',
+  ])('rejects Windows reserved device segment %s', (relativePath) => {
+    const deps = makeDeps([
+      { prefix: WORKSPACE_PREFIX, root: 'C:\\Users\\Alice\\Repo' },
+    ]);
+
+    expect(() =>
+      resolveToolPath(deps, `${WORKSPACE_PREFIX}/${relativePath}`),
+    ).toThrow('Windows reserved device name');
+  });
+
+  it.each([
+    'file.txt:secret',
+    'src:stream/file.ts',
+    'C:relative\\file.ts',
+  ])('rejects Windows alternate data stream syntax in %s', (relativePath) => {
+    const deps = makeDeps([
+      { prefix: WORKSPACE_PREFIX, root: 'C:\\Users\\Alice\\Repo' },
+    ]);
+
+    expect(() =>
+      resolveToolPath(deps, `${WORKSPACE_PREFIX}/${relativePath}`),
+    ).toThrow('Windows alternate data stream syntax');
+  });
+
+  it.each([
+    'console.ts',
+    'com10.txt',
+    'lpt0.log',
+    'auxiliary.md',
+  ])('does not overmatch ordinary Windows filename %s', (relativePath) => {
+    const deps = makeDeps([
+      { prefix: WORKSPACE_PREFIX, root: 'C:\\Users\\Alice\\Repo' },
+    ]);
+
+    expect(
+      resolveToolPath(deps, `${WORKSPACE_PREFIX}/${relativePath}`),
+    ).toMatchObject({
+      mountPrefix: WORKSPACE_PREFIX,
+      relativePath,
+    });
+  });
+
   it('continues to resolve ordinary mount-prefixed paths with either separator', () => {
     const deps = makeDeps();
 

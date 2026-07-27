@@ -195,6 +195,15 @@ describe('universal toolbox', () => {
         deps,
       ),
     ).rejects.toThrow('Windows drive designator "C:" is not a mount prefix');
+    await expect(
+      readToolExecute({ path: `/${windowsPrefix}/src/app.ts` }, deps),
+    ).rejects.toThrow('absolute/rooted paths');
+    await expect(
+      grepSearchToolExecute(
+        { mount_prefix: `\\${windowsPrefix}`, query: 'needle' },
+        deps,
+      ),
+    ).rejects.toThrow('absolute/rooted paths');
   });
 
   it('reads from the memory mount', async () => {
