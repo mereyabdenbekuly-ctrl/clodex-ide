@@ -5,6 +5,7 @@ import type {
   BaseAgent,
   BaseAgentDependencies,
   BaseAgentToolboxView,
+  QueuedMessageUpdateResult,
   SendUserMessageResult,
 } from '../../agents/base-agent';
 import type { AgentTypeRegistry } from '../../agents/agents-registry';
@@ -752,6 +753,16 @@ export class AgentManager extends DisposableService {
       'agents.deleteQueuedMessage',
       async (instanceId: string, messageId: string) => {
         await this.deleteQueuedMessage(instanceId, messageId);
+      },
+    );
+    this.wrapAgentRpc(
+      'agents.updateQueuedMessage',
+      async (
+        instanceId: string,
+        messageId: string,
+        message: AgentMessage & { role: 'user' },
+      ) => {
+        return await this.updateQueuedMessage(instanceId, messageId, message);
       },
     );
     this.wrapAgentRpc(
@@ -2214,6 +2225,20 @@ export class AgentManager extends DisposableService {
     }
 
     await agent.deleteQueuedMessage(messageId);
+  }
+
+  public async updateQueuedMessage(
+    instanceId: string,
+    messageId: string,
+    message: AgentMessage & { role: 'user' },
+  ): Promise<QueuedMessageUpdateResult> {
+    const agent = this.activeAgents.get(instanceId);
+
+    if (!agent) {
+      throw new Error(`Agent with instance id ${instanceId} not found`);
+    }
+
+    return await agent.updateQueuedMessage(messageId, message);
   }
 
   /**

@@ -5,7 +5,7 @@ export const taskEn = {
   composer: {
     placeholder:
       'Use / to plan and run commands. Use @ for context. {{queuedHint}}',
-    sendQueuedHint: 'Press ↵ to send now',
+    queuedWaitingHint: 'Queued messages will run after the current step.',
     writeMessageInstead: 'Write a message instead',
     actions: {
       selectContextElements: 'Select context elements',
@@ -14,16 +14,21 @@ export const taskEn = {
       attachFile: 'Attach file',
       stopAgent: 'Stop agent',
       sendMessage: 'Send message',
-      queueMessage: 'Queue for the next iteration',
+      queueMessage: 'Send after current step',
     },
     queue: {
       explanation:
-        'The active model request cannot be changed in flight. These messages will be sent automatically on the next iteration after any pending approval is resolved.',
-      queuedForNextIteration: '{{count}} queued for next iteration',
-      interruptAndSend: 'Interrupt & send',
+        'Messages are delivered in order after the current read, write, or command finishes. Pending approvals stay open until you decide them.',
+      queuedForNextIteration: '{{count}} waiting after current step',
+      interruptAndSend: 'Stop step & send now',
       interruptAndSendDescription:
-        'Stop the current iteration and send the queued messages now',
+        'Explicitly abort the current step and send the queued messages immediately',
       remove: 'Remove from queue',
+      edit: 'Edit queued message',
+      save: 'Save',
+      cancel: 'Cancel',
+      noLongerQueued: 'That message has already left the queue.',
+      updateFailed: 'Could not save the queued message. Try again.',
     },
     swarm: {
       battleOverridesUltraLabel: 'Battle Agent overrides Ultra Deep Think',

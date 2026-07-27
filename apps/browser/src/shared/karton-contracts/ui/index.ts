@@ -1639,6 +1639,11 @@ export type KartonContract = {
         agentId: string,
         messageId: string,
       ) => Promise<void>;
+      updateQueuedMessage: (
+        agentId: string,
+        messageId: string,
+        message: AgentMessage & { role: 'user' },
+      ) => Promise<'updated' | 'not-found'>;
       revertToUserMessage: (
         agentId: string,
         userMessageId: string,

@@ -598,6 +598,8 @@ export type SendUserMessageResult = {
   disposition: 'admitted' | 'queued';
 };
 
+export type QueuedMessageUpdateResult = 'updated' | 'not-found';
+
 /**
  * Interface for the static (class) side of any agent.
  * This enables type-safe access to static properties like `config` and `agentType`
@@ -815,6 +817,10 @@ export abstract class BaseAgent<
   private _historyPreemptionGeneration = 0;
   /** Keeps execution fail-closed until priority stop/recovery work is durable. */
   private _historyPreemptionInFlight = 0;
+  /** Durable queue work exists and must be retried when temporary gates settle. */
+  private _queuedDrainRequested = false;
+  /** Coalesces repeated queue-wake requests into one next-tick admission check. */
+  private _queuedDrainScheduled = false;
 
   /**
    * Settlement barrier for the currently admitted step. The controller is
@@ -992,6 +998,11 @@ export abstract class BaseAgent<
       defaultModelId: this.config.defaultModelId,
     });
 
+    if (this.state.get().queuedMessages.length > 0) {
+      this._queuedDrainRequested = true;
+      this.scheduleQueuedDrainAttempt();
+    }
+
     this.onCreated();
   }
 
@@ -1007,11 +1018,14 @@ export abstract class BaseAgent<
     const queued = this._historyLifecycleTail
       .catch(() => undefined)
       .then(operation);
-    this._historyLifecycleTail = queued.then(
+    const settled = queued.finally(() => {
+      this.scheduleQueuedDrainAttempt();
+    });
+    this._historyLifecycleTail = settled.then(
       () => undefined,
       () => undefined,
     );
-    return queued;
+    return settled;
   }
 
   private captureHistoryPreemptionGeneration(operation: string): number {
@@ -1057,6 +1071,55 @@ export abstract class BaseAgent<
     });
   }
 
+  private async commitQueuedMessagesDurably<T>(input: {
+    previousQueue: Array<AgentMessage & { role: 'user' }>;
+    originatingStep: {
+      readonly settled: Promise<AgentStepSettlement>;
+    } | null;
+    requestDrain: boolean;
+    mutate: () => { changed: boolean; value: T };
+  }): Promise<T> {
+    this._historyRewriteInFlight += 1;
+    let changed = false;
+    let durableStateAvailable = false;
+    try {
+      try {
+        const result = input.mutate();
+        changed = result.changed;
+        if (!changed) return result.value;
+        await this.saveQueuedMessagesStrict();
+        durableStateAvailable = true;
+        return result.value;
+      } catch (mutationError) {
+        this.state.commands.restoreQueuedMessages({
+          messages: input.previousQueue,
+        });
+        try {
+          await this.saveQueuedMessagesStrict();
+          durableStateAvailable = true;
+        } catch (rollbackPersistenceError) {
+          throw new AggregateError(
+            [mutationError, rollbackPersistenceError],
+            'Queued-message mutation and exact durable rollback both failed',
+          );
+        }
+        throw mutationError;
+      }
+    } finally {
+      this._historyRewriteInFlight -= 1;
+      if (
+        changed &&
+        durableStateAvailable &&
+        input.requestDrain &&
+        this.state.get().queuedMessages.length > 0
+      ) {
+        this.scheduleQueuedMessageWake(input.originatingStep);
+      } else {
+        this.scheduleQueuedDrainAttempt();
+      }
+    }
+  }
+
   /**
    * Send a message to the agent. If the agent is busy, the message will be queued.
    * @param message - The message to send to the agent
@@ -1099,13 +1162,72 @@ export abstract class BaseAgent<
     const id = crypto.randomUUID();
 
     const msg = { ...message, id: id };
+    const originatingStep = this._activeStepRun;
+    const stateAtIngress = this.state.get();
+    const shouldQueue =
+      !deferRunStep &&
+      (stateAtIngress.queuedMessages.length > 0 ||
+        stateAtIngress.isWorking ||
+        !this.canRunStep());
+
+    if (shouldQueue) {
+      const previousQueue = structuredClone(stateAtIngress.queuedMessages);
+      const { queuedModelId, queueLengthAfter } =
+        await this.commitQueuedMessagesDurably({
+          previousQueue,
+          originatingStep,
+          requestDrain: true,
+          mutate: () => {
+            this.assertHistoryNotPreempted(
+              preemptionGeneration,
+              'User message',
+            );
+            return {
+              changed: true,
+              value: this.state.commands.enqueueUserMessage({ message: msg }),
+            };
+          },
+        });
+
+      this.recordEvidenceEvent(
+        'user_message',
+        {
+          role: 'user',
+          text: getMessageText(msg),
+          partTypes: msg.parts.map((part) => part.type),
+          queued: true,
+        },
+        {
+          id: `user:${this.instanceId}:${id}`,
+          messageId: id,
+          source: 'agent_message',
+          sourceId: id,
+        },
+      );
+      this.host.logger.debug(`[BaseAgent:${this.instanceId}] Queued message`);
+      this.host.telemetry?.capture('agent-message-queued', {
+        agent_type: this.agentType,
+        agent_instance_id: this.instanceId,
+        model_id: queuedModelId,
+        queue_length_after: queueLengthAfter,
+      });
+
+      return { messageId: id, disposition: 'queued' };
+    }
+
+    this.assertHistoryNotPreempted(preemptionGeneration, 'User message');
+    this.host.logger.debug(
+      `[BaseAgent:${this.instanceId}] Sending user message`,
+    );
+    this.state.commands.appendHistoryMessage({ message: msg });
+    this.scheduleMemorySnapshotWrite('user-message');
     this.recordEvidenceEvent(
       'user_message',
       {
         role: 'user',
         text: getMessageText(msg),
         partTypes: msg.parts.map((part) => part.type),
-        queued: this.state.get().isWorking,
+        queued: false,
       },
       {
         id: `user:${this.instanceId}:${id}`,
@@ -1114,85 +1236,6 @@ export abstract class BaseAgent<
         sourceId: id,
       },
     );
-
-    // Invalidate host-managed records before deciding whether a busy message
-    // can be queued. This closes the interval where the broker has already
-    // staged an approval but AgentStore/UI has not published it yet.
-    const hadLocalApproval = this.hasLocalOpenToolApproval();
-    const hadLifecycleInvalidationFailure =
-      this._approvalLifecycleInvalidationFailedClosed;
-    const invalidation =
-      await this.invalidateOpenToolApprovals('new-user-message');
-    try {
-      this.assertHistoryNotPreempted(preemptionGeneration, 'User message');
-      const displacedApproval =
-        hadLocalApproval ||
-        this.hasLocalOpenToolApproval() ||
-        invalidation.invalidatedCount > 0 ||
-        this._approvalSweepPersistencePending ||
-        this._approvalSweepOperationsInFlight > 0 ||
-        hadLifecycleInvalidationFailure;
-
-      // Busy agents without a displaced approval keep the existing queue
-      // semantics.
-      const originatingStep = this._activeStepRun;
-      const isBusy = this.state.get().isWorking || originatingStep !== null;
-      if (isBusy && !displacedApproval) {
-        const { queuedModelId, queueLengthAfter } =
-          this.state.commands.enqueueUserMessage({ message: msg });
-
-        this.host.logger.debug(`[BaseAgent:${this.instanceId}] Queued message`);
-
-        this.host.telemetry?.capture('agent-message-queued', {
-          agent_type: this.agentType,
-          agent_instance_id: this.instanceId,
-          model_id: queuedModelId,
-          queue_length_after: queueLengthAfter,
-        });
-
-        // Always request a post-settlement wake from the exact step that made
-        // this message busy. This closes the race where the step already made
-        // its continuation decision before the queue mutation became visible.
-        this.scheduleQueuedMessageWake(originatingStep);
-
-        return { messageId: id, disposition: 'queued' };
-      }
-
-      this.host.logger.debug(
-        `[BaseAgent:${this.instanceId}] Sending user message`,
-      );
-
-      if (this.state.get().isWorking || this._activeStepRun !== null) {
-        // Keep the outer invalidation gate held across abort, AgentStore
-        // sweep, and strict persistence so a response cannot re-enter between
-        // those phases.
-        await this.internalStop('user-flushed-queue');
-        this.assertHistoryNotPreempted(preemptionGeneration, 'User message');
-      }
-
-      // Auto-deny any pending approval requests and force-terminate any
-      // non-terminal tool parts before the user message enters history.
-      // Without this, stale tool states (approval-requested, input-streaming,
-      // input-available) would cause canRunStep() to block indefinitely.
-      await this.applyAndPersistApprovalSweep(() =>
-        this.state.commands.denyAllNonTerminalToolPartsInHistory({
-          approvalDenyReason:
-            this.config.flushQueueToolCallRequestApprovalReason ??
-            'User sent new message before tool call approval was granted.',
-          forceErrorText:
-            'Tool execution interrupted — agent session ended before tool call finished.',
-        }),
-      );
-      this.assertHistoryNotPreempted(preemptionGeneration, 'User message');
-
-      // If the agent is not running, add the message to history and
-      // immediately send it to the model after releasing the invalidation
-      // gate below.
-      this.state.commands.appendHistoryMessage({ message: msg });
-      this.scheduleMemorySnapshotWrite('user-message');
-    } finally {
-      invalidation.release();
-    }
 
     if (!deferRunStep) void this.runStep();
 
@@ -1427,7 +1470,73 @@ export abstract class BaseAgent<
    */
   public async deleteQueuedMessage(messageId: string): Promise<void> {
     return await this.enqueueHistoryLifecycleOperation(async () => {
-      this.state.commands.removeQueuedMessage({ messageId });
+      const preemptionGeneration = this.captureHistoryPreemptionGeneration(
+        'Queued-message deletion',
+      );
+      const stateAtIngress = this.state.get();
+      if (!stateAtIngress.queuedMessages.some((m) => m.id === messageId)) {
+        return;
+      }
+      const previousQueue = structuredClone(stateAtIngress.queuedMessages);
+      await this.commitQueuedMessagesDurably({
+        previousQueue,
+        originatingStep: this._activeStepRun,
+        requestDrain: false,
+        mutate: () => {
+          this.assertHistoryNotPreempted(
+            preemptionGeneration,
+            'Queued-message deletion',
+          );
+          this.state.commands.removeQueuedMessage({ messageId });
+          return { changed: true, value: undefined };
+        },
+      });
+    });
+  }
+
+  /**
+   * Atomically edits a queued user message without changing its FIFO position
+   * or durable message id. If the next step already admitted the queue, the
+   * operation returns `not-found` instead of editing visible history.
+   */
+  public async updateQueuedMessage(
+    messageId: string,
+    message: AgentMessage & { role: 'user' },
+  ): Promise<QueuedMessageUpdateResult> {
+    const detachedMessage = structuredClone(message);
+    return await this.enqueueHistoryLifecycleOperation(async () => {
+      const preemptionGeneration = this.captureHistoryPreemptionGeneration(
+        'Queued-message update',
+      );
+      const stateAtIngress = this.state.get();
+      const previousQueue = structuredClone(stateAtIngress.queuedMessages);
+      const status = await this.commitQueuedMessagesDurably({
+        previousQueue,
+        originatingStep: this._activeStepRun,
+        requestDrain: false,
+        mutate: () => {
+          this.assertHistoryNotPreempted(
+            preemptionGeneration,
+            'Queued-message update',
+          );
+          const result = this.state.commands.replaceQueuedMessage({
+            messageId,
+            message: {
+              ...detachedMessage,
+              id: messageId,
+              role: 'user',
+            },
+          });
+          return { changed: result === 'updated', value: result };
+        },
+      });
+      if (status === 'updated') {
+        this.host.telemetry?.capture('agent-queued-message-updated', {
+          agent_type: this.agentType,
+          agent_instance_id: this.instanceId,
+        });
+      }
+      return status;
     });
   }
 
@@ -1436,7 +1545,25 @@ export abstract class BaseAgent<
    */
   public async clearQueue(): Promise<void> {
     return await this.enqueueHistoryLifecycleOperation(async () => {
-      this.state.commands.clearQueuedMessages();
+      const preemptionGeneration = this.captureHistoryPreemptionGeneration(
+        'Queued-message clear',
+      );
+      const stateAtIngress = this.state.get();
+      if (stateAtIngress.queuedMessages.length === 0) return;
+      const previousQueue = structuredClone(stateAtIngress.queuedMessages);
+      await this.commitQueuedMessagesDurably({
+        previousQueue,
+        originatingStep: this._activeStepRun,
+        requestDrain: false,
+        mutate: () => {
+          this.assertHistoryNotPreempted(
+            preemptionGeneration,
+            'Queued-message clear',
+          );
+          this.state.commands.clearQueuedMessages();
+          return { changed: true, value: undefined };
+        },
+      });
     });
   }
 
@@ -1752,6 +1879,7 @@ export abstract class BaseAgent<
 
     // Send all queued messages into the chat
     this.state.commands.flushQueueIntoHistory();
+    this._queuedDrainRequested = false;
     if (flushedCount > 0) {
       this.scheduleMemorySnapshotWrite('queued-messages');
     }
@@ -1781,6 +1909,9 @@ export abstract class BaseAgent<
   }
 
   private async stopSerialized(): Promise<void> {
+    // Explicit Stop owns the lifecycle boundary. Preserve the queue for later,
+    // but do not let an older soft-steering wake silently restart execution.
+    this._queuedDrainRequested = false;
     await this.internalStop('user-stopped');
     this.state.commands.setIsWorkingFalse();
   }
@@ -2645,6 +2776,7 @@ export abstract class BaseAgent<
         // it, so lifecycle observers cannot drift into newer history.
         state: this.state.get(),
       });
+      this.scheduleQueuedDrainAttempt();
     }
   }
 
@@ -2721,12 +2853,11 @@ export abstract class BaseAgent<
       readonly settled: Promise<AgentStepSettlement>;
     } | null,
   ): void {
-    const wake = () => {
-      if (this.state.get().queuedMessages.length > 0) void this.runStep();
-    };
+    this._queuedDrainRequested = true;
+    const wake = () => this.scheduleQueuedDrainAttempt();
 
     if (!originatingStep) {
-      setTimeout(wake, 0);
+      wake();
       return;
     }
 
@@ -2735,6 +2866,27 @@ export abstract class BaseAgent<
       // It must not be undone by an older queued-message wake.
       if (outcome !== 'superseded') wake();
     });
+  }
+
+  private scheduleQueuedDrainAttempt(): void {
+    if (!this._queuedDrainRequested || this._queuedDrainScheduled) return;
+    this._queuedDrainScheduled = true;
+    setTimeout(() => {
+      this._queuedDrainScheduled = false;
+      this.tryDrainQueuedMessages();
+    }, 0);
+  }
+
+  private tryDrainQueuedMessages(): void {
+    if (!this._queuedDrainRequested) return;
+    if (this.state.get().queuedMessages.length === 0) {
+      this._queuedDrainRequested = false;
+      return;
+    }
+    if (!this.canRunStep()) return;
+
+    this._queuedDrainRequested = false;
+    void this.runStep();
   }
 
   private async runAdmittedStep(
@@ -2775,6 +2927,7 @@ export abstract class BaseAgent<
       flushQueue: !isApprovalContinuation,
     });
     if (flushedIndex !== undefined) {
+      this._queuedDrainRequested = this.state.get().queuedMessages.length > 0;
       this.scheduleMemorySnapshotWrite('queued-messages');
     }
     const queueFlushIndex = flushedIndex ?? -1;
@@ -3863,6 +4016,12 @@ export abstract class BaseAgent<
     await this.state.persist(dirtyMessageIndices);
   }
 
+  private async saveQueuedMessagesStrict(): Promise<void> {
+    if (!this.config.persistent) return;
+
+    await this.state.persist({ throwOnError: true });
+  }
+
   private getExecutionTargetForCurrentTurn(): AgentExecutionTarget {
     return resolveAgentExecutionTargetFromMessages(this.state.get().history);
   }
@@ -4794,27 +4953,6 @@ export abstract class BaseAgent<
     }
 
     await this.runStep(true);
-  }
-
-  private hasLocalOpenToolApproval(): boolean {
-    const state = this.state.get();
-    if (Object.keys(state.pendingApprovals).length > 0) return true;
-    return state.history.some(
-      (message) =>
-        message.role === 'assistant' &&
-        message.parts.some((part) => {
-          if (
-            !(part.type.startsWith('tool-') || part.type === 'dynamic-tool')
-          ) {
-            return false;
-          }
-          const toolPart = part as AgentToolUIPart | DynamicToolUIPart;
-          return (
-            toolPart.state === 'approval-requested' ||
-            toolPart.state === 'approval-responded'
-          );
-        }),
-    );
   }
 
   private async persistApprovalSweep(sweep: {

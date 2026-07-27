@@ -38,6 +38,45 @@ export function removeQueuedMessage(
   });
 }
 
+export function replaceQueuedMessage(
+  store: AgentStore,
+  agentInstanceId: string,
+  args: {
+    messageId: string;
+    message: AgentMessage & { role: 'user' };
+  },
+): 'updated' | 'not-found' {
+  let status: 'updated' | 'not-found' = 'not-found';
+  updateAgentInstanceState(store, agentInstanceId, (state) => {
+    const index = state.queuedMessages.findIndex(
+      (message) => message.id === args.messageId,
+    );
+    if (index < 0) return;
+
+    state.queuedMessages[index] = {
+      ...args.message,
+      id: args.messageId,
+      role: 'user',
+    };
+    status = 'updated';
+  });
+  return status;
+}
+
+/**
+ * Exact queue restore used only by durable queue-mutation rollback.
+ * Callers must pass a detached snapshot captured before the mutation.
+ */
+export function restoreQueuedMessages(
+  store: AgentStore,
+  agentInstanceId: string,
+  args: { messages: Array<AgentMessage & { role: 'user' }> },
+): void {
+  updateAgentInstanceState(store, agentInstanceId, (state) => {
+    state.queuedMessages = args.messages;
+  });
+}
+
 export function clearQueuedMessages(
   store: AgentStore,
   agentInstanceId: string,

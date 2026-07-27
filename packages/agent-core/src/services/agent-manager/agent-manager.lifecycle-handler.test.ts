@@ -103,6 +103,42 @@ describe('AgentManager task lifecycle handlers', () => {
     vi.restoreAllMocks();
   });
 
+  it('delegates an atomic queued-message update and returns its disposition', async () => {
+    const harness = createHarness(false);
+    const updateQueuedMessage = vi.fn(async () => 'updated' as const);
+    (
+      harness.manager as unknown as {
+        activeAgents: Map<
+          string,
+          {
+            updateQueuedMessage: typeof updateQueuedMessage;
+            onTeardown: () => Promise<void>;
+          }
+        >;
+      }
+    ).activeAgents.set('source-task', {
+      updateQueuedMessage,
+      onTeardown: vi.fn(async () => {}),
+    });
+    const message = {
+      id: 'queued-1',
+      role: 'user' as const,
+      parts: [{ type: 'text' as const, text: 'edited instruction' }],
+      metadata: { createdAt: new Date(), partsMetadata: [] },
+    };
+
+    await expect(
+      harness.registry.dispatch(
+        'agents.updateQueuedMessage',
+        { callerId: 'test' },
+        ['source-task', 'queued-1', message],
+      ),
+    ).resolves.toBe('updated');
+    expect(updateQueuedMessage).toHaveBeenCalledWith('queued-1', message);
+
+    await harness.manager.teardown();
+  });
+
   it('rejects forking a running task before touching persistence', async () => {
     const harness = createHarness(true);
 

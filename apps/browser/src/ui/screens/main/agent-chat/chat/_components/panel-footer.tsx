@@ -1209,11 +1209,6 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
       ? (s.agents.instances[openAgent]?.state.queuedMessages ?? EMPTY_QUEUE)
       : EMPTY_QUEUE,
   );
-  const flushQueue = useKartonProcedure((p) => p.agents.flushQueue);
-  const handleFlushQueue = useCallback(() => {
-    if (openAgent) void flushQueue(openAgent);
-  }, [flushQueue, openAgent]);
-
   const [chatInputActive, setChatInputActive] = useState<boolean>(false);
   // Mirror `chatInputActive` into a ref so synchronous handlers
   // (`omnibox-focus-requested`, `search-bar-focus-requested`, `onInputBlur`)
@@ -1904,7 +1899,6 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
             contextUsedKb={usedTokens ? usedTokens / 1000 : 0}
             contextMaxKb={maxTokens ? maxTokens / 1000 : 0}
             hasQueuedMessages={(queuedMessages?.length ?? 0) > 0}
-            onFlushQueue={handleFlushQueue}
             onFocus={onInputFocus}
             onBlur={onInputBlur}
             onEscape={handleEscape}

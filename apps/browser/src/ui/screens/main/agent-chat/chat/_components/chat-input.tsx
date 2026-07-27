@@ -229,9 +229,8 @@ export interface ChatInputProps {
   contextUsedKb?: number;
   contextMaxKb?: number;
 
-  // Queued messages (for early flushing)
+  // Queued-message status hint
   hasQueuedMessages?: boolean;
-  onFlushQueue?: () => void;
 
   // Focus management
   onFocus?: () => void;
@@ -308,7 +307,6 @@ export const ChatInput = memo(function ChatInput({
   contextMaxKb = 0,
 
   hasQueuedMessages = false,
-  onFlushQueue,
 
   onFocus,
   onBlur,
@@ -328,7 +326,7 @@ export const ChatInput = memo(function ChatInput({
     shownPlaceholder.current =
       placeholder ??
       t('composer.placeholder', {
-        queuedHint: hasQueuedMessages ? t('composer.sendQueuedHint') : '',
+        queuedHint: hasQueuedMessages ? t('composer.queuedWaitingHint') : '',
       });
   }, [placeholder, hasQueuedMessages, t]);
   const staticPlaceholderRef = useRef(() => shownPlaceholder.current);
@@ -452,13 +450,10 @@ export const ChatInput = memo(function ChatInput({
           );
           if (hasSuggestionPopup) return false;
           event.preventDefault();
-          // If input is empty and there are queued messages, flush the queue
           const isEmpty = view.state.doc.textContent.trim().length === 0;
-          if (isEmpty && hasQueuedMessages && onFlushQueue) {
-            onFlushQueue();
-          } else {
-            handleSubmit();
-          }
+          // Empty Enter is deliberately a no-op. Queue interruption is a
+          // destructive action and must remain an explicit button click.
+          if (!isEmpty) handleSubmit();
           return true;
         }
         // Handle Escape
