@@ -329,12 +329,20 @@ function getAuthRouteAuthorityFingerprint(authState: AuthState): string {
 }
 
 function isManagedCredentialRejection(error: unknown): boolean {
-  let current = error;
-  for (let depth = 0; depth < 4; depth++) {
-    if (!(current instanceof Error) && !isPlainObject(current)) return false;
+  const pending: Array<{ value: unknown; depth: number }> = [
+    { value: error, depth: 0 },
+  ];
+  const seen = new Set<object>();
+
+  while (pending.length > 0) {
+    const { value: current, depth } = pending.shift()!;
+    if (!(current instanceof Error) && !isPlainObject(current)) continue;
+    if (seen.has(current)) continue;
+    seen.add(current);
+
     const frame = current as Record<string, unknown>;
     const statusCode = frame.statusCode ?? frame.status;
-    if (statusCode === 401 || statusCode === 403) return true;
+    if (statusCode === 401) return true;
 
     const errorText = [frame.message, frame.code, frame.responseBody]
       .filter((value): value is string => typeof value === 'string')
@@ -347,7 +355,17 @@ function isManagedCredentialRejection(error: unknown): boolean {
       return true;
     }
 
-    current = frame.lastError ?? frame.cause;
+    if (depth >= 3) continue;
+    for (const nested of [
+      frame.lastError,
+      frame.cause,
+      frame.responseBody,
+      frame.error,
+    ]) {
+      if (nested instanceof Error || isPlainObject(nested)) {
+        pending.push({ value: nested, depth: depth + 1 });
+      }
+    }
   }
   return false;
 }

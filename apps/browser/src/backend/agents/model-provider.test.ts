@@ -141,6 +141,35 @@ const agentStepMetadata = {
   [MODEL_REQUEST_PURPOSE_METADATA_KEY]: 'agent-step',
 };
 
+async function createManagedRejectingRoute(error: unknown, traceId: string) {
+  const managedToken = `managed-token-${traceId}`;
+  const invalidateRejectedModelAccessToken = vi.fn();
+  const rejectingModel = {
+    doGenerate: vi.fn().mockRejectedValue(error),
+    doStream: vi.fn().mockRejectedValue(error),
+  } as any;
+  const service = createTestModelProviderService({
+    telemetryService: {
+      withTracing: vi.fn(() => rejectingModel),
+      forkTracing: vi.fn((model) => model),
+      captureException: vi.fn(),
+    },
+    authService: {
+      accessToken: 'clodex-session-token',
+      modelAccessToken: managedToken,
+      ensureModelAccessTokenForRoute: vi.fn().mockResolvedValue(managedToken),
+      invalidateRejectedModelAccessToken,
+      authState: { models: [] },
+    },
+  });
+  const route = await service.getModelWithOptionsAsync(
+    'gpt-5.5',
+    traceId,
+    agentStepMetadata,
+  );
+  return { invalidateRejectedModelAccessToken, managedToken, route };
+}
+
 describe('model route leases', () => {
   it('forks the admitted route onto a fresh internal-review trace and revokes both together', async () => {
     let invalidatePreferencesRoute:
@@ -1074,10 +1103,10 @@ describe('official provider endpoint resolution', () => {
 });
 
 describe('Clodex IDE model token refresh', () => {
-  it('evicts a managed route token after the relay rejects it', async () => {
+  it('revokes a managed route on a bare numeric 401', async () => {
     const rejectedToken = 'rejected-managed-route-token';
     const invalidateRejectedModelAccessToken = vi.fn();
-    const invalidKeyError = Object.assign(new Error('Invalid API key'), {
+    const invalidKeyError = Object.assign(new Error('Unauthorized'), {
       statusCode: 401,
     });
     const rejectingModel = {
@@ -1131,6 +1160,71 @@ describe('Clodex IDE model token refresh', () => {
       Promise.resolve().then(() => forked?.model.doGenerate({} as never)),
     ).rejects.toThrow('revoked before request dispatch');
     expect(rejectingModel.doGenerate).not.toHaveBeenCalled();
+  });
+
+  it('revokes a managed route on a message-only invalid-key signal', async () => {
+    const invalidKeyError = new Error(
+      'The relay rejected this request: invalid API key',
+    );
+    const { invalidateRejectedModelAccessToken, managedToken, route } =
+      await createManagedRejectingRoute(
+        invalidKeyError,
+        'message-only-invalid-key',
+      );
+
+    await expect(route.model.doStream({} as never)).rejects.toBe(
+      invalidKeyError,
+    );
+    expect(invalidateRejectedModelAccessToken).toHaveBeenCalledOnce();
+    expect(invalidateRejectedModelAccessToken).toHaveBeenCalledWith(
+      managedToken,
+    );
+    expect(route.routeLease?.isValid()).toBe(false);
+  });
+
+  it('revokes an explicit invalid-key 403 from a nested response body', async () => {
+    const invalidKeyError = Object.assign(new Error('Forbidden'), {
+      statusCode: 403,
+      responseBody: {
+        error: {
+          code: 'invalid_api_key',
+        },
+      },
+    });
+    const { invalidateRejectedModelAccessToken, managedToken, route } =
+      await createManagedRejectingRoute(
+        invalidKeyError,
+        'nested-invalid-key-403',
+      );
+
+    await expect(route.model.doStream({} as never)).rejects.toBe(
+      invalidKeyError,
+    );
+    expect(invalidateRejectedModelAccessToken).toHaveBeenCalledOnce();
+    expect(invalidateRejectedModelAccessToken).toHaveBeenCalledWith(
+      managedToken,
+    );
+    expect(route.routeLease?.isValid()).toBe(false);
+  });
+
+  it('does not revoke a managed route on a policy or entitlement 403', async () => {
+    const policyError = Object.assign(
+      new Error('This model is not included in the current plan'),
+      {
+        statusCode: 403,
+        responseBody: {
+          error: {
+            code: 'insufficient_entitlement',
+          },
+        },
+      },
+    );
+    const { invalidateRejectedModelAccessToken, route } =
+      await createManagedRejectingRoute(policyError, 'policy-403');
+
+    await expect(route.model.doStream({} as never)).rejects.toBe(policyError);
+    expect(invalidateRejectedModelAccessToken).not.toHaveBeenCalled();
+    expect(route.routeLease?.isValid()).toBe(true);
   });
 
   it('revokes independently resolved routes and forks sharing one managed token', async () => {
