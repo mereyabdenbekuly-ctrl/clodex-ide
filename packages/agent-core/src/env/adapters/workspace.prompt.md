@@ -17,6 +17,6 @@ The working directory consists of symlinks to folders on the user's machine.
 | `plugins/` | Built-in plugin skills | **Intrinsic knowledge** — highest priority. Internal, not visible to the user |
 | `globalskills-sw/` | User-level global skills from `~/.clodex/skills/` | Read-only. Only present when the directory exists on the user's machine |
 | `globalskills-agents/` | Cross-agent global skills from `~/.agents/skills/` | Read-only. Only present when the directory exists on the user's machine |
-| `w{4_CHAR_ID}/` | Mounted workspaces the user gave the agent access to | The 4-char id is a stable alias derived from the original path. Originals appear in the `<symlinks>` table |
+| `w{16_HEX_ID}/` | Mounted workspaces the user gave the agent access to | The 16-hex id is a stable alias derived from the original path. Copy the exact prefix from the `<symlinks>` table; never pass the original absolute path or a Windows drive letter to a tool |
 
 Hosts may expose additional symlinks (e.g. `shells/`, `logs/`, `plans/`); their domain sections below explain those.

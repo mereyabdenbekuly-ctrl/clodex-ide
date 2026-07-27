@@ -67,7 +67,7 @@ export const getLintingDiagnosticsToolInputSchema = z.object({
   paths: z
     .array(z.string())
     .describe(
-      'File paths to check for diagnostics. Each must include a valid mount prefix, e.g. "w1a2b/src/file.ts".',
+      'File paths to check for diagnostics. Each must use the exact mount prefix from <symlinks>, never an absolute path or Windows drive letter, e.g. "w0123456789abcdef/src/file.ts".',
     ),
 });
 
@@ -86,7 +86,7 @@ export const fileDiagnosticsSchema = z.object({
   path: z
     .string()
     .describe(
-      'Path to the file to get linting diagnostics for. Must include a valid mount prefix. e.g. "/ws1/path/to/file.ts"',
+      'Path to the file to get linting diagnostics for. Copy the exact mount prefix from <symlinks>; never use an absolute path or Windows drive letter. e.g. "w0123456789abcdef/path/to/file.ts"',
     ),
   diagnostics: z.array(lintingDiagnosticSchema),
 });

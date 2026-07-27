@@ -166,6 +166,37 @@ describe('universal toolbox', () => {
     });
   });
 
+  it('surfaces registered alias guidance for Windows paths in read and grep tools', async () => {
+    const windowsRoot = 'C:\\Users\\Alice\\Repo';
+    const windowsPrefix = 'w0123456789abcdef';
+    deps.mountManager = {
+      getMountPrefixes: () => [windowsPrefix],
+      getWorkspacePathForPrefix: (prefix) =>
+        prefix === windowsPrefix ? windowsRoot : undefined,
+      getMountPermissionsForPrefix: () => ['read'],
+      findWorkspaceForFile: () => undefined,
+    };
+
+    await expect(
+      readToolExecute({ path: 'C:\\Users\\Alice\\Repo\\src\\app.ts' }, deps),
+    ).rejects.toThrow(`${windowsPrefix}/src/app.ts`);
+    await expect(
+      grepSearchToolExecute(
+        { mount_prefix: windowsRoot, query: 'needle' },
+        deps,
+      ),
+    ).rejects.toThrow(`mount_prefix arguments, use "${windowsPrefix}"`);
+    await expect(
+      grepSearchToolExecute({ mount_prefix: 'C:', query: 'needle' }, deps),
+    ).rejects.toThrow('Windows drive designator "C:" is not a mount prefix');
+    await expect(
+      searchProjectSymbolsToolExecute(
+        { mount_prefix: 'C:', query: 'BillingService' },
+        deps,
+      ),
+    ).rejects.toThrow('Windows drive designator "C:" is not a mount prefix');
+  });
+
   it('reads from the memory mount', async () => {
     mkdirSync(path.join(root, 'memory'), { recursive: true });
     writeFileSync(path.join(root, 'memory', 'index.md'), '# Memory\n');

@@ -78,6 +78,7 @@ import type { UniversalToolboxDeps } from './types';
 import {
   findWorkspaceRootForPath,
   listAvailableMountPrefixes,
+  resolveToolMountPrefix,
   resolveToolPath,
 } from './path-resolution';
 import {
@@ -1261,8 +1262,12 @@ function getSearchableProjectMounts(
     if (isProtectedMountPrefix(prefix)) continue;
     let resolved: ReturnType<typeof resolveToolPath>;
     try {
-      resolved = resolveToolPath(deps, `${prefix}/`, 'read');
-    } catch {
+      resolved = resolveToolMountPrefix(deps, prefix, 'read');
+    } catch (error) {
+      // A user/model supplied prefix deserves the resolver's actionable
+      // diagnostic (notably Windows drive/absolute-path guidance). Discovery
+      // across all registered mounts remains tolerant of a stale entry.
+      if (requestedPrefix) throw error;
       continue;
     }
     const key = `${resolved.mountPrefix}\0${resolved.mountRoot}`;
@@ -1754,7 +1759,7 @@ export async function globToolExecute(
   deps: UniversalToolboxDeps,
   runtimeCache?: { get: (mountRoot: string) => ClientRuntimeNode },
 ) {
-  const resolved = resolveToolPath(deps, `${params.mount_prefix}/`, 'read');
+  const resolved = resolveToolMountPrefix(deps, params.mount_prefix, 'read');
   if (isProtectedMountPrefix(resolved.mountPrefix)) {
     const relativePaths = (await walkProtectedMount(resolved.mountRoot)).filter(
       (entry) => globMatches(params.pattern, entry),
@@ -1807,7 +1812,7 @@ export async function grepSearchToolExecute(
   deps: UniversalToolboxDeps,
   runtimeCache?: { get: (mountRoot: string) => ClientRuntimeNode },
 ) {
-  const resolved = resolveToolPath(deps, `${params.mount_prefix}/`, 'read');
+  const resolved = resolveToolMountPrefix(deps, params.mount_prefix, 'read');
   if (isProtectedMountPrefix(resolved.mountPrefix)) {
     return grepProtectedMount(params, deps, resolved);
   }
