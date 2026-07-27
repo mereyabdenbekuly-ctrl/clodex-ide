@@ -1133,6 +1133,76 @@ describe('Clodex IDE model token refresh', () => {
     expect(rejectingModel.doGenerate).not.toHaveBeenCalled();
   });
 
+  it('revokes independently resolved routes and forks sharing one managed token', async () => {
+    const sharedToken = 'shared-rejected-managed-route-token';
+    const invalidateRejectedModelAccessToken = vi.fn();
+    const invalidKeyError = Object.assign(new Error('Invalid API key'), {
+      statusCode: 401,
+    });
+    const rejectingModel = {
+      doGenerate: vi.fn().mockRejectedValue(invalidKeyError),
+      doStream: vi.fn().mockRejectedValue(invalidKeyError),
+    } as any;
+    const service = createTestModelProviderService({
+      telemetryService: {
+        withTracing: vi.fn(() => rejectingModel),
+        forkTracing: vi.fn((model) => model),
+        captureException: vi.fn(),
+      },
+      authService: {
+        accessToken: 'clodex-session-token',
+        modelAccessToken: sharedToken,
+        ensureModelAccessTokenForRoute: vi.fn().mockResolvedValue(sharedToken),
+        invalidateRejectedModelAccessToken,
+        authState: { models: [] },
+      },
+    });
+    const first = await service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'managed-rejection-first',
+      agentStepMetadata,
+    );
+    const second = await service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'managed-rejection-second',
+      agentStepMetadata,
+    );
+    const secondFork = second.routeLease?.forkTrace?.(
+      'managed-rejection-second-fork',
+      { [MODEL_REQUEST_PURPOSE_METADATA_KEY]: 'internal' },
+    );
+
+    await expect(first.model.doStream({} as never)).rejects.toBe(
+      invalidKeyError,
+    );
+
+    expect(invalidateRejectedModelAccessToken).toHaveBeenCalledOnce();
+    expect(invalidateRejectedModelAccessToken).toHaveBeenCalledWith(
+      sharedToken,
+    );
+    expect(first.routeLease?.isValid()).toBe(false);
+    expect(second.routeLease?.isValid()).toBe(false);
+    expect(secondFork?.routeLease?.isValid()).toBe(false);
+    const attemptedResurrection = await service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'managed-rejection-resurrection',
+      agentStepMetadata,
+    );
+    expect(attemptedResurrection.routeLease?.isValid()).toBe(false);
+    await expect(
+      Promise.resolve().then(() => second.model.doGenerate({} as never)),
+    ).rejects.toThrow('revoked before request dispatch');
+    await expect(
+      Promise.resolve().then(() => secondFork?.model.doGenerate({} as never)),
+    ).rejects.toThrow('revoked before request dispatch');
+    await expect(
+      Promise.resolve().then(() =>
+        attemptedResurrection.model.doGenerate({} as never),
+      ),
+    ).rejects.toThrow('revoked before request dispatch');
+    expect(rejectingModel.doGenerate).not.toHaveBeenCalled();
+  });
+
   it('does not apply managed-token eviction to official BYOK routes', async () => {
     const invalidateRejectedModelAccessToken = vi.fn();
     const invalidKeyError = Object.assign(new Error('Invalid API key'), {
@@ -1163,6 +1233,188 @@ describe('Clodex IDE model token refresh', () => {
       agentStepMetadata,
     );
 
+    await expect(route.model.doStream({} as never)).rejects.toBe(
+      invalidKeyError,
+    );
+    expect(invalidateRejectedModelAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('refreshes and revokes the reserved qualified Clodex account route', async () => {
+    const staleProfileTokenRead = vi.fn(() => 'stale-profile-token');
+    const providerApiKeys: Record<string, string> = {};
+    Object.defineProperty(providerApiKeys, 'provider.clodex-account', {
+      get: staleProfileTokenRead,
+    });
+    const refreshedToken = 'fresh-qualified-managed-route-token';
+    const ensureModelAccessTokenForRoute = vi
+      .fn()
+      .mockResolvedValue(refreshedToken);
+    const invalidateRejectedModelAccessToken = vi.fn();
+    const invalidKeyError = Object.assign(new Error('Invalid API key'), {
+      statusCode: 401,
+    });
+    const rejectingModel = {
+      doGenerate: vi.fn().mockRejectedValue(invalidKeyError),
+      doStream: vi.fn().mockRejectedValue(invalidKeyError),
+    } as any;
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'clodex-account',
+          providerType: 'clodex',
+          displayName: 'Clodex Cloud',
+          baseUrl: 'https://clodex.test/v1',
+          apiKeyReference: 'provider.clodex-account',
+          protocol: 'openai-responses',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      providerApiKeys,
+      telemetryService: {
+        withTracing: vi.fn(() => rejectingModel),
+        forkTracing: vi.fn((model) => model),
+        captureException: vi.fn(),
+      },
+      authService: {
+        accessToken: 'clodex-session-token',
+        modelAccessToken: 'stale-profile-token',
+        ensureModelAccessTokenForRoute,
+        invalidateRejectedModelAccessToken,
+        authState: {
+          models: [
+            {
+              id: 'anthropic/claude-opus-4.8',
+              enabled: true,
+            },
+          ],
+        },
+      },
+    });
+
+    const route = await service.getModelWithOptionsAsync(
+      'clodex-account:anthropic/claude-opus-4.8',
+      'qualified-managed-rejection',
+      agentStepMetadata,
+    );
+
+    expect(ensureModelAccessTokenForRoute).toHaveBeenCalledWith({
+      provider: 'anthropic',
+      modelId: 'anthropic/claude-opus-4.8',
+    });
+    expect(staleProfileTokenRead).not.toHaveBeenCalled();
+    expect(route.providerMode).toBe('clodex');
+    await expect(route.model.doStream({} as never)).rejects.toBe(
+      invalidKeyError,
+    );
+    expect(invalidateRejectedModelAccessToken).toHaveBeenCalledWith(
+      refreshedToken,
+    );
+    expect(route.routeLease?.isValid()).toBe(false);
+  });
+
+  it('keeps qualified custom routes outside managed-token invalidation', async () => {
+    const ensureModelAccessTokenForRoute = vi.fn();
+    const invalidateRejectedModelAccessToken = vi.fn();
+    const invalidKeyError = Object.assign(new Error('Invalid API key'), {
+      statusCode: 401,
+    });
+    const rejectingModel = {
+      doGenerate: vi.fn().mockRejectedValue(invalidKeyError),
+      doStream: vi.fn().mockRejectedValue(invalidKeyError),
+    } as any;
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'openrouter-main',
+          providerType: 'openrouter',
+          displayName: 'OpenRouter',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKeyReference: 'provider.openrouter-main',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      providerApiKeys: {
+        'provider.openrouter-main': 'openrouter-byok-token',
+      },
+      telemetryService: {
+        withTracing: vi.fn(() => rejectingModel),
+        forkTracing: vi.fn((model) => model),
+        captureException: vi.fn(),
+      },
+      authService: {
+        accessToken: 'clodex-session-token',
+        modelAccessToken: 'unused-managed-token',
+        ensureModelAccessTokenForRoute,
+        invalidateRejectedModelAccessToken,
+        authState: { models: [] },
+      },
+    });
+
+    const route = await service.getModelWithOptionsAsync(
+      'openrouter-main:openai/example',
+      'qualified-custom-rejection',
+      agentStepMetadata,
+    );
+
+    expect(route.providerMode).toBe('custom');
+    expect(ensureModelAccessTokenForRoute).not.toHaveBeenCalled();
+    await expect(route.model.doStream({} as never)).rejects.toBe(
+      invalidKeyError,
+    );
+    expect(invalidateRejectedModelAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('keeps non-reserved qualified Clodex BYOK routes isolated', async () => {
+    const ensureModelAccessTokenForRoute = vi.fn();
+    const invalidateRejectedModelAccessToken = vi.fn();
+    const invalidKeyError = Object.assign(new Error('Invalid API key'), {
+      statusCode: 401,
+    });
+    const rejectingModel = {
+      doGenerate: vi.fn().mockRejectedValue(invalidKeyError),
+      doStream: vi.fn().mockRejectedValue(invalidKeyError),
+    } as any;
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'clodex-byok',
+          providerType: 'clodex',
+          displayName: 'Private Clodex-compatible relay',
+          baseUrl: 'https://relay.example.test/v1',
+          apiKeyReference: 'provider.clodex-byok',
+          protocol: 'openai-chat',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      providerApiKeys: {
+        'provider.clodex-byok': 'user-managed-clodex-token',
+      },
+      telemetryService: {
+        withTracing: vi.fn(() => rejectingModel),
+        forkTracing: vi.fn((model) => model),
+        captureException: vi.fn(),
+      },
+      authService: {
+        accessToken: 'clodex-session-token',
+        modelAccessToken: 'unused-managed-token',
+        ensureModelAccessTokenForRoute,
+        invalidateRejectedModelAccessToken,
+        authState: { models: [] },
+      },
+    });
+
+    const route = await service.getModelWithOptionsAsync(
+      'clodex-byok:gpt-5.5',
+      'qualified-clodex-byok-rejection',
+      agentStepMetadata,
+    );
+
+    expect(route.providerMode).toBe('clodex');
+    expect(ensureModelAccessTokenForRoute).not.toHaveBeenCalled();
     await expect(route.model.doStream({} as never)).rejects.toBe(
       invalidKeyError,
     );

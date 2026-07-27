@@ -1,4 +1,5 @@
 import type { TelemetryService } from '@/services/telemetry';
+import { createHash } from 'node:crypto';
 import type { ModelAlias, ModelId } from '@shared/available-models';
 import type {
   ModelProvider,
@@ -54,6 +55,7 @@ type ProviderOptions = Parameters<typeof streamText>[0]['providerOptions'];
 type BuiltInModelSettings = (typeof availableModels)[number];
 type ThinkingModelSettings = ThinkingCapableModel;
 type ClodexAuthModel = NonNullable<AuthState['models']>[number];
+type ManagedCredentialState = { rejected: boolean };
 
 // Conservative internal budgets only. The UI deliberately reports unknown
 // when no provider/catalog capability is available instead of presenting
@@ -68,6 +70,58 @@ const CLODEX_BUILT_IN_SAME_PROVIDER_FALLBACKS: Partial<
 
 function getBareModelId(modelId: string): string {
   return modelId.split('/').pop() ?? modelId;
+}
+
+function getUnambiguousAvailableModelByBareId(
+  modelId: string,
+): BuiltInModelSettings | undefined {
+  const bareModelId = getBareModelId(modelId);
+  const matches = availableModels.filter(
+    (candidate) => getBareModelId(candidate.modelId) === bareModelId,
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function getExplicitQualifiedRouteProvider(
+  modelId: string,
+): ModelProvider | undefined {
+  const separator = modelId.indexOf('/');
+  if (separator <= 0) return undefined;
+  const prefix = modelId.slice(0, separator).toLowerCase();
+  switch (prefix) {
+    case 'anthropic':
+      return 'anthropic';
+    case 'openai':
+      return 'openai';
+    case 'google':
+    case 'gemini':
+      return 'google';
+    case 'moonshotai':
+    case 'moonshot':
+    case 'kimi':
+      return 'moonshotai';
+    case 'alibaba':
+    case 'qwen':
+    case 'dashscope':
+      return 'alibaba';
+    case 'deepseek':
+      return 'deepseek';
+    case 'z-ai':
+    case 'zai':
+    case 'glm':
+      return 'z-ai';
+    case 'minimax':
+      return 'minimax';
+    case 'xiaomi-mimo':
+    case 'xiaomi':
+    case 'mimo':
+      return 'xiaomi-mimo';
+    case 'mistral':
+    case 'mistralai':
+      return 'mistral';
+    default:
+      return undefined;
+  }
 }
 
 export function parseQualifiedModelId(
@@ -298,6 +352,10 @@ function isManagedCredentialRejection(error: unknown): boolean {
   return false;
 }
 
+function fingerprintManagedCredential(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
 function guardManagedModelCredential(
   model: LanguageModelV3,
   onCredentialRejected: () => void,
@@ -387,6 +445,10 @@ export class ModelProviderService {
   private readonly preferencesService: PreferencesService;
   private readonly credentialsService?: CredentialsService;
   private readonly providerRegistry = new AIProviderRegistry();
+  private readonly managedCredentialStates = new Map<
+    string,
+    ManagedCredentialState
+  >();
   private routeRevision = 0;
 
   public constructor(
@@ -421,6 +483,7 @@ export class ModelProviderService {
     });
     authService.registerCredentialEpochChangeCallback?.(() => {
       this.routeRevision += 1;
+      this.managedCredentialStates.clear();
     });
     credentialsService?.addProviderApiKeyListener?.(() => {
       this.routeRevision += 1;
@@ -1078,26 +1141,41 @@ export class ModelProviderService {
     modelId: ModelId,
     requestMetadata?: Record<string, unknown>,
   ): Promise<string | undefined> {
-    if (parseQualifiedModelId(modelId)) return undefined;
-    const builtIn = getAvailableModel(modelId);
-    const alias = getModelAlias(modelId);
+    const qualified = parseQualifiedModelId(modelId);
+    if (
+      qualified &&
+      !this.isManagedClodexAccountProfile(qualified.providerProfileId)
+    ) {
+      return undefined;
+    }
+    const routeRequestModelId = qualified?.modelId ?? modelId;
+    const builtIn = getAvailableModel(routeRequestModelId);
+    const bareBuiltIn = qualified
+      ? getUnambiguousAvailableModelByBareId(routeRequestModelId)
+      : undefined;
+    const alias = getModelAlias(routeRequestModelId);
     const aliasTarget = alias
       ? getAvailableModel(alias.targetModelId)
       : undefined;
-    const clodexModel = this.getClodexModel(modelId);
+    const clodexModel = this.getClodexModel(routeRequestModelId);
     const routeModelId =
       builtIn?.modelId ??
       aliasTarget?.modelId ??
       clodexModel?.id ??
       (typeof requestMetadata?.preferred_model_id === 'string'
         ? requestMetadata.preferred_model_id
-        : modelId);
+        : routeRequestModelId);
     const routeProvider =
       builtIn?.officialProvider ??
       aliasTarget?.officialProvider ??
-      clodexModel?.provider;
+      clodexModel?.provider ??
+      bareBuiltIn?.officialProvider ??
+      (qualified
+        ? getExplicitQualifiedRouteProvider(routeRequestModelId)
+        : undefined);
 
     if (
+      !qualified &&
       routeProvider &&
       !clodexModel &&
       !this.providerUsesClodexGateway(routeProvider as ModelProvider)
@@ -1120,15 +1198,37 @@ export class ModelProviderService {
     return this.authService.ensureModelAccessToken();
   }
 
+  private isManagedClodexAccountProfile(profileId: string): boolean {
+    if (profileId !== 'clodex-account') return false;
+    return this.preferencesService
+      .get()
+      .providerProfiles.some(
+        (profile) =>
+          profile.id === profileId &&
+          profile.enabled &&
+          profile.providerType === 'clodex',
+      );
+  }
+
   private bindRouteLease(
     options: ModelWithOptions,
     admittedRevision = this.routeRevision,
     managedCredentialToken?: string,
-    managedCredentialState?: { rejected: boolean },
+    managedCredentialState?: ManagedCredentialState,
   ): ModelWithOptions {
-    const exactManagedCredentialState = managedCredentialToken
-      ? (managedCredentialState ?? { rejected: false })
-      : undefined;
+    let exactManagedCredentialState = managedCredentialState;
+    if (managedCredentialToken && !exactManagedCredentialState) {
+      const fingerprint = fingerprintManagedCredential(managedCredentialToken);
+      exactManagedCredentialState =
+        this.managedCredentialStates.get(fingerprint);
+      if (!exactManagedCredentialState) {
+        exactManagedCredentialState = { rejected: false };
+        this.managedCredentialStates.set(
+          fingerprint,
+          exactManagedCredentialState,
+        );
+      }
+    }
     const isValid = () =>
       this.routeRevision === admittedRevision &&
       exactManagedCredentialState?.rejected !== true;
@@ -1201,6 +1301,7 @@ export class ModelProviderService {
         qualified.modelId,
         traceId,
         otherPostHogProperties,
+        clodexApiKeyOverride,
       );
     }
     const clodexModel = this.getClodexModel(modelId);
@@ -1315,6 +1416,7 @@ export class ModelProviderService {
     modelId: string,
     traceId: string,
     requestMetadata?: Record<string, unknown>,
+    clodexApiKeyOverride?: string,
   ): ModelWithOptions {
     const preferences = this.preferencesService.get();
     const profile = preferences.providerProfiles.find(
@@ -1322,9 +1424,14 @@ export class ModelProviderService {
     );
     if (!profile)
       throw new Error(`Enabled provider profile ${profileId} not found`);
-    const apiKey = profile.apiKeyReference
-      ? this.credentialsService?.getProviderApiKey(profile.apiKeyReference)
-      : undefined;
+    const apiKey =
+      profile.id === 'clodex-account' &&
+      profile.providerType === 'clodex' &&
+      clodexApiKeyOverride
+        ? clodexApiKeyOverride
+        : profile.apiKeyReference
+          ? this.credentialsService?.getProviderApiKey(profile.apiKeyReference)
+          : undefined;
     if (
       profile.providerType !== 'ollama' &&
       !apiKey &&
