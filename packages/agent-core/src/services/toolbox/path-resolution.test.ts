@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { HostPaths } from '../../host';
 import { resolveToolMountPrefix, resolveToolPath } from './path-resolution';
@@ -251,12 +252,12 @@ describe('resolveToolPath Windows guidance', () => {
     expect(resolveToolPath(deps, 'wposix/src/app.ts')).toMatchObject({
       mountPrefix: 'wposix',
       relativePath: 'src/app.ts',
-      absolutePath: '/workspace/src/app.ts',
+      absolutePath: path.resolve('/workspace', 'src/app.ts'),
     });
     expect(resolveToolPath(deps, 'wposix\\src\\app.ts')).toMatchObject({
       mountPrefix: 'wposix',
       relativePath: 'src/app.ts',
-      absolutePath: '/workspace/src/app.ts',
+      absolutePath: path.resolve('/workspace', 'src/app.ts'),
     });
   });
 
@@ -266,7 +267,7 @@ describe('resolveToolPath Windows guidance', () => {
     expect(resolveToolMountPrefix(deps, 'wposix')).toMatchObject({
       mountPrefix: 'wposix',
       relativePath: '',
-      absolutePath: '/workspace',
+      absolutePath: path.resolve('/workspace'),
     });
     expect(() => resolveToolMountPrefix(deps, 'wposix/src')).toThrow(
       'mount_prefix must be one exact registered prefix',
