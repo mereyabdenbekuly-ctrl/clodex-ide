@@ -2078,43 +2078,41 @@ function ProviderProfilesSection() {
                       </span>
                     </span>
                   </RadioLabel>
-                  <div className="flex shrink-0 gap-1">
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => void handleTest(profile.id)}
-                    >
-                      Test
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => void handleModels(profile.id)}
-                    >
-                      Models
-                    </Button>
-                    {profile.id !== CLODEX_ACCOUNT_PROVIDER_PROFILE_ID && (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => {
-                            setEditing(profile);
-                            setDialogOpen(true);
-                          }}
-                        >
-                          <IconPenOutline18 className="size-3" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => void deleteProfile(profile.id)}
-                        >
-                          <IconTrashOutline18 className="size-3" />
-                        </Button>
-                      </>
-                    )}
-                  </div>
+                  {profile.id !== CLODEX_ACCOUNT_PROVIDER_PROFILE_ID && (
+                    <div className="flex shrink-0 gap-1">
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => void handleTest(profile.id)}
+                      >
+                        Test
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => void handleModels(profile.id)}
+                      >
+                        Models
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => {
+                          setEditing(profile);
+                          setDialogOpen(true);
+                        }}
+                      >
+                        <IconPenOutline18 className="size-3" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => void deleteProfile(profile.id)}
+                      >
+                        <IconTrashOutline18 className="size-3" />
+                      </Button>
+                    </div>
+                  )}
                 </div>
                 {status && (
                   <p

@@ -3,7 +3,16 @@ import type { CredentialsService } from '@/services/credentials';
 import { OllamaProviderAdapter } from './ollama-adapter';
 import { OpenAICompatibleProviderAdapter } from './openai-compatible-adapter';
 import { AnthropicProviderAdapter } from './anthropic-adapter';
-import { getClodexLlmRelayUrl } from '@/utils/clodex-relay';
+
+const DEFAULT_CLODEX_LLM_RELAY_URL = 'https://clodex.xyz/v1';
+
+function getClodexLlmRelayUrl(): string {
+  return (
+    process.env.CLODEX_LLM_RELAY_URL ||
+    process.env.LLM_PROXY_URL ||
+    DEFAULT_CLODEX_LLM_RELAY_URL
+  );
+}
 
 export function createBuiltInProviderAdapters(
   credentials: CredentialsService,

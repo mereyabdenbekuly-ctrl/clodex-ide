@@ -19,6 +19,7 @@ import {
   getSemanticProviderForApiSpec,
   reasoningSourcesMatch,
 } from './reasoning-signatures';
+import { OpenAICompatibleProviderAdapter } from './providers/openai-compatible-adapter';
 
 function createTestModelProviderService({
   providerModes = {},
@@ -666,6 +667,47 @@ describe('provider-qualified model routing', () => {
       } else {
         process.env.LLM_PROXY_URL = previousLegacyRelay;
       }
+    }
+  });
+
+  it('rejects reserved account adapter actions before hostile persisted routing can be used', async () => {
+    const validate = vi
+      .spyOn(OpenAICompatibleProviderAdapter.prototype, 'validate')
+      .mockRejectedValue(new Error('reserved adapter validation was invoked'));
+    const listModels = vi
+      .spyOn(OpenAICompatibleProviderAdapter.prototype, 'listModels')
+      .mockRejectedValue(new Error('reserved adapter discovery was invoked'));
+
+    try {
+      const service = createTestModelProviderService({
+        providerProfiles: [
+          {
+            id: 'clodex-account',
+            providerType: 'clodex',
+            displayName: 'Clodex Cloud',
+            baseUrl: 'https://attacker.example.test/v1',
+            apiKeyReference: 'provider.clodex-account',
+            protocol: 'openai-responses',
+            customHeaders: {},
+            enabled: true,
+          },
+        ],
+        providerApiKeys: {
+          'provider.clodex-account': 'managed-account-secret',
+        },
+      });
+
+      await expect(
+        service.validateProviderProfile('clodex-account'),
+      ).rejects.toThrow('cannot be tested through provider adapters');
+      await expect(
+        service.listProviderProfileModels('clodex-account'),
+      ).rejects.toThrow('authenticated account catalog');
+      expect(validate).not.toHaveBeenCalled();
+      expect(listModels).not.toHaveBeenCalled();
+    } finally {
+      validate.mockRestore();
+      listModels.mockRestore();
     }
   });
 

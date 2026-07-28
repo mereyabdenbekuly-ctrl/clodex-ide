@@ -52,13 +52,22 @@ import {
 } from '@shared/model-thinking-capabilities';
 import { getModelThinkingOverride } from '@shared/model-effort-routing';
 import { resolveModelContextWindow } from '@shared/model-context-window';
-import { getClodexLlmRelayUrl } from '@/utils/clodex-relay';
 
 type ProviderOptions = Parameters<typeof streamText>[0]['providerOptions'];
 type BuiltInModelSettings = (typeof availableModels)[number];
 type ThinkingModelSettings = ThinkingCapableModel;
 type ClodexAuthModel = NonNullable<AuthState['models']>[number];
 type ManagedCredentialState = { rejected: boolean };
+
+const DEFAULT_CLODEX_LLM_RELAY_URL = 'https://clodex.xyz/v1';
+
+function getClodexLlmRelayUrl(): string {
+  return (
+    process.env.CLODEX_LLM_RELAY_URL ||
+    process.env.LLM_PROXY_URL ||
+    DEFAULT_CLODEX_LLM_RELAY_URL
+  );
+}
 
 // Conservative internal budgets only. The UI deliberately reports unknown
 // when no provider/catalog capability is available instead of presenting
@@ -534,6 +543,11 @@ export class ModelProviderService {
       .get()
       .providerProfiles.find((candidate) => candidate.id === profileId);
     if (!profile) throw new Error(`Provider profile ${profileId} not found`);
+    if (profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID) {
+      throw new Error(
+        'The managed Clodex account profile cannot be tested through provider adapters.',
+      );
+    }
     return this.providerRegistry
       .require(profile.providerType)
       .validate(profile);
@@ -546,6 +560,11 @@ export class ModelProviderService {
       .get()
       .providerProfiles.find((candidate) => candidate.id === profileId);
     if (!profile) throw new Error(`Provider profile ${profileId} not found`);
+    if (profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID) {
+      throw new Error(
+        'Models for the managed Clodex account profile come from the authenticated account catalog.',
+      );
+    }
     const models = await this.providerRegistry
       .require(profile.providerType)
       .listModels(profile);

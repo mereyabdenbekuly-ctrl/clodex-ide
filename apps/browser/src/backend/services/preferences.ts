@@ -35,13 +35,22 @@ import {
   validateApiKeys,
   validateCodingPlanApiKey,
 } from '../utils/validate-api-keys';
-import { getClodexLlmRelayUrl } from '../utils/clodex-relay';
 
 // Enable Immer patches support
 enablePatches();
 
 const CLODEX_ACCOUNT_PROVIDER_CREDENTIAL_REFERENCE =
   `provider.${CLODEX_ACCOUNT_PROVIDER_PROFILE_ID}`;
+
+const DEFAULT_CLODEX_LLM_RELAY_URL = 'https://clodex.xyz/v1';
+
+function getClodexLlmRelayUrl(): string {
+  return (
+    process.env.CLODEX_LLM_RELAY_URL ||
+    process.env.LLM_PROXY_URL ||
+    DEFAULT_CLODEX_LLM_RELAY_URL
+  );
+}
 
 type PreferencesListener = (
   newPrefs: UserPreferences,
