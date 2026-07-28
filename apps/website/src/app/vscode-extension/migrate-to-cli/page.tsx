@@ -53,7 +53,7 @@ export default function MigrateToCLI() {
                 </span>
               </h1>
               <p className="mx-auto mb-10 max-w-md text-muted-foreground">
-                Community Observed 15 is the current verified Free Technical
+                Community Observed 17 is the current verified Free Technical
                 Preview for macOS, Windows, and Linux.
               </p>
 
@@ -74,7 +74,7 @@ export default function MigrateToCLI() {
                       variant: 'primary',
                     })}
                   >
-                    Download Community Observed 15
+                    Download Community Observed 17
                   </Link>
                 )}
                 <p className="text-sm text-subtle-foreground">
