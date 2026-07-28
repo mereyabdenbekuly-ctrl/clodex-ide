@@ -25,6 +25,7 @@ import {
   isUnavailableGatewayChannelError,
   shouldAttemptBattleSynthesizerSwarmFallback,
   shouldAttemptSameProviderSwarmFallback,
+  shouldContinueSwarmFallbackAfterError,
   type SwarmRuntimeDependencies,
 } from './index';
 
@@ -897,6 +898,35 @@ describe('swarm gateway error classifiers', () => {
     expect(
       shouldAttemptSameProviderSwarmFallback(error, 'gemini-3.5-flash'),
     ).toBe(true);
+    expect(shouldContinueSwarmFallbackAfterError({ error })).toBe(true);
+  });
+
+  it.each([
+    'invalid_api_key: distributor.no_available_channel',
+    'permission-denied while distributor.no-available-channel',
+    'payment_required: no available channel',
+    'authentication.failed; distributor.no_available_channel',
+  ])('keeps embedded nonretryable code ahead of unavailable channel: %s', (message) => {
+    const error = new Error(message);
+
+    expect(isUnavailableGatewayChannelError(error)).toBe(true);
+    expect(isRetryableGeminiGatewayError(error, 'gemini-3.5-flash')).toBe(
+      false,
+    );
+    expect(
+      shouldAttemptSameProviderSwarmFallback(error, 'gemini-3.5-flash'),
+    ).toBe(false);
+    expect(
+      shouldAttemptSameProviderSwarmFallback(error, 'claude-opus-4.8'),
+    ).toBe(false);
+    expect(
+      shouldAttemptBattleSynthesizerSwarmFallback({
+        error,
+        failedModelId: 'gemini-3.5-flash',
+        isBattleSynthesizerTask: true,
+      }),
+    ).toBe(false);
+    expect(shouldContinueSwarmFallbackAfterError({ error })).toBe(false);
   });
 
   it.each([
@@ -938,6 +968,24 @@ describe('swarm gateway error classifiers', () => {
         isBattleSynthesizerTask: true,
       }),
     ).toBe(false);
+    expect(shouldContinueSwarmFallbackAfterError({ error })).toBe(false);
+  });
+
+  it.each([
+    { statusCode: 401, message: 'invalid API key' },
+    new Error('invalid_api_key: distributor.no_available_channel'),
+  ])('stops the fallback chain when a transient Gemini probe returns nonretryable error %#', (probeError) => {
+    const originalError = {
+      statusCode: 503,
+      message: 'Service Unavailable',
+    };
+
+    expect(
+      shouldAttemptSameProviderSwarmFallback(originalError, 'gemini-3.5-flash'),
+    ).toBe(true);
+    expect(shouldContinueSwarmFallbackAfterError({ error: probeError })).toBe(
+      false,
+    );
   });
 
   it('refuses fallback after a write-class tool has started', () => {
@@ -957,6 +1005,12 @@ describe('swarm gateway error classifiers', () => {
         error,
         failedModelId: 'gemini-3.5-flash',
         isBattleSynthesizerTask: true,
+        effectfulToolStarted,
+      }),
+    ).toBe(false);
+    expect(
+      shouldContinueSwarmFallbackAfterError({
+        error,
         effectfulToolStarted,
       }),
     ).toBe(false);

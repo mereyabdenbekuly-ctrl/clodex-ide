@@ -156,6 +156,9 @@ const normalizeSwarmProviderCode = (value: string): string =>
     .toLowerCase()
     .replace(/[.\s-]+/g, '_');
 
+const SWARM_PROVIDER_CODE_TOKEN_PATTERN =
+  /\b[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+\b/gi;
+
 const getSwarmErrorSignals = (error: unknown): SwarmErrorSignals => {
   const signals: SwarmErrorSignals = {
     statusCodes: new Set<number>(),
@@ -172,6 +175,9 @@ const getSwarmErrorSignals = (error: unknown): SwarmErrorSignals => {
       return;
     }
     if (typeof value === 'string') {
+      for (const match of value.matchAll(SWARM_PROVIDER_CODE_TOKEN_PATTERN)) {
+        signals.providerCodes.add(normalizeSwarmProviderCode(match[0]));
+      }
       for (const match of value.matchAll(
         /\b(?:http(?: status)?|status(?: code)?)\s*[:=]?\s*(\d{3})\b/gi,
       )) {
@@ -334,6 +340,27 @@ const hasNonRetryableClientStatus = (
       status !== 429,
   );
 
+const hasNonRetryableSwarmGatewaySignals = (
+  signals: SwarmErrorSignals,
+  errorSearchText: string,
+): boolean =>
+  hasNonRetryableClientStatus(signals.statusCodes) ||
+  [...signals.providerCodes].some((code) =>
+    GEMINI_NON_RETRYABLE_PROVIDER_CODES.has(code),
+  ) ||
+  GEMINI_NON_RETRYABLE_MESSAGE_PATTERN.test(errorSearchText);
+
+const hasTransientSwarmGatewaySignals = (
+  signals: SwarmErrorSignals,
+  errorSearchText: string,
+): boolean =>
+  [...signals.statusCodes].some((status) => status >= 500) ||
+  [...signals.providerCodes].some((code) =>
+    GEMINI_TRANSIENT_PROVIDER_CODES.has(code),
+  ) ||
+  GEMINI_TRANSIENT_MESSAGE_PATTERN.test(errorSearchText) ||
+  GEMINI_HTTP_5XX_MESSAGE_PATTERN.test(errorSearchText);
+
 export const isRetryableGeminiGatewayError = (
   error: unknown,
   preferredModelId: string | undefined,
@@ -341,25 +368,14 @@ export const isRetryableGeminiGatewayError = (
   if (!preferredModelId?.startsWith('gemini-')) return false;
   const errorSearchText = getSwarmErrorSearchText(error);
   const signals = getSwarmErrorSignals(error);
-  if (
-    hasNonRetryableClientStatus(signals.statusCodes) ||
-    [...signals.providerCodes].some((code) =>
-      GEMINI_NON_RETRYABLE_PROVIDER_CODES.has(code),
-    ) ||
-    GEMINI_NON_RETRYABLE_MESSAGE_PATTERN.test(errorSearchText)
-  ) {
+  if (hasNonRetryableSwarmGatewaySignals(signals, errorSearchText)) {
     return false;
   }
 
   if (isUnavailableGatewayChannelError(error)) return true;
 
   return (
-    [...signals.statusCodes].some((status) => status >= 500) ||
-    [...signals.providerCodes].some((code) =>
-      GEMINI_TRANSIENT_PROVIDER_CODES.has(code),
-    ) ||
-    GEMINI_TRANSIENT_MESSAGE_PATTERN.test(errorSearchText) ||
-    GEMINI_HTTP_5XX_MESSAGE_PATTERN.test(errorSearchText) ||
+    hasTransientSwarmGatewaySignals(signals, errorSearchText) ||
     /openai[_-]?error/i.test(errorSearchText) ||
     /empty visible response/i.test(errorSearchText)
   );
@@ -374,13 +390,7 @@ export const shouldAttemptSameProviderSwarmFallback = (
 
   const errorSearchText = getSwarmErrorSearchText(error);
   const signals = getSwarmErrorSignals(error);
-  if (
-    hasNonRetryableClientStatus(signals.statusCodes) ||
-    [...signals.providerCodes].some((code) =>
-      GEMINI_NON_RETRYABLE_PROVIDER_CODES.has(code),
-    ) ||
-    GEMINI_NON_RETRYABLE_MESSAGE_PATTERN.test(errorSearchText)
-  ) {
+  if (hasNonRetryableSwarmGatewaySignals(signals, errorSearchText)) {
     return false;
   }
 
@@ -405,6 +415,27 @@ export const shouldAttemptBattleSynthesizerSwarmFallback = ({
   isBattleSynthesizerTask &&
   failedModelId.startsWith('gemini-') &&
   isRetryableGeminiGatewayError(error, failedModelId);
+
+export const shouldContinueSwarmFallbackAfterError = ({
+  error,
+  effectfulToolStarted = false,
+}: {
+  error: unknown;
+  effectfulToolStarted?: boolean;
+}): boolean => {
+  if (effectfulToolStarted) return false;
+
+  const errorSearchText = getSwarmErrorSearchText(error);
+  const signals = getSwarmErrorSignals(error);
+  if (hasNonRetryableSwarmGatewaySignals(signals, errorSearchText)) {
+    return false;
+  }
+
+  return (
+    isUnavailableGatewayChannelError(error) ||
+    hasTransientSwarmGatewaySignals(signals, errorSearchText)
+  );
+};
 
 type SwarmSubmitHandler = Parameters<
   AgentManagerService['setSwarmSubmitHandler']
@@ -1943,6 +1974,14 @@ export function createSwarmRuntime({
               } catch (probeError) {
                 throwIfAborted(abortSignal);
                 const probeDetail = getSwarmErrorSearchText(probeError);
+                if (
+                  !shouldContinueSwarmFallbackAfterError({ error: probeError })
+                ) {
+                  logger.warn(
+                    `[SwarmRun] Refusing further fallback after non-retryable Gemini provider-options probe failure for ${context.task.name}: ${probeDetail.slice(0, 1_500)}`,
+                  );
+                  throw probeError;
+                }
                 logger.warn(
                   `[SwarmRun] Gemini no-tools probe with provider options failed for ${context.task.name}: ${probeDetail.slice(0, 1_500)}`,
                 );
@@ -1966,6 +2005,16 @@ export function createSwarmRuntime({
                   throwIfAborted(abortSignal);
                   const minimalProbeDetail =
                     getSwarmErrorSearchText(minimalProbeError);
+                  if (
+                    !shouldContinueSwarmFallbackAfterError({
+                      error: minimalProbeError,
+                    })
+                  ) {
+                    logger.warn(
+                      `[SwarmRun] Refusing further fallback after non-retryable Gemini minimal probe failure for ${context.task.name}: ${minimalProbeDetail.slice(0, 1_500)}`,
+                    );
+                    throw minimalProbeError;
+                  }
                   logger.warn(
                     `[SwarmRun] Gemini minimal no-tools probe failed for ${context.task.name}: ${minimalProbeDetail.slice(0, 1_500)}`,
                   );
@@ -1987,6 +2036,7 @@ export function createSwarmRuntime({
                 'claude-opus-4.8',
               ]) {
                 throwIfAborted(abortSignal);
+                let candidateModelId = fallbackPreferredModelId;
                 context.emitProgress({
                   log: {
                     level: 'warn',
@@ -2011,6 +2061,7 @@ export function createSwarmRuntime({
                     },
                   });
                   if (fallback.resolvedModelId === failedModelId) continue;
+                  candidateModelId = fallback.resolvedModelId;
                   resolvedModelId = fallback.resolvedModelId;
                   modelWithOptions = fallback.modelWithOptions;
                   context.emitProgress({
@@ -2025,9 +2076,14 @@ export function createSwarmRuntime({
                   break;
                 } catch (candidateError) {
                   throwIfAborted(abortSignal);
-                  if (effectfulToolStarted) {
+                  const shouldContinueCandidateFallback =
+                    shouldContinueSwarmFallbackAfterError({
+                      error: candidateError,
+                      effectfulToolStarted,
+                    });
+                  if (!shouldContinueCandidateFallback) {
                     logger.warn(
-                      `[SwarmRun] Refusing another synthesizer fallback after effectful tool ${firstEffectfulToolName ?? 'unknown'} started for ${context.task.name}`,
+                      `[SwarmRun] Refusing another synthesizer fallback after ${candidateModelId} failed with a non-retryable error${effectfulToolStarted ? ` after effectful tool ${firstEffectfulToolName ?? 'unknown'} started` : ''} for ${context.task.name}`,
                     );
                     throw candidateError;
                   }
