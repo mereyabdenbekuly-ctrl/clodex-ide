@@ -20,8 +20,10 @@ import {
   createSwarmSubmitHandler,
   getAutomaticUltraSwarmPrompt,
   getSwarmErrorSearchText,
+  isEffectfulSwarmWorkerTool,
   isRetryableGeminiGatewayError,
   isUnavailableGatewayChannelError,
+  shouldAttemptBattleSynthesizerSwarmFallback,
   shouldAttemptSameProviderSwarmFallback,
   type SwarmRuntimeDependencies,
 } from './index';
@@ -899,6 +901,14 @@ describe('swarm gateway error classifiers', () => {
 
   it.each([
     { statusCode: 401, message: 'Internal error: invalid API key' },
+    {
+      statusCode: 401,
+      message: 'distributor.no_available_channel: invalid API key',
+    },
+    {
+      message:
+        'distributor.no_available_channel while upstream returned HTTP status 402',
+    },
     { response: { status: 403 }, error: { code: 'service_unavailable' } },
     { status: 404, message: 'openai_error: model not found' },
     { statusCode: 422, body: 'empty visible response' },
@@ -912,6 +922,43 @@ describe('swarm gateway error classifiers', () => {
     );
     expect(
       shouldAttemptSameProviderSwarmFallback(error, 'gemini-3.5-flash'),
+    ).toBe(false);
+  });
+
+  it.each([
+    { statusCode: 401, message: 'invalid API key' },
+    { statusCode: 402, message: 'payment required' },
+    { statusCode: 403, message: 'permission denied' },
+    { statusCode: 400, message: 'invalid request' },
+  ])('does not use Battle synthesizer fallback for auth/payment/4xx %#', (error) => {
+    expect(
+      shouldAttemptBattleSynthesizerSwarmFallback({
+        error,
+        failedModelId: 'gemini-3.5-flash',
+        isBattleSynthesizerTask: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('refuses fallback after a write-class tool has started', () => {
+    const error = { statusCode: 503, message: 'Service Unavailable' };
+    const effectfulToolStarted = isEffectfulSwarmWorkerTool('write');
+
+    expect(effectfulToolStarted).toBe(true);
+    expect(isEffectfulSwarmWorkerTool('multiEdit')).toBe(true);
+    expect(isEffectfulSwarmWorkerTool('read')).toBe(false);
+    expect(
+      shouldAttemptSameProviderSwarmFallback(error, 'gemini-3.5-flash', {
+        effectfulToolStarted,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAttemptBattleSynthesizerSwarmFallback({
+        error,
+        failedModelId: 'gemini-3.5-flash',
+        isBattleSynthesizerTask: true,
+        effectfulToolStarted,
+      }),
     ).toBe(false);
   });
 
