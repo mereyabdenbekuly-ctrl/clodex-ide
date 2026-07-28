@@ -1,4 +1,5 @@
 import { applyPatches, enablePatches, type Patch } from 'immer';
+import { isDeepStrictEqual } from 'node:util';
 import type { Logger } from './logger';
 import type { KartonService } from './karton';
 import type { PagesService } from './pages';
@@ -38,6 +39,9 @@ import { getClodexLlmRelayUrl } from '../utils/clodex-relay';
 
 // Enable Immer patches support
 enablePatches();
+
+const CLODEX_ACCOUNT_PROVIDER_CREDENTIAL_REFERENCE =
+  `provider.${CLODEX_ACCOUNT_PROVIDER_PROFILE_ID}`;
 
 type PreferencesListener = (
   newPrefs: UserPreferences,
@@ -662,17 +666,66 @@ export class PreferencesService extends DisposableService {
    * @throws If patches result in invalid preferences (fails Zod validation)
    */
   public async update(patches: Patch[]): Promise<void> {
+    return this.applyPreferencePatches(patches, {
+      allowManagedProviderProfileChanges: false,
+    });
+  }
+
+  private async applyPreferencePatches(
+    patches: Patch[],
+    options: { allowManagedProviderProfileChanges: boolean },
+  ): Promise<void> {
     this.assertNotDisposed();
     this.logger.debug('[PreferencesService] Applying patches...', { patches });
 
     await this.enqueuePreferenceWrite(async () => {
       // Apply patches using Immer
-      const patched = applyPatches(this.preferences, patches);
+      const patched = userPreferencesSchema.parse(
+        applyPatches(this.preferences, patches),
+      );
+
+      if (!options.allowManagedProviderProfileChanges) {
+        this.assertPublicProviderProfileBoundary(this.preferences, patched);
+      }
 
       await this.replacePreferences(patched);
     });
 
     this.logger.debug('[PreferencesService] Patches applied successfully');
+  }
+
+  /**
+   * Generic renderer patches must not gain authority over the authenticated
+   * account profile or reuse its credential on an attacker-controlled route.
+   */
+  private assertPublicProviderProfileBoundary(
+    current: UserPreferences,
+    next: UserPreferences,
+  ): void {
+    const currentManagedProfiles = current.providerProfiles.filter(
+      (profile) => profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID,
+    );
+    const nextManagedProfiles = next.providerProfiles.filter(
+      (profile) => profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID,
+    );
+
+    if (!isDeepStrictEqual(currentManagedProfiles, nextManagedProfiles)) {
+      throw new Error(
+        'The Clodex account provider profile is managed by the authenticated session and cannot be changed through preferences.update.',
+      );
+    }
+
+    const credentialAlias = next.providerProfiles.find(
+      (profile) =>
+        profile.id !== CLODEX_ACCOUNT_PROVIDER_PROFILE_ID &&
+        profile.apiKeyReference ===
+          CLODEX_ACCOUNT_PROVIDER_CREDENTIAL_REFERENCE,
+    );
+    if (credentialAlias) {
+      throw new Error(
+        `Provider profile ${credentialAlias.id} cannot reference the reserved Clodex account credential.`,
+      );
+    }
   }
 
   public async snoozeWorkspaceGitCleanupCandidates(
@@ -1119,26 +1172,31 @@ export class PreferencesService extends DisposableService {
     const profiles = this.preferences.providerProfiles.filter(
       (candidate) => candidate.id !== profileId,
     );
-    await this.update([
-      { op: 'replace', path: ['providerProfiles'], value: profiles },
-      ...(this.preferences.providerModelCatalogs[profileId]
-        ? [
-            {
-              op: 'remove' as const,
-              path: ['providerModelCatalogs', profileId],
-            },
-          ]
-        : []),
-      ...(this.preferences.defaultProviderProfileId === profileId
-        ? [
-            {
-              op: 'replace' as const,
-              path: ['defaultProviderProfileId'],
-              value: profiles.find((candidate) => candidate.enabled)?.id,
-            },
-          ]
-        : []),
-    ]);
+    await this.applyPreferencePatches(
+      [
+        { op: 'replace', path: ['providerProfiles'], value: profiles },
+        ...(this.preferences.providerModelCatalogs[profileId]
+          ? [
+              {
+                op: 'remove' as const,
+                path: ['providerModelCatalogs', profileId],
+              },
+            ]
+          : []),
+        ...(this.preferences.defaultProviderProfileId === profileId
+          ? [
+              {
+                op: 'replace' as const,
+                path: ['defaultProviderProfileId'],
+                value: profiles.find((candidate) => candidate.enabled)?.id,
+              },
+            ]
+          : []),
+      ],
+      {
+        allowManagedProviderProfileChanges: options.allowReservedProfile,
+      },
+    );
   }
 
   public async setDefaultProviderProfile(profileId: string): Promise<void> {

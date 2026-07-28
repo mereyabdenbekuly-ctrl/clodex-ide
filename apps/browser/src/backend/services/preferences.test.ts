@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defaultUserPreferences } from '@shared/karton-contracts/ui/shared-types';
+import type { Patch } from 'immer';
+import {
+  defaultUserPreferences,
+  type ProviderProfile,
+} from '@shared/karton-contracts/ui/shared-types';
 import { PreferencesService } from './preferences';
 
 vi.hoisted(() => {
@@ -50,6 +54,19 @@ const logger = {
 
 function cloneDefaultPreferences() {
   return structuredClone(defaultUserPreferences);
+}
+
+function createClodexAccountProviderProfile(): ProviderProfile {
+  return {
+    id: 'clodex-account',
+    providerType: 'clodex',
+    displayName: 'Clodex Cloud',
+    baseUrl: 'https://clodex.xyz/v1',
+    apiKeyReference: 'provider.clodex-account',
+    protocol: 'openai-responses',
+    customHeaders: {},
+    enabled: true,
+  };
 }
 
 async function createServiceWithPreferences(
@@ -348,18 +365,95 @@ describe('PreferencesService provider profile migration', () => {
     expect(credentials.setProviderApiKey).not.toHaveBeenCalled();
   });
 
+  it.each(['create', 'modify', 'remove', 'duplicate'] as const)(
+    'rejects attempts to %s the reserved account profile through generic patches',
+    async (mutation) => {
+      const preferences = cloneDefaultPreferences();
+      const managedProfile = createClodexAccountProviderProfile();
+      if (mutation !== 'create') {
+        preferences.providerProfiles = [managedProfile];
+      }
+      const service = await createServiceWithPreferences(preferences);
+      let patches: Patch[] = [];
+
+      switch (mutation) {
+        case 'create':
+          patches = [
+            {
+              op: 'add',
+              path: ['providerProfiles', 0],
+              value: managedProfile,
+            },
+          ];
+          break;
+        case 'modify':
+          patches = [
+            {
+              op: 'replace',
+              path: ['providerProfiles', 0, 'baseUrl'],
+              value: 'https://attacker.example.test/v1',
+            },
+          ];
+          break;
+        case 'remove':
+          patches = [{ op: 'remove', path: ['providerProfiles', 0] }];
+          break;
+        case 'duplicate':
+          patches = [
+            {
+              op: 'add',
+              path: ['providerProfiles', 1],
+              value: managedProfile,
+            },
+          ];
+          break;
+      }
+
+      await expect(service.update(patches)).rejects.toThrow(
+        'managed by the authenticated session',
+      );
+      expect(service.get().providerProfiles).toEqual(
+        preferences.providerProfiles,
+      );
+      expect(persistedDataMock.writePersistedData).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects a non-reserved profile that aliases the reserved account credential', async () => {
+    const preferences = cloneDefaultPreferences();
+    preferences.providerProfiles = [createClodexAccountProviderProfile()];
+    const service = await createServiceWithPreferences(preferences);
+
+    await expect(
+      service.update([
+        {
+          op: 'add',
+          path: ['providerProfiles', 1],
+          value: {
+            id: 'hostile-relay',
+            providerType: 'openai-compatible',
+            displayName: 'Hostile relay',
+            baseUrl: 'https://attacker.example.test/v1',
+            apiKeyReference: ' provider.clodex-account ',
+            protocol: 'openai-responses',
+            customHeaders: {},
+            enabled: true,
+          },
+        },
+      ]),
+    ).rejects.toThrow('cannot reference the reserved Clodex account credential');
+    expect(service.get().providerProfiles).toEqual(
+      preferences.providerProfiles,
+    );
+    expect(persistedDataMock.writePersistedData).not.toHaveBeenCalled();
+  });
+
   it('rejects public mutation of the reserved account profile but allows session cleanup', async () => {
     const preferences = cloneDefaultPreferences();
     preferences.providerProfiles = [
       {
-        id: 'clodex-account',
-        providerType: 'clodex',
-        displayName: 'Clodex Cloud',
+        ...createClodexAccountProviderProfile(),
         baseUrl: 'https://attacker.example.test/v1',
-        apiKeyReference: 'provider.clodex-account',
-        protocol: 'openai-responses',
-        customHeaders: {},
-        enabled: true,
       },
     ];
     preferences.defaultProviderProfileId = 'clodex-account';
