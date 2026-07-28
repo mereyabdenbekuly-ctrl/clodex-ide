@@ -1138,6 +1138,10 @@ export class AuthService extends DisposableService {
     this.assertNotDisposed();
     if (!token || this.wasModelAccessTokenRejected(token)) return false;
 
+    if (!isClodexAuthEnabled) {
+      return this.getTrustedCredentials()?.token === token;
+    }
+
     if (
       this.ideModelToken?.token === token &&
       this.isCachedIdeModelTokenFresh(this.ideModelToken)

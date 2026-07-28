@@ -1170,4 +1170,32 @@ describe('AuthService route-specific Clodex model tokens', () => {
     expect(authService.modelAccessToken).toBeUndefined();
     expect(uiKarton.state.userAccount.ideToken).toBeUndefined();
   });
+
+  it('keeps the exact legacy session token current until it is rejected', async () => {
+    const previousClodexAuthEnabled = process.env.CLODEX_AUTH_ENABLED;
+    process.env.CLODEX_AUTH_ENABLED = 'false';
+    vi.resetModules();
+
+    try {
+      const { authService } = await createTestAuthService();
+      const token = await authService.ensureModelAccessToken();
+
+      expect(token).toBe('session-token');
+      expect(authService.isModelAccessTokenCurrent(token!)).toBe(true);
+      expect(authService.isModelAccessTokenCurrent('different-token')).toBe(
+        false,
+      );
+
+      authService.invalidateRejectedModelAccessToken(token!);
+
+      expect(authService.isModelAccessTokenCurrent(token!)).toBe(false);
+    } finally {
+      if (previousClodexAuthEnabled === undefined) {
+        delete process.env.CLODEX_AUTH_ENABLED;
+      } else {
+        process.env.CLODEX_AUTH_ENABLED = previousClodexAuthEnabled;
+      }
+      vi.resetModules();
+    }
+  });
 });
