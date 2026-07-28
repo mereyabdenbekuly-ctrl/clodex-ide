@@ -58,6 +58,8 @@ vi.mock('./clodex', () => ({
     public constructor(
       message: string,
       public status?: number,
+      public code?: string,
+      public retryAfterMs?: number,
     ) {
       super(message);
     }
@@ -406,6 +408,56 @@ describe('AuthService route-specific Clodex model tokens', () => {
         group: 'CLAUDE',
       },
     );
+  });
+
+  it('holds an exact route in cooldown after a token refresh 429', async () => {
+    vi.useFakeTimers();
+    try {
+      const { authService } = await createTestAuthService();
+      const createIdeToken = (
+        authService as unknown as {
+          clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+        }
+      ).clodexInterop.createIdeToken;
+      const { ClodexRequestError } = await import('./clodex');
+      createIdeToken
+        .mockRejectedValueOnce(
+          new ClodexRequestError(
+            'Too many token requests.',
+            429,
+            'rate_limited',
+            7_000,
+          ),
+        )
+        .mockResolvedValueOnce({
+          token: 'fresh-route-token',
+          keyId: 'all-key',
+          group: 'GPT',
+          expiresAt: '3600',
+        });
+      const route = {
+        provider: 'openai' as const,
+        modelId: 'gpt-5.5',
+      };
+
+      await expect(
+        authService.ensureModelAccessTokenForRoute(route),
+      ).rejects.toThrow('Retry after 7 seconds');
+      expect(createIdeToken).toHaveBeenCalledOnce();
+
+      await expect(
+        authService.ensureModelAccessTokenForRoute(route),
+      ).rejects.toThrow('temporarily rate limited. Retry after 7 seconds');
+      expect(createIdeToken).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(7_000);
+      await expect(
+        authService.ensureModelAccessTokenForRoute(route),
+      ).resolves.toBe('fresh-route-token');
+      expect(createIdeToken).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('evicts only cache entries carrying a relay-rejected token', async () => {

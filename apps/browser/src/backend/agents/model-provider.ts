@@ -796,29 +796,13 @@ export class ModelProviderService {
       return preferredModelId;
     }
 
-    const current = this.getClodexModel(currentModelId);
-    const models = this.getEnabledClodexModels();
-    if (!current || models.length <= 1) return currentModelId;
-
-    const hasTaskRoleMetadata = models.some((model) =>
-      model.taskRoles?.includes(taskRole),
-    );
-    const ranked = models
-      .map((model) => ({
-        model,
-        score: hasTaskRoleMetadata
-          ? scoreClodexModelMetadataForTask(model, taskRole, currentModelId)
-          : scoreClodexModelForTask(model, taskRole, currentModelId),
-      }))
-      .filter(({ score }) => score > Number.NEGATIVE_INFINITY)
-      .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        return getClodexModelLabel(a.model).localeCompare(
-          getClodexModelLabel(b.model),
-        );
-      });
-
-    return ranked[0]?.model.id ?? currentModelId;
+    // The model selected in the task UI is an explicit execution choice, not
+    // a hint for a hidden cost/task-role router. Only orchestrated work that
+    // supplies `preferredModelId` may substitute a concrete model (and then
+    // only through the fail-closed same-provider path above). Keeping ordinary
+    // steps on `currentModelId` also avoids minting credentials for models the
+    // user never selected.
+    return currentModelId;
   }
 
   private getServiceFallbackClodexModel(
