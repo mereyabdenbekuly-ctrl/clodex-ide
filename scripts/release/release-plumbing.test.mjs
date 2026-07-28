@@ -28,11 +28,11 @@ import {
 } from './canary-observation-test-fixtures.mjs';
 
 const repositoryRoot = new URL('../../', import.meta.url);
-const communityObservedVersion = '1.16.0-communityobserved15';
+const communityObservedVersion = '1.16.0-communityobserved17';
 const communityObservedTag = `v${communityObservedVersion}`;
 const communityObservedSourceCommit =
-  'c9ef56fc5f8bd68007373b6c7fb98943ac8a8438';
-const communityObservedRunId = '30203394727';
+  '65fd0c74215d5a50d911bf656f11521966ecc436';
+const communityObservedRunId = '30334239898';
 const communityObservedRepositoryUrl =
   'https://github.com/mereyabdenbekuly-ctrl/clodex-ide';
 const communityObservedReleaseAssetBase = `${communityObservedRepositoryUrl}/releases/download/${communityObservedTag}`;
@@ -41,7 +41,7 @@ const communityObservedAssetUrls = [
   `${communityObservedReleaseAssetBase}/clodex-community-observed-${communityObservedVersion}-x64.dmg`,
   `${communityObservedReleaseAssetBase}/clodex-community-observed-${communityObservedVersion}-x64-setup.exe`,
   `${communityObservedReleaseAssetBase}/clodex-community-observed_${communityObservedVersion}_amd64.deb`,
-  `${communityObservedReleaseAssetBase}/clodex-community-observed-1.16.0.communityobserved15-1.x86_64.rpm`,
+  `${communityObservedReleaseAssetBase}/clodex-community-observed-1.16.0.communityobserved17-1.x86_64.rpm`,
   `${communityObservedReleaseAssetBase}/SHA256SUMS.txt`,
   `${communityObservedReleaseAssetBase}/clodex-community-observed-${communityObservedVersion}-evidence.zip`,
 ];
@@ -1843,7 +1843,7 @@ test('preview.2 documentation rejects preview.1 as a trusted target', () => {
   assert.match(plan, /distribution-stop-only/i);
 });
 
-test('website exposes the exact Community Observed 15 mapping and no legacy preview.1 URL', () => {
+test('website exposes the exact Community Observed 17 mapping and no legacy preview.1 URL', () => {
   for (const file of [
     'apps/website/src/app/download/page.tsx',
     'apps/website/src/app/(home)/_components/download-buttons.tsx',
