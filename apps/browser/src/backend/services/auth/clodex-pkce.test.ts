@@ -10,7 +10,7 @@ vi.hoisted(() => {
 
 vi.mock('electron', () => ({ shell: { openExternal: vi.fn() } }));
 
-import { ClodexAuthInterop, ClodexRequestError } from './clodex';
+import { ClodexAuthInterop } from './clodex';
 
 describe('ClodexAuthInterop PKCE exchange', () => {
   beforeEach(() => {
@@ -80,7 +80,7 @@ describe('ClodexAuthInterop PKCE exchange', () => {
       group: 'GPT',
     });
 
-    await expect(request).rejects.toMatchObject<Partial<ClodexRequestError>>({
+    await expect(request).rejects.toMatchObject({
       name: 'ClodexRequestError',
       status: 429,
       retryAfterMs: 7_000,
