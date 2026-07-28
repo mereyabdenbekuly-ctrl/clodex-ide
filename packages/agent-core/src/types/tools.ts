@@ -5,7 +5,7 @@ export const writeToolInputSchema = z.object({
   path: z
     .string()
     .describe(
-      'File path to write to. Must include a valid mount prefix. (e.g. "ws1/path/to/file.ts", "apps/my-app/index.html")',
+      'File path to write to. Copy the exact mount prefix from <symlinks>; never use an absolute path or Windows drive letter. (e.g. "w0123456789abcdef/path/to/file.ts", "apps/my-app/index.html")',
     ),
   content: z.string().describe('New content for the file'),
 });
@@ -26,7 +26,7 @@ export const readToolInputSchema = z.object({
   path: z
     .string()
     .describe(
-      'Path of file to read. Must include a valid mount prefix (e.g. "ws1/path/to/file.ts", "apps/my-app/index.html", "att/screens-j8943f.webp"). For directories, use ls instead.',
+      'Path of file to read. Copy the exact mount prefix from <symlinks>; never use an absolute path or Windows drive letter (e.g. "w0123456789abcdef/path/to/file.ts", "apps/my-app/index.html", "att/screens-j8943f.webp"). For directories, use ls instead.',
     ),
   start_line: z
     .number()
@@ -86,7 +86,7 @@ export const getFileSkeletonToolInputSchema = z.object({
   path: z
     .string()
     .describe(
-      'Path of source file to inspect. Must include a valid mount prefix (e.g. "ws1/src/app.tsx"). Returns an AST symbol outline, not full file content.',
+      'Path of source file to inspect. Copy the exact mount prefix from <symlinks>; never use an absolute path or Windows drive letter (e.g. "w0123456789abcdef/src/app.tsx"). Returns an AST symbol outline, not full file content.',
     ),
 });
 
@@ -127,7 +127,7 @@ export const getSymbolBodyToolInputSchema = z.object({
   path: z
     .string()
     .describe(
-      'Path of source file to inspect. Must include a valid mount prefix (e.g. "ws1/src/app.tsx").',
+      'Path of source file to inspect. Copy the exact mount prefix from <symlinks>; never use an absolute path or Windows drive letter (e.g. "w0123456789abcdef/src/app.tsx").',
     ),
   symbolName: z
     .string()
@@ -184,7 +184,7 @@ export const searchProjectSymbolsToolInputSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Optional mount prefix to restrict the search, e.g. "ws1". Omit to search all mounted workspaces.',
+      'Optional exact mount prefix from <symlinks> to restrict the search, e.g. "w0123456789abcdef". Never pass an absolute path or Windows drive letter. Omit to search all mounted workspaces.',
     ),
   max_results: z
     .number()
@@ -240,7 +240,7 @@ export const lsToolInputSchema = z.object({
   path: z
     .string()
     .describe(
-      'Path of directory to list. Must include a valid mount prefix (e.g. "ws1/src", "apps/my-app"). For reading file contents, use read instead.',
+      'Path of directory to list. Copy the exact mount prefix from <symlinks>; never use an absolute path or Windows drive letter (e.g. "w0123456789abcdef/src", "apps/my-app"). For reading file contents, use read instead.',
     ),
   depth: z
     .number()
@@ -259,7 +259,11 @@ export const lsToolSchema = {
 } as const;
 
 export const grepSearchToolInputSchema = z.object({
-  mount_prefix: z.string().describe('Mount prefix to use for the grep search.'),
+  mount_prefix: z
+    .string()
+    .describe(
+      'Exact mount prefix from <symlinks> to use for grep, e.g. "w0123456789abcdef". Pass only the prefix, never an absolute path, directory path, or Windows drive letter.',
+    ),
   query: z
     .string()
     .describe(
@@ -317,7 +321,11 @@ export const grepSearchToolSchema = {
 } as const;
 
 export const globToolInputSchema = z.object({
-  mount_prefix: z.string().describe('Mount prefix to use for the glob search.'),
+  mount_prefix: z
+    .string()
+    .describe(
+      'Exact mount prefix from <symlinks> to use for glob, e.g. "w0123456789abcdef". Pass only the prefix, never an absolute path, directory path, or Windows drive letter.',
+    ),
   pattern: z
     .string()
     .describe(
@@ -364,7 +372,7 @@ export const multiEditToolInputSchema = z.object({
   path: z
     .string()
     .describe(
-      'Path to file to be edited. Must include a valid mount prefix. (e.g. "ws1/path/to/file.ts", "apps/my-app/index.html")',
+      'Path to file to be edited. Copy the exact mount prefix from <symlinks>; never use an absolute path or Windows drive letter. (e.g. "w0123456789abcdef/path/to/file.ts", "apps/my-app/index.html")',
     ),
   edits: z
     .array(editSchema)
@@ -391,7 +399,7 @@ export const deleteToolInputSchema = z.object({
   path: z
     .string()
     .describe(
-      'File/Directory to delete. Must include a valid mount prefix. (e.g. "ws1/path/to/file.ts", "apps/my-app/index.html")',
+      'File/Directory to delete. Copy the exact mount prefix from <symlinks>; never use an absolute path or Windows drive letter. (e.g. "w0123456789abcdef/path/to/file.ts", "apps/my-app/index.html")',
     ),
 });
 
@@ -410,7 +418,7 @@ export const mkdirToolInputSchema = z.object({
   path: z
     .string()
     .describe(
-      'Directory path to create. Must include a valid mount prefix. (e.g. "w1/src/components/new-dir", "apps/my-app/assets"). Parent directories are created automatically.',
+      'Directory path to create. Copy the exact mount prefix from <symlinks>; never use an absolute path or Windows drive letter. (e.g. "w0123456789abcdef/src/components/new-dir", "apps/my-app/assets"). Parent directories are created automatically.',
     ),
 });
 
@@ -430,12 +438,12 @@ export const copyToolInputSchema = z.object({
   input_path: z
     .string()
     .describe(
-      'Source file or directory path to copy/move. Must include a valid mount prefix (e.g. "w1/src/utils.ts", "w1/src/components").',
+      'Source file or directory path to copy/move. Copy the exact mount prefix from <symlinks>; never use an absolute path or Windows drive letter (e.g. "w0123456789abcdef/src/utils.ts", "w0123456789abcdef/src/components").',
     ),
   output_path: z
     .string()
     .describe(
-      'Target file or directory path. Must include a valid mount prefix (e.g. "w1/src/lib/utils.ts", "w1/src/new-components"). Cannot copy a directory into a file.',
+      'Target file or directory path. Copy the exact mount prefix from <symlinks>; never use an absolute path or Windows drive letter (e.g. "w0123456789abcdef/src/lib/utils.ts", "w0123456789abcdef/src/new-components"). Cannot copy a directory into a file.',
     ),
   move: z
     .boolean()

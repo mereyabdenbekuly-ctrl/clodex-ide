@@ -133,5 +133,8 @@ describe('createWorkspaceDomainAdapter', () => {
     const section = adapter.promptSection ?? '';
     expect(section).toContain('symlink');
     expect(section).toContain('workspace');
+    expect(section).toContain('w{16_HEX_ID}');
+    expect(section).toContain('Windows drive letter');
+    expect(section).not.toContain('w{4_CHAR_ID}');
   });
 });
