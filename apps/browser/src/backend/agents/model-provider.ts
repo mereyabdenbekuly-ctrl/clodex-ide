@@ -310,6 +310,7 @@ function getAuthRouteAuthorityFingerprint(authState: AuthState): string {
     models: authState.models ?? [],
     keys: (authState.keys ?? []).map((key) => ({
       id: key.id,
+      name: key.name,
       group: key.group,
       status: key.status,
       isDefault: key.isDefault,
@@ -1249,7 +1250,9 @@ export class ModelProviderService {
     }
     const isValid = () =>
       this.routeRevision === admittedRevision &&
-      exactManagedCredentialState?.rejected !== true;
+      exactManagedCredentialState?.rejected !== true &&
+      (!managedCredentialToken ||
+        this.authService.isModelAccessTokenCurrent(managedCredentialToken));
     const { routeLease: _previousLease, ...exactRoute } = options;
     const guardedCredentialModel = managedCredentialToken
       ? guardManagedModelCredential(exactRoute.model, () => {

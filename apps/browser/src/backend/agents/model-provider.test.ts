@@ -91,26 +91,34 @@ function createTestModelProviderService({
       models: [],
     } as AuthState);
 
+  const defaultAuthService = {
+    accessToken: 'clodex-token',
+    modelAccessToken: 'ide-model-token',
+    ensureModelAccessToken: vi.fn().mockResolvedValue('ide-model-token'),
+    isModelAccessTokenCurrent: vi.fn(() => true),
+    authState: defaultAuthState,
+    registerAuthStateChangeCallback: vi.fn(
+      (listener: (newAuthState: AuthState) => void) => {
+        onAuthStateListener?.(listener, defaultAuthState);
+      },
+    ),
+    registerCredentialEpochChangeCallback: vi.fn((listener: () => void) => {
+      onAuthCredentialListener?.(listener);
+    }),
+  };
+
   return new ModelProviderService(
     (telemetryService ?? {
       withTracing: vi.fn((model) => model),
       forkTracing: vi.fn((model) => model),
       captureException: vi.fn(),
     }) as any,
-    (authService ?? {
-      accessToken: 'clodex-token',
-      modelAccessToken: 'ide-model-token',
-      ensureModelAccessToken: vi.fn().mockResolvedValue('ide-model-token'),
-      authState: defaultAuthState,
-      registerAuthStateChangeCallback: vi.fn(
-        (listener: (newAuthState: AuthState) => void) => {
-          onAuthStateListener?.(listener, defaultAuthState);
-        },
-      ),
-      registerCredentialEpochChangeCallback: vi.fn((listener: () => void) => {
-        onAuthCredentialListener?.(listener);
-      }),
-    }) as any,
+    (authService
+      ? {
+          isModelAccessTokenCurrent: vi.fn(() => true),
+          ...(authService as Record<string, unknown>),
+        }
+      : defaultAuthService) as any,
     {
       get: vi.fn(() => preferences),
       decryptProviderApiKey: vi.fn(() => 'provider-api-key'),
@@ -288,6 +296,63 @@ describe('model route leases', () => {
     ).rejects.toThrow('revoked before request dispatch');
   });
 
+  it('revokes an exact managed-token lease after cache rotation without changing route authority', async () => {
+    let currentToken = 'managed-route-token-a';
+    const ensureModelAccessTokenForRoute = vi.fn(async () => currentToken);
+    const isModelAccessTokenCurrent = vi.fn(
+      (token: string) => token === currentToken,
+    );
+    const dispatchedModel = {
+      doGenerate: vi.fn().mockResolvedValue({}),
+      doStream: vi.fn().mockResolvedValue({}),
+    } as any;
+    const service = createTestModelProviderService({
+      telemetryService: {
+        withTracing: vi.fn(() => dispatchedModel),
+        forkTracing: vi.fn((model) => model),
+        captureException: vi.fn(),
+      },
+      authService: {
+        accessToken: 'clodex-session-token',
+        modelAccessToken: currentToken,
+        ensureModelAccessTokenForRoute,
+        isModelAccessTokenCurrent,
+        invalidateRejectedModelAccessToken: vi.fn(),
+        authState: { models: [] },
+      },
+    });
+
+    const routeA = await service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'managed-route-a',
+      agentStepMetadata,
+    );
+    expect(routeA.routeLease?.isValid()).toBe(true);
+
+    currentToken = 'managed-route-token-b';
+
+    expect(routeA.routeLease?.isValid()).toBe(false);
+    await expect(
+      Promise.resolve().then(() => routeA.model.doGenerate({} as never)),
+    ).rejects.toThrow('revoked before request dispatch');
+    expect(dispatchedModel.doGenerate).not.toHaveBeenCalled();
+
+    const routeB = await service.getModelWithOptionsAsync(
+      'gpt-5.5',
+      'managed-route-b',
+      agentStepMetadata,
+    );
+    expect(routeB.routeLease?.isValid()).toBe(true);
+    await expect(routeB.model.doGenerate({} as never)).resolves.toEqual({});
+    expect(dispatchedModel.doGenerate).toHaveBeenCalledOnce();
+    expect(isModelAccessTokenCurrent).toHaveBeenCalledWith(
+      'managed-route-token-a',
+    );
+    expect(isModelAccessTokenCurrent).toHaveBeenCalledWith(
+      'managed-route-token-b',
+    );
+  });
+
   it('keeps admitted routes valid across UI, thinking, and catalog preferences but revokes provider changes', async () => {
     let notifyPreferences:
       | ((
@@ -338,7 +403,7 @@ describe('model route leases', () => {
     expect(route.routeLease?.isValid()).toBe(false);
   });
 
-  it('keeps admitted routes valid across public auth and same-key cosmetic refreshes', async () => {
+  it('keeps admitted routes valid across cosmetic auth refreshes but revokes key-name authority changes', async () => {
     let notifyAuthState: ((newAuthState: AuthState) => void) | undefined;
     let admittedAuthState: AuthState | undefined;
     const initialAuthState = {
@@ -388,13 +453,17 @@ describe('model route leases', () => {
       updatedAt: '2026-07-27T12:00:00.000Z',
     };
     refreshedAuthState.isSwitchingKey = true;
-    refreshedAuthState.keys![0]!.name = 'Renamed GPT key';
     refreshedAuthState.keys![0]!.expiresAt = '2099-02-01T00:00:00.000Z';
-    refreshedAuthState.ideToken!.keyName = 'Renamed GPT key';
     refreshedAuthState.ideToken!.expiresAt = '2099-02-01T00:00:00.000Z';
     notifyAuthState?.(refreshedAuthState);
 
     expect(route.routeLease?.isValid()).toBe(true);
+
+    const renamedKeyAuthState = structuredClone(refreshedAuthState);
+    renamedKeyAuthState.keys![0]!.name = 'Renamed GPT key';
+    notifyAuthState?.(renamedKeyAuthState);
+
+    expect(route.routeLease?.isValid()).toBe(false);
   });
 
   it('revokes admitted routes when account model, key, or IDE key identity changes', async () => {
@@ -1299,6 +1368,7 @@ describe('Clodex IDE model token refresh', () => {
 
   it('does not apply managed-token eviction to official BYOK routes', async () => {
     const invalidateRejectedModelAccessToken = vi.fn();
+    const isModelAccessTokenCurrent = vi.fn(() => false);
     const invalidKeyError = Object.assign(new Error('Invalid API key'), {
       statusCode: 401,
     });
@@ -1317,6 +1387,7 @@ describe('Clodex IDE model token refresh', () => {
         accessToken: 'clodex-session-token',
         modelAccessToken: 'unused-managed-token',
         ensureModelAccessTokenForRoute: vi.fn(),
+        isModelAccessTokenCurrent,
         invalidateRejectedModelAccessToken,
         authState: { models: [] },
       },
@@ -1331,6 +1402,7 @@ describe('Clodex IDE model token refresh', () => {
       invalidKeyError,
     );
     expect(invalidateRejectedModelAccessToken).not.toHaveBeenCalled();
+    expect(isModelAccessTokenCurrent).not.toHaveBeenCalled();
   });
 
   it('refreshes and revokes the reserved qualified Clodex account route', async () => {
@@ -1410,6 +1482,7 @@ describe('Clodex IDE model token refresh', () => {
   it('keeps qualified custom routes outside managed-token invalidation', async () => {
     const ensureModelAccessTokenForRoute = vi.fn();
     const invalidateRejectedModelAccessToken = vi.fn();
+    const isModelAccessTokenCurrent = vi.fn(() => false);
     const invalidKeyError = Object.assign(new Error('Invalid API key'), {
       statusCode: 401,
     });
@@ -1442,6 +1515,7 @@ describe('Clodex IDE model token refresh', () => {
         accessToken: 'clodex-session-token',
         modelAccessToken: 'unused-managed-token',
         ensureModelAccessTokenForRoute,
+        isModelAccessTokenCurrent,
         invalidateRejectedModelAccessToken,
         authState: { models: [] },
       },
@@ -1459,11 +1533,13 @@ describe('Clodex IDE model token refresh', () => {
       invalidKeyError,
     );
     expect(invalidateRejectedModelAccessToken).not.toHaveBeenCalled();
+    expect(isModelAccessTokenCurrent).not.toHaveBeenCalled();
   });
 
   it('keeps non-reserved qualified Clodex BYOK routes isolated', async () => {
     const ensureModelAccessTokenForRoute = vi.fn();
     const invalidateRejectedModelAccessToken = vi.fn();
+    const isModelAccessTokenCurrent = vi.fn(() => false);
     const invalidKeyError = Object.assign(new Error('Invalid API key'), {
       statusCode: 401,
     });
@@ -1496,6 +1572,7 @@ describe('Clodex IDE model token refresh', () => {
         accessToken: 'clodex-session-token',
         modelAccessToken: 'unused-managed-token',
         ensureModelAccessTokenForRoute,
+        isModelAccessTokenCurrent,
         invalidateRejectedModelAccessToken,
         authState: { models: [] },
       },
@@ -1513,6 +1590,7 @@ describe('Clodex IDE model token refresh', () => {
       invalidKeyError,
     );
     expect(invalidateRejectedModelAccessToken).not.toHaveBeenCalled();
+    expect(isModelAccessTokenCurrent).not.toHaveBeenCalled();
   });
 
   it('refreshes the IDE model token before resolving a clodex model asynchronously', async () => {

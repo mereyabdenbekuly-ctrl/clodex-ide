@@ -215,6 +215,135 @@ describe('AuthService route-specific Clodex model tokens', () => {
     await expect(persistence).resolves.toBe(true);
   });
 
+  it('tracks only the exact fresh route token across replacement and tombstoning', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-28T00:00:00.000Z'));
+    try {
+      const { authService } = await createTestAuthService();
+      const createIdeToken = (
+        authService as unknown as {
+          clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+        }
+      ).clodexInterop.createIdeToken;
+      let issueCount = 0;
+      createIdeToken.mockImplementation(
+        async (_accessToken: string, keyId?: string) => ({
+          token: `rotating-route-token-${++issueCount}`,
+          keyId,
+          group: 'CLAUDE',
+        }),
+      );
+      const route = {
+        provider: 'anthropic' as const,
+        modelId: 'claude-opus-5',
+      };
+
+      const tokenA = await authService.ensureModelAccessTokenForRoute(route);
+      expect(tokenA).toBe('rotating-route-token-1');
+      expect(authService.isModelAccessTokenCurrent(tokenA!)).toBe(true);
+      expect(authService.isModelAccessTokenCurrent('different-token')).toBe(
+        false,
+      );
+
+      vi.advanceTimersByTime(10 * 60_000);
+      expect(authService.isModelAccessTokenCurrent(tokenA!)).toBe(false);
+
+      const tokenB = await authService.ensureModelAccessTokenForRoute(route);
+      expect(tokenB).toBe('rotating-route-token-2');
+      expect(authService.isModelAccessTokenCurrent(tokenA!)).toBe(false);
+      expect(authService.isModelAccessTokenCurrent(tokenB!)).toBe(true);
+
+      const tokenCache = (
+        authService as unknown as {
+          ideModelTokenByKeyId: Map<
+            string,
+            {
+              token: string;
+              cachedAtMs: number;
+              expiresAt?: string;
+              keyId?: string;
+              group?: string;
+            }
+          >;
+        }
+      ).ideModelTokenByKeyId;
+      const tokenBEntry = [...tokenCache.values()].find(
+        (entry) => entry.token === tokenB,
+      );
+      expect(tokenBEntry).toBeDefined();
+
+      expect(authService.invalidateRejectedModelAccessToken(tokenB!)).toBe(
+        true,
+      );
+      expect(authService.isModelAccessTokenCurrent(tokenB!)).toBe(false);
+
+      tokenCache.set('reinserted-tombstoned-token', tokenBEntry!);
+      expect(authService.isModelAccessTokenCurrent(tokenB!)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('expires a still-cached exact route token using declared expiry and refresh skew', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-28T00:00:00.000Z'));
+    try {
+      const { authService } = await createTestAuthService();
+      const createIdeToken = (
+        authService as unknown as {
+          clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+        }
+      ).clodexInterop.createIdeToken;
+      createIdeToken.mockResolvedValue({
+        token: 'short-lived-route-token',
+        keyId: 'all-key',
+        group: 'CLAUDE',
+        expiresAt: '120',
+      });
+
+      const token = await authService.ensureModelAccessTokenForRoute({
+        provider: 'anthropic',
+        modelId: 'claude-opus-5',
+      });
+      expect(authService.isModelAccessTokenCurrent(token!)).toBe(true);
+
+      vi.advanceTimersByTime(60_000);
+
+      expect(authService.isModelAccessTokenCurrent(token!)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('recognizes an exact fresh primary token independently of route caches', async () => {
+    const { authService } = await createTestAuthService();
+    const createIdeToken = (
+      authService as unknown as {
+        clodexInterop: { createIdeToken: ReturnType<typeof vi.fn> };
+      }
+    ).clodexInterop.createIdeToken;
+    createIdeToken.mockResolvedValue({
+      token: 'primary-model-token',
+      keyId: 'all-key',
+      group: 'ALL',
+      expiresAt: '3600',
+    });
+
+    const token = await authService.ensureModelAccessToken();
+    expect(token).toBe('primary-model-token');
+    expect(authService.isModelAccessTokenCurrent(token!)).toBe(true);
+
+    const tokenState = authService as unknown as {
+      ideModelToken: unknown;
+      ideModelTokenByKeyId: Map<string, unknown>;
+    };
+    tokenState.ideModelTokenByKeyId.clear();
+    expect(authService.isModelAccessTokenCurrent(token!)).toBe(true);
+
+    tokenState.ideModelToken = null;
+    expect(authService.isModelAccessTokenCurrent(token!)).toBe(false);
+  });
+
   it('allows the universal ALL key to route an Anthropic battle model', async () => {
     const { authService } = await createTestAuthService();
 

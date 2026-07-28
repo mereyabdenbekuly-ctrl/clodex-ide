@@ -1134,6 +1134,29 @@ export class AuthService extends DisposableService {
     );
   }
 
+  public isModelAccessTokenCurrent(token: string): boolean {
+    this.assertNotDisposed();
+    if (!token || this.wasModelAccessTokenRejected(token)) return false;
+
+    if (
+      this.ideModelToken?.token === token &&
+      this.isCachedIdeModelTokenFresh(this.ideModelToken)
+    ) {
+      return true;
+    }
+
+    for (const cachedToken of this.ideModelTokenByKeyId.values()) {
+      if (
+        cachedToken.token === token &&
+        this.isCachedIdeModelTokenFresh(cachedToken)
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   public invalidateRejectedModelAccessToken(rejectedToken: string): boolean {
     this.assertNotDisposed();
     if (!rejectedToken) return false;
