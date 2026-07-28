@@ -39,8 +39,7 @@ import {
 // Enable Immer patches support
 enablePatches();
 
-const CLODEX_ACCOUNT_PROVIDER_CREDENTIAL_REFERENCE =
-  `provider.${CLODEX_ACCOUNT_PROVIDER_PROFILE_ID}`;
+const CLODEX_ACCOUNT_PROVIDER_CREDENTIAL_REFERENCE = `provider.${CLODEX_ACCOUNT_PROVIDER_PROFILE_ID}`;
 
 const DEFAULT_CLODEX_LLM_RELAY_URL = 'https://clodex.xyz/v1';
 

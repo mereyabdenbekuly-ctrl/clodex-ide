@@ -365,59 +365,61 @@ describe('PreferencesService provider profile migration', () => {
     expect(credentials.setProviderApiKey).not.toHaveBeenCalled();
   });
 
-  it.each(['create', 'modify', 'remove', 'duplicate'] as const)(
-    'rejects attempts to %s the reserved account profile through generic patches',
-    async (mutation) => {
-      const preferences = cloneDefaultPreferences();
-      const managedProfile = createClodexAccountProviderProfile();
-      if (mutation !== 'create') {
-        preferences.providerProfiles = [managedProfile];
-      }
-      const service = await createServiceWithPreferences(preferences);
-      let patches: Patch[] = [];
+  it.each([
+    'create',
+    'modify',
+    'remove',
+    'duplicate',
+  ] as const)('rejects attempts to %s the reserved account profile through generic patches', async (mutation) => {
+    const preferences = cloneDefaultPreferences();
+    const managedProfile = createClodexAccountProviderProfile();
+    if (mutation !== 'create') {
+      preferences.providerProfiles = [managedProfile];
+    }
+    const service = await createServiceWithPreferences(preferences);
+    let patches: Patch[] = [];
 
-      switch (mutation) {
-        case 'create':
-          patches = [
-            {
-              op: 'add',
-              path: ['providerProfiles', 0],
-              value: managedProfile,
-            },
-          ];
-          break;
-        case 'modify':
-          patches = [
-            {
-              op: 'replace',
-              path: ['providerProfiles', 0, 'baseUrl'],
-              value: 'https://attacker.example.test/v1',
-            },
-          ];
-          break;
-        case 'remove':
-          patches = [{ op: 'remove', path: ['providerProfiles', 0] }];
-          break;
-        case 'duplicate':
-          patches = [
-            {
-              op: 'add',
-              path: ['providerProfiles', 1],
-              value: managedProfile,
-            },
-          ];
-          break;
-      }
+    switch (mutation) {
+      case 'create':
+        patches = [
+          {
+            op: 'add',
+            path: ['providerProfiles', 0],
+            value: managedProfile,
+          },
+        ];
+        break;
+      case 'modify':
+        patches = [
+          {
+            op: 'replace',
+            path: ['providerProfiles', 0, 'baseUrl'],
+            value: 'https://attacker.example.test/v1',
+          },
+        ];
+        break;
+      case 'remove':
+        patches = [{ op: 'remove', path: ['providerProfiles', 0] }];
+        break;
+      case 'duplicate':
+        patches = [
+          {
+            op: 'add',
+            path: ['providerProfiles', 1],
+            value: managedProfile,
+          },
+        ];
+        break;
+    }
 
-      await expect(service.update(patches)).rejects.toThrow(
-        'managed by the authenticated session',
-      );
-      expect(service.get().providerProfiles).toEqual(
-        preferences.providerProfiles,
-      );
-      expect(persistedDataMock.writePersistedData).not.toHaveBeenCalled();
-    },
-  );
+    await expect(service.update(patches)).rejects.toThrow(
+      'managed by the authenticated session',
+    );
+    expect(service.get().providerProfiles).toEqual(
+      preferences.providerProfiles,
+    );
+    expect(persistedDataMock.writePersistedData).not.toHaveBeenCalled();
+  });
 
   it('rejects a non-reserved profile that aliases the reserved account credential', async () => {
     const preferences = cloneDefaultPreferences();
@@ -441,7 +443,9 @@ describe('PreferencesService provider profile migration', () => {
           },
         },
       ]),
-    ).rejects.toThrow('cannot reference the reserved Clodex account credential');
+    ).rejects.toThrow(
+      'cannot reference the reserved Clodex account credential',
+    );
     expect(service.get().providerProfiles).toEqual(
       preferences.providerProfiles,
     );
@@ -483,7 +487,9 @@ describe('PreferencesService provider profile migration', () => {
 
     expect(credentials.setProviderApiKey).not.toHaveBeenCalled();
     expect(credentials.deleteProviderApiKey).not.toHaveBeenCalled();
-    expect(service.get().providerProfiles).toEqual(preferences.providerProfiles);
+    expect(service.get().providerProfiles).toEqual(
+      preferences.providerProfiles,
+    );
 
     await service.syncClodexAccountProfile(credentials as any, undefined);
 
