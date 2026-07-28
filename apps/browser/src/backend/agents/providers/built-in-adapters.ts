@@ -3,6 +3,7 @@ import type { CredentialsService } from '@/services/credentials';
 import { OllamaProviderAdapter } from './ollama-adapter';
 import { OpenAICompatibleProviderAdapter } from './openai-compatible-adapter';
 import { AnthropicProviderAdapter } from './anthropic-adapter';
+import { getClodexLlmRelayUrl } from '@/utils/clodex-relay';
 
 export function createBuiltInProviderAdapters(
   credentials: CredentialsService,
@@ -32,8 +33,7 @@ export function createBuiltInProviderAdapters(
       id: 'clodex',
       name: 'Clodex Cloud',
       type: 'clodex',
-      defaultBaseUrl:
-        process.env.CLODEX_LLM_RELAY_URL || 'https://clodex.xyz/v1',
+      defaultBaseUrl: getClodexLlmRelayUrl(),
       resolveApiKey,
       fetch: request,
     }),

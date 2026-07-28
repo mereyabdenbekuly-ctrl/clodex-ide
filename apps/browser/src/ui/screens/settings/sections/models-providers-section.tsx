@@ -18,6 +18,7 @@ import type {
 } from '@shared/karton-contracts/ui/shared-types';
 import type { AIProviderProtocol, AIProviderType } from '@shared/ai-provider';
 import {
+  CLODEX_ACCOUNT_PROVIDER_PROFILE_ID,
   PROVIDER_DISPLAY_INFO,
   PROVIDER_OFFICIAL_URLS,
 } from '@shared/karton-contracts/ui/shared-types';
@@ -2066,9 +2067,11 @@ function ProviderProfilesSection() {
                       </span>
                       <span className="block truncate text-muted-foreground text-xs">
                         {profile.providerType} ·{' '}
-                        {profile.baseUrl ?? 'default endpoint'}
+                        {profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID
+                          ? 'managed account relay'
+                          : (profile.baseUrl ?? 'default endpoint')}
                         {profile.apiKeyReference
-                          ? profile.id === 'clodex-account'
+                          ? profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID
                             ? ' · account relay ready'
                             : ' · key configured'
                           : ''}
@@ -2090,23 +2093,27 @@ function ProviderProfilesSection() {
                     >
                       Models
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => {
-                        setEditing(profile);
-                        setDialogOpen(true);
-                      }}
-                    >
-                      <IconPenOutline18 className="size-3" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => void deleteProfile(profile.id)}
-                    >
-                      <IconTrashOutline18 className="size-3" />
-                    </Button>
+                    {profile.id !== CLODEX_ACCOUNT_PROVIDER_PROFILE_ID && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => {
+                            setEditing(profile);
+                            setDialogOpen(true);
+                          }}
+                        >
+                          <IconPenOutline18 className="size-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => void deleteProfile(profile.id)}
+                        >
+                          <IconTrashOutline18 className="size-3" />
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </div>
                 {status && (

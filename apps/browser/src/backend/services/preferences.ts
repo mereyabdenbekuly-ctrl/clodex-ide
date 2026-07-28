@@ -18,6 +18,7 @@ import {
   modelProviderSchema,
   DEFAULT_WIDGET_ORDER,
   DEV_TOOLBAR_MAX_ORIGINS,
+  CLODEX_ACCOUNT_PROVIDER_PROFILE_ID,
 } from '@shared/karton-contracts/ui/shared-types';
 import type { CredentialsService } from './credentials';
 import type { AIModelInfo } from '@shared/ai-provider';
@@ -33,6 +34,7 @@ import {
   validateApiKeys,
   validateCodingPlanApiKey,
 } from '../utils/validate-api-keys';
+import { getClodexLlmRelayUrl } from '../utils/clodex-relay';
 
 // Enable Immer patches support
 enablePatches();
@@ -244,17 +246,14 @@ export class PreferencesService extends DisposableService {
     }
 
     if (clodexApiKey) {
-      const id = 'clodex-account';
+      const id = CLODEX_ACCOUNT_PROVIDER_PROFILE_ID;
       const reference = `provider.${id}`;
       await credentials.setProviderApiKey(reference, clodexApiKey);
       profiles.set(id, {
         id,
         providerType: 'clodex',
         displayName: 'Clodex Cloud',
-        baseUrl:
-          process.env.CLODEX_LLM_RELAY_URL ||
-          process.env.LLM_PROXY_URL ||
-          'https://clodex.xyz/v1',
+        baseUrl: getClodexLlmRelayUrl(),
         apiKeyReference: reference,
         protocol: 'openai-responses',
         customHeaders: {},
@@ -283,10 +282,13 @@ export class PreferencesService extends DisposableService {
     }
     if (
       this.preferences.providerProfiles.some(
-        (profile) => profile.id === 'clodex-account',
+        (profile) => profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID,
       )
     ) {
-      await this.deleteProviderProfile('clodex-account');
+      await this.deleteProviderProfileInternal(
+        CLODEX_ACCOUNT_PROVIDER_PROFILE_ID,
+        { allowReservedProfile: true },
+      );
     }
   }
 
@@ -1034,10 +1036,15 @@ export class PreferencesService extends DisposableService {
     rawInput: ProviderProfileSaveInput,
   ): Promise<ProviderProfile> {
     this.assertNotDisposed();
+    const input = providerProfileSaveInputSchema.parse(rawInput);
+    if (input.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID) {
+      throw new Error(
+        'The Clodex account provider profile is managed by the authenticated session and cannot be edited.',
+      );
+    }
     if (!this.providerCredentials) {
       throw new Error('Provider credential storage is not initialized');
     }
-    const input = providerProfileSaveInputSchema.parse(rawInput);
     const existing = this.preferences.providerProfiles.find(
       (profile) => profile.id === input.id,
     );
@@ -1082,7 +1089,24 @@ export class PreferencesService extends DisposableService {
   }
 
   public async deleteProviderProfile(profileId: string): Promise<void> {
+    return this.deleteProviderProfileInternal(profileId, {
+      allowReservedProfile: false,
+    });
+  }
+
+  private async deleteProviderProfileInternal(
+    profileId: string,
+    options: { allowReservedProfile: boolean },
+  ): Promise<void> {
     this.assertNotDisposed();
+    if (
+      profileId === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID &&
+      !options.allowReservedProfile
+    ) {
+      throw new Error(
+        'The Clodex account provider profile is managed by the authenticated session and cannot be deleted.',
+      );
+    }
     const profile = this.preferences.providerProfiles.find(
       (candidate) => candidate.id === profileId,
     );

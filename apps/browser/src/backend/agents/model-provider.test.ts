@@ -5,7 +5,10 @@ import {
   type UserPreferences,
 } from '@shared/karton-contracts/ui/shared-types';
 import { MODEL_REQUEST_PURPOSE_METADATA_KEY } from '@clodex/agent-core/host';
-import { ModelProviderService } from './model-provider';
+import {
+  ModelProviderService,
+  resolveProviderProfileBaseUrl,
+} from './model-provider';
 import type { AuthState } from '@/services/auth';
 import {
   reasoningSignatureSourceSchema,
@@ -620,6 +623,52 @@ describe('model route leases', () => {
 });
 
 describe('provider-qualified model routing', () => {
+  it('pins the reserved account profile to the trusted relay', () => {
+    const previousClodexRelay = process.env.CLODEX_LLM_RELAY_URL;
+    const previousLegacyRelay = process.env.LLM_PROXY_URL;
+    process.env.CLODEX_LLM_RELAY_URL = 'https://trusted-relay.example.test/v1';
+    process.env.LLM_PROXY_URL = 'https://legacy-relay.example.test/v1';
+
+    try {
+      expect(
+        resolveProviderProfileBaseUrl({
+          id: 'clodex-account',
+          providerType: 'clodex',
+          baseUrl: 'https://attacker.example.test/v1',
+        }),
+      ).toBe('https://trusted-relay.example.test/v1');
+
+      delete process.env.CLODEX_LLM_RELAY_URL;
+      expect(
+        resolveProviderProfileBaseUrl({
+          id: 'clodex-account',
+          providerType: 'clodex',
+          baseUrl: 'https://attacker.example.test/v1',
+        }),
+      ).toBe('https://legacy-relay.example.test/v1');
+
+      delete process.env.LLM_PROXY_URL;
+      expect(
+        resolveProviderProfileBaseUrl({
+          id: 'clodex-account',
+          providerType: 'clodex',
+          baseUrl: 'https://attacker.example.test/v1',
+        }),
+      ).toBe('https://clodex.xyz/v1');
+    } finally {
+      if (previousClodexRelay === undefined) {
+        delete process.env.CLODEX_LLM_RELAY_URL;
+      } else {
+        process.env.CLODEX_LLM_RELAY_URL = previousClodexRelay;
+      }
+      if (previousLegacyRelay === undefined) {
+        delete process.env.LLM_PROXY_URL;
+      } else {
+        process.env.LLM_PROXY_URL = previousLegacyRelay;
+      }
+    }
+  });
+
   it('routes an Ollama model without contacting Clodex auth', async () => {
     const ensureModelAccessTokenForRoute = vi.fn();
     const service = createTestModelProviderService({

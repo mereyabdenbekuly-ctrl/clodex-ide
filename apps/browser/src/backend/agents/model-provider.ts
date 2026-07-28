@@ -7,8 +7,10 @@ import type {
   CustomModel,
   CustomEndpoint,
   ModelThinkingOverride,
+  ProviderProfile,
   UserPreferences,
 } from '@shared/karton-contracts/ui/shared-types';
+import { CLODEX_ACCOUNT_PROVIDER_PROFILE_ID } from '@shared/karton-contracts/ui/shared-types';
 import type { ReasoningSignatureSource } from '@shared/karton-contracts/ui/agent/metadata';
 import {
   createReasoningSignatureSource,
@@ -50,6 +52,7 @@ import {
 } from '@shared/model-thinking-capabilities';
 import { getModelThinkingOverride } from '@shared/model-effort-routing';
 import { resolveModelContextWindow } from '@shared/model-context-window';
+import { getClodexLlmRelayUrl } from '@/utils/clodex-relay';
 
 type ProviderOptions = Parameters<typeof streamText>[0]['providerOptions'];
 type BuiltInModelSettings = (typeof availableModels)[number];
@@ -70,6 +73,18 @@ const CLODEX_BUILT_IN_SAME_PROVIDER_FALLBACKS: Partial<
 
 function getBareModelId(modelId: string): string {
   return modelId.split('/').pop() ?? modelId;
+}
+
+export function resolveProviderProfileBaseUrl(
+  profile: Pick<ProviderProfile, 'id' | 'providerType' | 'baseUrl'>,
+): string | undefined {
+  if (profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID) {
+    return getClodexLlmRelayUrl();
+  }
+  if (profile.providerType === 'ollama') {
+    return `${(profile.baseUrl || 'http://localhost:11434').replace(/\/+$/, '')}/v1`;
+  }
+  return profile.baseUrl;
 }
 
 function getUnambiguousAvailableModelByBareId(
@@ -857,10 +872,7 @@ export class ModelProviderService {
   } {
     const prefs = this.preferencesService.get();
     const config = prefs.providerConfigs[provider];
-    const proxyBaseUrl =
-      process.env.CLODEX_LLM_RELAY_URL ||
-      process.env.LLM_PROXY_URL ||
-      'https://clodex.xyz/v1';
+    const proxyBaseUrl = getClodexLlmRelayUrl();
 
     switch (config.mode) {
       case 'clodex':
@@ -1218,7 +1230,7 @@ export class ModelProviderService {
   }
 
   private isManagedClodexAccountProfile(profileId: string): boolean {
-    if (profileId !== 'clodex-account') return false;
+    if (profileId !== CLODEX_ACCOUNT_PROVIDER_PROFILE_ID) return false;
     return this.preferencesService
       .get()
       .providerProfiles.some(
@@ -1446,7 +1458,7 @@ export class ModelProviderService {
     if (!profile)
       throw new Error(`Enabled provider profile ${profileId} not found`);
     const apiKey =
-      profile.id === 'clodex-account' &&
+      profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID &&
       profile.providerType === 'clodex' &&
       clodexApiKeyOverride
         ? clodexApiKeyOverride
@@ -1461,10 +1473,7 @@ export class ModelProviderService {
       throw new Error(`API key is not configured for ${profile.displayName}`);
     }
 
-    const baseURL =
-      profile.providerType === 'ollama'
-        ? `${(profile.baseUrl || 'http://localhost:11434').replace(/\/+$/, '')}/v1`
-        : profile.baseUrl;
+    const baseURL = resolveProviderProfileBaseUrl(profile);
     let model: LanguageModelV3;
     let providerMode: ProviderMode;
 
@@ -1490,10 +1499,7 @@ export class ModelProviderService {
     } else if (profile.providerType === 'clodex') {
       const provider = createClodex({
         apiKey: apiKey ?? '',
-        baseURL:
-          baseURL ||
-          process.env.CLODEX_LLM_RELAY_URL ||
-          'https://clodex.xyz/v1',
+        baseURL: baseURL || getClodexLlmRelayUrl(),
       });
       model = wrapLanguageModel({
         model: provider.chatModel(modelId),
@@ -1632,10 +1638,7 @@ export class ModelProviderService {
     otherPostHogProperties?: Record<string, unknown>,
     clodexApiKeyOverride?: string,
   ): ModelWithOptions {
-    const proxyBaseUrl =
-      process.env.CLODEX_LLM_RELAY_URL ||
-      process.env.LLM_PROXY_URL ||
-      'https://clodex.xyz/v1';
+    const proxyBaseUrl = getClodexLlmRelayUrl();
     const semanticProvider = toSemanticProvider(
       clodexModel.provider ?? modelSettings?.officialProvider,
       clodexModel.id,
@@ -1740,10 +1743,7 @@ export class ModelProviderService {
           `Model ${modelSettings.modelId} has no officialProvider set`,
         );
       }
-      const proxyBaseUrl =
-        process.env.CLODEX_LLM_RELAY_URL ||
-        process.env.LLM_PROXY_URL ||
-        'https://clodex.xyz/v1';
+      const proxyBaseUrl = getClodexLlmRelayUrl();
       const gatewayModelId = toClodexGatewayModelId(
         officialProvider,
         modelSettings.modelId,

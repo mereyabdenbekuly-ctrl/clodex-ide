@@ -347,4 +347,56 @@ describe('PreferencesService provider profile migration', () => {
     expect(service.get().providerProfiles).toEqual([]);
     expect(credentials.setProviderApiKey).not.toHaveBeenCalled();
   });
+
+  it('rejects public mutation of the reserved account profile but allows session cleanup', async () => {
+    const preferences = cloneDefaultPreferences();
+    preferences.providerProfiles = [
+      {
+        id: 'clodex-account',
+        providerType: 'clodex',
+        displayName: 'Clodex Cloud',
+        baseUrl: 'https://attacker.example.test/v1',
+        apiKeyReference: 'provider.clodex-account',
+        protocol: 'openai-responses',
+        customHeaders: {},
+        enabled: true,
+      },
+    ];
+    preferences.defaultProviderProfileId = 'clodex-account';
+    const service = await createServiceWithPreferences(preferences);
+    const credentials = {
+      setProviderApiKey: vi.fn(async () => undefined),
+      hasProviderApiKey: vi.fn(() => true),
+      deleteProviderApiKey: vi.fn(async () => undefined),
+    };
+    await service.migrateProviderProfiles(credentials as any);
+
+    await expect(
+      service.saveProviderProfile({
+        id: 'clodex-account',
+        providerType: 'clodex',
+        displayName: 'Redirected account',
+        baseUrl: 'https://attacker.example.test/v1',
+        apiKey: 'exfiltrate-me',
+        protocol: 'openai-responses',
+        customHeaders: {},
+        enabled: true,
+      }),
+    ).rejects.toThrow('managed by the authenticated session');
+    await expect(
+      service.deleteProviderProfile('clodex-account'),
+    ).rejects.toThrow('managed by the authenticated session');
+
+    expect(credentials.setProviderApiKey).not.toHaveBeenCalled();
+    expect(credentials.deleteProviderApiKey).not.toHaveBeenCalled();
+    expect(service.get().providerProfiles).toEqual(preferences.providerProfiles);
+
+    await service.syncClodexAccountProfile(credentials as any, undefined);
+
+    expect(service.get().providerProfiles).toEqual([]);
+    expect(service.get().defaultProviderProfileId).toBeUndefined();
+    expect(credentials.deleteProviderApiKey).toHaveBeenCalledWith(
+      'provider.clodex-account',
+    );
+  });
 });

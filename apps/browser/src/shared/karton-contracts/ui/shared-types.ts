@@ -116,6 +116,9 @@ export type ProviderConfigs = z.infer<typeof providerConfigsSchema>;
 // Provider-neutral profiles, Custom Endpoints & Custom Models
 // ============================================================================
 
+/** Reserved profile managed exclusively by the authenticated Clodex session. */
+export const CLODEX_ACCOUNT_PROVIDER_PROFILE_ID = 'clodex-account';
+
 export const aiProviderTypeSchema = z.enum(AI_PROVIDER_TYPES);
 export const aiProviderProtocolSchema = z.enum(AI_PROVIDER_PROTOCOLS);
 
