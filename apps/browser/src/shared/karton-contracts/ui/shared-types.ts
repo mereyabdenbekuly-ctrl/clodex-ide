@@ -116,6 +116,10 @@ export type ProviderConfigs = z.infer<typeof providerConfigsSchema>;
 // Provider-neutral profiles, Custom Endpoints & Custom Models
 // ============================================================================
 
+/** Reserved profile managed exclusively by the authenticated Clodex session. */
+export const CLODEX_ACCOUNT_PROVIDER_PROFILE_ID = 'clodex-account';
+export const CLODEX_ACCOUNT_PROVIDER_CREDENTIAL_REFERENCE = `provider.${CLODEX_ACCOUNT_PROVIDER_PROFILE_ID}`;
+
 export const aiProviderTypeSchema = z.enum(AI_PROVIDER_TYPES);
 export const aiProviderProtocolSchema = z.enum(AI_PROVIDER_PROTOCOLS);
 
@@ -137,6 +141,22 @@ export const providerProfileSchema = z
   })
   .strict();
 export type ProviderProfile = z.infer<typeof providerProfileSchema>;
+
+export function isClodexAccountProviderCredentialAlias(
+  profile: Pick<ProviderProfile, 'id' | 'apiKeyReference'>,
+): boolean {
+  return (
+    profile.id !== CLODEX_ACCOUNT_PROVIDER_PROFILE_ID &&
+    profile.apiKeyReference?.trim() ===
+      CLODEX_ACCOUNT_PROVIDER_CREDENTIAL_REFERENCE
+  );
+}
+
+export function isClodexAccountProviderCredentialReference(
+  reference: string | undefined,
+): boolean {
+  return reference?.trim() === CLODEX_ACCOUNT_PROVIDER_CREDENTIAL_REFERENCE;
+}
 
 export const providerProfileSaveInputSchema = providerProfileSchema
   .omit({ apiKeyReference: true })

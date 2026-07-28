@@ -1,4 +1,5 @@
 import type { TelemetryService } from '@/services/telemetry';
+import { createHash } from 'node:crypto';
 import type { ModelAlias, ModelId } from '@shared/available-models';
 import type {
   ModelProvider,
@@ -6,7 +7,12 @@ import type {
   CustomModel,
   CustomEndpoint,
   ModelThinkingOverride,
+  ProviderProfile,
   UserPreferences,
+} from '@shared/karton-contracts/ui/shared-types';
+import {
+  CLODEX_ACCOUNT_PROVIDER_PROFILE_ID,
+  isClodexAccountProviderCredentialAlias,
 } from '@shared/karton-contracts/ui/shared-types';
 import type { ReasoningSignatureSource } from '@shared/karton-contracts/ui/agent/metadata';
 import {
@@ -54,6 +60,17 @@ type ProviderOptions = Parameters<typeof streamText>[0]['providerOptions'];
 type BuiltInModelSettings = (typeof availableModels)[number];
 type ThinkingModelSettings = ThinkingCapableModel;
 type ClodexAuthModel = NonNullable<AuthState['models']>[number];
+type ManagedCredentialState = { rejected: boolean };
+
+const DEFAULT_CLODEX_LLM_RELAY_URL = 'https://clodex.xyz/v1';
+
+function getClodexLlmRelayUrl(): string {
+  return (
+    process.env.CLODEX_LLM_RELAY_URL ||
+    process.env.LLM_PROXY_URL ||
+    DEFAULT_CLODEX_LLM_RELAY_URL
+  );
+}
 
 // Conservative internal budgets only. The UI deliberately reports unknown
 // when no provider/catalog capability is available instead of presenting
@@ -68,6 +85,70 @@ const CLODEX_BUILT_IN_SAME_PROVIDER_FALLBACKS: Partial<
 
 function getBareModelId(modelId: string): string {
   return modelId.split('/').pop() ?? modelId;
+}
+
+export function resolveProviderProfileBaseUrl(
+  profile: Pick<ProviderProfile, 'id' | 'providerType' | 'baseUrl'>,
+): string | undefined {
+  if (profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID) {
+    return getClodexLlmRelayUrl();
+  }
+  if (profile.providerType === 'ollama') {
+    return `${(profile.baseUrl || 'http://localhost:11434').replace(/\/+$/, '')}/v1`;
+  }
+  return profile.baseUrl;
+}
+
+function getUnambiguousAvailableModelByBareId(
+  modelId: string,
+): BuiltInModelSettings | undefined {
+  const bareModelId = getBareModelId(modelId);
+  const matches = availableModels.filter(
+    (candidate) => getBareModelId(candidate.modelId) === bareModelId,
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function getExplicitQualifiedRouteProvider(
+  modelId: string,
+): ModelProvider | undefined {
+  const separator = modelId.indexOf('/');
+  if (separator <= 0) return undefined;
+  const prefix = modelId.slice(0, separator).toLowerCase();
+  switch (prefix) {
+    case 'anthropic':
+      return 'anthropic';
+    case 'openai':
+      return 'openai';
+    case 'google':
+    case 'gemini':
+      return 'google';
+    case 'moonshotai':
+    case 'moonshot':
+    case 'kimi':
+      return 'moonshotai';
+    case 'alibaba':
+    case 'qwen':
+    case 'dashscope':
+      return 'alibaba';
+    case 'deepseek':
+      return 'deepseek';
+    case 'z-ai':
+    case 'zai':
+    case 'glm':
+      return 'z-ai';
+    case 'minimax':
+      return 'minimax';
+    case 'xiaomi-mimo':
+    case 'xiaomi':
+    case 'mimo':
+      return 'xiaomi-mimo';
+    case 'mistral':
+    case 'mistralai':
+      return 'mistral';
+    default:
+      return undefined;
+  }
 }
 
 export function parseQualifiedModelId(
@@ -256,6 +337,7 @@ function getAuthRouteAuthorityFingerprint(authState: AuthState): string {
     models: authState.models ?? [],
     keys: (authState.keys ?? []).map((key) => ({
       id: key.id,
+      name: key.name,
       group: key.group,
       status: key.status,
       isDefault: key.isDefault,
@@ -271,6 +353,81 @@ function getAuthRouteAuthorityFingerprint(authState: AuthState): string {
           group: authState.ideToken.group,
         }
       : undefined,
+  });
+}
+
+function isManagedCredentialRejection(error: unknown): boolean {
+  const pending: Array<{ value: unknown; depth: number }> = [
+    { value: error, depth: 0 },
+  ];
+  const seen = new Set<object>();
+
+  while (pending.length > 0) {
+    const { value: current, depth } = pending.shift()!;
+    if (!(current instanceof Error) && !isPlainObject(current)) continue;
+    if (seen.has(current)) continue;
+    seen.add(current);
+
+    const frame = current as Record<string, unknown>;
+    const statusCode = frame.statusCode ?? frame.status;
+    if (statusCode === 401) return true;
+
+    const errorText = [frame.message, frame.code, frame.responseBody]
+      .filter((value): value is string => typeof value === 'string')
+      .join(' ')
+      .toLowerCase();
+    if (
+      errorText.includes('invalid api key') ||
+      errorText.includes('invalid_api_key')
+    ) {
+      return true;
+    }
+
+    if (depth >= 3) continue;
+    for (const nested of [
+      frame.lastError,
+      frame.cause,
+      frame.responseBody,
+      frame.error,
+    ]) {
+      if (nested instanceof Error || isPlainObject(nested)) {
+        pending.push({ value: nested, depth: depth + 1 });
+      }
+    }
+  }
+  return false;
+}
+
+function fingerprintManagedCredential(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+function guardManagedModelCredential(
+  model: LanguageModelV3,
+  onCredentialRejected: () => void,
+): LanguageModelV3 {
+  const doGenerate: LanguageModelV3['doGenerate'] = async (options) => {
+    try {
+      return await model.doGenerate(options);
+    } catch (error) {
+      if (isManagedCredentialRejection(error)) onCredentialRejected();
+      throw error;
+    }
+  };
+  const doStream: LanguageModelV3['doStream'] = async (options) => {
+    try {
+      return await model.doStream(options);
+    } catch (error) {
+      if (isManagedCredentialRejection(error)) onCredentialRejected();
+      throw error;
+    }
+  };
+  return new Proxy(model, {
+    get(target, property, receiver) {
+      if (property === 'doGenerate') return doGenerate;
+      if (property === 'doStream') return doStream;
+      return Reflect.get(target, property, receiver);
+    },
   });
 }
 
@@ -334,6 +491,10 @@ export class ModelProviderService {
   private readonly preferencesService: PreferencesService;
   private readonly credentialsService?: CredentialsService;
   private readonly providerRegistry = new AIProviderRegistry();
+  private readonly managedCredentialStates = new Map<
+    string,
+    ManagedCredentialState
+  >();
   private routeRevision = 0;
 
   public constructor(
@@ -368,6 +529,7 @@ export class ModelProviderService {
     });
     authService.registerCredentialEpochChangeCallback?.(() => {
       this.routeRevision += 1;
+      this.managedCredentialStates.clear();
     });
     credentialsService?.addProviderApiKeyListener?.(() => {
       this.routeRevision += 1;
@@ -384,6 +546,12 @@ export class ModelProviderService {
       .get()
       .providerProfiles.find((candidate) => candidate.id === profileId);
     if (!profile) throw new Error(`Provider profile ${profileId} not found`);
+    this.assertProviderProfileDoesNotAliasClodexCredential(profile);
+    if (profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID) {
+      throw new Error(
+        'The managed Clodex account profile cannot be tested through provider adapters.',
+      );
+    }
     return this.providerRegistry
       .require(profile.providerType)
       .validate(profile);
@@ -396,6 +564,12 @@ export class ModelProviderService {
       .get()
       .providerProfiles.find((candidate) => candidate.id === profileId);
     if (!profile) throw new Error(`Provider profile ${profileId} not found`);
+    this.assertProviderProfileDoesNotAliasClodexCredential(profile);
+    if (profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID) {
+      throw new Error(
+        'Models for the managed Clodex account profile come from the authenticated account catalog.',
+      );
+    }
     const models = await this.providerRegistry
       .require(profile.providerType)
       .listModels(profile);
@@ -441,9 +615,7 @@ export class ModelProviderService {
           candidate.providerType === 'openai',
       );
     const apiKey =
-      (profile?.apiKeyReference
-        ? this.credentialsService?.getProviderApiKey(profile.apiKeyReference)
-        : undefined) ??
+      this.resolveProviderProfileApiKey(profile) ??
       this.preferencesService.decryptProviderApiKey(config.encryptedApiKey);
     if (!apiKey) return null;
     return {
@@ -471,9 +643,7 @@ export class ModelProviderService {
       .providerProfiles.find(
         (candidate) => candidate.enabled && candidate.providerType === 'clodex',
       );
-    const profileKey = profile?.apiKeyReference
-      ? this.credentialsService?.getProviderApiKey(profile.apiKeyReference)
-      : undefined;
+    const profileKey = this.resolveProviderProfileApiKey(profile);
     if (profileKey) return profileKey;
     const token = this.authService.modelAccessToken;
     if (!token) {
@@ -722,10 +892,7 @@ export class ModelProviderService {
   } {
     const prefs = this.preferencesService.get();
     const config = prefs.providerConfigs[provider];
-    const proxyBaseUrl =
-      process.env.CLODEX_LLM_RELAY_URL ||
-      process.env.LLM_PROXY_URL ||
-      'https://clodex.xyz/v1';
+    const proxyBaseUrl = getClodexLlmRelayUrl();
 
     switch (config.mode) {
       case 'clodex':
@@ -744,11 +911,7 @@ export class ModelProviderService {
         );
         return {
           apiKey:
-            (profile?.apiKeyReference
-              ? this.credentialsService?.getProviderApiKey(
-                  profile.apiKeyReference,
-                )
-              : undefined) ??
+            this.resolveProviderProfileApiKey(profile) ??
             this.preferencesService.decryptProviderApiKey(
               config.encryptedApiKey,
             ),
@@ -779,11 +942,7 @@ export class ModelProviderService {
                 candidate.id === `custom-${endpoint.id}` && candidate.enabled,
             );
             return (
-              (profile?.apiKeyReference
-                ? this.credentialsService?.getProviderApiKey(
-                    profile.apiKeyReference,
-                  )
-                : undefined) ??
+              this.resolveProviderProfileApiKey(profile) ??
               this.preferencesService.decryptProviderApiKey(
                 endpoint.encryptedApiKey,
               )
@@ -849,11 +1008,7 @@ export class ModelProviderService {
               candidate.id === `custom-${endpoint.id}` && candidate.enabled,
           );
         return (
-          (profile?.apiKeyReference
-            ? this.credentialsService?.getProviderApiKey(
-                profile.apiKeyReference,
-              )
-            : undefined) ??
+          this.resolveProviderProfileApiKey(profile) ??
           this.preferencesService.decryptProviderApiKey(
             endpoint.encryptedApiKey,
           )
@@ -1002,14 +1157,18 @@ export class ModelProviderService {
           'Model route authority changed while credentials were resolving; retry the request against the current route',
         );
       }
+      const resolved = this.createModelWithOptions(
+        modelId,
+        traceId,
+        otherPostHogProperties,
+        clodexApiKeyOverride,
+      );
       return this.bindRouteLease(
-        this.createModelWithOptions(
-          modelId,
-          traceId,
-          otherPostHogProperties,
-          clodexApiKeyOverride,
-        ),
+        resolved,
         admittedRevision,
+        clodexApiKeyOverride && resolved.providerMode === 'clodex'
+          ? clodexApiKeyOverride
+          : undefined,
       );
     } catch (error) {
       this.report(error as Error, 'getModelWithOptionsAsync', { modelId });
@@ -1021,26 +1180,41 @@ export class ModelProviderService {
     modelId: ModelId,
     requestMetadata?: Record<string, unknown>,
   ): Promise<string | undefined> {
-    if (parseQualifiedModelId(modelId)) return undefined;
-    const builtIn = getAvailableModel(modelId);
-    const alias = getModelAlias(modelId);
+    const qualified = parseQualifiedModelId(modelId);
+    if (
+      qualified &&
+      !this.isManagedClodexAccountProfile(qualified.providerProfileId)
+    ) {
+      return undefined;
+    }
+    const routeRequestModelId = qualified?.modelId ?? modelId;
+    const builtIn = getAvailableModel(routeRequestModelId);
+    const bareBuiltIn = qualified
+      ? getUnambiguousAvailableModelByBareId(routeRequestModelId)
+      : undefined;
+    const alias = getModelAlias(routeRequestModelId);
     const aliasTarget = alias
       ? getAvailableModel(alias.targetModelId)
       : undefined;
-    const clodexModel = this.getClodexModel(modelId);
+    const clodexModel = this.getClodexModel(routeRequestModelId);
     const routeModelId =
       builtIn?.modelId ??
       aliasTarget?.modelId ??
       clodexModel?.id ??
       (typeof requestMetadata?.preferred_model_id === 'string'
         ? requestMetadata.preferred_model_id
-        : modelId);
+        : routeRequestModelId);
     const routeProvider =
       builtIn?.officialProvider ??
       aliasTarget?.officialProvider ??
-      clodexModel?.provider;
+      clodexModel?.provider ??
+      bareBuiltIn?.officialProvider ??
+      (qualified
+        ? getExplicitQualifiedRouteProvider(routeRequestModelId)
+        : undefined);
 
     if (
+      !qualified &&
       routeProvider &&
       !clodexModel &&
       !this.providerUsesClodexGateway(routeProvider as ModelProvider)
@@ -1063,15 +1237,54 @@ export class ModelProviderService {
     return this.authService.ensureModelAccessToken();
   }
 
+  private isManagedClodexAccountProfile(profileId: string): boolean {
+    if (profileId !== CLODEX_ACCOUNT_PROVIDER_PROFILE_ID) return false;
+    return this.preferencesService
+      .get()
+      .providerProfiles.some(
+        (profile) =>
+          profile.id === profileId &&
+          profile.enabled &&
+          profile.providerType === 'clodex',
+      );
+  }
+
   private bindRouteLease(
     options: ModelWithOptions,
     admittedRevision = this.routeRevision,
+    managedCredentialToken?: string,
+    managedCredentialState?: ManagedCredentialState,
   ): ModelWithOptions {
-    const isValid = () => this.routeRevision === admittedRevision;
+    let exactManagedCredentialState = managedCredentialState;
+    if (managedCredentialToken && !exactManagedCredentialState) {
+      const fingerprint = fingerprintManagedCredential(managedCredentialToken);
+      exactManagedCredentialState =
+        this.managedCredentialStates.get(fingerprint);
+      if (!exactManagedCredentialState) {
+        exactManagedCredentialState = { rejected: false };
+        this.managedCredentialStates.set(
+          fingerprint,
+          exactManagedCredentialState,
+        );
+      }
+    }
+    const isValid = () =>
+      this.routeRevision === admittedRevision &&
+      exactManagedCredentialState?.rejected !== true &&
+      (!managedCredentialToken ||
+        this.authService.isModelAccessTokenCurrent(managedCredentialToken));
     const { routeLease: _previousLease, ...exactRoute } = options;
+    const guardedCredentialModel = managedCredentialToken
+      ? guardManagedModelCredential(exactRoute.model, () => {
+          exactManagedCredentialState!.rejected = true;
+          this.authService.invalidateRejectedModelAccessToken(
+            managedCredentialToken,
+          );
+        })
+      : exactRoute.model;
     return {
       ...exactRoute,
-      model: guardRevocableModelRoute(exactRoute.model, isValid),
+      model: guardRevocableModelRoute(guardedCredentialModel, isValid),
       routeLease: {
         isValid,
         forkTrace: (traceId, metadata) => {
@@ -1096,6 +1309,8 @@ export class ModelProviderService {
               model: tracedModel,
             },
             admittedRevision,
+            managedCredentialToken,
+            exactManagedCredentialState,
           );
         },
       },
@@ -1127,6 +1342,7 @@ export class ModelProviderService {
         qualified.modelId,
         traceId,
         otherPostHogProperties,
+        clodexApiKeyOverride,
       );
     }
     const clodexModel = this.getClodexModel(modelId);
@@ -1241,6 +1457,7 @@ export class ModelProviderService {
     modelId: string,
     traceId: string,
     requestMetadata?: Record<string, unknown>,
+    clodexApiKeyOverride?: string,
   ): ModelWithOptions {
     const preferences = this.preferencesService.get();
     const profile = preferences.providerProfiles.find(
@@ -1248,9 +1465,12 @@ export class ModelProviderService {
     );
     if (!profile)
       throw new Error(`Enabled provider profile ${profileId} not found`);
-    const apiKey = profile.apiKeyReference
-      ? this.credentialsService?.getProviderApiKey(profile.apiKeyReference)
-      : undefined;
+    const apiKey =
+      profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID &&
+      profile.providerType === 'clodex' &&
+      clodexApiKeyOverride
+        ? clodexApiKeyOverride
+        : this.resolveProviderProfileApiKey(profile);
     if (
       profile.providerType !== 'ollama' &&
       !apiKey &&
@@ -1259,10 +1479,7 @@ export class ModelProviderService {
       throw new Error(`API key is not configured for ${profile.displayName}`);
     }
 
-    const baseURL =
-      profile.providerType === 'ollama'
-        ? `${(profile.baseUrl || 'http://localhost:11434').replace(/\/+$/, '')}/v1`
-        : profile.baseUrl;
+    const baseURL = resolveProviderProfileBaseUrl(profile);
     let model: LanguageModelV3;
     let providerMode: ProviderMode;
 
@@ -1288,10 +1505,7 @@ export class ModelProviderService {
     } else if (profile.providerType === 'clodex') {
       const provider = createClodex({
         apiKey: apiKey ?? '',
-        baseURL:
-          baseURL ||
-          process.env.CLODEX_LLM_RELAY_URL ||
-          'https://clodex.xyz/v1',
+        baseURL: baseURL || getClodexLlmRelayUrl(),
       });
       model = wrapLanguageModel({
         model: provider.chatModel(modelId),
@@ -1422,6 +1636,26 @@ export class ModelProviderService {
     };
   }
 
+  private resolveProviderProfileApiKey(
+    profile: ProviderProfile | undefined,
+  ): string | undefined {
+    if (!profile?.apiKeyReference) return undefined;
+    this.assertProviderProfileDoesNotAliasClodexCredential(profile);
+    return (
+      this.credentialsService?.getProviderApiKey(profile.apiKeyReference) ??
+      undefined
+    );
+  }
+
+  private assertProviderProfileDoesNotAliasClodexCredential(
+    profile: ProviderProfile,
+  ): void {
+    if (!isClodexAccountProviderCredentialAlias(profile)) return;
+    throw new Error(
+      `Provider profile ${profile.id} cannot reference the reserved Clodex account credential.`,
+    );
+  }
+
   private createClodexModelWithOptions(
     clodexModel: ClodexAuthModel,
     traceId: string,
@@ -1430,10 +1664,7 @@ export class ModelProviderService {
     otherPostHogProperties?: Record<string, unknown>,
     clodexApiKeyOverride?: string,
   ): ModelWithOptions {
-    const proxyBaseUrl =
-      process.env.CLODEX_LLM_RELAY_URL ||
-      process.env.LLM_PROXY_URL ||
-      'https://clodex.xyz/v1';
+    const proxyBaseUrl = getClodexLlmRelayUrl();
     const semanticProvider = toSemanticProvider(
       clodexModel.provider ?? modelSettings?.officialProvider,
       clodexModel.id,
@@ -1538,10 +1769,7 @@ export class ModelProviderService {
           `Model ${modelSettings.modelId} has no officialProvider set`,
         );
       }
-      const proxyBaseUrl =
-        process.env.CLODEX_LLM_RELAY_URL ||
-        process.env.LLM_PROXY_URL ||
-        'https://clodex.xyz/v1';
+      const proxyBaseUrl = getClodexLlmRelayUrl();
       const gatewayModelId = toClodexGatewayModelId(
         officialProvider,
         modelSettings.modelId,

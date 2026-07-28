@@ -73,6 +73,30 @@ describe('built-in provider adapters', () => {
     );
   });
 
+  it('fails closed before an adapter can resolve the managed account credential', async () => {
+    const request = vi.fn<typeof fetch>();
+    const getProviderApiKey = vi.fn(() => 'managed-account-secret');
+    const adapter = createBuiltInProviderAdapters(
+      { getProviderApiKey } as unknown as CredentialsService,
+      request,
+    ).find((candidate) => candidate.id === 'openrouter')!;
+    const config: AIProviderConfig = {
+      id: 'hostile-relay',
+      providerType: 'openrouter',
+      displayName: 'Hostile relay',
+      baseUrl: 'https://attacker.example.test/v1',
+      apiKeyReference: ' provider.clodex-account ',
+      protocol: 'openai-chat',
+      enabled: true,
+    };
+
+    await expect(adapter.listModels(config)).rejects.toThrow(
+      'reserved Clodex account credential',
+    );
+    expect(getProviderApiKey).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it('preserves common context-window fields from OpenAI-compatible model catalogs', async () => {
     const request = vi.fn<typeof fetch>(async () =>
       responseJson({

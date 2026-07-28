@@ -3,13 +3,30 @@ import type { CredentialsService } from '@/services/credentials';
 import { OllamaProviderAdapter } from './ollama-adapter';
 import { OpenAICompatibleProviderAdapter } from './openai-compatible-adapter';
 import { AnthropicProviderAdapter } from './anthropic-adapter';
+import { isClodexAccountProviderCredentialReference } from '@shared/karton-contracts/ui/shared-types';
+
+const DEFAULT_CLODEX_LLM_RELAY_URL = 'https://clodex.xyz/v1';
+
+function getClodexLlmRelayUrl(): string {
+  return (
+    process.env.CLODEX_LLM_RELAY_URL ||
+    process.env.LLM_PROXY_URL ||
+    DEFAULT_CLODEX_LLM_RELAY_URL
+  );
+}
 
 export function createBuiltInProviderAdapters(
   credentials: CredentialsService,
   request: typeof fetch = fetch,
 ): AIProviderAdapter[] {
-  const resolveApiKey = (reference: string) =>
-    credentials.getProviderApiKey(reference);
+  const resolveApiKey = (reference: string) => {
+    if (isClodexAccountProviderCredentialReference(reference)) {
+      throw new Error(
+        'The reserved Clodex account credential cannot be resolved through provider adapters.',
+      );
+    }
+    return credentials.getProviderApiKey(reference);
+  };
   return [
     new OpenAICompatibleProviderAdapter({
       id: 'openai',
@@ -32,8 +49,7 @@ export function createBuiltInProviderAdapters(
       id: 'clodex',
       name: 'Clodex Cloud',
       type: 'clodex',
-      defaultBaseUrl:
-        process.env.CLODEX_LLM_RELAY_URL || 'https://clodex.xyz/v1',
+      defaultBaseUrl: getClodexLlmRelayUrl(),
       resolveApiKey,
       fetch: request,
     }),
