@@ -10,7 +10,10 @@ import type {
   ProviderProfile,
   UserPreferences,
 } from '@shared/karton-contracts/ui/shared-types';
-import { CLODEX_ACCOUNT_PROVIDER_PROFILE_ID } from '@shared/karton-contracts/ui/shared-types';
+import {
+  CLODEX_ACCOUNT_PROVIDER_PROFILE_ID,
+  isClodexAccountProviderCredentialAlias,
+} from '@shared/karton-contracts/ui/shared-types';
 import type { ReasoningSignatureSource } from '@shared/karton-contracts/ui/agent/metadata';
 import {
   createReasoningSignatureSource,
@@ -543,6 +546,7 @@ export class ModelProviderService {
       .get()
       .providerProfiles.find((candidate) => candidate.id === profileId);
     if (!profile) throw new Error(`Provider profile ${profileId} not found`);
+    this.assertProviderProfileDoesNotAliasClodexCredential(profile);
     if (profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID) {
       throw new Error(
         'The managed Clodex account profile cannot be tested through provider adapters.',
@@ -560,6 +564,7 @@ export class ModelProviderService {
       .get()
       .providerProfiles.find((candidate) => candidate.id === profileId);
     if (!profile) throw new Error(`Provider profile ${profileId} not found`);
+    this.assertProviderProfileDoesNotAliasClodexCredential(profile);
     if (profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID) {
       throw new Error(
         'Models for the managed Clodex account profile come from the authenticated account catalog.',
@@ -610,9 +615,7 @@ export class ModelProviderService {
           candidate.providerType === 'openai',
       );
     const apiKey =
-      (profile?.apiKeyReference
-        ? this.credentialsService?.getProviderApiKey(profile.apiKeyReference)
-        : undefined) ??
+      this.resolveProviderProfileApiKey(profile) ??
       this.preferencesService.decryptProviderApiKey(config.encryptedApiKey);
     if (!apiKey) return null;
     return {
@@ -640,9 +643,7 @@ export class ModelProviderService {
       .providerProfiles.find(
         (candidate) => candidate.enabled && candidate.providerType === 'clodex',
       );
-    const profileKey = profile?.apiKeyReference
-      ? this.credentialsService?.getProviderApiKey(profile.apiKeyReference)
-      : undefined;
+    const profileKey = this.resolveProviderProfileApiKey(profile);
     if (profileKey) return profileKey;
     const token = this.authService.modelAccessToken;
     if (!token) {
@@ -910,11 +911,7 @@ export class ModelProviderService {
         );
         return {
           apiKey:
-            (profile?.apiKeyReference
-              ? this.credentialsService?.getProviderApiKey(
-                  profile.apiKeyReference,
-                )
-              : undefined) ??
+            this.resolveProviderProfileApiKey(profile) ??
             this.preferencesService.decryptProviderApiKey(
               config.encryptedApiKey,
             ),
@@ -945,11 +942,7 @@ export class ModelProviderService {
                 candidate.id === `custom-${endpoint.id}` && candidate.enabled,
             );
             return (
-              (profile?.apiKeyReference
-                ? this.credentialsService?.getProviderApiKey(
-                    profile.apiKeyReference,
-                  )
-                : undefined) ??
+              this.resolveProviderProfileApiKey(profile) ??
               this.preferencesService.decryptProviderApiKey(
                 endpoint.encryptedApiKey,
               )
@@ -1015,11 +1008,7 @@ export class ModelProviderService {
               candidate.id === `custom-${endpoint.id}` && candidate.enabled,
           );
         return (
-          (profile?.apiKeyReference
-            ? this.credentialsService?.getProviderApiKey(
-                profile.apiKeyReference,
-              )
-            : undefined) ??
+          this.resolveProviderProfileApiKey(profile) ??
           this.preferencesService.decryptProviderApiKey(
             endpoint.encryptedApiKey,
           )
@@ -1481,9 +1470,7 @@ export class ModelProviderService {
       profile.providerType === 'clodex' &&
       clodexApiKeyOverride
         ? clodexApiKeyOverride
-        : profile.apiKeyReference
-          ? this.credentialsService?.getProviderApiKey(profile.apiKeyReference)
-          : undefined;
+        : this.resolveProviderProfileApiKey(profile);
     if (
       profile.providerType !== 'ollama' &&
       !apiKey &&
@@ -1647,6 +1634,26 @@ export class ModelProviderService {
               modelId,
             ),
     };
+  }
+
+  private resolveProviderProfileApiKey(
+    profile: ProviderProfile | undefined,
+  ): string | undefined {
+    if (!profile?.apiKeyReference) return undefined;
+    this.assertProviderProfileDoesNotAliasClodexCredential(profile);
+    return (
+      this.credentialsService?.getProviderApiKey(profile.apiKeyReference) ??
+      undefined
+    );
+  }
+
+  private assertProviderProfileDoesNotAliasClodexCredential(
+    profile: ProviderProfile,
+  ): void {
+    if (!isClodexAccountProviderCredentialAlias(profile)) return;
+    throw new Error(
+      `Provider profile ${profile.id} cannot reference the reserved Clodex account credential.`,
+    );
   }
 
   private createClodexModelWithOptions(

@@ -711,6 +711,43 @@ describe('provider-qualified model routing', () => {
     }
   });
 
+  it('fails closed before a non-reserved route can resolve the managed account credential', async () => {
+    const managedCredentialRead = vi.fn(() => 'managed-account-secret');
+    const providerApiKeys: Record<string, string> = {};
+    Object.defineProperty(providerApiKeys, 'provider.clodex-account', {
+      get: managedCredentialRead,
+    });
+    const service = createTestModelProviderService({
+      providerProfiles: [
+        {
+          id: 'hostile-relay',
+          providerType: 'openai-compatible',
+          displayName: 'Hostile relay',
+          baseUrl: 'https://attacker.example.test/v1',
+          apiKeyReference: ' provider.clodex-account ',
+          protocol: 'openai-responses',
+          customHeaders: {},
+          enabled: true,
+        },
+      ],
+      providerApiKeys,
+    });
+
+    expect(() =>
+      service.getModelWithOptions(
+        'hostile-relay:attacker/model',
+        'trace-hostile-alias',
+      ),
+    ).toThrow('reserved Clodex account credential');
+    await expect(
+      service.validateProviderProfile('hostile-relay'),
+    ).rejects.toThrow('reserved Clodex account credential');
+    await expect(
+      service.listProviderProfileModels('hostile-relay'),
+    ).rejects.toThrow('reserved Clodex account credential');
+    expect(managedCredentialRead).not.toHaveBeenCalled();
+  });
+
   it('routes an Ollama model without contacting Clodex auth', async () => {
     const ensureModelAccessTokenForRoute = vi.fn();
     const service = createTestModelProviderService({

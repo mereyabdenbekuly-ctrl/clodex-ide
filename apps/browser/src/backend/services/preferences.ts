@@ -20,6 +20,7 @@ import {
   DEFAULT_WIDGET_ORDER,
   DEV_TOOLBAR_MAX_ORIGINS,
   CLODEX_ACCOUNT_PROVIDER_PROFILE_ID,
+  isClodexAccountProviderCredentialAlias,
 } from '@shared/karton-contracts/ui/shared-types';
 import type { CredentialsService } from './credentials';
 import type { AIModelInfo } from '@shared/ai-provider';
@@ -38,8 +39,6 @@ import {
 
 // Enable Immer patches support
 enablePatches();
-
-const CLODEX_ACCOUNT_PROVIDER_CREDENTIAL_REFERENCE = `provider.${CLODEX_ACCOUNT_PROVIDER_PROFILE_ID}`;
 
 const DEFAULT_CLODEX_LLM_RELAY_URL = 'https://clodex.xyz/v1';
 
@@ -140,6 +139,11 @@ export class PreferencesService extends DisposableService {
       defaultUserPreferences,
     );
 
+    // Older builds allowed arbitrary profiles to reference the managed
+    // account credential. Remove those aliases before auth can publish a new
+    // token under the reserved reference.
+    await this.removeClodexAccountCredentialAliases();
+
     // Migration: convert old customBaseUrl configs to customProviderId
     await this.migrateCustomBaseUrlToProviderId();
 
@@ -161,6 +165,9 @@ export class PreferencesService extends DisposableService {
     clodexApiKey?: string,
   ): Promise<void> {
     this.assertNotDisposed();
+    // Re-check at the credential migration boundary. If persistence cleanup
+    // fails, abort before writing or exposing the managed account token.
+    await this.removeClodexAccountCredentialAliases();
     this.providerCredentials = credentials;
     const next = structuredClone(this.preferences);
     const profiles = new Map(
@@ -302,6 +309,35 @@ export class PreferencesService extends DisposableService {
         { allowReservedProfile: true },
       );
     }
+  }
+
+  private async removeClodexAccountCredentialAliases(): Promise<void> {
+    const aliases = this.preferences.providerProfiles.filter(
+      isClodexAccountProviderCredentialAlias,
+    );
+    if (aliases.length === 0) return;
+
+    const aliasIds = new Set(aliases.map((profile) => profile.id));
+    const next = structuredClone(this.preferences);
+    next.providerProfiles = next.providerProfiles.filter(
+      (profile) => !isClodexAccountProviderCredentialAlias(profile),
+    );
+    for (const aliasId of aliasIds) {
+      delete next.providerModelCatalogs[aliasId];
+    }
+    if (
+      next.defaultProviderProfileId &&
+      aliasIds.has(next.defaultProviderProfileId)
+    ) {
+      next.defaultProviderProfileId = next.providerProfiles.find(
+        (profile) => profile.enabled,
+      )?.id;
+    }
+
+    await this.replacePreferences(next);
+    this.logger.warn(
+      `[PreferencesService] Removed ${aliases.length} provider profile(s) that referenced the reserved Clodex account credential`,
+    );
   }
 
   /**
@@ -724,10 +760,7 @@ export class PreferencesService extends DisposableService {
     }
 
     const credentialAlias = next.providerProfiles.find(
-      (profile) =>
-        profile.id !== CLODEX_ACCOUNT_PROVIDER_PROFILE_ID &&
-        profile.apiKeyReference ===
-          CLODEX_ACCOUNT_PROVIDER_CREDENTIAL_REFERENCE,
+      isClodexAccountProviderCredentialAlias,
     );
     if (credentialAlias) {
       throw new Error(
@@ -1103,12 +1136,13 @@ export class PreferencesService extends DisposableService {
         'The Clodex account provider profile is managed by the authenticated session and cannot be edited.',
       );
     }
-    if (!this.providerCredentials) {
-      throw new Error('Provider credential storage is not initialized');
-    }
     const existing = this.preferences.providerProfiles.find(
       (profile) => profile.id === input.id,
     );
+    this.assertProviderProfileDoesNotAliasClodexCredential(existing);
+    if (!this.providerCredentials) {
+      throw new Error('Provider credential storage is not initialized');
+    }
     const reference = existing?.apiKeyReference ?? `provider.${input.id}`;
     const apiKey = input.apiKey?.trim();
 
@@ -1172,6 +1206,7 @@ export class PreferencesService extends DisposableService {
       (candidate) => candidate.id === profileId,
     );
     if (!profile) return;
+    this.assertProviderProfileDoesNotAliasClodexCredential(profile);
     if (profile.apiKeyReference && this.providerCredentials) {
       await this.providerCredentials.deleteProviderApiKey(
         profile.apiKeyReference,
@@ -1204,6 +1239,15 @@ export class PreferencesService extends DisposableService {
       {
         allowManagedProviderProfileChanges: options.allowReservedProfile,
       },
+    );
+  }
+
+  private assertProviderProfileDoesNotAliasClodexCredential(
+    profile: ProviderProfile | undefined,
+  ): void {
+    if (!profile || !isClodexAccountProviderCredentialAlias(profile)) return;
+    throw new Error(
+      `Provider profile ${profile.id} cannot reference the reserved Clodex account credential.`,
     );
   }
 

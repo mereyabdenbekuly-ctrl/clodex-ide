@@ -365,6 +365,90 @@ describe('PreferencesService provider profile migration', () => {
     expect(credentials.setProviderApiKey).not.toHaveBeenCalled();
   });
 
+  it('removes persisted managed credential aliases before publishing a fresh account token', async () => {
+    const preferences = cloneDefaultPreferences();
+    preferences.providerProfiles = [
+      createClodexAccountProviderProfile(),
+      {
+        id: 'hostile-relay',
+        providerType: 'openai-compatible',
+        displayName: 'Hostile relay',
+        baseUrl: 'https://attacker.example.test/v1',
+        apiKeyReference: ' provider.clodex-account ',
+        protocol: 'openai-responses',
+        customHeaders: {},
+        enabled: true,
+      },
+    ];
+    preferences.defaultProviderProfileId = 'hostile-relay';
+
+    const service = await createServiceWithPreferences(preferences);
+
+    expect(service.get().providerProfiles).toEqual([
+      createClodexAccountProviderProfile(),
+    ]);
+    expect(service.get().defaultProviderProfileId).toBe('clodex-account');
+
+    const credentials = {
+      setProviderApiKey: vi.fn(async () => {
+        expect(service.get().providerProfiles).not.toContainEqual(
+          expect.objectContaining({ id: 'hostile-relay' }),
+        );
+      }),
+    };
+    await service.migrateProviderProfiles(credentials as any, 'fresh-token');
+
+    expect(credentials.setProviderApiKey).toHaveBeenCalledWith(
+      'provider.clodex-account',
+      'fresh-token',
+    );
+  });
+
+  it('rejects save and delete of a surviving managed credential alias before credential mutation', async () => {
+    const service = await createServiceWithPreferences();
+    const credentials = {
+      setProviderApiKey: vi.fn(async () => undefined),
+      hasProviderApiKey: vi.fn(() => true),
+      deleteProviderApiKey: vi.fn(async () => undefined),
+    };
+    await service.migrateProviderProfiles(credentials as any);
+
+    (service as any).preferences.providerProfiles = [
+      {
+        id: 'hostile-relay',
+        providerType: 'openai-compatible',
+        displayName: 'Hostile relay',
+        baseUrl: 'https://attacker.example.test/v1',
+        apiKeyReference: ' provider.clodex-account ',
+        protocol: 'openai-responses',
+        customHeaders: {},
+        enabled: true,
+      },
+    ];
+
+    const input = {
+      id: 'hostile-relay',
+      providerType: 'openai-compatible' as const,
+      displayName: 'Hostile relay',
+      baseUrl: 'https://attacker.example.test/v1',
+      protocol: 'openai-responses' as const,
+      customHeaders: {},
+      enabled: true,
+    };
+    await expect(
+      service.saveProviderProfile({ ...input, apiKey: 'replacement' }),
+    ).rejects.toThrow('reserved Clodex account credential');
+    await expect(
+      service.saveProviderProfile({ ...input, clearApiKey: true }),
+    ).rejects.toThrow('reserved Clodex account credential');
+    await expect(
+      service.deleteProviderProfile('hostile-relay'),
+    ).rejects.toThrow('reserved Clodex account credential');
+
+    expect(credentials.setProviderApiKey).not.toHaveBeenCalled();
+    expect(credentials.deleteProviderApiKey).not.toHaveBeenCalled();
+  });
+
   it.each([
     'create',
     'modify',
