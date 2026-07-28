@@ -2102,7 +2102,7 @@ describe('Clodex task routing', () => {
     });
   }
 
-  it('routes analysis and review steps to the cheapest fast enabled model', () => {
+  it('keeps the user-selected model for ordinary analysis and review steps', () => {
     const service = createClodexRoutingService();
 
     expect(
@@ -2112,7 +2112,7 @@ describe('Clodex task routing', () => {
         agentType: 'chat',
         traceId: 'trace-1',
       }),
-    ).toBe('gemini-3.5-flash');
+    ).toBe('claude-opus-4.7');
     expect(
       service.selectModelForTask({
         currentModelId: 'claude-opus-4.7',
@@ -2120,10 +2120,10 @@ describe('Clodex task routing', () => {
         agentType: 'chat',
         traceId: 'trace-1',
       }),
-    ).toBe('gemini-3.5-flash');
+    ).toBe('claude-opus-4.7');
   });
 
-  it('routes coding steps to the strongest enabled model', () => {
+  it('keeps the user-selected model for ordinary coding steps', () => {
     const service = createClodexRoutingService();
 
     expect(
@@ -2133,7 +2133,46 @@ describe('Clodex task routing', () => {
         agentType: 'chat',
         traceId: 'trace-1',
       }),
-    ).toBe('claude-opus-4.7');
+    ).toBe('gemini-3.5-flash');
+  });
+
+  it('does not silently replace GPT-5.6 Sol with GPT-5.5 for a chat analysis step', () => {
+    const service = createTestModelProviderService({
+      authService: {
+        accessToken: 'clodex-session-token',
+        modelAccessToken: 'ide-model-token',
+        ensureModelAccessToken: vi.fn().mockResolvedValue('ide-model-token'),
+        authState: {
+          models: [
+            {
+              id: 'gpt-5.6-sol',
+              name: 'GPT-5.6 Sol',
+              provider: 'openai',
+              enabled: true,
+              costTier: 'high',
+              taskRoles: ['coding', 'general'],
+            },
+            {
+              id: 'gpt-5.5',
+              name: 'GPT-5.5',
+              provider: 'openai',
+              enabled: true,
+              costTier: 'low',
+              taskRoles: ['analysis', 'review'],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(
+      service.selectModelForTask({
+        currentModelId: 'gpt-5.6-sol',
+        taskRole: 'analysis',
+        agentType: 'chat',
+        traceId: 'trace-1',
+      }),
+    ).toBe('gpt-5.6-sol');
   });
 
   it('routes unavailable preferred Battle models to an enabled same-provider model', () => {
@@ -2267,7 +2306,7 @@ describe('Clodex task routing', () => {
     ).toBe('not-in-selected-key');
   });
 
-  it('prefers Clodex task metadata over model-name heuristics', () => {
+  it('uses Clodex task metadata only for an explicit orchestrated fallback', () => {
     const service = createTestModelProviderService({
       authService: {
         accessToken: 'clodex-session-token',
@@ -2301,16 +2340,18 @@ describe('Clodex task routing', () => {
     expect(
       service.selectModelForTask({
         currentModelId: 'tiny-coder',
+        preferredModelId: 'gpt-5.5',
         taskRole: 'coding',
-        agentType: 'chat',
+        agentType: 'swarm',
         traceId: 'trace-1',
       }),
     ).toBe('boring-model');
     expect(
       service.selectModelForTask({
         currentModelId: 'boring-model',
+        preferredModelId: 'gpt-5.5',
         taskRole: 'analysis',
-        agentType: 'chat',
+        agentType: 'swarm',
         traceId: 'trace-1',
       }),
     ).toBe('tiny-coder');

@@ -482,13 +482,33 @@ function readAccessToken(value: unknown): string {
 export class ClodexRequestError extends Error {
   public readonly status: number;
   public readonly code?: string;
+  public readonly retryAfterMs?: number;
 
-  public constructor(message: string, status: number, code?: string) {
+  public constructor(
+    message: string,
+    status: number,
+    code?: string,
+    retryAfterMs?: number,
+  ) {
     super(message);
     this.name = 'ClodexRequestError';
     this.status = status;
     this.code = code;
+    this.retryAfterMs = retryAfterMs;
   }
+}
+
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined;
+
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.ceil(seconds * 1000);
+  }
+
+  const retryAtMs = Date.parse(value);
+  if (!Number.isFinite(retryAtMs)) return undefined;
+  return Math.max(0, retryAtMs - Date.now());
 }
 
 function shouldTryLegacyTelegramEndpoint(err: unknown): boolean {
@@ -524,7 +544,12 @@ async function requestJson<T>(
 
   if (!response.ok) {
     const { message, code } = readApiError(payload, response.status);
-    throw new ClodexRequestError(message, response.status, code);
+    throw new ClodexRequestError(
+      message,
+      response.status,
+      code,
+      parseRetryAfterMs(response.headers.get('retry-after')),
+    );
   }
 
   return parse(payload);
@@ -556,7 +581,12 @@ async function requestJsonWithResponse<T>(
 
   if (!response.ok) {
     const { message, code } = readApiError(payload, response.status);
-    throw new ClodexRequestError(message, response.status, code);
+    throw new ClodexRequestError(
+      message,
+      response.status,
+      code,
+      parseRetryAfterMs(response.headers.get('retry-after')),
+    );
   }
 
   return parse(payload, response);

@@ -61,4 +61,30 @@ describe('ClodexAuthInterop PKCE exchange', () => {
       code_verifier: 'verifier',
     });
   });
+
+  it('preserves Retry-After metadata on an IDE token rate limit response', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: 'Too many token requests.' }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': '7',
+        },
+      }),
+    );
+    const interop = new ClodexAuthInterop();
+
+    const request = interop.createIdeToken('desktop-access-token', 'key-1', {
+      provider: 'openai',
+      modelId: 'gpt-5.6-sol',
+      group: 'GPT',
+    });
+
+    await expect(request).rejects.toMatchObject({
+      name: 'ClodexRequestError',
+      status: 429,
+      retryAfterMs: 7_000,
+      message: 'Too many token requests.',
+    });
+  });
 });

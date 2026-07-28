@@ -134,6 +134,8 @@ const IDE_MODEL_TOKEN_REFRESH_SKEW_MS = 60_000;
 // Treat server expiry as an upper bound, never as permission to retain a
 // managed credential indefinitely when expiry metadata is absent or malformed.
 const IDE_MODEL_TOKEN_MAX_CACHE_AGE_MS = 10 * 60_000;
+const IDE_MODEL_TOKEN_RATE_LIMIT_FALLBACK_COOLDOWN_MS = 60_000;
+const IDE_MODEL_TOKEN_RATE_LIMIT_MAX_COOLDOWN_MS = 30 * 60_000;
 const isClodexAuthEnabled =
   isAccountAuthEnabled &&
   process.env.CLODEX_AUTH_ENABLED !== 'false' &&
@@ -378,6 +380,19 @@ function formatProviderLabel(provider: ModelProvider): string {
   }
 }
 
+function clampModelTokenRateLimitCooldownMs(
+  retryAfterMs: number | undefined,
+): number {
+  const requestedMs =
+    retryAfterMs != null && Number.isFinite(retryAfterMs)
+      ? retryAfterMs
+      : IDE_MODEL_TOKEN_RATE_LIMIT_FALLBACK_COOLDOWN_MS;
+  return Math.min(
+    IDE_MODEL_TOKEN_RATE_LIMIT_MAX_COOLDOWN_MS,
+    Math.max(1_000, Math.ceil(requestedMs)),
+  );
+}
+
 export class AuthService extends DisposableService {
   private readonly identifierService: IdentifierService;
   private readonly uiKarton: KartonService;
@@ -393,6 +408,7 @@ export class AuthService extends DisposableService {
     string,
     Promise<string | undefined>
   >();
+  private modelAccessTokenRetryNotBeforeByCacheKey = new Map<string, number>();
   private modelAccessTokenCacheEpoch = 0;
   private rejectedModelAccessTokenFingerprints = new Set<string>();
   private clodexUserModels: ClodexUserModel[] = [];
@@ -1106,6 +1122,7 @@ export class AuthService extends DisposableService {
     this.modelAccessTokenCacheEpoch += 1;
     this.ideModelTokenByKeyId.clear();
     this.pendingIdeModelTokenRefreshes.clear();
+    this.modelAccessTokenRetryNotBeforeByCacheKey.clear();
   }
 
   private trackModelAccessTokenRefresh(
@@ -1277,6 +1294,17 @@ export class AuthService extends DisposableService {
     const authEpoch = this.authLifecycleEpoch;
     const cacheEpoch = this.modelAccessTokenCacheEpoch;
     const refreshCacheKey = `route:${routeCacheKey}`;
+    const retryNotBeforeMs =
+      this.modelAccessTokenRetryNotBeforeByCacheKey.get(refreshCacheKey);
+    if (retryNotBeforeMs != null) {
+      const retryAfterMs = retryNotBeforeMs - Date.now();
+      if (retryAfterMs > 0) {
+        throw new Error(
+          `Clodex IDE token refresh for ${formatProviderLabel(provider)} model ${route.modelId ?? 'unknown'} is temporarily rate limited. Retry after ${Math.max(1, Math.ceil(retryAfterMs / 1000))} seconds.`,
+        );
+      }
+      this.modelAccessTokenRetryNotBeforeByCacheKey.delete(refreshCacheKey);
+    }
     const pendingRefresh =
       this.pendingIdeModelTokenRefreshes.get(refreshCacheKey);
     if (pendingRefresh) return pendingRefresh;
@@ -1357,17 +1385,46 @@ export class AuthService extends DisposableService {
         group: issuedGroup,
       };
       this.ideModelTokenByKeyId.set(routeCacheKey, cachedToken);
+      this.modelAccessTokenRetryNotBeforeByCacheKey.delete(
+        `route:${routeCacheKey}`,
+      );
       this.logger.debug(
         `[AuthService] Refreshed route-specific Clodex IDE model token for ${formatProviderLabel(provider)} model ${route.modelId ?? 'unknown'} via key "${selectedKey.name}"`,
       );
       return cachedToken.token;
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      let rateLimitCooldownMs: number | undefined;
+      if (
+        err instanceof ClodexRequestError &&
+        err.status === 429 &&
+        authEpoch === this.authLifecycleEpoch &&
+        cacheEpoch === this.modelAccessTokenCacheEpoch &&
+        this.getTrustedCredentials()?.token === accessToken
+      ) {
+        rateLimitCooldownMs = clampModelTokenRateLimitCooldownMs(
+          err.retryAfterMs,
+        );
+        this.modelAccessTokenRetryNotBeforeByCacheKey.set(
+          `route:${routeCacheKey}`,
+          Date.now() + rateLimitCooldownMs,
+        );
+      }
+      const reason =
+        err instanceof ClodexRequestError && err.status === 429
+          ? `${err.message}${
+              rateLimitCooldownMs == null
+                ? ' Wait before retrying.'
+                : ` Retry after ${Math.max(1, Math.ceil(rateLimitCooldownMs / 1000))} seconds.`
+            }`
+          : err instanceof Error
+            ? err.message
+            : String(err);
       this.logger.warn(
         `[AuthService] Failed to refresh route-specific Clodex IDE model token: ${err}`,
       );
       throw new Error(
         `Failed to refresh Clodex IDE token for ${formatProviderLabel(provider)} model ${route.modelId ?? 'unknown'}. ${reason}`,
+        { cause: err },
       );
     }
   }
