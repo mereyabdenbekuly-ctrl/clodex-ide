@@ -9,13 +9,13 @@ tester artifact.
 
 ## Current verified artifact
 
-**Community Observed 19** (`1.16.0-communityobserved19`) is the current Free
+**Community Observed 21** (`1.16.0-communityobserved21`) is the current Free
 Technical Preview verified against the packaging boundary defined below. It was
 built from exact canonical source
-[`623b7f733b74679468c5107602921f9e26b4a151`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/623b7f733b74679468c5107602921f9e26b4a151)
-by [Actions run `30435058244`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/30435058244)
+[`d2dd2b63077c67255d60b8ab53f5c3c0995c7f84`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/d2dd2b63077c67255d60b8ab53f5c3c0995c7f84)
+by [Actions run `30483341383`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/30483341383)
 and published on 2026-07-29 as
-[`v1.16.0-communityobserved19`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved19).
+[`v1.16.0-communityobserved21`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved21).
 
 The release's Free/managed checks and packaged-byte audit passed. Its
 `SHA256SUMS.txt` covers five unchanged installers and the evidence archive; the
