@@ -67,7 +67,7 @@ export const taskEn = {
         autoWorkspace: {
           label: 'Auto edits',
           description:
-            'Automatically apply eligible edits to existing regular text files in connected workspaces, plus checkbox progress updates in previously approved plans. New, sensitive, ignored, linked, executable, or read-only files still require review.',
+            'Automatically apply eligible ordinary text-file edits. Together with Always allow, project configuration updates skip repeated Accept prompts and new-file creation receives a guarded-shell fallback instruction; secrets, boundary violations, read-only access, and unsafe filesystem links are blocked.',
         },
       },
     },
@@ -88,7 +88,7 @@ export const taskEn = {
         label: 'Always allow',
         title: 'Skip future approvals',
         description:
-          'This agent will run every shell command without asking. Only enable this if you trust what this agent is about to do.',
+          'This agent will run permitted shell commands without the normal prompt. Together with Auto edits, existing-file updates skip repeated Accept prompts and new-file attempts receive a shell fallback instruction. Hard Guardian restrictions still apply.',
       },
     },
     actions: {

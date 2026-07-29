@@ -48,16 +48,16 @@ describe('task locale catalog', () => {
     );
   });
 
-  it('states the bounded Auto edits policy in both languages', () => {
+  it('states the combined Auto edits and Always allow policy in both languages', () => {
     expect(
       englishEntries['approval.fileEdits.mode.autoWorkspace.description'],
     ).toBe(
-      'Automatically apply eligible edits to existing regular text files in connected workspaces, plus checkbox progress updates in previously approved plans. New, sensitive, ignored, linked, executable, or read-only files still require review.',
+      'Automatically apply eligible ordinary text-file edits. Together with Always allow, project configuration updates skip repeated Accept prompts and new-file creation receives a guarded-shell fallback instruction; secrets, boundary violations, read-only access, and unsafe filesystem links are blocked.',
     );
     expect(
       russianEntries['approval.fileEdits.mode.autoWorkspace.description'],
     ).toBe(
-      'Автоматически применять допустимые правки существующих обычных текстовых файлов в подключённых рабочих областях, а также обновления прогресса чекбоксов в ранее одобренных планах. Новые, чувствительные, игнорируемые, связанные, исполняемые и read-only файлы по-прежнему требуют проверки.',
+      'Автоматически применять допустимые правки обычных текстовых файлов. Вместе с режимом «Всегда разрешать» файлы конфигурации проекта изменяются без повторного Accept, а для создания новых файлов агент получает указание использовать защищённый терминальный путь. Секреты, нарушение границ, read-only доступ и небезопасные файловые ссылки блокируются.',
     );
   });
 

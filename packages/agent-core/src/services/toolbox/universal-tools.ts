@@ -243,6 +243,50 @@ const AUTO_APPROVAL_SENSITIVE_EXTENSIONS = new Set([
   '.keystore',
 ]);
 
+const ALWAYS_ALLOW_BLOCKED_FILENAMES = new Set([
+  '.git-credentials',
+  '.netrc',
+  '.npmrc',
+  '.pypirc',
+  'authorized_keys',
+  'id_dsa',
+  'id_ecdsa',
+  'id_ed25519',
+  'id_rsa',
+  'identity',
+  'kubeconfig',
+]);
+
+const ALWAYS_ALLOW_BLOCKED_SEGMENTS = new Set([
+  '.aws',
+  '.azure',
+  '.clodex',
+  '.docker',
+  '.git',
+  '.gnupg',
+  '.kube',
+  '.ssh',
+]);
+
+function isAlwaysAllowBlockedCredentialPath(relativePath: string): boolean {
+  const normalized = relativePath.replaceAll('\\', '/').toLowerCase();
+  const segments = normalized.split('/').filter(Boolean);
+  const basename = segments.at(-1) ?? '';
+  return (
+    segments.some((segment) => ALWAYS_ALLOW_BLOCKED_SEGMENTS.has(segment)) ||
+    segments.some(
+      (segment, index) =>
+        segment === '.config' &&
+        (segments[index + 1] === 'gcloud' || segments[index + 1] === 'gh'),
+    ) ||
+    basename === '.env' ||
+    basename.startsWith('.env.') ||
+    ALWAYS_ALLOW_BLOCKED_FILENAMES.has(basename) ||
+    AUTO_APPROVAL_SENSITIVE_EXTENSIONS.has(path.extname(basename)) ||
+    /(?:credential|credentials|secret|secrets|private[-_.]?key)/u.test(basename)
+  );
+}
+
 function isSensitiveAutoApprovalPath(relativePath: string): boolean {
   const normalized = relativePath.replaceAll('\\', '/').toLowerCase();
   const segments = normalized.split('/').filter(Boolean);
@@ -450,6 +494,64 @@ async function isAutoApprovalEligible(
   return trackable && cleanHistory;
 }
 
+/**
+ * Broader standing authorization selected explicitly by combining
+ * `fileEditApprovalMode=autoWorkspace` with
+ * `toolApprovalMode=alwaysAllow`. Sensitive project filenames and new text
+ * files are allowed, but new-file creation remains delegated to the shell
+ * capability path until a descriptor-relative cross-platform creator exists.
+ * Mount permissions, text/evidence bounds, pending lineage, and unsafe
+ * filesystem aliases remain hard failures rather than another Accept prompt.
+ */
+async function isAlwaysAllowApprovalEligible(
+  deps: UniversalToolboxDeps,
+  resolved: ReturnType<typeof resolveToolPath>,
+  beforeState: Awaited<ReturnType<typeof captureFileState>>,
+  newContent: string,
+): Promise<boolean> {
+  if (
+    beforeState.isExternal ||
+    beforeState.content === null ||
+    !isSafeAutoApprovalText(newContent) ||
+    !isSafeAutoApprovalText(beforeState.content) ||
+    !deps.diffHistoryService
+  ) {
+    return false;
+  }
+  if (
+    isAlwaysAllowBlockedCredentialPath(resolved.relativePath) ||
+    isAlwaysAllowBlockedCredentialPath(resolved.mountRoot)
+  ) {
+    return false;
+  }
+
+  if (await hasUnsafeAutoApprovalPathComponent(resolved)) return false;
+
+  let authorizedTarget: CapturedAutoApprovedTarget;
+  try {
+    authorizedTarget = await captureAutoApprovedTargetIdentity(resolved);
+  } catch {
+    return false;
+  }
+  if (
+    isAlwaysAllowBlockedCredentialPath(authorizedTarget.physicalTarget) ||
+    isAlwaysAllowBlockedCredentialPath(authorizedTarget.physicalWorkspaceRoot)
+  ) {
+    return false;
+  }
+
+  const workspaceRoot = findWorkspaceRootForPath(deps, resolved.absolutePath);
+  const policyRoot = workspaceRoot ?? resolved.mountRoot;
+  const [trackable, cleanHistory] = await Promise.all([
+    deps.diffHistoryService.canSafelyTrackFilepath(
+      resolved.absolutePath,
+      policyRoot,
+    ),
+    deps.diffHistoryService.canSafelyAutoAcceptFile(resolved.absolutePath),
+  ]);
+  return trackable && cleanHistory;
+}
+
 type CapturedAutoApprovedTarget = AutoApprovedFileBinding;
 
 async function captureAutoApprovedTargetIdentity(
@@ -524,6 +626,125 @@ async function assertPendingTextBaselineUnchanged(
     if (currentState.isExternal) {
       void cleanupTempFile(currentState.tempPath);
     }
+  }
+}
+
+function runAbortableEditPreflight<T>(
+  abortSignal: AbortSignal,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (abortSignal.aborted) {
+    return Promise.reject(
+      new Error('File edit authorization was revoked during preflight.'),
+    );
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      abortSignal.removeEventListener('abort', onAbort);
+      callback();
+    };
+    const onAbort = () =>
+      finish(() =>
+        reject(
+          new Error('File edit authorization was revoked during preflight.'),
+        ),
+      );
+    abortSignal.addEventListener('abort', onAbort, { once: true });
+
+    let operationPromise: Promise<T>;
+    try {
+      operationPromise = operation();
+    } catch (error) {
+      finish(() => reject(error));
+      return;
+    }
+    void operationPromise.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error)),
+    );
+  });
+}
+
+/**
+ * Race revocation only while an automatic edit is still effect-free.
+ *
+ * Filesystem guard promises are not cancellable. If revocation wins before
+ * the writer reaches its synchronous final authority callback, this promise
+ * rejects immediately so PendingEditService can release the lease. The
+ * detached guard pipeline remains observed and its final callback is latched
+ * closed, which guarantees it cannot issue a late write after lease release.
+ *
+ * Once the callback succeeds, a write may already be in flight. Revocation
+ * must then wait for the writer to verify or recover the effect instead of
+ * releasing the lease early.
+ */
+function runAbortableUntilAutoEditEffectStarts<T>(
+  abortSignal: AbortSignal,
+  assertAutoPolicyAuthorized: () => void,
+  onEffectStarting: () => void,
+  operation: (assertEffectMayStart: () => void) => Promise<T>,
+): Promise<T> {
+  const revokedError = () =>
+    new Error('File edit authorization was revoked before its disk effect.');
+  if (abortSignal.aborted) return Promise.reject(revokedError());
+
+  return new Promise<T>((resolve, reject) => {
+    let state: 'pre-effect' | 'effect-started' | 'settled' = 'pre-effect';
+    const cleanup = () => abortSignal.removeEventListener('abort', handleAbort);
+    const settle = (callback: () => void) => {
+      if (state === 'settled') return;
+      state = 'settled';
+      cleanup();
+      callback();
+    };
+    const handleAbort = () => {
+      if (state !== 'pre-effect') return;
+      settle(() => reject(revokedError()));
+    };
+    const assertEffectMayStart = () => {
+      if (state !== 'pre-effect' || abortSignal.aborted) {
+        throw revokedError();
+      }
+      // Keep the host-owned authority check and the phase transition in one
+      // synchronous turn. Abort cannot interleave between this successful
+      // assertion, the marker, and the writer's immediately following call.
+      assertAutoPolicyAuthorized();
+      onEffectStarting();
+      if (state !== 'pre-effect' || abortSignal.aborted) {
+        throw revokedError();
+      }
+      state = 'effect-started';
+      cleanup();
+    };
+
+    abortSignal.addEventListener('abort', handleAbort, { once: true });
+    if (abortSignal.aborted) {
+      handleAbort();
+      return;
+    }
+
+    let operationPromise: Promise<T>;
+    try {
+      operationPromise = operation(assertEffectMayStart);
+    } catch (error) {
+      settle(() => reject(error));
+      return;
+    }
+    void operationPromise.then(
+      (value) => settle(() => resolve(value)),
+      (error) => settle(() => reject(error)),
+    );
+  });
+}
+
+function assertAutoEditEffectNotRevoked(abortSignal: AbortSignal): void {
+  if (abortSignal.aborted) {
+    throw new Error(
+      'File edit authorization was revoked while its disk effect was settling.',
+    );
   }
 }
 
@@ -851,10 +1072,18 @@ async function proposeSinglePathEdit<T extends object>(
     // file-edit call while preserving proposal admission order.
     autoApprovalEligible: () =>
       isAutoApprovalEligible(deps, resolved, beforeState, newContent),
-    apply: async ({ decisionSource, assertAutoPolicyAuthorized }) => {
+    apply: async ({
+      decisionSource,
+      autoApprovalPolicy,
+      abortSignal: effectAbortSignal,
+      assertAutoPolicyAuthorized,
+    }) => {
       if (decisionSource === 'human') {
         deps.diffHistoryService?.ignoreFileForWatcher(absolutePath);
       }
+      const isAlwaysAllowAutoPolicy =
+        decisionSource === 'auto-policy' &&
+        autoApprovalPolicy === 'always-allow';
       let autoEditReceipt: Awaited<
         ReturnType<typeof writeAutoApprovedEditToDisk>
       > | null = null;
@@ -881,53 +1110,101 @@ async function proposeSinglePathEdit<T extends object>(
             'Workspace authority changed after the edit was proposed; retry the edit.',
           );
         }
-        await assertPendingTextBaselineUnchanged(
-          deps,
-          absolutePath,
-          beforeState,
+        await runAbortableEditPreflight(effectAbortSignal, () =>
+          assertPendingTextBaselineUnchanged(deps, absolutePath, beforeState),
         );
-        if (
-          decisionSource === 'auto-policy' &&
-          !(await isAutoApprovalEligible(
-            deps,
-            currentResolution,
-            beforeState,
-            newContent,
-          ))
-        ) {
-          throw new Error(
-            'Automatic edit policy no longer permits this file; review it manually.',
+        if (decisionSource === 'auto-policy') {
+          const stillEligible = await runAbortableEditPreflight(
+            effectAbortSignal,
+            () =>
+              isAlwaysAllowAutoPolicy
+                ? isAlwaysAllowApprovalEligible(
+                    deps,
+                    currentResolution,
+                    beforeState,
+                    newContent,
+                  )
+                : isAutoApprovalEligible(
+                    deps,
+                    currentResolution,
+                    beforeState,
+                    newContent,
+                  ),
           );
+          if (!stillEligible) {
+            throw new Error(
+              isAlwaysAllowAutoPolicy && textBaseline === null
+                ? 'Always allow cannot safely create a new file through the mount-scoped file writer on this platform. Use executeShellCommand from the mounted workspace; normal Guardian policy still applies and no file-edit Accept is required.'
+                : isAlwaysAllowAutoPolicy
+                  ? 'Always allow blocked this file effect because its workspace boundary, filesystem binding, text limits, or durable edit lineage is unsafe.'
+                  : 'Automatic edit policy no longer permits this file; review it manually.',
+            );
+          }
         }
 
         if (decisionSource === 'auto-policy') {
           if (textBaseline === null) {
-            throw new Error('Automatic creation is not permitted.');
+            throw new Error(
+              'Always allow cannot safely create a new file through the mount-scoped file writer on this platform. Use executeShellCommand from the mounted workspace; normal Guardian policy still applies and no file-edit Accept is required.',
+            );
           }
           if (!deps.diffHistoryService) {
             throw new Error(
               'Automatic file edit requires durable diff-history evidence.',
             );
           }
-          autoWatcherToken =
-            deps.diffHistoryService.beginAutoApprovedWriteWatcher(
-              absolutePath,
-              newContent,
-            );
-          const targetIdentity =
-            await captureAutoApprovedTargetIdentity(currentResolution);
-          autoEditReceipt = await writeAutoApprovedEditToDisk(
-            absolutePath,
-            textBaseline,
-            newContent,
-            targetIdentity,
-            assertAutoPolicyAuthorized,
+          const targetIdentity = await runAbortableEditPreflight(
+            effectAbortSignal,
+            () => captureAutoApprovedTargetIdentity(currentResolution),
           );
+          if (
+            isAlwaysAllowAutoPolicy &&
+            (isAlwaysAllowBlockedCredentialPath(
+              targetIdentity.physicalTarget,
+            ) ||
+              isAlwaysAllowBlockedCredentialPath(
+                targetIdentity.physicalWorkspaceRoot,
+              ))
+          ) {
+            throw new Error(
+              'Always allow blocked this file effect because its final physical target is credential-bearing.',
+            );
+          }
+          if (
+            autoApprovalPolicy === 'safe-workspace' &&
+            (isSensitiveAutoApprovalPath(targetIdentity.physicalTarget) ||
+              isSensitiveAutoApprovalPath(targetIdentity.physicalWorkspaceRoot))
+          ) {
+            throw new Error(
+              'Automatic edit policy blocked this file effect because its final physical target is sensitive.',
+            );
+          }
+          autoEditReceipt = await runAbortableUntilAutoEditEffectStarts(
+            effectAbortSignal,
+            assertAutoPolicyAuthorized,
+            () => {
+              autoWatcherToken =
+                deps.diffHistoryService!.beginAutoApprovedWriteWatcher(
+                  absolutePath,
+                  newContent,
+                );
+            },
+            (assertEffectMayStart) =>
+              writeAutoApprovedEditToDisk(
+                absolutePath,
+                textBaseline,
+                newContent,
+                targetIdentity,
+                assertEffectMayStart,
+              ),
+          );
+          assertAutoEditEffectNotRevoked(effectAbortSignal);
           if (!(await autoEditReceipt.verify())) {
             throw new Error(
               'Automatic edit target changed before policy evidence could be recorded; review the latest content.',
             );
           }
+          assertAutoEditEffectNotRevoked(effectAbortSignal);
         } else {
           await writePendingEditToDisk(absolutePath, newContent);
         }
@@ -936,8 +1213,8 @@ async function proposeSinglePathEdit<T extends object>(
             !deps.diffHistoryService ||
             beforeState.isExternal ||
             beforeState.content === null ||
-            !autoEditReceipt ||
-            !autoWatcherToken
+            !autoWatcherToken ||
+            !autoEditReceipt
           ) {
             throw new Error(
               'Automatic file edit could not produce bounded text evidence.',
@@ -948,7 +1225,9 @@ async function proposeSinglePathEdit<T extends object>(
               agentInstanceId: deps.agentInstanceId,
               path: absolutePath,
               toolCallId,
-              workspaceRoot: findWorkspaceRootForPath(deps, absolutePath),
+              workspaceRoot:
+                findWorkspaceRootForPath(deps, absolutePath) ??
+                currentResolution.mountRoot,
               contentBefore: beforeState.content,
               // Never attribute an arbitrary path read to the agent. The
               // receipt carries the exact bytes written and verified by the
@@ -962,6 +1241,7 @@ async function proposeSinglePathEdit<T extends object>(
             );
           }
           autoEvidenceCommitted = true;
+          assertAutoEditEffectNotRevoked(effectAbortSignal);
           const reconciliation =
             await deps.diffHistoryService.reconcileAutoApprovedWriteWatcher(
               absolutePath,
@@ -969,6 +1249,7 @@ async function proposeSinglePathEdit<T extends object>(
               autoEditReceipt.contentAfter,
             );
           const stillExactAgentEffect = await autoEditReceipt.verify();
+          assertAutoEditEffectNotRevoked(effectAbortSignal);
           if (reconciliation !== 'exact' || !stillExactAgentEffect) {
             const rolledBack = await autoEditReceipt.rollback();
             autoReceiptSettled = true;
