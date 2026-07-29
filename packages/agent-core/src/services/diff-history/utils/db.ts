@@ -1301,6 +1301,167 @@ export async function hasPendingEditsForFilepath(
 }
 
 /**
+ * Prove that the latest human acceptance for this exact filepath belongs to a
+ * content-bearing edit from `agentInstanceId` and accepted that exact snapshot.
+ *
+ * The acceptance must be the immediately following operation for the same
+ * filepath. Operations for unrelated files may interleave in the global log,
+ * but any intervening operation on this filepath breaks the proof. Ownership
+ * survives only complete, content-contiguous automatic-policy transactions by
+ * the same agent:
+ *
+ *   user/init -> agent/tool-* -> policy/auto-accept
+ *
+ * A redundant policy baseline for the already-current snapshot is harmless.
+ * Any uncovered fresh generation, mismatched snapshot, user/reject operation,
+ * or policy transaction by another agent revokes the historical proof. A
+ * later human acceptance transfers ownership according to its own exact pair.
+ *
+ * This is historical provenance only. Callers that use it for automatic
+ * authorization must independently require a clean current history state.
+ */
+export async function hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+  db: SnapshotDb,
+  agentInstanceId: AgentInstanceId,
+  filepath: string,
+): Promise<boolean> {
+  const contributor = `agent-${agentInstanceId}` as `agent-${AgentInstanceId}`;
+  const result = await db.get<{
+    has_human_accepted_edit: boolean | number | bigint | string | null;
+  }>(sql`
+    WITH ordered AS (
+      SELECT
+        idx,
+        operation,
+        snapshot_oid,
+        reason,
+        contributor,
+        MAX(
+          CASE
+            WHEN operation = 'baseline'
+              AND contributor = 'user'
+              AND reason = 'init'
+            THEN idx
+          END
+        ) OVER (
+          ORDER BY idx
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS latest_init_idx,
+        LAG(operation, 1) OVER (ORDER BY idx) AS prev_operation,
+        LAG(snapshot_oid, 1) OVER (ORDER BY idx) AS prev_snapshot_oid,
+        LAG(reason, 1) OVER (ORDER BY idx) AS prev_reason,
+        LAG(contributor, 1) OVER (ORDER BY idx) AS prev_contributor,
+        LEAD(operation, 1) OVER (ORDER BY idx) AS next_operation,
+        LEAD(snapshot_oid, 1) OVER (ORDER BY idx) AS next_snapshot_oid,
+        LEAD(reason, 1) OVER (ORDER BY idx) AS next_reason,
+        LEAD(contributor, 1) OVER (ORDER BY idx) AS next_contributor,
+        LEAD(operation, 2) OVER (ORDER BY idx) AS next2_operation,
+        LEAD(snapshot_oid, 2) OVER (ORDER BY idx) AS next2_snapshot_oid,
+        LEAD(reason, 2) OVER (ORDER BY idx) AS next2_reason,
+        LEAD(contributor, 2) OVER (ORDER BY idx) AS next2_contributor
+      FROM operations
+      WHERE filepath = ${filepath}
+    ),
+    latest_accept AS (
+      SELECT *
+      FROM ordered
+      WHERE operation = 'baseline'
+        AND contributor = 'user'
+        AND reason = 'accept'
+      ORDER BY idx DESC
+      LIMIT 1
+    )
+    SELECT EXISTS (
+      SELECT 1
+      FROM latest_accept accepted
+      WHERE accepted.snapshot_oid IS NOT NULL
+        AND accepted.latest_init_idx IS NOT NULL
+        AND accepted.prev_operation = 'edit'
+        AND accepted.prev_contributor = ${contributor}
+        AND accepted.prev_reason LIKE 'tool-%'
+        AND accepted.prev_snapshot_oid = accepted.snapshot_oid
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ordered later
+          WHERE later.idx > accepted.idx
+            AND NOT COALESCE((
+              (
+                later.operation = 'baseline'
+                AND later.contributor = 'policy'
+                AND later.reason = 'auto-accept'
+                AND later.snapshot_oid IS NOT NULL
+                AND later.prev_snapshot_oid = later.snapshot_oid
+                AND (
+                  (
+                    later.prev_operation = 'edit'
+                    AND later.prev_contributor = ${contributor}
+                    AND later.prev_reason LIKE 'tool-%'
+                  )
+                  OR (
+                    later.prev_operation = 'baseline'
+                    AND (
+                      (
+                        later.prev_contributor = 'user'
+                        AND later.prev_reason = 'accept'
+                      )
+                      OR (
+                        later.prev_contributor = 'policy'
+                        AND later.prev_reason = 'auto-accept'
+                      )
+                    )
+                  )
+                )
+              )
+              OR (
+                later.operation = 'baseline'
+                AND later.contributor = 'user'
+                AND later.reason = 'init'
+                AND later.snapshot_oid IS NOT NULL
+                AND later.prev_operation = 'baseline'
+                AND later.prev_snapshot_oid = later.snapshot_oid
+                AND (
+                  (
+                    later.prev_contributor = 'user'
+                    AND later.prev_reason = 'accept'
+                  )
+                  OR (
+                    later.prev_contributor = 'policy'
+                    AND later.prev_reason = 'auto-accept'
+                  )
+                )
+                AND later.next_operation = 'edit'
+                AND later.next_contributor = ${contributor}
+                AND later.next_reason LIKE 'tool-%'
+                AND later.next_snapshot_oid IS NOT NULL
+                AND later.next2_operation = 'baseline'
+                AND later.next2_contributor = 'policy'
+                AND later.next2_reason = 'auto-accept'
+                AND later.next2_snapshot_oid = later.next_snapshot_oid
+              )
+              OR (
+                later.operation = 'edit'
+                AND later.contributor = ${contributor}
+                AND later.reason LIKE 'tool-%'
+                AND later.snapshot_oid IS NOT NULL
+                AND later.prev_operation = 'baseline'
+                AND later.prev_contributor = 'user'
+                AND later.prev_reason = 'init'
+                AND later.next_operation = 'baseline'
+                AND later.next_contributor = 'policy'
+                AND later.next_reason = 'auto-accept'
+                AND later.next_snapshot_oid = later.snapshot_oid
+              )
+            ), 0)
+        )
+      LIMIT 1
+    ) AS has_human_accepted_edit
+  `);
+
+  const value = result?.has_human_accepted_edit;
+  return value === true || value === 1 || value === 1n || value === '1';
+}
+
+/**
  * Get all pending operations across all files in the system.
  * Pending edit operations for a file are defined as operations where
  * the latest baseline snapshot_oid differs from the latest edit snapshot_oid.

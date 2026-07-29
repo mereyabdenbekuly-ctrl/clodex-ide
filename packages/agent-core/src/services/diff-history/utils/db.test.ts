@@ -19,6 +19,7 @@ import {
   insertOperation,
   storeFileContent,
   storeAutoApprovedTextEdit,
+  hasHumanAcceptedEditForAgentInstanceIdAndFilepath,
   getPendingOperationsForAgentInstanceId,
   getAllOperationsForAgentInstanceId,
   getAllPendingOperations,
@@ -301,6 +302,474 @@ describe('diff-history db utilities', () => {
       });
 
       expect(oid).toBe(expectedOid);
+    });
+  });
+
+  describe('hasHumanAcceptedEditForAgentInstanceIdAndFilepath', () => {
+    function createSnapshot(content: string): string {
+      const buffer = Buffer.from(content);
+      const oid = computeOid(buffer);
+      insertKeyframe(db, oid, buffer);
+      return oid;
+    }
+
+    it('proves an exact agent edit followed by human acceptance on the same filepath', async () => {
+      const filepath = '/test/human-accepted.ts';
+      const beforeOid = createSnapshot('before');
+      const afterOid = createSnapshot('after');
+      const unrelatedOid = createSnapshot('unrelated');
+      insertOperation(db, filepath, beforeOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, filepath, afterOid, {
+        operation: 'edit',
+        contributor: 'agent-agent-1',
+        reason: 'tool-edit-1',
+      });
+      // Global-log interleaving is allowed; adjacency is per filepath.
+      insertOperation(db, '/test/other.ts', unrelatedOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, filepath, afterOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          filepath,
+        ),
+      ).resolves.toBe(true);
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          '/test/other.ts',
+        ),
+      ).resolves.toBe(false);
+    });
+
+    it('requires the accepted edit to belong to an initialized file generation', async () => {
+      const filepath = '/test/missing-init.ts';
+      const afterOid = createSnapshot('after');
+      insertOperation(db, filepath, afterOid, {
+        operation: 'edit',
+        contributor: 'agent-agent-1',
+        reason: 'tool-edit-1',
+      });
+      insertOperation(db, filepath, afterOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          filepath,
+        ),
+      ).resolves.toBe(false);
+    });
+
+    it('rejects an acceptance whose immediately preceding filepath operation is a reject', async () => {
+      const filepath = '/test/rejected.ts';
+      const beforeOid = createSnapshot('before');
+      const afterOid = createSnapshot('after');
+      insertOperation(db, filepath, beforeOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, filepath, afterOid, {
+        operation: 'edit',
+        contributor: 'agent-agent-1',
+        reason: 'tool-edit-1',
+      });
+      insertOperation(db, filepath, beforeOid, {
+        operation: 'edit',
+        contributor: 'user',
+        reason: 'reject',
+      });
+      insertOperation(db, filepath, beforeOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          filepath,
+        ),
+      ).resolves.toBe(false);
+    });
+
+    it('binds the proof to the contributing agent', async () => {
+      const filepath = '/test/other-agent.ts';
+      const beforeOid = createSnapshot('before');
+      const afterOid = createSnapshot('after');
+      insertOperation(db, filepath, beforeOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, filepath, afterOid, {
+        operation: 'edit',
+        contributor: 'agent-agent-2',
+        reason: 'tool-edit-2',
+      });
+      insertOperation(db, filepath, afterOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          filepath,
+        ),
+      ).resolves.toBe(false);
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-2',
+          filepath,
+        ),
+      ).resolves.toBe(true);
+    });
+
+    it('does not treat standing policy as human acceptance', async () => {
+      const filepath = '/test/policy-only.ts';
+      const beforeOid = createSnapshot('before');
+      const afterOid = createSnapshot('after');
+      insertOperation(db, filepath, beforeOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, filepath, afterOid, {
+        operation: 'edit',
+        contributor: 'agent-agent-1',
+        reason: 'tool-auto-1',
+      });
+      insertOperation(db, filepath, afterOid, {
+        operation: 'baseline',
+        contributor: 'policy',
+        reason: 'auto-accept',
+      });
+
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          filepath,
+        ),
+      ).resolves.toBe(false);
+    });
+
+    it('keeps the latest human owner across later policy baselines', async () => {
+      const filepath = '/test/human-then-policy.ts';
+      const beforeOid = createSnapshot('before');
+      const afterOid = createSnapshot('after');
+      insertOperation(db, filepath, beforeOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, filepath, afterOid, {
+        operation: 'edit',
+        contributor: 'agent-agent-1',
+        reason: 'tool-edit-1',
+      });
+      insertOperation(db, filepath, afterOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+      insertOperation(db, filepath, afterOid, {
+        operation: 'baseline',
+        contributor: 'policy',
+        reason: 'auto-accept',
+      });
+
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          filepath,
+        ),
+      ).resolves.toBe(true);
+    });
+
+    it('keeps ownership through consecutive complete same-agent policy edits', async () => {
+      const filepath = '/test/consecutive-policy-edits.md';
+      const initial = '- [ ] first\n- [ ] second\n';
+      const afterFirst = '- [x] first\n- [ ] second\n';
+      const afterSecond = '- [x] first\n- [x] second\n';
+      const initialOid = createSnapshot(initial);
+      insertOperation(db, filepath, null, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, filepath, initialOid, {
+        operation: 'edit',
+        contributor: 'agent-agent-1',
+        reason: 'tool-create-plan',
+      });
+      insertOperation(db, filepath, initialOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+
+      await expect(
+        storeAutoApprovedTextEdit(db, {
+          agentInstanceId: 'agent-1',
+          filepath,
+          toolCallId: 'check-first',
+          contentBefore: initial,
+          contentAfter: afterFirst,
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          filepath,
+        ),
+      ).resolves.toBe(true);
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-2',
+          filepath,
+        ),
+      ).resolves.toBe(false);
+
+      await expect(
+        storeAutoApprovedTextEdit(db, {
+          agentInstanceId: 'agent-1',
+          filepath,
+          toolCallId: 'check-second',
+          contentBefore: afterFirst,
+          contentAfter: afterSecond,
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          filepath,
+        ),
+      ).resolves.toBe(true);
+    });
+
+    it('revokes ownership after a complete policy edit by another agent', async () => {
+      const filepath = '/test/other-agent-policy-edit.md';
+      const initial = '- [ ] task\n';
+      const changed = '- [x] task\n';
+      const initialOid = createSnapshot(initial);
+      insertOperation(db, filepath, null, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, filepath, initialOid, {
+        operation: 'edit',
+        contributor: 'agent-agent-1',
+        reason: 'tool-create-plan',
+      });
+      insertOperation(db, filepath, initialOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+
+      await expect(
+        storeAutoApprovedTextEdit(db, {
+          agentInstanceId: 'agent-2',
+          filepath,
+          toolCallId: 'other-agent-check',
+          contentBefore: initial,
+          contentAfter: changed,
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          filepath,
+        ),
+      ).resolves.toBe(false);
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-2',
+          filepath,
+        ),
+      ).resolves.toBe(false);
+    });
+
+    it('transfers ownership after another agent recreates and receives human acceptance', async () => {
+      const filepath = '/test/recreated-plan.md';
+      const oldOid = createSnapshot('old plan');
+      const newOid = createSnapshot('new plan');
+      insertOperation(db, filepath, null, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, filepath, oldOid, {
+        operation: 'edit',
+        contributor: 'agent-agent-1',
+        reason: 'tool-create-old',
+      });
+      insertOperation(db, filepath, oldOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+      insertOperation(db, filepath, null, {
+        operation: 'edit',
+        contributor: 'user',
+        reason: 'user-save',
+      });
+      insertOperation(db, filepath, null, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, filepath, newOid, {
+        operation: 'edit',
+        contributor: 'agent-agent-2',
+        reason: 'tool-create-new',
+      });
+      insertOperation(db, filepath, newOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          filepath,
+        ),
+      ).resolves.toBe(false);
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-2',
+          filepath,
+        ),
+      ).resolves.toBe(true);
+    });
+
+    it('revokes stale ownership when a new init generation has no human-accepted agent edit', async () => {
+      const filepath = '/test/user-recreated-plan.md';
+      const oldOid = createSnapshot('old plan');
+      const userOid = createSnapshot('user recreation');
+      insertOperation(db, filepath, null, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, filepath, oldOid, {
+        operation: 'edit',
+        contributor: 'agent-agent-1',
+        reason: 'tool-create-old',
+      });
+      insertOperation(db, filepath, oldOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+      insertOperation(db, filepath, userOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, filepath, userOid, {
+        operation: 'edit',
+        contributor: 'user',
+        reason: 'user-save',
+      });
+
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          filepath,
+        ),
+      ).resolves.toBe(false);
+    });
+
+    it('requires the human baseline to accept the same non-null snapshot', async () => {
+      const mismatchPath = '/test/mismatched-accept.ts';
+      const deletionPath = '/test/accepted-deletion.ts';
+      const beforeOid = createSnapshot('before');
+      const afterOid = createSnapshot('after');
+      const differentOid = createSnapshot('different');
+
+      insertOperation(db, mismatchPath, beforeOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, mismatchPath, afterOid, {
+        operation: 'edit',
+        contributor: 'agent-agent-1',
+        reason: 'tool-edit-1',
+      });
+      insertOperation(db, mismatchPath, differentOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+
+      insertOperation(db, deletionPath, beforeOid, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'init',
+      });
+      insertOperation(db, deletionPath, null, {
+        operation: 'edit',
+        contributor: 'agent-agent-1',
+        reason: 'tool-delete-1',
+      });
+      insertOperation(db, deletionPath, null, {
+        operation: 'baseline',
+        contributor: 'user',
+        reason: 'accept',
+      });
+
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          mismatchPath,
+        ),
+      ).resolves.toBe(false);
+      await expect(
+        hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          db,
+          'agent-1',
+          deletionPath,
+        ),
+      ).resolves.toBe(false);
     });
   });
 

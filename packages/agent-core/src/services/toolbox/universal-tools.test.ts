@@ -99,6 +99,7 @@ function makeDeps(root: string, workspace: string): UniversalToolboxDeps {
       acceptPendingEditsForAgentFile: vi.fn(async () => {}),
       canSafelyTrackFilepath: vi.fn(async () => true),
       canSafelyAutoAcceptFile: vi.fn(async () => true),
+      hasCleanHumanAcceptedEditForAgentFile: vi.fn(async () => false),
     } as never,
     logger: {
       debug: vi.fn(),
@@ -355,6 +356,7 @@ describe('universal toolbox', () => {
     let capturedApply:
       | ((context: {
           decisionSource: 'human' | 'auto-policy';
+          assertAutoPolicyAuthorized: () => void;
         }) => Promise<void>)
       | undefined;
     deps.pendingEditService = {
@@ -364,7 +366,10 @@ describe('universal toolbox', () => {
         expect(readFileSync(path.join(workspace, 'file.txt'), 'utf-8')).toBe(
           'before',
         );
-        await request.apply({ decisionSource: 'human' });
+        await request.apply({
+          decisionSource: 'human',
+          assertAutoPolicyAuthorized: () => {},
+        });
         return {
           status: 'accepted',
           message: 'accepted by test',
@@ -429,6 +434,43 @@ describe('universal toolbox', () => {
     expect(deps.diffHistoryService?.registerAgentEdit).toHaveBeenCalled();
   });
 
+  it('distinguishes newly created and existing empty files in trusted diff output', async () => {
+    deps.pendingEditService = {
+      requestApproval: vi.fn(async (request) => {
+        await request.apply({
+          decisionSource: 'human',
+          assertAutoPolicyAuthorized: () => {},
+        });
+        return { status: 'accepted', message: 'accepted by test' };
+      }),
+    } as never;
+
+    const created = await writeToolExecute(
+      { path: 'wtest/new-empty.txt', content: '' },
+      deps,
+      { toolCallId: 'tc-create-empty' },
+    );
+    expect(created._diff).toEqual({ before: null, after: '' });
+    expect(readFileSync(path.join(workspace, 'new-empty.txt'), 'utf8')).toBe(
+      '',
+    );
+
+    writeFileSync(path.join(workspace, 'existing-empty.txt'), '');
+    const unchanged = await writeToolExecute(
+      { path: 'wtest/existing-empty.txt', content: '' },
+      deps,
+      { toolCallId: 'tc-existing-empty-noop' },
+    );
+    expect(unchanged._diff).toBeNull();
+
+    const edited = await writeToolExecute(
+      { path: 'wtest/existing-empty.txt', content: 'filled' },
+      deps,
+      { toolCallId: 'tc-edit-empty' },
+    );
+    expect(edited._diff).toEqual({ before: '', after: 'filled' });
+  });
+
   it('auto-applies eligible workspace write and multi-edit operations', async () => {
     writeFileSync(path.join(workspace, 'file.txt'), 'hello world');
     const store = enableAutoWorkspaceEdits(deps, workspace);
@@ -468,6 +510,179 @@ describe('universal toolbox', () => {
     expect(
       deps.diffHistoryService?.canSafelyAutoAcceptFile,
     ).toHaveBeenCalledWith(path.join(workspace, 'file.txt'));
+  });
+
+  it('auto-applies a pure checkbox toggle to an owned top-level plan', async () => {
+    const plansDir = deps.hostPaths.plansDir();
+    const planPath = path.join(plansDir, 'release.md');
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(
+      planPath,
+      '# Release\n\n- [ ] Publish build\n- [x] Tag source\n',
+    );
+    const store = enableAutoWorkspaceEdits(deps, workspace);
+    vi.mocked(
+      deps.diffHistoryService!.hasCleanHumanAcceptedEditForAgentFile,
+    ).mockResolvedValue(true);
+
+    const result = await multiEditToolExecute(
+      {
+        path: 'plans/release.md',
+        edits: [
+          {
+            old_string: '- [ ] Publish build',
+            new_string: '- [x] Publish build',
+          },
+        ],
+      },
+      deps,
+      { toolCallId: 'tc-auto-plan-checkoff' },
+    );
+
+    expect(result.message).toContain('Success: applied changes');
+    expect(readFileSync(planPath, 'utf8')).toBe(
+      '# Release\n\n- [x] Publish build\n- [x] Tag source\n',
+    );
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+    expect(
+      deps.diffHistoryService?.hasCleanHumanAcceptedEditForAgentFile,
+    ).toHaveBeenCalledWith('agent-1', planPath);
+    expect(
+      deps.diffHistoryService?.registerAutoApprovedTextEdit,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentInstanceId: 'agent-1',
+        path: planPath,
+        toolCallId: 'tc-auto-plan-checkoff',
+      }),
+    );
+  });
+
+  it('keeps an unowned or other-agent plan checkbox change manual', async () => {
+    const plansDir = deps.hostPaths.plansDir();
+    const planPath = path.join(plansDir, 'other-agent.md');
+    mkdirSync(plansDir, { recursive: true });
+    writeFileSync(planPath, '# Other agent\n\n- [ ] Private task\n');
+    const store = enableAutoWorkspaceEdits(deps, workspace);
+
+    const editPromise = multiEditToolExecute(
+      {
+        path: 'plans/other-agent.md',
+        edits: [
+          {
+            old_string: '- [ ] Private task',
+            new_string: '- [x] Private task',
+          },
+        ],
+      },
+      deps,
+      { toolCallId: 'tc-unowned-plan-checkoff' },
+    );
+
+    await vi.waitFor(() =>
+      expect(
+        store.get().toolbox['agent-1']?.pendingProposedEdits.at(0)?.toolCallId,
+      ).toBe('tc-unowned-plan-checkoff'),
+    );
+    expect(readFileSync(planPath, 'utf8')).toContain('- [ ] Private task');
+    deps.pendingEditService?.rejectEdit(
+      store.get().toolbox['agent-1']!.pendingProposedEdits[0]!.id,
+    );
+    await editPromise;
+
+    expect(
+      deps.diffHistoryService?.hasCleanHumanAcceptedEditForAgentFile,
+    ).toHaveBeenCalledWith('agent-1', planPath);
+    expect(
+      deps.diffHistoryService?.registerAutoApprovedTextEdit,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('keeps plan rewrites, nested plans, and new plans manual in auto-edit mode', async () => {
+    const plansDir = deps.hostPaths.plansDir();
+    const planPath = path.join(plansDir, 'release.md');
+    const nestedPlanPath = path.join(plansDir, 'nested', 'release.md');
+    mkdirSync(path.dirname(nestedPlanPath), { recursive: true });
+    writeFileSync(planPath, '# Release\n\n- [ ] Publish build\n');
+    writeFileSync(nestedPlanPath, '# Nested\n\n- [ ] Publish build\n');
+    const store = enableAutoWorkspaceEdits(deps, workspace);
+    vi.mocked(
+      deps.diffHistoryService!.hasCleanHumanAcceptedEditForAgentFile,
+    ).mockResolvedValue(true);
+
+    const rejectManualProposal = async (
+      toolCallId: string,
+      operation: Promise<unknown>,
+    ) => {
+      await vi.waitFor(() =>
+        expect(
+          store
+            .get()
+            .toolbox['agent-1']?.pendingProposedEdits.find(
+              (proposal) => proposal.toolCallId === toolCallId,
+            )?.toolCallId,
+        ).toBe(toolCallId),
+      );
+      const proposal = store
+        .get()
+        .toolbox['agent-1']!.pendingProposedEdits.find(
+          (candidate) => candidate.toolCallId === toolCallId,
+        )!;
+      deps.pendingEditService?.rejectEdit(proposal.id);
+      await operation;
+    };
+
+    await rejectManualProposal(
+      'tc-plan-rewrite',
+      writeToolExecute(
+        {
+          path: 'plans/release.md',
+          content: '# Rewritten\n\n- [x] Different task\n',
+        },
+        deps,
+        { toolCallId: 'tc-plan-rewrite' },
+      ),
+    );
+    await rejectManualProposal(
+      'tc-nested-plan-checkoff',
+      multiEditToolExecute(
+        {
+          path: 'plans/nested/release.md',
+          edits: [
+            {
+              old_string: '- [ ] Publish build',
+              new_string: '- [x] Publish build',
+            },
+          ],
+        },
+        deps,
+        { toolCallId: 'tc-nested-plan-checkoff' },
+      ),
+    );
+    await rejectManualProposal(
+      'tc-new-plan',
+      writeToolExecute(
+        { path: 'plans/new.md', content: '# New\n\n- [ ] First task\n' },
+        deps,
+        { toolCallId: 'tc-new-plan' },
+      ),
+    );
+
+    expect(readFileSync(planPath, 'utf8')).toBe(
+      '# Release\n\n- [ ] Publish build\n',
+    );
+    expect(readFileSync(nestedPlanPath, 'utf8')).toBe(
+      '# Nested\n\n- [ ] Publish build\n',
+    );
+    expect(() => readFileSync(path.join(plansDir, 'new.md'))).toThrow();
+    expect(
+      deps.diffHistoryService?.hasCleanHumanAcceptedEditForAgentFile,
+    ).not.toHaveBeenCalled();
+    expect(
+      deps.diffHistoryService?.registerAutoApprovedTextEdit,
+    ).not.toHaveBeenCalled();
   });
 
   it('keeps new-file creation manual in auto-edit mode', async () => {

@@ -29,9 +29,18 @@ export interface PendingEditRequest {
   abortSignal?: AbortSignal;
   /** Host-only exact-batch capability. Never supplied by the model. */
   fileEditBatchParticipant?: FileEditBatchParticipant;
-  apply: (context: {
-    decisionSource: 'human' | 'auto-policy';
-  }) => Promise<void>;
+  apply: (context: PendingEditApplyContext) => Promise<void>;
+}
+
+export interface PendingEditApplyContext {
+  decisionSource: 'human' | 'auto-policy';
+  /**
+   * Host-only live authority check. Automatic writers must invoke this
+   * synchronously at their final effect boundary, after all asynchronous
+   * path/baseline preflight and immediately before issuing the first write.
+   * Human-approved flows may call it, but it is intentionally a no-op there.
+   */
+  assertAutoPolicyAuthorized: () => void;
 }
 
 interface PendingEditRecord {
@@ -310,8 +319,6 @@ export class PendingEditService {
         }),
       };
     }
-    const autoApprove = eligibility === 'eligible';
-
     let lockKey: string;
     try {
       lockKey = await canonicalizeLockKey(
@@ -367,6 +374,16 @@ export class PendingEditService {
       toolCallId: request.toolCallId,
       createdAt: Date.now(),
     });
+
+    // Eligibility can perform filesystem and history checks and admission can
+    // wait behind earlier requests. Re-read the live preference after those
+    // awaits so disabling Auto edits revokes standing authority before this
+    // proposal is settled/applied. A revoked proposal falls back to the normal
+    // published human-review flow below.
+    const autoApprove =
+      eligibility === 'eligible' &&
+      this.store.get().agents.instances[request.agentInstanceId]?.state
+        .fileEditApprovalMode === 'autoWorkspace';
 
     let preview: PendingEditPreview;
     try {
@@ -524,7 +541,29 @@ export class PendingEditService {
 
     try {
       this.markApplying(record);
-      await record.apply({ decisionSource });
+      await record.apply({
+        decisionSource,
+        assertAutoPolicyAuthorized: () => {
+          if (decisionSource !== 'auto-policy') return;
+
+          const activeRecord = this.pending.get(pendingEditId);
+          const activeLease = this.fileLocks.get(record.lockKey);
+          const liveMode =
+            this.store.get().agents.instances[record.preview.agentInstanceId]
+              ?.state.fileEditApprovalMode;
+          if (
+            activeRecord !== record ||
+            record.resolutionState !== 'settling' ||
+            activeLease?.leaseId !== record.leaseId ||
+            record.fileEditBatchParticipant?.getState() === 'aborted' ||
+            liveMode !== 'autoWorkspace'
+          ) {
+            throw new Error(
+              'Automatic edit authorization was revoked before the filesystem effect; review the change manually.',
+            );
+          }
+        },
+      });
       this.resolve(record, {
         status: 'accepted',
         message: `Success: applied changes to ${record.preview.relativePath}.\n\n${POST_EDIT_VERIFICATION_NUDGE}`,
@@ -1019,6 +1058,7 @@ async function rewriteExistingFileWithGuards(
   expectedContent: string,
   replacementContent: string,
   expectedBinding: AutoApprovedFileBinding,
+  assertAutoPolicyAuthorized: () => void,
 ): Promise<GuardedRewriteResult> {
   await assertAutoApprovedPathBinding(absolutePath, expectedBinding);
   const beforePathStat = await lstat(absolutePath);
@@ -1100,6 +1140,12 @@ async function rewriteExistingFileWithGuards(
 
     const identity = identityOf(openedStat);
     try {
+      // This callback is deliberately synchronous and sits after every
+      // asynchronous path/baseline check. Calling it here binds the live host
+      // preference and the held edit lease to the first filesystem write;
+      // disabling Auto edits before this point leaves the original bytes
+      // untouched.
+      assertAutoPolicyAuthorized();
       await writeHandleContent(handle, replacementContent);
       await assertAutoApprovedPathBinding(absolutePath, expectedBinding);
       const beforeVerificationStat = await handle.stat();
@@ -1259,12 +1305,14 @@ export async function writeAutoApprovedEditToDisk(
   expectedContent: string,
   content: string,
   expectedBinding: AutoApprovedFileBinding,
+  assertAutoPolicyAuthorized: () => void,
 ): Promise<AutoApprovedEditReceipt> {
   const applied = await rewriteExistingFileWithGuards(
     absolutePath,
     expectedContent,
     content,
     expectedBinding,
+    assertAutoPolicyAuthorized,
   );
   let state: 'open' | 'committed' | 'rolled-back-success' | 'closed-failed' =
     'open';

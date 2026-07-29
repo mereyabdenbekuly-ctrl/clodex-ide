@@ -135,6 +135,25 @@ describe('guarded automatic file writes', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it('revokes automatic authority at the final boundary before the first write', async () => {
+    const assertAutoPolicyAuthorized = vi.fn(() => {
+      throw new Error('automatic mode disabled');
+    });
+
+    await expect(
+      writeAutoApprovedEditToDisk(
+        filePath,
+        'before',
+        'after',
+        captureBinding(root, filePath),
+        assertAutoPolicyAuthorized,
+      ),
+    ).rejects.toThrow('automatic mode disabled');
+
+    expect(assertAutoPolicyAuthorized).toHaveBeenCalledOnce();
+    expect(readFileSync(filePath, 'utf8')).toBe('before');
+  });
+
   it('keeps a synced mutation authoritative when close cleanup fails', async () => {
     fsMocks.open.mockImplementationOnce(
       async (...args: Parameters<typeof nodeOpen>) =>
@@ -145,6 +164,7 @@ describe('guarded automatic file writes', () => {
       'before',
       'after',
       captureBinding(root, filePath),
+      () => {},
     );
 
     expect(readFileSync(filePath, 'utf8')).toBe('after');
@@ -163,6 +183,7 @@ describe('guarded automatic file writes', () => {
       'before',
       'agent content',
       captureBinding(root, filePath),
+      () => {},
     );
 
     // A portable regular-file API cannot exclude an uncooperative writer
@@ -210,6 +231,7 @@ describe('guarded automatic file writes', () => {
       'before',
       'agent content',
       binding,
+      () => {},
     );
     if (process.platform === 'win32') {
       // Windows denies renaming a parent that contains the target while the
@@ -252,6 +274,7 @@ describe('guarded automatic file writes', () => {
       'before',
       'after',
       binding,
+      () => {},
     );
 
     let relocationError: unknown;
