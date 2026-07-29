@@ -3,7 +3,11 @@ import { z } from 'zod';
 import { BaseAgent, type BaseAgentConfig } from '../base-agent';
 import { AgentTypes } from '../../types/agent';
 import { isPlanPath } from '../../plans/ownership';
-import type { WriteToolInput } from '../../types/tools';
+import type {
+  WithDiff,
+  WriteToolInput,
+  WriteToolOutput,
+} from '../../types/tools';
 import { buildChatSystemPrompt } from './system-prompt-builder/system-prompt-builder';
 
 /**
@@ -68,21 +72,22 @@ export class ChatAgent extends BaseAgent<never, undefined> {
   }
 
   /**
-   * Stop generation after the agent creates a new plan file.
+   * Stop generation after the agent successfully creates a new plan file.
    *
-   * When the step contains a `write` tool result whose path matches `plans/*.md`
-   * (i.e. the file was just created, not updated), we return `false`
-   * so the agent goes idle and the plan-creation tool part is the
-   * last visible element in the chat.
+   * The model-provided `write` input identifies the plan mount, but it is not
+   * trusted to classify the filesystem effect. Creation is proven only by the
+   * host-produced `_diff.before === null` metadata. Existing plan updates have
+   * a string baseline, while rejected or aborted writes publish no diff.
    */
   protected onStepFinished(result: StepResult<ToolSet>): boolean {
     for (const tr of result.toolResults) {
       if (tr.toolName !== 'write') continue;
 
-      const input = tr.input as WriteToolInput;
-      if (!isPlanPath(input.path)) continue;
+      const input = tr.input as Partial<WriteToolInput> | undefined;
+      if (typeof input?.path !== 'string' || !isPlanPath(input.path)) continue;
+      if (!isCreatedFileOutput(tr.output)) continue;
 
-      // Plan was created or updated — stop so the UI can present it cleanly.
+      // A newly created plan should be the last visible element in the chat.
       return false;
     }
 
@@ -150,6 +155,21 @@ export class ChatAgent extends BaseAgent<never, undefined> {
       ),
     ) as Partial<ToolSet>;
   }
+}
+
+/**
+ * Interpret only host-produced file-effect metadata. The `_diff` contract is
+ * deliberately stricter than the human-readable tool message:
+ * `before === null` means creation and `after` must contain the created bytes.
+ */
+function isCreatedFileOutput(
+  output: unknown,
+): output is WithDiff<WriteToolOutput> {
+  if (!output || typeof output !== 'object') return false;
+  const diff = (output as { _diff?: unknown })._diff;
+  if (!diff || typeof diff !== 'object') return false;
+  const candidate = diff as { before?: unknown; after?: unknown };
+  return candidate.before === null && typeof candidate.after === 'string';
 }
 
 function escapePromptText(value: string): string {

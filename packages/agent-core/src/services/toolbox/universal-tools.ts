@@ -81,6 +81,7 @@ import {
   resolveToolMountPrefix,
   resolveToolPath,
 } from './path-resolution';
+import { PLANS_PREFIX } from '../../plans';
 import {
   buildAgentFileEditContent,
   capToolOutput,
@@ -267,6 +268,60 @@ function isSafeAutoApprovalText(content: string): boolean {
   );
 }
 
+function isTopLevelPlanMarkdownPath(
+  resolved: ReturnType<typeof resolveToolPath>,
+): boolean {
+  if (resolved.mountPrefix !== PLANS_PREFIX) return false;
+  const normalized = resolved.relativePath.replaceAll('\\', '/');
+  return (
+    normalized.length > '.md'.length &&
+    !normalized.includes('/') &&
+    normalized.endsWith('.md')
+  );
+}
+
+const PLAN_CHECKBOX_LINE = /^([ \t]*-\s+\[)([ xX])(\]\s+\S.*)$/u;
+
+/**
+ * Standing policy may update an already-approved plan only when every changed
+ * line preserves the complete task text and changes the checkbox state alone.
+ * This deliberately rejects rewrites, reordered lines, added tasks, and
+ * cosmetic `x`/`X` changes.
+ */
+function isPurePlanCheckboxToggle(
+  beforeContent: string,
+  afterContent: string,
+): boolean {
+  if (beforeContent === afterContent) return false;
+  const beforeLines = beforeContent.split('\n');
+  const afterLines = afterContent.split('\n');
+  if (beforeLines.length !== afterLines.length) return false;
+
+  let toggled = false;
+  for (let index = 0; index < beforeLines.length; index++) {
+    const beforeLine = beforeLines[index]!;
+    const afterLine = afterLines[index]!;
+    if (beforeLine === afterLine) continue;
+
+    const beforeMatch = PLAN_CHECKBOX_LINE.exec(beforeLine);
+    const afterMatch = PLAN_CHECKBOX_LINE.exec(afterLine);
+    if (
+      !beforeMatch ||
+      !afterMatch ||
+      beforeMatch[1] !== afterMatch[1] ||
+      beforeMatch[3] !== afterMatch[3]
+    ) {
+      return false;
+    }
+    const beforeChecked = beforeMatch[2]!.toLowerCase() === 'x';
+    const afterChecked = afterMatch[2]!.toLowerCase() === 'x';
+    if (beforeChecked === afterChecked) return false;
+    toggled = true;
+  }
+
+  return toggled;
+}
+
 function comparableFilesystemPath(value: string): string {
   const normalized = path.normalize(path.resolve(value));
   return process.platform === 'win32' || process.platform === 'darwin'
@@ -341,17 +396,38 @@ async function isAutoApprovalEligible(
   ) {
     return false;
   }
-  const workspaceRoot = findWorkspaceRootForPath(deps, resolved.absolutePath);
+  if (!deps.diffHistoryService) return false;
   if (
-    !workspaceRoot ||
-    comparableFilesystemPath(workspaceRoot) !==
-      comparableFilesystemPath(resolved.mountRoot) ||
     isSensitiveAutoApprovalPath(resolved.relativePath) ||
     isSensitiveAutoApprovalPath(resolved.mountRoot) ||
     (await hasUnsafeAutoApprovalPathComponent(resolved))
   ) {
     return false;
   }
+
+  const workspaceRoot = findWorkspaceRootForPath(deps, resolved.absolutePath);
+  let policyRoot: string | null = null;
+  if (
+    workspaceRoot &&
+    comparableFilesystemPath(workspaceRoot) ===
+      comparableFilesystemPath(resolved.mountRoot)
+  ) {
+    policyRoot = workspaceRoot;
+  } else if (
+    isTopLevelPlanMarkdownPath(resolved) &&
+    isPurePlanCheckboxToggle(beforeState.content, newContent) &&
+    (await deps.diffHistoryService.hasCleanHumanAcceptedEditForAgentFile(
+      deps.agentInstanceId,
+      resolved.absolutePath,
+    ))
+  ) {
+    // `plans/` is a global static mount, so the exact path needs a durable
+    // prior human acceptance for this agent before standing policy can touch
+    // it. Message-history ownership is intentionally not authority.
+    policyRoot = resolved.mountRoot;
+  }
+  if (!policyRoot) return false;
+
   let authorizedTarget: CapturedAutoApprovedTarget;
   try {
     authorizedTarget = await captureAutoApprovedTargetIdentity(resolved);
@@ -364,11 +440,10 @@ async function isAutoApprovalEligible(
   ) {
     return false;
   }
-  if (!deps.diffHistoryService) return false;
   const [trackable, cleanHistory] = await Promise.all([
     deps.diffHistoryService.canSafelyTrackFilepath(
       resolved.absolutePath,
-      workspaceRoot,
+      policyRoot,
     ),
     deps.diffHistoryService.canSafelyAutoAcceptFile(resolved.absolutePath),
   ]);
@@ -750,7 +825,7 @@ async function proposeSinglePathEdit<T extends object>(
   const { absolutePath, relativePath } = resolved;
   const textBaseline = beforeState.isExternal ? null : beforeState.content;
   const _diff = !beforeState.isExternal
-    ? { before: beforeState.content ?? '', after: newContent }
+    ? { before: beforeState.content, after: newContent }
     : null;
 
   if (!deps.pendingEditService) {
@@ -776,7 +851,7 @@ async function proposeSinglePathEdit<T extends object>(
     // file-edit call while preserving proposal admission order.
     autoApprovalEligible: () =>
       isAutoApprovalEligible(deps, resolved, beforeState, newContent),
-    apply: async ({ decisionSource }) => {
+    apply: async ({ decisionSource, assertAutoPolicyAuthorized }) => {
       if (decisionSource === 'human') {
         deps.diffHistoryService?.ignoreFileForWatcher(absolutePath);
       }
@@ -846,6 +921,7 @@ async function proposeSinglePathEdit<T extends object>(
             textBaseline,
             newContent,
             targetIdentity,
+            assertAutoPolicyAuthorized,
           );
           if (!(await autoEditReceipt.verify())) {
             throw new Error(

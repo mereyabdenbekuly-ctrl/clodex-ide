@@ -48,6 +48,7 @@ import {
   storeFileContent,
   storeLargeContent,
   hasPendingEditsForFilepath,
+  hasHumanAcceptedEditForAgentInstanceIdAndFilepath,
   streamContent,
   getLatestOperationIdxPerFilepath,
   getAgentInstanceIdsWithOperationsForFilepath,
@@ -707,6 +708,34 @@ export class DiffHistoryService extends DisposableService {
     } catch (error) {
       this.logError(
         `Automatic edit pending-history check failed for ${filepath}`,
+        error,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Fail-closed durable proof that this agent previously made a text edit to
+   * the exact filepath, a human accepted that exact snapshot, and the file has
+   * no pending history now. Historical policy-only acceptance or an accepted
+   * contribution from another agent is never sufficient.
+   */
+  public async hasCleanHumanAcceptedEditForAgentFile(
+    agentInstanceId: string,
+    filepath: string,
+  ): Promise<boolean> {
+    try {
+      const humanAccepted =
+        await hasHumanAcceptedEditForAgentInstanceIdAndFilepath(
+          this.db,
+          agentInstanceId,
+          filepath,
+        );
+      if (!humanAccepted) return false;
+      return !(await hasPendingEditsForFilepath(this.db, filepath));
+    } catch (error) {
+      this.logError(
+        `Human-accepted edit provenance check failed for ${filepath}`,
         error,
       );
       return false;
@@ -1377,8 +1406,22 @@ export class DiffHistoryService extends DisposableService {
     agentInstanceId: string,
     filePath: string,
   ): Promise<void> {
-    const pendingDiffs =
-      await this.getPendingFileDiffsForAgentInstanceId(agentInstanceId);
+    // Use the exact raw DB slice rather than the UI projection. The UI path
+    // intentionally filters internal apps/plans/logs files, but a human who
+    // approved a live proposal for one of those files still needs a durable
+    // `user/accept` baseline before the proposal resolves.
+    const pendingOperations =
+      await getPendingOperationsForAgentInstanceIdAndFilepath(
+        this.db,
+        agentInstanceId,
+        filePath,
+      );
+    if (pendingOperations.length === 0) return;
+    const pendingDiffs = await this.computeFileDiffsUncached(
+      null,
+      pendingOperations,
+      'pending',
+    );
     const hunkIds = pendingDiffs
       .filter((diff) => diff.path === filePath)
       .flatMap((diff) =>

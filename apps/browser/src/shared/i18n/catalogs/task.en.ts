@@ -67,7 +67,7 @@ export const taskEn = {
         autoWorkspace: {
           label: 'Auto edits',
           description:
-            'Automatically apply eligible edits to existing regular text files in connected workspaces. New, sensitive, ignored, linked, executable, or read-only files still require review.',
+            'Automatically apply eligible edits to existing regular text files in connected workspaces, plus checkbox progress updates in previously approved plans. New, sensitive, ignored, linked, executable, or read-only files still require review.',
         },
       },
     },

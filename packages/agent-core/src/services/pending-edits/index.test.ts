@@ -362,7 +362,9 @@ describe('PendingEditService', () => {
     ).resolves.toMatchObject({ status: 'accepted' });
 
     expect(apply).toHaveBeenCalledTimes(1);
-    expect(apply).toHaveBeenCalledWith({ decisionSource: 'auto-policy' });
+    expect(apply).toHaveBeenCalledWith(
+      expect.objectContaining({ decisionSource: 'auto-policy' }),
+    );
     expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
       [],
     );
@@ -658,6 +660,41 @@ describe('PendingEditService', () => {
     await Promise.resolve();
     expect(apply).not.toHaveBeenCalled();
 
+    service.rejectEdit(pendingEditId);
+    await expect(decisionPromise).resolves.toMatchObject({
+      status: 'rejected',
+    });
+  });
+
+  it('falls back to human review when auto mode is disabled during eligibility', async () => {
+    const { service, store } = createService();
+    setFileEditApprovalMode(store, 'autoWorkspace');
+    const apply = vi.fn(async () => {});
+    let resolveEligibility!: (eligible: boolean) => void;
+    const eligibility = vi.fn(
+      async () =>
+        await new Promise<boolean>((resolve) => {
+          resolveEligibility = resolve;
+        }),
+    );
+
+    const decisionPromise = service.requestApproval({
+      toolCallId: 'tc-mode-revoked',
+      agentInstanceId: 'agent-1',
+      absolutePath: path.join('/workspace', 'src', 'revoked.ts'),
+      relativePath: 'src/revoked.ts',
+      oldContent: 'before',
+      newContent: 'after',
+      autoApprovalEligible: eligibility,
+      apply,
+    });
+
+    await vi.waitFor(() => expect(eligibility).toHaveBeenCalledOnce());
+    setFileEditApprovalMode(store, 'manual');
+    resolveEligibility(true);
+
+    const pendingEditId = await getPendingId(store);
+    expect(apply).not.toHaveBeenCalled();
     service.rejectEdit(pendingEditId);
     await expect(decisionPromise).resolves.toMatchObject({
       status: 'rejected',

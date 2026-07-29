@@ -1,3 +1,4 @@
+import type { StepResult, ToolSet } from 'ai';
 import { describe, expect, it, vi } from 'vitest';
 import { createTestAgentHost } from '../../host/test-utils';
 import { ChatAgent } from './chat';
@@ -27,6 +28,13 @@ interface ChatAgentInternals {
   getSystemPrompt: () => string;
   getActiveModelId: () => string;
   getCurrentStepModelId: () => string;
+  onStepFinished: (result: StepResult<ToolSet>) => boolean;
+}
+
+function makeStepResult(
+  toolResults: Array<Record<string, unknown>>,
+): StepResult<ToolSet> {
+  return { toolResults } as unknown as StepResult<ToolSet>;
 }
 
 function makeStubAgent<T extends ChatAgent>(
@@ -147,6 +155,90 @@ describe('ChatAgent', () => {
 
     expect(tools).not.toHaveProperty('missingHostTool');
     expect(tools).toHaveProperty('presentHostTool');
+  });
+
+  it('stops after trusted output proves that a plan file was created', () => {
+    const stub = makeStubAgent(ChatAgent, {
+      getTool: vi.fn().mockResolvedValue({}),
+    });
+
+    expect(
+      stub.onStepFinished(
+        makeStepResult([
+          {
+            toolName: 'write',
+            input: { path: 'plans/new-plan.md', content: '# Plan' },
+            output: {
+              message: 'Success: applied changes to new-plan.md.',
+              _diff: { before: null, after: '# Plan' },
+            },
+          },
+        ]),
+      ),
+    ).toBe(false);
+  });
+
+  it('continues after writing an existing plan, including checkbox progress', () => {
+    const stub = makeStubAgent(ChatAgent, {
+      getTool: vi.fn().mockResolvedValue({}),
+    });
+
+    expect(
+      stub.onStepFinished(
+        makeStepResult([
+          {
+            toolName: 'write',
+            input: { path: 'plans/current-plan.md', content: '- [x] Done' },
+            output: {
+              message: 'Success: applied changes to current-plan.md.',
+              _diff: { before: '- [ ] Done', after: '- [x] Done' },
+            },
+          },
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not trust a plan-shaped model input without creation metadata', () => {
+    const stub = makeStubAgent(ChatAgent, {
+      getTool: vi.fn().mockResolvedValue({}),
+    });
+
+    expect(
+      stub.onStepFinished(
+        makeStepResult([
+          {
+            toolName: 'write',
+            input: { path: 'plans/unapplied-plan.md', content: '# Plan' },
+            output: {
+              message: 'Action rejected by user.',
+              _diff: null,
+            },
+          },
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not stop after creating a non-plan file', () => {
+    const stub = makeStubAgent(ChatAgent, {
+      getTool: vi.fn().mockResolvedValue({}),
+    });
+
+    expect(
+      stub.onStepFinished(
+        makeStepResult([
+          {
+            toolName: 'write',
+            input: { path: 'workspace/readme.md', content: '# Readme' },
+            output: {
+              message: 'Success: applied changes to readme.md.',
+              _diff: { before: null, after: '# Readme' },
+            },
+          },
+        ]),
+      ),
+    ).toBe(true);
   });
 
   it('system prompt identifies Clodex IDE and exposes the selected model identity', () => {
