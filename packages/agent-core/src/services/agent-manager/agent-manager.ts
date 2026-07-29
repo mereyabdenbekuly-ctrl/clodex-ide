@@ -191,6 +191,7 @@ interface CapturedAgentStatePersistOptions
 
 interface AgentStateSnapshotOverrides {
   /** Persist an authorization transition before exposing it in live state. */
+  readonly toolApprovalMode?: ToolApprovalMode;
   readonly fileEditApprovalMode?: FileEditApprovalMode;
 }
 
@@ -319,6 +320,27 @@ export class AgentManager extends DisposableService {
    * authorization decision or approval response.
    */
   private readonly agentPersistenceTails = new Map<string, Promise<void>>();
+  /**
+   * Latest queued approval-profile intents. A newer UI choice supersedes an
+   * older operation before that operation can persist or expose authority.
+   * Owners are removed once the latest operation settles, so inactive agents
+   * do not accumulate bookkeeping entries.
+   */
+  private readonly toolApprovalModeIntentOwners = new Map<string, object>();
+  private readonly fileEditApprovalModeIntentOwners = new Map<string, object>();
+  /**
+   * A stale durability attempt may already have reached storage before its
+   * superseding intent was observed. The latest operation must reconcile that
+   * uncertainty even when the fail-closed live state already equals its mode.
+   */
+  private readonly toolApprovalModeDurabilityDirtyGenerations = new Map<
+    string,
+    number
+  >();
+  private readonly fileEditApprovalModeDurabilityDirtyGenerations = new Map<
+    string,
+    number
+  >();
 
   /**
    * Registry of {@link DomainAdapter}s threaded into every `BaseAgent`.
@@ -1746,6 +1768,14 @@ export class AgentManager extends DisposableService {
     return operation;
   }
 
+  private markApprovalModeDurabilityDirty(
+    dirtyGenerations: Map<string, number>,
+    instanceId: string,
+  ): void {
+    const nextGeneration = (dirtyGenerations.get(instanceId) ?? 0) + 1;
+    dirtyGenerations.set(instanceId, nextGeneration);
+  }
+
   private async persistAgentStateSnapshot(
     instanceId: string,
     options: CapturedAgentStatePersistOptions,
@@ -1795,7 +1825,9 @@ export class AgentManager extends DisposableService {
         title: agentState.title,
         titleLockedByUser: agentState.titleLockedByUser,
         activeModelId: agentState.activeModelId,
-        toolApprovalMode: agentState.toolApprovalMode as ToolApprovalMode,
+        toolApprovalMode:
+          overrides.toolApprovalMode ??
+          (agentState.toolApprovalMode as ToolApprovalMode),
         fileEditApprovalMode:
           overrides.fileEditApprovalMode ??
           (agentState.fileEditApprovalMode as FileEditApprovalMode),
@@ -2060,32 +2092,126 @@ export class AgentManager extends DisposableService {
       /** Tool name for `inline-approval-button`; optional otherwise. */
       toolName?: string;
     },
-  ) {
-    const agent = this.activeAgents.get(instanceId);
-
-    if (!agent) {
+  ): Promise<void> {
+    if (!this.activeAgents.has(instanceId)) {
       throw new Error(`Agent with instance id ${instanceId} not found`);
     }
-
-    const currentMode =
+    const intentOwner = {};
+    this.toolApprovalModeIntentOwners.set(instanceId, intentOwner);
+    const isCurrentIntent = () =>
+      this.toolApprovalModeIntentOwners.get(instanceId) === intentOwner;
+    const markDurabilityDirty = () =>
+      this.markApprovalModeDurabilityDirty(
+        this.toolApprovalModeDurabilityDirtyGenerations,
+        instanceId,
+      );
+    const modeAtRequest =
       this.agentStore.get().agents.instances[instanceId]?.state
         .toolApprovalMode ?? 'alwaysAsk';
-    // No-op calls aren't logged — otherwise the combobox's onValueChange
-    // firing on a reselection would emit spurious events.
-    if (currentMode === mode) return;
+    const liveFirstRevocation =
+      (modeAtRequest === 'alwaysAllow' && mode !== 'alwaysAllow') ||
+      (modeAtRequest === 'smart' && mode === 'alwaysAsk');
+    const repeatsDirtyRevocation =
+      modeAtRequest === mode &&
+      this.toolApprovalModeDurabilityDirtyGenerations.has(instanceId);
+    try {
+      if (liveFirstRevocation || repeatsDirtyRevocation) {
+        markDurabilityDirty();
+      }
+      if (liveFirstRevocation) {
+        // Restrictive intent is synchronous and cannot wait behind a stalled
+        // snapshot. PendingEditService observes this store transition as an
+        // epoch revocation before this method yields. Mark durability dirty
+        // first so a repeated same-mode intent can safely supersede this
+        // queued owner without losing the required durable revocation.
+        setToolApprovalMode(this.agentStore, instanceId, mode);
+      }
 
-    setToolApprovalMode(this.agentStore, instanceId, mode);
+      await this.enqueueAgentPersistenceOperation(instanceId, async () => {
+        if (!isCurrentIntent()) return;
+        const agent = this.activeAgents.get(instanceId);
+        if (!agent) {
+          throw new Error(`Agent with instance id ${instanceId} not found`);
+        }
 
-    await this.persistenceDb.updateToolApprovalMode(instanceId, mode);
+        // Read inside the queue so rapid approval-profile transitions cannot
+        // race a stale full-state snapshot or expose authority that failed to
+        // become durable.
+        const currentMode = liveFirstRevocation
+          ? modeAtRequest
+          : (this.agentStore.get().agents.instances[instanceId]?.state
+              .toolApprovalMode ?? 'alwaysAsk');
+        const changesLiveMode = currentMode !== mode;
+        const durabilityDirtyGeneration =
+          this.toolApprovalModeDurabilityDirtyGenerations.get(instanceId);
+        if (!changesLiveMode && durabilityDirtyGeneration === undefined) {
+          return;
+        }
 
-    this.host.telemetry?.capture('tool-approval-mode-changed', {
-      agent_instance_id: instanceId,
-      previous_mode: currentMode as ToolApprovalMode,
-      new_mode: mode,
-      source: telemetry?.source ?? 'unknown',
-      ...(telemetry?.toolCallId && { tool_call_id: telemetry.toolCallId }),
-      ...(telemetry?.toolName && { tool_name: telemetry.toolName }),
-    });
+        try {
+          const updated = await this.persistenceDb.updateToolApprovalMode(
+            instanceId,
+            mode,
+          );
+          if (!isCurrentIntent()) {
+            markDurabilityDirty();
+            return;
+          }
+          if (!updated) {
+            await this.persistAgentStateSnapshot(
+              instanceId,
+              { throwOnError: true },
+              { toolApprovalMode: mode },
+            );
+            if (!isCurrentIntent()) {
+              markDurabilityDirty();
+              return;
+            }
+          }
+        } catch (error) {
+          markDurabilityDirty();
+          throw error;
+        }
+
+        if (!isCurrentIntent()) {
+          markDurabilityDirty();
+          return;
+        }
+        if (
+          this.toolApprovalModeDurabilityDirtyGenerations.get(instanceId) !==
+          durabilityDirtyGeneration
+        ) {
+          return;
+        }
+        if (durabilityDirtyGeneration !== undefined) {
+          this.toolApprovalModeDurabilityDirtyGenerations.delete(instanceId);
+        }
+
+        // Grants are durable-before-live; revocations were already applied
+        // above and remain fail-closed even when persistence throws.
+        if (!liveFirstRevocation && changesLiveMode) {
+          if (!isCurrentIntent()) {
+            markDurabilityDirty();
+            return;
+          }
+          setToolApprovalMode(this.agentStore, instanceId, mode);
+        }
+
+        if (!changesLiveMode || !isCurrentIntent()) return;
+        this.host.telemetry?.capture('tool-approval-mode-changed', {
+          agent_instance_id: instanceId,
+          previous_mode: currentMode as ToolApprovalMode,
+          new_mode: mode,
+          source: telemetry?.source ?? 'unknown',
+          ...(telemetry?.toolCallId && { tool_call_id: telemetry.toolCallId }),
+          ...(telemetry?.toolName && { tool_name: telemetry.toolName }),
+        });
+      });
+    } finally {
+      if (this.toolApprovalModeIntentOwners.get(instanceId) === intentOwner) {
+        this.toolApprovalModeIntentOwners.delete(instanceId);
+      }
+    }
   }
 
   /**
@@ -2096,47 +2222,126 @@ export class AgentManager extends DisposableService {
     instanceId: string,
     mode: FileEditApprovalMode,
   ): Promise<void> {
-    await this.enqueueAgentPersistenceOperation(instanceId, async () => {
-      const agent = this.activeAgents.get(instanceId);
-      if (!agent) {
-        throw new Error(`Agent with instance id ${instanceId} not found`);
-      }
-
-      // Read inside the queue. A rapid manual -> auto -> manual sequence must
-      // observe the first queued transition rather than prematurely treating
-      // the second request as a no-op against stale live state.
-      const currentMode =
-        this.agentStore.get().agents.instances[instanceId]?.state
-          .fileEditApprovalMode ?? DEFAULT_FILE_EDIT_APPROVAL_MODE;
-      if (currentMode === mode) return;
-
-      const updated = await this.persistenceDb.updateFileEditApprovalMode(
+    if (!this.activeAgents.has(instanceId)) {
+      throw new Error(`Agent with instance id ${instanceId} not found`);
+    }
+    const intentOwner = {};
+    this.fileEditApprovalModeIntentOwners.set(instanceId, intentOwner);
+    const isCurrentIntent = () =>
+      this.fileEditApprovalModeIntentOwners.get(instanceId) === intentOwner;
+    const markDurabilityDirty = () =>
+      this.markApprovalModeDurabilityDirty(
+        this.fileEditApprovalModeDurabilityDirtyGenerations,
         instanceId,
-        mode,
       );
-      if (!updated) {
-        // Fresh agents have no row until their first state snapshot. Create it
-        // through the normal per-agent persistence owner rather than a partial
-        // metadata insert. The override is durable before live automatic
-        // authorization is exposed, preserving fail-closed behavior.
-        await this.persistAgentStateSnapshot(
-          instanceId,
-          { throwOnError: true },
-          { fileEditApprovalMode: mode },
-        );
+    const modeAtRequest =
+      this.agentStore.get().agents.instances[instanceId]?.state
+        .fileEditApprovalMode ?? DEFAULT_FILE_EDIT_APPROVAL_MODE;
+    const liveFirstRevocation =
+      modeAtRequest === 'autoWorkspace' && mode === 'manual';
+    const repeatsDirtyRevocation =
+      modeAtRequest === mode &&
+      this.fileEditApprovalModeDurabilityDirtyGenerations.has(instanceId);
+    try {
+      if (liveFirstRevocation || repeatsDirtyRevocation) {
+        markDurabilityDirty();
+      }
+      if (liveFirstRevocation) {
+        setFileEditApprovalMode(this.agentStore, instanceId, mode);
       }
 
-      // Persist before exposing an automatic mode in live state. Because the
-      // narrow update shares the snapshot queue, no stale full save can write
-      // the previous mode after this transition commits.
-      setFileEditApprovalMode(this.agentStore, instanceId, mode);
+      await this.enqueueAgentPersistenceOperation(instanceId, async () => {
+        if (!isCurrentIntent()) return;
+        const agent = this.activeAgents.get(instanceId);
+        if (!agent) {
+          throw new Error(`Agent with instance id ${instanceId} not found`);
+        }
 
-      this.host.telemetry?.capture('file-edit-approval-mode-changed', {
-        agent_instance_id: instanceId,
-        previous_mode: currentMode as FileEditApprovalMode,
-        new_mode: mode,
+        // Read inside the queue. A rapid manual -> auto -> manual sequence must
+        // observe the first queued transition rather than prematurely treating
+        // the second request as a no-op against stale live state.
+        const currentMode = liveFirstRevocation
+          ? modeAtRequest
+          : (this.agentStore.get().agents.instances[instanceId]?.state
+              .fileEditApprovalMode ?? DEFAULT_FILE_EDIT_APPROVAL_MODE);
+        const changesLiveMode = currentMode !== mode;
+        const durabilityDirtyGeneration =
+          this.fileEditApprovalModeDurabilityDirtyGenerations.get(instanceId);
+        if (!changesLiveMode && durabilityDirtyGeneration === undefined) {
+          return;
+        }
+
+        try {
+          const updated = await this.persistenceDb.updateFileEditApprovalMode(
+            instanceId,
+            mode,
+          );
+          if (!isCurrentIntent()) {
+            markDurabilityDirty();
+            return;
+          }
+          if (!updated) {
+            // Fresh agents have no row until their first state snapshot.
+            // Create it through the normal per-agent persistence owner rather
+            // than a partial metadata insert. The override is durable before
+            // live automatic authorization is exposed, preserving fail-closed
+            // behavior.
+            await this.persistAgentStateSnapshot(
+              instanceId,
+              { throwOnError: true },
+              { fileEditApprovalMode: mode },
+            );
+            if (!isCurrentIntent()) {
+              markDurabilityDirty();
+              return;
+            }
+          }
+        } catch (error) {
+          markDurabilityDirty();
+          throw error;
+        }
+
+        if (!isCurrentIntent()) {
+          markDurabilityDirty();
+          return;
+        }
+        if (
+          this.fileEditApprovalModeDurabilityDirtyGenerations.get(
+            instanceId,
+          ) !== durabilityDirtyGeneration
+        ) {
+          return;
+        }
+        if (durabilityDirtyGeneration !== undefined) {
+          this.fileEditApprovalModeDurabilityDirtyGenerations.delete(
+            instanceId,
+          );
+        }
+
+        // Grants are durable-before-live. Revocations remain live even if the
+        // durability operation fails, preventing delayed authority reuse.
+        if (!liveFirstRevocation && changesLiveMode) {
+          if (!isCurrentIntent()) {
+            markDurabilityDirty();
+            return;
+          }
+          setFileEditApprovalMode(this.agentStore, instanceId, mode);
+        }
+
+        if (!changesLiveMode || !isCurrentIntent()) return;
+        this.host.telemetry?.capture('file-edit-approval-mode-changed', {
+          agent_instance_id: instanceId,
+          previous_mode: currentMode as FileEditApprovalMode,
+          new_mode: mode,
+        });
       });
-    });
+    } finally {
+      if (
+        this.fileEditApprovalModeIntentOwners.get(instanceId) === intentOwner
+      ) {
+        this.fileEditApprovalModeIntentOwners.delete(instanceId);
+      }
+    }
   }
 
   /**

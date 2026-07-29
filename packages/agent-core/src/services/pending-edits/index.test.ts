@@ -2,7 +2,11 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentStore, createInitialAgentSystemState } from '../../store';
 import type { FileEditBatchParticipant } from '../../types/pending-edits';
-import { POST_EDIT_VERIFICATION_NUDGE, PendingEditService } from './index';
+import {
+  POST_EDIT_VERIFICATION_NUDGE,
+  PendingEditService,
+  type PendingEditApplyContext,
+} from './index';
 
 function createService(
   options: { resolveRealpath?: (absolutePath: string) => Promise<string> } = {},
@@ -29,8 +33,29 @@ function setFileEditApprovalMode(
   mode: 'manual' | 'autoWorkspace',
 ): void {
   store.update((draft) => {
+    const instance = draft.agents.instances['agent-1'];
+    if (instance) {
+      instance.state.fileEditApprovalMode = mode;
+      return;
+    }
     draft.agents.instances['agent-1'] = {
       state: { fileEditApprovalMode: mode },
+    } as never;
+  });
+}
+
+function setToolApprovalMode(
+  store: AgentStore,
+  mode: 'alwaysAsk' | 'alwaysAllow' | 'smart',
+): void {
+  store.update((draft) => {
+    const instance = draft.agents.instances['agent-1'];
+    if (instance) {
+      instance.state.toolApprovalMode = mode;
+      return;
+    }
+    draft.agents.instances['agent-1'] = {
+      state: { toolApprovalMode: mode },
     } as never;
   });
 }
@@ -363,11 +388,229 @@ describe('PendingEditService', () => {
 
     expect(apply).toHaveBeenCalledTimes(1);
     expect(apply).toHaveBeenCalledWith(
-      expect.objectContaining({ decisionSource: 'auto-policy' }),
+      expect.objectContaining({
+        decisionSource: 'auto-policy',
+        autoApprovalPolicy: 'safe-workspace',
+      }),
     );
     expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
       [],
     );
+  });
+
+  it('auto-applies under combined always-allow without publishing a preview', async () => {
+    const { service, store } = createService();
+    setFileEditApprovalMode(store, 'autoWorkspace');
+    setToolApprovalMode(store, 'alwaysAllow');
+    const eligibility = vi.fn(async () => false);
+    const apply = vi.fn(async (context: PendingEditApplyContext) => {
+      expect(context.autoApprovalPolicy).toBe('always-allow');
+      context.assertAutoPolicyAuthorized();
+    });
+
+    await expect(
+      service.requestApproval({
+        toolCallId: 'tc-always-allow',
+        agentInstanceId: 'agent-1',
+        absolutePath: path.join('/workspace', 'src', 'new-file.ts'),
+        relativePath: 'src/new-file.ts',
+        oldContent: null,
+        newContent: 'after',
+        autoApprovalEligible: eligibility,
+        apply,
+      }),
+    ).resolves.toMatchObject({ status: 'accepted' });
+
+    expect(eligibility).not.toHaveBeenCalled();
+    expect(apply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decisionSource: 'auto-policy',
+        autoApprovalPolicy: 'always-allow',
+      }),
+    );
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+  });
+
+  it.each([
+    'file',
+    'tool',
+  ] as const)('rechecks both always-allow modes at the effect fence when %s authority is revoked', async (revokedMode) => {
+    const { service, store } = createService();
+    setFileEditApprovalMode(store, 'autoWorkspace');
+    setToolApprovalMode(store, 'alwaysAllow');
+    let started!: () => void;
+    const applyStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let release!: () => void;
+    const applyRelease = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const decisionPromise = service.requestApproval({
+      toolCallId: `tc-revoke-${revokedMode}`,
+      agentInstanceId: 'agent-1',
+      absolutePath: path.join('/workspace', `revoke-${revokedMode}.ts`),
+      relativePath: `revoke-${revokedMode}.ts`,
+      oldContent: null,
+      newContent: 'after',
+      apply: async (context) => {
+        started();
+        await applyRelease;
+        context.assertAutoPolicyAuthorized();
+      },
+    });
+
+    await applyStarted;
+    if (revokedMode === 'file') {
+      setFileEditApprovalMode(store, 'manual');
+    } else {
+      setToolApprovalMode(store, 'smart');
+    }
+    release();
+
+    await expect(decisionPromise).resolves.toMatchObject({
+      status: 'rejected',
+      message: expect.stringContaining(
+        'Automatic edit authorization was revoked',
+      ),
+    });
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+  });
+
+  it('does not resurrect an admitted always-allow request after an off-on ABA transition', async () => {
+    const { service, store } = createService();
+    setFileEditApprovalMode(store, 'autoWorkspace');
+    setToolApprovalMode(store, 'alwaysAllow');
+    let started!: () => void;
+    const applyStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let release!: () => void;
+    const applyRelease = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const decisionPromise = service.requestApproval({
+      toolCallId: 'tc-always-allow-aba',
+      agentInstanceId: 'agent-1',
+      absolutePath: path.join('/workspace', 'aba.ts'),
+      relativePath: 'aba.ts',
+      oldContent: null,
+      newContent: 'after',
+      apply: async (context) => {
+        started();
+        await applyRelease;
+        context.assertAutoPolicyAuthorized();
+      },
+    });
+
+    await applyStarted;
+    setFileEditApprovalMode(store, 'manual');
+    setFileEditApprovalMode(store, 'autoWorkspace');
+    release();
+
+    await expect(decisionPromise).resolves.toMatchObject({
+      status: 'rejected',
+      message: expect.stringContaining(
+        'Automatic edit authorization was revoked',
+      ),
+    });
+  });
+
+  it('honors an abort that arrives while an always-allow effect is settling', async () => {
+    const { service, store } = createService();
+    setFileEditApprovalMode(store, 'autoWorkspace');
+    setToolApprovalMode(store, 'alwaysAllow');
+    const controller = new AbortController();
+    let started!: () => void;
+    const applyStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let release!: () => void;
+    const applyRelease = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const decisionPromise = service.requestApproval({
+      toolCallId: 'tc-always-allow-settling-abort',
+      agentInstanceId: 'agent-1',
+      absolutePath: path.join('/workspace', 'abort.ts'),
+      relativePath: 'abort.ts',
+      oldContent: null,
+      newContent: 'after',
+      abortSignal: controller.signal,
+      apply: async (context) => {
+        started();
+        await applyRelease;
+        context.assertAutoPolicyAuthorized();
+      },
+    });
+
+    await applyStarted;
+    controller.abort();
+    release();
+
+    await expect(decisionPromise).resolves.toMatchObject({
+      status: 'rejected',
+      message: expect.stringContaining(
+        'Automatic edit authorization was revoked',
+      ),
+    });
+  });
+
+  it.each([
+    'owner',
+    'agent',
+    'all-agent-edits',
+  ] as const)('latches %s release while an always-allow effect is settling', async (releaseKind) => {
+    const { service, store } = createService();
+    setFileEditApprovalMode(store, 'autoWorkspace');
+    setToolApprovalMode(store, 'alwaysAllow');
+    let started!: () => void;
+    const applyStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let releaseApply!: () => void;
+    const applyRelease = new Promise<void>((resolve) => {
+      releaseApply = resolve;
+    });
+
+    const decisionPromise = service.requestApproval({
+      toolCallId: `tc-always-allow-release-${releaseKind}`,
+      lockOwnerId: 'coder-owner',
+      agentInstanceId: 'agent-1',
+      absolutePath: path.join('/workspace', `${releaseKind}.ts`),
+      relativePath: `${releaseKind}.ts`,
+      oldContent: null,
+      newContent: 'after',
+      apply: async (context) => {
+        started();
+        await applyRelease;
+        context.assertAutoPolicyAuthorized();
+      },
+    });
+
+    await applyStarted;
+    if (releaseKind === 'owner') {
+      service.releaseLocksForOwner('coder-owner');
+    } else if (releaseKind === 'agent') {
+      service.releaseAgentLocks('agent-1');
+    } else {
+      service.abortAgentEdits('agent-1');
+    }
+    releaseApply();
+
+    await expect(decisionPromise).resolves.toMatchObject({
+      status: 'rejected',
+      message: expect.stringContaining(
+        'Automatic edit authorization was revoked',
+      ),
+    });
   });
 
   it('keeps ineligible edits manual even when auto mode is enabled', async () => {
@@ -608,6 +851,38 @@ describe('PendingEditService', () => {
 
     expect(batch.participant.settle).toHaveBeenCalledWith('auto-policy');
     expect(apply).toHaveBeenCalledOnce();
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+  });
+
+  it('settles an always-allow batch member through auto-policy without a preview', async () => {
+    const { service, store } = createService();
+    setFileEditApprovalMode(store, 'autoWorkspace');
+    setToolApprovalMode(store, 'alwaysAllow');
+    const batch = createBatchParticipant('tc-batch-always-allow');
+    vi.mocked(batch.participant.settle).mockImplementation(() => batch.ready());
+    const apply = vi.fn(async (context: PendingEditApplyContext) => {
+      expect(context.autoApprovalPolicy).toBe('always-allow');
+      context.assertAutoPolicyAuthorized();
+    });
+
+    await expect(
+      service.requestApproval({
+        toolCallId: 'tc-batch-always-allow',
+        agentInstanceId: 'agent-1',
+        absolutePath: path.join('/workspace', 'src', 'batch-new.ts'),
+        relativePath: 'src/batch-new.ts',
+        oldContent: null,
+        newContent: 'after',
+        autoApprovalEligible: false,
+        fileEditBatchParticipant: batch.participant,
+        apply,
+      }),
+    ).resolves.toMatchObject({ status: 'accepted' });
+
+    expect(batch.participant.arriveAsProposal).not.toHaveBeenCalled();
+    expect(batch.participant.settle).toHaveBeenCalledWith('auto-policy');
     expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
       [],
     );

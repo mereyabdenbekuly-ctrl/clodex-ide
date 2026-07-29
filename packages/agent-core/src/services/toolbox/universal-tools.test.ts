@@ -6,8 +6,10 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -39,6 +41,21 @@ import {
   POST_EDIT_VERIFICATION_NUDGE,
   PendingEditService,
 } from '../pending-edits';
+import {
+  lstat as agentCoreLstat,
+  open as agentCoreOpen,
+  realpath as agentCoreRealpath,
+} from '../../fs';
+
+vi.mock('../../fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../fs')>();
+  return {
+    ...actual,
+    lstat: vi.fn(actual.lstat),
+    open: vi.fn(actual.open),
+    realpath: vi.fn(actual.realpath),
+  };
+});
 
 function makeHostPaths(root: string): HostPaths {
   return {
@@ -113,12 +130,13 @@ function makeDeps(root: string, workspace: string): UniversalToolboxDeps {
 function enableAutoWorkspaceEdits(
   deps: UniversalToolboxDeps,
   workspace: string,
+  toolApprovalMode: 'alwaysAsk' | 'smart' | 'alwaysAllow' = 'alwaysAsk',
 ): AgentStore {
   const store = new AgentStore({
     agents: {
       instances: {
         'agent-1': {
-          state: { fileEditApprovalMode: 'autoWorkspace' },
+          state: { fileEditApprovalMode: 'autoWorkspace', toolApprovalMode },
         } as never,
       },
     },
@@ -141,6 +159,18 @@ function enableAutoWorkspaceEdits(
   return store;
 }
 
+function setToolApprovalMode(
+  store: AgentStore,
+  mode: 'alwaysAsk' | 'smart' | 'alwaysAllow',
+): void {
+  store.update((draft) => {
+    const instance = draft.agents.instances['agent-1'];
+    if (instance) {
+      instance.state.toolApprovalMode = mode;
+    }
+  });
+}
+
 describe('universal toolbox', () => {
   let root: string;
   let workspace: string;
@@ -154,7 +184,15 @@ describe('universal toolbox', () => {
     deps = makeDeps(root, workspace);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const actualFs =
+      await vi.importActual<typeof import('../../fs')>('../../fs');
+    vi.mocked(agentCoreLstat).mockReset();
+    vi.mocked(agentCoreLstat).mockImplementation(actualFs.lstat);
+    vi.mocked(agentCoreOpen).mockReset();
+    vi.mocked(agentCoreOpen).mockImplementation(actualFs.open);
+    vi.mocked(agentCoreRealpath).mockReset();
+    vi.mocked(agentCoreRealpath).mockImplementation(actualFs.realpath);
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -356,6 +394,8 @@ describe('universal toolbox', () => {
     let capturedApply:
       | ((context: {
           decisionSource: 'human' | 'auto-policy';
+          autoApprovalPolicy: 'safe-workspace' | 'always-allow' | null;
+          abortSignal: AbortSignal;
           assertAutoPolicyAuthorized: () => void;
         }) => Promise<void>)
       | undefined;
@@ -368,6 +408,8 @@ describe('universal toolbox', () => {
         );
         await request.apply({
           decisionSource: 'human',
+          autoApprovalPolicy: null,
+          abortSignal: new AbortController().signal,
           assertAutoPolicyAuthorized: () => {},
         });
         return {
@@ -439,6 +481,8 @@ describe('universal toolbox', () => {
       requestApproval: vi.fn(async (request) => {
         await request.apply({
           decisionSource: 'human',
+          autoApprovalPolicy: null,
+          abortSignal: new AbortController().signal,
           assertAutoPolicyAuthorized: () => {},
         });
         return { status: 'accepted', message: 'accepted by test' };
@@ -707,6 +751,410 @@ describe('universal toolbox', () => {
     });
   });
 
+  it('routes new-file creation to the Guardian-controlled shell path without publishing another Accept', async () => {
+    const store = enableAutoWorkspaceEdits(deps, workspace, 'alwaysAllow');
+
+    const result = await writeToolExecute(
+      { path: 'wtest/new-file.ts', content: 'export const ready = true;\n' },
+      deps,
+      { toolCallId: 'tc-always-allow-create' },
+    );
+
+    expect(result.message).toContain('Use executeShellCommand');
+    expect(result.message).toContain('no file-edit Accept is required');
+    expect(result._diff).toBeNull();
+    expect(() => readFileSync(path.join(workspace, 'new-file.ts'))).toThrow();
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+    expect(
+      deps.diffHistoryService?.registerAutoApprovedTextEdit,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('updates sensitive project files without another Accept under the combined trusted profile', async () => {
+    const filePath = path.join(workspace, 'pyproject.toml');
+    writeFileSync(filePath, '[project]\nname = "before"\n');
+    const store = enableAutoWorkspaceEdits(deps, workspace, 'alwaysAllow');
+
+    const result = await writeToolExecute(
+      { path: 'wtest/pyproject.toml', content: '[project]\nname = "after"\n' },
+      deps,
+      { toolCallId: 'tc-always-allow-sensitive' },
+    );
+
+    expect(result.message).toContain('Success: applied changes');
+    expect(readFileSync(filePath, 'utf8')).toBe('[project]\nname = "after"\n');
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+    expect(
+      deps.diffHistoryService?.registerAutoApprovedTextEdit,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolCallId: 'tc-always-allow-sensitive',
+        contentBefore: '[project]\nname = "before"\n',
+        contentAfter: '[project]\nname = "after"\n',
+      }),
+    );
+  });
+
+  it('keeps credential-bearing files blocked without publishing an Accept under the combined profile', async () => {
+    const filePath = path.join(workspace, '.env');
+    writeFileSync(filePath, 'TOKEN=before');
+    const store = enableAutoWorkspaceEdits(deps, workspace, 'alwaysAllow');
+
+    const result = await writeToolExecute(
+      { path: 'wtest/.env', content: 'TOKEN=after' },
+      deps,
+      { toolCallId: 'tc-always-allow-secret' },
+    );
+
+    expect(result.message).toContain('Always allow blocked this file effect');
+    expect(readFileSync(filePath, 'utf8')).toBe('TOKEN=before');
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+  });
+
+  it('rechecks the strict sensitive denylist against the final physical safe-workspace target', async () => {
+    const safeDir = path.join(workspace, 'safe');
+    const movedSafeDir = path.join(workspace, 'safe-original');
+    const sensitiveDir = path.join(workspace, '.github');
+    mkdirSync(safeDir);
+    mkdirSync(sensitiveDir);
+    writeFileSync(path.join(safeDir, 'config'), 'before');
+    writeFileSync(path.join(sensitiveDir, 'config'), 'before');
+    const store = enableAutoWorkspaceEdits(deps, workspace);
+    vi.mocked(deps.diffHistoryService!.canSafelyAutoAcceptFile)
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(async () => {
+        renameSync(safeDir, movedSafeDir);
+        symlinkSync(
+          sensitiveDir,
+          safeDir,
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+        return true;
+      });
+
+    const result = await writeToolExecute(
+      { path: 'wtest/safe/config', content: 'agent content' },
+      deps,
+      { toolCallId: 'tc-safe-workspace-final-sensitive-target' },
+    );
+
+    expect(result.message).toContain('final physical target is sensitive');
+    expect(readFileSync(path.join(sensitiveDir, 'config'), 'utf8')).toBe(
+      'before',
+    );
+    expect(readFileSync(path.join(movedSafeDir, 'config'), 'utf8')).toBe(
+      'before',
+    );
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+  });
+
+  it('rechecks the final physical credential target before an always-allow write', async () => {
+    const safeDir = path.join(workspace, 'safe');
+    const movedSafeDir = path.join(workspace, 'safe-original');
+    const credentialDir = path.join(workspace, '.ssh');
+    mkdirSync(safeDir);
+    mkdirSync(credentialDir);
+    writeFileSync(path.join(safeDir, 'config'), 'before');
+    writeFileSync(path.join(credentialDir, 'config'), 'before');
+    const store = enableAutoWorkspaceEdits(deps, workspace, 'alwaysAllow');
+    vi.mocked(
+      deps.diffHistoryService!.canSafelyAutoAcceptFile,
+    ).mockImplementationOnce(async () => {
+      renameSync(safeDir, movedSafeDir);
+      symlinkSync(
+        credentialDir,
+        safeDir,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      return true;
+    });
+
+    const result = await writeToolExecute(
+      { path: 'wtest/safe/config', content: 'agent content' },
+      deps,
+      { toolCallId: 'tc-always-allow-final-credential-target' },
+    );
+
+    expect(result.message).toContain(
+      'final physical target is credential-bearing',
+    );
+    expect(readFileSync(path.join(credentialDir, 'config'), 'utf8')).toBe(
+      'before',
+    );
+    expect(readFileSync(path.join(movedSafeDir, 'config'), 'utf8')).toBe(
+      'before',
+    );
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+  });
+
+  it('blocks an unsafe linked file instead of publishing another Accept under Always allow', async () => {
+    const outsidePath = path.join(root, 'outside-always-allow.txt');
+    const linkedPath = path.join(workspace, 'linked-always-allow.txt');
+    writeFileSync(outsidePath, 'outside content');
+    linkSync(outsidePath, linkedPath);
+    const store = enableAutoWorkspaceEdits(deps, workspace, 'alwaysAllow');
+
+    const result = await writeToolExecute(
+      { path: 'wtest/linked-always-allow.txt', content: 'agent content' },
+      deps,
+      { toolCallId: 'tc-always-allow-hardlink' },
+    );
+
+    expect(result.message).toContain('Always allow blocked this file effect');
+    expect(readFileSync(outsidePath, 'utf8')).toBe('outside content');
+    expect(store.get().toolbox['agent-1']?.pendingProposedEdits ?? []).toEqual(
+      [],
+    );
+  });
+
+  it('releases the file lease when an always-allow preflight is aborted', async () => {
+    const filePath = path.join(workspace, 'slow-preflight.ts');
+    writeFileSync(filePath, 'before');
+    enableAutoWorkspaceEdits(deps, workspace, 'alwaysAllow');
+    const controller = new AbortController();
+    let preflightStarted!: () => void;
+    const preflightStart = new Promise<void>((resolve) => {
+      preflightStarted = resolve;
+    });
+    vi.mocked(
+      deps.diffHistoryService!.canSafelyTrackFilepath,
+    ).mockImplementationOnce(
+      async () =>
+        await new Promise<boolean>(() => {
+          preflightStarted();
+        }),
+    );
+
+    const first = writeToolExecute(
+      { path: 'wtest/slow-preflight.ts', content: 'first' },
+      deps,
+      {
+        toolCallId: 'tc-always-allow-slow-preflight',
+        abortSignal: controller.signal,
+      },
+    );
+    await preflightStart;
+    controller.abort();
+
+    await expect(first).resolves.toMatchObject({
+      message: expect.stringContaining('revoked during preflight'),
+    });
+
+    const second = await writeToolExecute(
+      { path: 'wtest/slow-preflight.ts', content: 'second' },
+      deps,
+      { toolCallId: 'tc-always-allow-after-abort' },
+    );
+    expect(second.message).toContain('Success: applied changes');
+    expect(readFileSync(filePath, 'utf8')).toBe('second');
+  });
+
+  it('releases the file lease when final physical-target capture is aborted', async () => {
+    const filePath = path.join(workspace, 'slow-final-capture.ts');
+    writeFileSync(filePath, 'before');
+    enableAutoWorkspaceEdits(deps, workspace, 'alwaysAllow');
+    const actualFs =
+      await vi.importActual<typeof import('../../fs')>('../../fs');
+    const controller = new AbortController();
+    let armFinalCapture = false;
+    let finalCaptureStarted!: () => void;
+    const finalCaptureStart = new Promise<void>((resolve) => {
+      finalCaptureStarted = resolve;
+    });
+    let resolveFinalCapture!: (physicalPath: string) => void;
+    const finalCapture = new Promise<string>((resolve) => {
+      resolveFinalCapture = resolve;
+    });
+    vi.mocked(
+      deps.diffHistoryService!.canSafelyAutoAcceptFile,
+    ).mockImplementationOnce(async () => {
+      armFinalCapture = true;
+      return true;
+    });
+    vi.mocked(agentCoreRealpath).mockImplementation(((candidate: string) => {
+      if (armFinalCapture && candidate === filePath) {
+        armFinalCapture = false;
+        finalCaptureStarted();
+        return finalCapture;
+      }
+      return actualFs.realpath(candidate);
+    }) as never);
+
+    const first = writeToolExecute(
+      { path: 'wtest/slow-final-capture.ts', content: 'first' },
+      deps,
+      {
+        toolCallId: 'tc-always-allow-slow-final-capture',
+        abortSignal: controller.signal,
+      },
+    );
+    await finalCaptureStart;
+    controller.abort();
+
+    await expect(first).resolves.toMatchObject({
+      message: expect.stringContaining('revoked during preflight'),
+    });
+    expect(
+      deps.diffHistoryService?.beginAutoApprovedWriteWatcher,
+    ).not.toHaveBeenCalled();
+    expect(
+      deps.diffHistoryService?.cancelAutoApprovedWriteWatcher,
+    ).not.toHaveBeenCalled();
+    const second = await writeToolExecute(
+      { path: 'wtest/slow-final-capture.ts', content: 'second' },
+      deps,
+      { toolCallId: 'tc-always-allow-after-final-capture-abort' },
+    );
+    expect(second.message).toContain('Success: applied changes');
+    expect(readFileSync(filePath, 'utf8')).toBe('second');
+
+    resolveFinalCapture(await actualFs.realpath(filePath));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(readFileSync(filePath, 'utf8')).toBe('second');
+  });
+
+  it('releases a pre-effect lease without letting the detached writer roll back identical later bytes', async () => {
+    const filePath = path.join(workspace, 'slow-final-write-guard.ts');
+    const replacement = 'shared replacement';
+    writeFileSync(filePath, 'before');
+    enableAutoWorkspaceEdits(deps, workspace, 'alwaysAllow');
+    const actualFs =
+      await vi.importActual<typeof import('../../fs')>('../../fs');
+    const callActualOpen = actualFs.open as unknown as (
+      candidate: string,
+      flags: string,
+      mode?: number,
+    ) => ReturnType<typeof actualFs.open>;
+    const controller = new AbortController();
+    let finalGuardArmed = false;
+    let finalGuardConsumed = false;
+    let finalGuardStarted!: () => void;
+    const finalGuardStart = new Promise<void>((resolve) => {
+      finalGuardStarted = resolve;
+    });
+    let resolveFinalGuard!: (
+      stats: Awaited<ReturnType<typeof actualFs.lstat>>,
+    ) => void;
+    const finalGuard = new Promise<Awaited<ReturnType<typeof actualFs.lstat>>>(
+      (resolve) => {
+        resolveFinalGuard = resolve;
+      },
+    );
+    let lateWriterClosed!: () => void;
+    const lateWriterClose = new Promise<void>((resolve) => {
+      lateWriterClosed = resolve;
+    });
+
+    vi.mocked(agentCoreOpen).mockImplementationOnce((async (
+      candidate: string,
+      flags: string,
+      mode?: number,
+    ) => {
+      const handle = await callActualOpen(candidate, flags, mode);
+      const read = handle.read.bind(handle);
+      let readCount = 0;
+      vi.spyOn(handle, 'read').mockImplementation((async (
+        ...args: Parameters<typeof handle.read>
+      ) => {
+        const result = await read(...args);
+        readCount += 1;
+        if (readCount === 2) finalGuardArmed = true;
+        return result;
+      }) as never);
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, 'close').mockImplementation(async () => {
+        try {
+          await close();
+        } finally {
+          lateWriterClosed();
+        }
+      });
+      return handle;
+    }) as never);
+    vi.mocked(agentCoreLstat).mockImplementation(((candidate: string) => {
+      if (finalGuardArmed && !finalGuardConsumed && candidate === filePath) {
+        finalGuardConsumed = true;
+        finalGuardStarted();
+        return finalGuard;
+      }
+      return actualFs.lstat(candidate);
+    }) as never);
+
+    const first = writeToolExecute(
+      { path: 'wtest/slow-final-write-guard.ts', content: replacement },
+      deps,
+      {
+        toolCallId: 'tc-always-allow-slow-final-write-guard',
+        abortSignal: controller.signal,
+      },
+    );
+    await finalGuardStart;
+    controller.abort();
+
+    await expect(first).resolves.toMatchObject({
+      message: expect.stringContaining('revoked before its disk effect'),
+    });
+    expect(
+      deps.diffHistoryService?.beginAutoApprovedWriteWatcher,
+    ).not.toHaveBeenCalled();
+    expect(
+      deps.diffHistoryService?.cancelAutoApprovedWriteWatcher,
+    ).not.toHaveBeenCalled();
+    const second = await writeToolExecute(
+      { path: 'wtest/slow-final-write-guard.ts', content: replacement },
+      deps,
+      { toolCallId: 'tc-always-allow-after-write-guard-abort' },
+    );
+    expect(second.message).toContain('Success: applied changes');
+    expect(readFileSync(filePath, 'utf8')).toBe(replacement);
+
+    resolveFinalGuard(await actualFs.lstat(filePath));
+    await lateWriterClose;
+    expect(readFileSync(filePath, 'utf8')).toBe(replacement);
+  });
+
+  it('aborts a stalled always-allow preflight when the policy mode changes', async () => {
+    const filePath = path.join(workspace, 'policy-preflight.ts');
+    writeFileSync(filePath, 'before');
+    const store = enableAutoWorkspaceEdits(deps, workspace, 'alwaysAllow');
+    let preflightStarted!: () => void;
+    const preflightStart = new Promise<void>((resolve) => {
+      preflightStarted = resolve;
+    });
+    vi.mocked(
+      deps.diffHistoryService!.canSafelyTrackFilepath,
+    ).mockImplementationOnce(
+      async () =>
+        await new Promise<boolean>(() => {
+          preflightStarted();
+        }),
+    );
+
+    const first = writeToolExecute(
+      { path: 'wtest/policy-preflight.ts', content: 'first' },
+      deps,
+      { toolCallId: 'tc-always-allow-policy-preflight' },
+    );
+    await preflightStart;
+    setToolApprovalMode(store, 'smart');
+
+    await expect(first).resolves.toMatchObject({
+      message: expect.stringContaining('revoked during preflight'),
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe('before');
+  });
+
   it('keeps files with earlier pending history manual in auto-edit mode', async () => {
     const filePath = path.join(workspace, 'pending-history.txt');
     writeFileSync(filePath, 'before');
@@ -901,6 +1349,72 @@ describe('universal toolbox', () => {
     expect(
       deps.diffHistoryService?.ignoreFileForWatcher,
     ).not.toHaveBeenCalled();
+  });
+
+  it('reconciles durable evidence when revocation lands during evidence registration', async () => {
+    const filePath = path.join(workspace, 'evidence-abort.txt');
+    writeFileSync(filePath, 'before');
+    enableAutoWorkspaceEdits(deps, workspace, 'alwaysAllow');
+    const controller = new AbortController();
+    let evidenceStarted!: () => void;
+    const evidenceStart = new Promise<void>((resolve) => {
+      evidenceStarted = resolve;
+    });
+    let resolveEvidence!: (tracked: boolean) => void;
+    vi.mocked(
+      deps.diffHistoryService!.registerAutoApprovedTextEdit,
+    ).mockImplementationOnce(
+      async () =>
+        await new Promise<boolean>((resolve) => {
+          resolveEvidence = resolve;
+          evidenceStarted();
+        }),
+    );
+
+    const writePromise = writeToolExecute(
+      { path: 'wtest/evidence-abort.txt', content: 'agent content' },
+      deps,
+      {
+        toolCallId: 'tc-auto-evidence-abort',
+        abortSignal: controller.signal,
+      },
+    );
+    await evidenceStart;
+    controller.abort();
+
+    const blockedWhileEffectSettles = await writeToolExecute(
+      { path: 'wtest/evidence-abort.txt', content: 'too early' },
+      deps,
+      { toolCallId: 'tc-auto-evidence-abort-while-settling' },
+    );
+    expect(blockedWhileEffectSettles.message).toContain('currently locked');
+    expect(readFileSync(filePath, 'utf8')).toBe('agent content');
+
+    resolveEvidence(true);
+
+    await expect(writePromise).resolves.toMatchObject({
+      message: expect.stringContaining(
+        'revoked while its disk effect was settling',
+      ),
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe('before');
+    expect(
+      deps.diffHistoryService?.reconcileAutoApprovedWriteWatcher,
+    ).toHaveBeenCalledWith(filePath, 'auto-watcher-token', 'agent content');
+    expect(
+      deps.diffHistoryService?.completeAutoApprovedWriteWatcher,
+    ).toHaveBeenCalledWith(filePath, 'auto-watcher-token');
+    expect(
+      deps.diffHistoryService?.cancelAutoApprovedWriteWatcher,
+    ).not.toHaveBeenCalled();
+
+    const afterRollback = await writeToolExecute(
+      { path: 'wtest/evidence-abort.txt', content: 'after rollback' },
+      deps,
+      { toolCallId: 'tc-auto-evidence-abort-after-rollback' },
+    );
+    expect(afterRollback.message).toContain('Success: applied changes');
+    expect(readFileSync(filePath, 'utf8')).toBe('after rollback');
   });
 
   it('does not roll back over a newer user save after evidence failure', async () => {

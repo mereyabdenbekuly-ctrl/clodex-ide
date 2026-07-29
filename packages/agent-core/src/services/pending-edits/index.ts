@@ -32,8 +32,14 @@ export interface PendingEditRequest {
   apply: (context: PendingEditApplyContext) => Promise<void>;
 }
 
+export type PendingEditAutoApprovalPolicy = 'safe-workspace' | 'always-allow';
+
 export interface PendingEditApplyContext {
   decisionSource: 'human' | 'auto-policy';
+  /** Host-owned standing policy; human decisions always receive null. */
+  autoApprovalPolicy: PendingEditAutoApprovalPolicy | null;
+  /** Aborted when the turn, owner, agent, or policy record is revoked. */
+  abortSignal: AbortSignal;
   /**
    * Host-only live authority check. Automatic writers must invoke this
    * synchronously at their final effect boundary, after all asynchronous
@@ -52,6 +58,11 @@ interface PendingEditRecord {
   lockKey: string;
   leaseId: string;
   published: boolean;
+  autoApprovalPolicy: PendingEditAutoApprovalPolicy | null;
+  approvalPolicyEpoch: number;
+  revoked: boolean;
+  abortSignal?: AbortSignal;
+  effectAbortController: AbortController;
   fileEditBatchParticipant?: FileEditBatchParticipant;
   removeAbortListener?: () => void;
 }
@@ -237,38 +248,104 @@ export class PendingEditService {
   private readonly pending = new Map<string, PendingEditRecord>();
   private readonly activeToolCalls = new Map<string, string>();
   private readonly fileLocks = new Map<string, FileLockRecord>();
+  private readonly approvalPolicyEpochs = new Map<string, number>();
   private admissionTail: Promise<void> = Promise.resolve();
 
   constructor(deps: PendingEditServiceDeps) {
     this.store = deps.store;
     this.logger = deps.logger;
     this.resolveRealpath = deps.resolveRealpath ?? realpath;
+    this.store.subscribe((next, previous) => {
+      const agentIds = new Set([
+        ...Object.keys(previous.agents.instances),
+        ...Object.keys(next.agents.instances),
+      ]);
+      for (const agentInstanceId of agentIds) {
+        const previousState = previous.agents.instances[agentInstanceId]?.state;
+        const nextState = next.agents.instances[agentInstanceId]?.state;
+        if (
+          Boolean(previousState) !== Boolean(nextState) ||
+          previousState?.fileEditApprovalMode !==
+            nextState?.fileEditApprovalMode ||
+          previousState?.toolApprovalMode !== nextState?.toolApprovalMode
+        ) {
+          this.approvalPolicyEpochs.set(
+            agentInstanceId,
+            (this.approvalPolicyEpochs.get(agentInstanceId) ?? 0) + 1,
+          );
+          for (const record of this.pending.values()) {
+            if (
+              record.preview.agentInstanceId !== agentInstanceId ||
+              record.autoApprovalPolicy === null ||
+              record.resolutionState === 'resolved'
+            ) {
+              continue;
+            }
+            record.revoked = true;
+            record.effectAbortController.abort(
+              'Automatic edit policy changed during execution.',
+            );
+            if (record.resolutionState === 'pending') {
+              queueMicrotask(() => {
+                if (
+                  this.pending.get(record.preview.id) === record &&
+                  record.resolutionState === 'pending'
+                ) {
+                  this.abortRecord(
+                    record,
+                    'Operation aborted because its automatic edit policy changed.',
+                  );
+                }
+              });
+            }
+          }
+        }
+      }
+    });
+  }
+
+  private getApprovalPolicyEpoch(agentInstanceId: string): number {
+    return this.approvalPolicyEpochs.get(agentInstanceId) ?? 0;
   }
 
   public requestApproval(
     request: PendingEditRequest,
   ): Promise<PendingEditDecision> {
-    const autoModeEnabled =
-      this.store.get().agents.instances[request.agentInstanceId]?.state
-        .fileEditApprovalMode === 'autoWorkspace';
-    const autoApprovalEligibility = autoModeEnabled
-      ? Promise.resolve()
-          .then(async () => {
-            const eligibility = request.autoApprovalEligible;
-            return typeof eligibility === 'function'
-              ? await eligibility()
-              : eligibility === true;
-          })
-          .catch((error) => {
-            this.logger?.warn(
-              '[PendingEditService] Automatic edit eligibility failed closed',
-              { error, toolCallId: request.toolCallId },
-            );
-            return false;
-          })
-      : Promise.resolve(false);
+    const initialAgentState =
+      this.store.get().agents.instances[request.agentInstanceId]?.state;
+    const requestedApprovalPolicyEpoch = this.getApprovalPolicyEpoch(
+      request.agentInstanceId,
+    );
+    const requestedAutoApprovalPolicy: PendingEditAutoApprovalPolicy | null =
+      initialAgentState?.fileEditApprovalMode === 'autoWorkspace'
+        ? initialAgentState.toolApprovalMode === 'alwaysAllow'
+          ? 'always-allow'
+          : 'safe-workspace'
+        : null;
+    const autoApprovalEligibility =
+      requestedAutoApprovalPolicy === 'safe-workspace'
+        ? Promise.resolve()
+            .then(async () => {
+              const eligibility = request.autoApprovalEligible;
+              return typeof eligibility === 'function'
+                ? await eligibility()
+                : eligibility === true;
+            })
+            .catch((error) => {
+              this.logger?.warn(
+                '[PendingEditService] Automatic edit eligibility failed closed',
+                { error, toolCallId: request.toolCallId },
+              );
+              return false;
+            })
+        : Promise.resolve(false);
     const admission = this.admissionTail.then(() =>
-      this.admitRequest(request, autoModeEnabled, autoApprovalEligibility),
+      this.admitRequest(
+        request,
+        requestedAutoApprovalPolicy,
+        requestedApprovalPolicyEpoch,
+        autoApprovalEligibility,
+      ),
     );
     this.admissionTail = admission.then(
       () => undefined,
@@ -279,7 +356,8 @@ export class PendingEditService {
 
   private async admitRequest(
     request: PendingEditRequest,
-    autoModeEnabled: boolean,
+    requestedAutoApprovalPolicy: PendingEditAutoApprovalPolicy | null,
+    requestedApprovalPolicyEpoch: number,
     autoApprovalEligibility: Promise<boolean>,
   ): Promise<{ decision: Promise<PendingEditDecision> }> {
     const proposalId = randomUUID();
@@ -304,12 +382,15 @@ export class PendingEditService {
     }
     this.activeToolCalls.set(toolCallKey, proposalId);
 
-    const eligibility = autoModeEnabled
-      ? await this.waitForAutoApprovalEligibility(
-          request.abortSignal,
-          autoApprovalEligibility,
-        )
-      : 'ineligible';
+    const eligibility =
+      requestedAutoApprovalPolicy === 'safe-workspace'
+        ? await this.waitForAutoApprovalEligibility(
+            request.abortSignal,
+            autoApprovalEligibility,
+          )
+        : requestedAutoApprovalPolicy === 'always-allow'
+          ? 'eligible'
+          : 'ineligible';
     if (eligibility === 'aborted') {
       this.releaseActiveToolCall(toolCallKey, proposalId);
       return {
@@ -380,10 +461,24 @@ export class PendingEditService {
     // awaits so disabling Auto edits revokes standing authority before this
     // proposal is settled/applied. A revoked proposal falls back to the normal
     // published human-review flow below.
-    const autoApprove =
-      eligibility === 'eligible' &&
-      this.store.get().agents.instances[request.agentInstanceId]?.state
-        .fileEditApprovalMode === 'autoWorkspace';
+    const liveAgentState =
+      this.store.get().agents.instances[request.agentInstanceId]?.state;
+    const autoApprovalPolicy: PendingEditAutoApprovalPolicy | null =
+      requestedAutoApprovalPolicy === 'always-allow'
+        ? this.getApprovalPolicyEpoch(request.agentInstanceId) ===
+            requestedApprovalPolicyEpoch &&
+          liveAgentState?.fileEditApprovalMode === 'autoWorkspace' &&
+          liveAgentState.toolApprovalMode === 'alwaysAllow'
+          ? 'always-allow'
+          : null
+        : requestedAutoApprovalPolicy === 'safe-workspace' &&
+            this.getApprovalPolicyEpoch(request.agentInstanceId) ===
+              requestedApprovalPolicyEpoch &&
+            eligibility === 'eligible' &&
+            liveAgentState?.fileEditApprovalMode === 'autoWorkspace'
+          ? 'safe-workspace'
+          : null;
+    const autoApprove = autoApprovalPolicy !== null;
 
     let preview: PendingEditPreview;
     try {
@@ -407,13 +502,18 @@ export class PendingEditService {
       lockKey,
       leaseId,
       published: !autoApprove,
+      autoApprovalPolicy,
+      approvalPolicyEpoch: requestedApprovalPolicyEpoch,
+      revoked: false,
+      abortSignal: request.abortSignal,
+      effectAbortController: new AbortController(),
       fileEditBatchParticipant: request.fileEditBatchParticipant,
     };
     this.pending.set(proposalId, record);
 
     if (request.abortSignal) {
       const onAbort = () => {
-        this.abortRecord(
+        this.revokeRecord(
           record,
           'Operation aborted before the user approved the file edit.',
         );
@@ -541,22 +641,37 @@ export class PendingEditService {
 
     try {
       this.markApplying(record);
+      const autoApprovalPolicy =
+        decisionSource === 'auto-policy' ? record.autoApprovalPolicy : null;
       await record.apply({
         decisionSource,
+        autoApprovalPolicy,
+        abortSignal: record.effectAbortController.signal,
         assertAutoPolicyAuthorized: () => {
           if (decisionSource !== 'auto-policy') return;
 
           const activeRecord = this.pending.get(pendingEditId);
           const activeLease = this.fileLocks.get(record.lockKey);
-          const liveMode =
+          const liveState =
             this.store.get().agents.instances[record.preview.agentInstanceId]
-              ?.state.fileEditApprovalMode;
+              ?.state;
+          const livePolicyAuthorized =
+            autoApprovalPolicy === 'safe-workspace'
+              ? liveState?.fileEditApprovalMode === 'autoWorkspace'
+              : autoApprovalPolicy === 'always-allow'
+                ? liveState?.fileEditApprovalMode === 'autoWorkspace' &&
+                  liveState.toolApprovalMode === 'alwaysAllow'
+                : false;
           if (
             activeRecord !== record ||
             record.resolutionState !== 'settling' ||
             activeLease?.leaseId !== record.leaseId ||
             record.fileEditBatchParticipant?.getState() === 'aborted' ||
-            liveMode !== 'autoWorkspace'
+            record.revoked ||
+            record.abortSignal?.aborted === true ||
+            this.getApprovalPolicyEpoch(record.preview.agentInstanceId) !==
+              record.approvalPolicyEpoch ||
+            !livePolicyAuthorized
           ) {
             throw new Error(
               'Automatic edit authorization was revoked before the filesystem effect; review the change manually.',
@@ -602,7 +717,7 @@ export class PendingEditService {
   public abortAgentEdits(agentInstanceId: string): void {
     for (const record of [...this.pending.values()]) {
       if (record.preview.agentInstanceId !== agentInstanceId) continue;
-      this.abortRecord(
+      this.revokeRecord(
         record,
         'Operation aborted before the user approved the edit.',
       );
@@ -612,7 +727,7 @@ export class PendingEditService {
   public releaseLocksForOwner(ownerId: string): void {
     for (const record of [...this.pending.values()]) {
       if (record.ownerId !== ownerId) continue;
-      this.abortRecord(
+      this.revokeRecord(
         record,
         'Operation aborted because its edit owner was released.',
       );
@@ -622,7 +737,7 @@ export class PendingEditService {
   public releaseAgentLocks(agentInstanceId: string): void {
     for (const record of [...this.pending.values()]) {
       if (record.preview.agentInstanceId !== agentInstanceId) continue;
-      this.abortRecord(
+      this.revokeRecord(
         record,
         'Operation aborted because its agent was released.',
       );
@@ -660,6 +775,19 @@ export class PendingEditService {
   private abortRecord(record: PendingEditRecord, message: string): void {
     if (!this.beginResolution(record)) return;
     this.resolve(record, { status: 'aborted', message });
+  }
+
+  /**
+   * Latch revocation even after apply entered `settling`. Pending records can
+   * resolve immediately; settling records retain their lease until the apply
+   * callback reaches its final authority fence and terminates.
+   */
+  private revokeRecord(record: PendingEditRecord, message: string): void {
+    record.revoked = true;
+    record.effectAbortController.abort(message);
+    if (record.resolutionState === 'pending') {
+      this.abortRecord(record, message);
+    }
   }
 
   private discardRecord(record: PendingEditRecord): void {
@@ -1139,6 +1267,7 @@ async function rewriteExistingFileWithGuards(
     }
 
     const identity = identityOf(openedStat);
+    let writeIssued = false;
     try {
       // This callback is deliberately synchronous and sits after every
       // asynchronous path/baseline check. Calling it here binds the live host
@@ -1146,6 +1275,12 @@ async function rewriteExistingFileWithGuards(
       // disabling Auto edits before this point leaves the original bytes
       // untouched.
       assertAutoPolicyAuthorized();
+      // Recovery is allowed only after this writer has actually issued its
+      // first effect. If authority was revoked while a guard was stalled, a
+      // later authorized edit may already have written identical replacement
+      // bytes after our lease was released; treating those bytes as ours would
+      // roll back somebody else's effect.
+      writeIssued = true;
       await writeHandleContent(handle, replacementContent);
       await assertAutoApprovedPathBinding(absolutePath, expectedBinding);
       const beforeVerificationStat = await handle.stat();
@@ -1174,6 +1309,7 @@ async function rewriteExistingFileWithGuards(
         handle,
       };
     } catch (error) {
+      if (!writeIssued) throw error;
       const recovered = await recoverFailedAutoApprovedWrite(
         handle,
         identity,
