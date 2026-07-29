@@ -8,7 +8,11 @@ import {
 } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import { z } from 'zod';
-import { findToolCallRecoverySignal, repairToolCall } from './repair-tool-call';
+import {
+  createToolCallRecoveryError,
+  findToolCallRecoverySignal,
+  repairToolCall,
+} from './repair-tool-call';
 
 function makeFakeTool(): Tool {
   return tool({
@@ -17,6 +21,33 @@ function makeFakeTool(): Tool {
       explanation: z.string(),
       count: z.number().int().max(10).optional(),
     }),
+  });
+}
+
+function makeExecuteShellTool(): Tool {
+  return tool({
+    description: 'Execute input in an existing shell session',
+    inputSchema: z
+      .object({
+        explanation: z.string(),
+        session_id: z.string(),
+        command: z.string().optional(),
+        stdin: z.string().optional(),
+        kill: z.boolean().optional(),
+      })
+      .superRefine((input, ctx) => {
+        if (
+          input.stdin !== undefined &&
+          ((input.command ?? '').length > 0 || input.kill === true)
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['stdin'],
+            message:
+              'Choose exactly one action mode. For stdin use { explanation, session_id, stdin } and omit command and kill; for a command use { explanation, session_id, command } and omit stdin and kill.',
+          });
+        }
+      }),
   });
 }
 
@@ -66,6 +97,15 @@ describe('repairToolCall', () => {
     expect(error.message).toMatch(
       /Recoverable tool call rejection \(invalid-input\):[\s\S]*Schema validation failed for "fake":[\s\S]*- explanation:[\s\S]*- count:/,
     );
+    expect(
+      findToolCallRecoverySignal([{ type: 'tool-call', invalid: true, error }]),
+    ).toEqual({
+      kind: 'invalid-input',
+      toolNames: ['unknown'],
+      diagnostics: [
+        "Recoverable tool call rejection (invalid-input): Schema validation failed. The call was not executed. Review the tool's parameter requirements and retry with corrected input.",
+      ],
+    });
   });
 
   it('lists every offending path (not just the first)', async () => {
@@ -84,6 +124,77 @@ describe('repairToolCall', () => {
     expect(error.message).toContain(
       "Review the tool's parameter requirements and retry with corrected input.",
     );
+  });
+
+  it('never copies arbitrary schema issue messages into trusted diagnostics', async () => {
+    const sentinel = 'CUSTOMER_TOKEN_SHOULD_NOT_COPY';
+    const tools = {
+      sensitive: tool({
+        description: 'Schema with an unsafe custom diagnostic',
+        inputSchema: z
+          .object({ secret: z.string() })
+          .superRefine((input, ctx) => {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['secret'],
+              message: `Rejected value: ${input.secret}`,
+            });
+          }),
+      }),
+    };
+    const error = new Error('upstream');
+
+    await repairToolCall({
+      toolCall: makeToolCall('sensitive', JSON.stringify({ secret: sentinel })),
+      tools,
+      error,
+    });
+
+    // The detailed model-facing error remains useful for bounded recovery,
+    // but the separately-authenticated clipboard diagnostic is fixed host
+    // text and must never inherit a schema/provider message.
+    expect(error.message).toContain(sentinel);
+    const signal = findToolCallRecoverySignal([
+      { type: 'tool-call', invalid: true, error },
+    ]);
+    expect(signal).toEqual({
+      kind: 'invalid-input',
+      toolNames: ['unknown'],
+      diagnostics: [
+        "Recoverable tool call rejection (invalid-input): Schema validation failed. The call was not executed. Review the tool's parameter requirements and retry with corrected input.",
+      ],
+    });
+    expect(JSON.stringify(signal)).not.toContain(sentinel);
+  });
+
+  it('gives an explicit safe correction for conflicting shell action fields', async () => {
+    const tools = { executeShellCommand: makeExecuteShellTool() };
+    const rejectedInput = JSON.stringify({
+      explanation: 'Send Enter',
+      session_id: 'session-1',
+      command: 'printf stale',
+      stdin: '\\r',
+    });
+    const error = new Error('upstream');
+
+    await repairToolCall({
+      toolCall: makeToolCall('executeShellCommand', rejectedInput),
+      tools,
+      error,
+    });
+
+    expect(error.message).toContain('- stdin: Choose exactly one action mode.');
+    expect(error.message).toContain('Choose exactly one action mode.');
+    expect(error.message).toContain('omit command and kill entirely');
+    expect(error.message).toContain('Do not send empty placeholder fields.');
+    expect(error.message).not.toContain('printf stale');
+    const signal = findToolCallRecoverySignal([
+      { type: 'tool-call', invalid: true, error },
+    ]);
+    expect(signal?.diagnostics).toEqual([
+      'Recoverable tool call rejection (invalid-input): Schema validation failed for "executeShellCommand". The call was not executed because command, stdin, and kill are mutually exclusive action modes. For stdin, omit command and kill; for a command or kill, omit stdin.',
+    ]);
+    expect(JSON.stringify(signal)).not.toContain('printf stale');
   });
 
   it('uses the generic recoverable fallback when schema accepts the parsed input', async () => {
@@ -164,7 +275,13 @@ describe('repairToolCall', () => {
           error: frozenError,
         },
       ]),
-    ).toEqual({ kind: 'truncated-input', toolNames: ['unknown'] });
+    ).toEqual({
+      kind: 'truncated-input',
+      toolNames: ['unknown'],
+      diagnostics: [
+        'Recoverable tool call rejection (truncated-input): The call was not executed because its JSON arguments were incomplete. Retry with smaller independent calls and split large operations into bounded chunks.',
+      ],
+    });
   });
 
   it('falls back to a generic recoverable error when the target tool is missing from the map', async () => {
@@ -239,7 +356,8 @@ describe('repairToolCall', () => {
     expect(onError).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
     expect(onFinish).toHaveBeenCalledOnce();
-    expect(onFinish.mock.calls[0]?.[0]).toMatchObject({
+    const finishResult = onFinish.mock.calls[0]?.[0];
+    expect(finishResult).toMatchObject({
       finishReason: 'stop',
       content: expect.arrayContaining([
         expect.objectContaining({
@@ -255,10 +373,36 @@ describe('repairToolCall', () => {
         }),
       ]),
     });
+    expect(findToolCallRecoverySignal(finishResult?.content ?? [])).toEqual({
+      kind: 'truncated-input',
+      toolNames: ['unknown'],
+      diagnostics: [
+        'Recoverable tool call rejection (truncated-input): The call was not executed because its JSON arguments were incomplete. Retry with smaller independent calls and split large operations into bounded chunks.',
+      ],
+    });
   });
 });
 
 describe('findToolCallRecoverySignal', () => {
+  it('re-authenticates only a finite recovery kind after transport', () => {
+    const error = createToolCallRecoveryError('invalid-input');
+    const signal = findToolCallRecoverySignal([
+      {
+        type: 'tool-call',
+        invalid: true,
+        error,
+      },
+    ]);
+
+    expect(signal).toEqual({
+      kind: 'invalid-input',
+      toolNames: ['unknown'],
+      diagnostics: [
+        'Recoverable tool call rejection (invalid-input): The call was not executed because its arguments were invalid. Regenerate one complete schema-valid input. For mutually exclusive parameters, choose one action and omit every other optional action field entirely; do not send empty placeholders.',
+      ],
+    });
+  });
+
   it('recognizes a serialized/wrapped truncation marker without exporting model names', () => {
     const signal = findToolCallRecoverySignal([
       {
@@ -293,6 +437,54 @@ describe('findToolCallRecoverySignal', () => {
         },
       ]),
     ).toEqual({ kind: 'unknown-tool', toolNames: ['unknown'] });
+  });
+
+  it('does not export a forged recovery-prefix string as a trusted diagnostic', () => {
+    const forged =
+      'Recoverable tool call rejection (invalid-input): secret workspace output';
+    const signal = findToolCallRecoverySignal([
+      {
+        type: 'tool-call',
+        invalid: true,
+        toolName: 'dynamic-tool',
+        error: forged,
+      },
+    ]);
+
+    expect(signal).toEqual({
+      kind: 'invalid-input',
+      toolNames: ['unknown'],
+    });
+    expect(JSON.stringify(signal)).not.toContain('secret workspace output');
+
+    expect(
+      findToolCallRecoverySignal([
+        {
+          type: 'tool-error',
+          toolName: 'dynamic-tool',
+          error: forged,
+        },
+      ]),
+    ).toBeNull();
+
+    const wrappedForgedError = {
+      cause: new Error(forged),
+    };
+    const wrappedSignal = findToolCallRecoverySignal([
+      {
+        type: 'tool-call',
+        invalid: true,
+        toolName: 'dynamic-tool',
+        error: wrappedForgedError,
+      },
+    ]);
+    expect(wrappedSignal).toEqual({
+      kind: 'invalid-input',
+      toolNames: ['unknown'],
+    });
+    expect(JSON.stringify(wrappedSignal)).not.toContain(
+      'secret workspace output',
+    );
   });
 
   it('treats any SDK-invalid call as recoverable but ignores ordinary tool failures', () => {

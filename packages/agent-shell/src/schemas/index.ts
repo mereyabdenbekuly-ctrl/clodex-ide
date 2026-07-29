@@ -44,6 +44,17 @@ export const createShellSessionToolSchema = {
 // Execute Shell Command Tool (session input)
 // ============================================================================
 
+/**
+ * Empty stdin is an inactive optional placeholder. Some providers emit empty
+ * optional strings even when another action mode was selected; treating that
+ * as PTY input would replace a command, poll, or kill with a different effect.
+ */
+export function hasActiveShellStdin(
+  stdin: string | undefined,
+): stdin is string {
+  return typeof stdin === 'string' && stdin.length > 0;
+}
+
 export const executeShellCommandToolInputSchema = z
   .object({
     explanation: z
@@ -54,7 +65,11 @@ export const executeShellCommandToolInputSchema = z
     command: z
       .string()
       .optional()
-      .describe('The command to run. Required unless kill is true.'),
+      .describe(
+        'The shell command to run, or an empty string to poll a running command. ' +
+          'Omit this field entirely when sending `stdin` or using `kill: true`; ' +
+          'command, stdin, and kill are separate action modes.',
+      ),
     session_id: z
       .string()
       .describe(
@@ -65,7 +80,7 @@ export const executeShellCommandToolInputSchema = z
       .optional()
       .describe(
         'Raw bytes to write to the PTY. No \\r is appended — include it explicitly if needed. ' +
-          'Mutually exclusive with `command` and `kill`. Requires `session_id`. ' +
+          'Omit `command` and `kill` entirely, including empty or false placeholders. Requires `session_id`. ' +
           'Supports `wait_until` for output capture (default timeout: 5s without wait_until). ' +
           'Common sequences: "\\x03" (Ctrl+C / interrupt), "\\x1b[A" (Up), "\\x1b[B" (Down), ' +
           '"\\x1b[C" (Right), "\\x1b[D" (Left), "\\x1b" (Escape), "\\t" (Tab), "\\r" (Enter), ' +
@@ -75,7 +90,7 @@ export const executeShellCommandToolInputSchema = z
       .boolean()
       .optional()
       .describe(
-        'Hard-kill the session. Mutually exclusive with command and stdin.',
+        'Hard-kill the session. Omit command and stdin entirely; never combine action modes.',
       ),
     wait_until: z
       .object({
@@ -133,21 +148,23 @@ export const executeShellCommandToolInputSchema = z
     // stays optional so an empty/omitted command is a valid poll.
     const hasCommand =
       typeof val.command === 'string' && val.command.length > 0;
-    const hasStdin = val.stdin !== undefined;
+    const hasStdin = hasActiveShellStdin(val.stdin);
     const isKill = val.kill === true;
 
     if (hasStdin && (hasCommand || isKill)) {
       ctx.addIssue({
         code: 'custom',
         path: ['stdin'],
-        message: 'stdin is mutually exclusive with command and kill.',
+        message:
+          'Choose exactly one action mode. For stdin use { explanation, session_id, stdin } and omit command and kill; for a command use { explanation, session_id, command } and omit stdin and kill.',
       });
     }
     if (isKill && hasCommand) {
       ctx.addIssue({
         code: 'custom',
         path: ['kill'],
-        message: 'kill is mutually exclusive with command.',
+        message:
+          'Choose exactly one action mode. For kill use { explanation, session_id, kill: true } and omit command and stdin; for a command omit kill and stdin.',
       });
     }
   });

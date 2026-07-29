@@ -858,10 +858,13 @@ export abstract class BaseAgent<
    * but an unbounded model loop would make unattended runs hang forever.
    */
   private static readonly MAX_TOOL_CALL_RECOVERY_ATTEMPTS = 2;
+  private static readonly MAX_TOOL_CALL_RECOVERY_DIAGNOSTICS = 6;
   private _toolCallRecoveryTurnId: string | null = null;
   private _toolCallRecoveryAttempts = 0;
+  private _toolCallRecoveryDiagnostics: string[] = [];
   private _pendingToolCallRecoveryExhaustion: {
     readonly message: string;
+    readonly diagnostics: readonly string[];
   } | null = null;
 
   /**
@@ -2820,7 +2823,14 @@ export abstract class BaseAgent<
         .history.some((m) => m.role === 'assistant');
       if (recoveryExhaustion && !stepHasApprovalRequest) {
         this.state.commands.recordStepError({
-          error: { message: recoveryExhaustion.message },
+          error: {
+            message: recoveryExhaustion.message,
+            ...(recoveryExhaustion.diagnostics.length > 0
+              ? {
+                  recoveryDiagnostics: [...recoveryExhaustion.diagnostics],
+                }
+              : {}),
+          },
           markUnread: 'mark-unread',
         });
         this.onIdle();
@@ -4044,6 +4054,15 @@ export abstract class BaseAgent<
     if (latestUserMessageId !== this._toolCallRecoveryTurnId) {
       this._toolCallRecoveryTurnId = latestUserMessageId;
       this._toolCallRecoveryAttempts = 0;
+      this._toolCallRecoveryDiagnostics = [];
+    }
+
+    if (signal.diagnostics?.length) {
+      this._toolCallRecoveryDiagnostics.push(...signal.diagnostics);
+      this._toolCallRecoveryDiagnostics =
+        this._toolCallRecoveryDiagnostics.slice(
+          -BaseAgent.MAX_TOOL_CALL_RECOVERY_DIAGNOSTICS,
+        );
     }
 
     const maxAttempts = BaseAgent.MAX_TOOL_CALL_RECOVERY_ATTEMPTS;
@@ -4053,11 +4072,20 @@ export abstract class BaseAgent<
     // enough for recovery and avoids a model-controlled telemetry channel.
     const safeToolNames = ['unknown'] as const;
     if (this._toolCallRecoveryAttempts >= maxAttempts) {
+      const recoveryAdvice =
+        signal.kind === 'truncated-input'
+          ? 'Continue manually with smaller independent tool calls and split large operations into bounded chunks.'
+          : signal.kind === 'unknown-tool'
+            ? 'Continue manually with a tool currently advertised by the host.'
+            : 'Review the rejected validation details above, correct the parameter shape, and retry. For mutually exclusive parameters, choose one action and omit every other optional action field entirely.';
       const message =
         `Automatic tool-call recovery stopped after ${maxAttempts} attempts in this user turn. ` +
-        'The rejected call was not executed. Continue manually or ask the model to split the operation into smaller calls.';
+        `The rejected call was not executed. ${recoveryAdvice}`;
       this._pendingSyntheticContinuation = null;
-      this._pendingToolCallRecoveryExhaustion = { message };
+      this._pendingToolCallRecoveryExhaustion = {
+        message,
+        diagnostics: [...this._toolCallRecoveryDiagnostics],
+      };
       this.host.logger.warn(
         `[BaseAgent:${this.instanceId}] ${message} kind=${signal.kind}, tools=unknown`,
       );
@@ -4479,7 +4507,7 @@ export abstract class BaseAgent<
       const compactInstruction =
         continuation.kind === 'truncated-input'
           ? 'Do not repeat the oversized payload. Split the intended operation into smaller independent tool calls; for large edits, apply bounded chunks and re-read current state between chunks.'
-          : 'Regenerate a complete schema-valid input. Keep the call small, and split the intended operation if one payload would be large.';
+          : 'Follow the immediately preceding validation details and regenerate one complete schema-valid input. For mutually exclusive parameters, choose one action and omit every other optional action field entirely; do not send empty placeholders. Keep the call small, and split the intended operation if one payload would be large.';
       const recoveryPrompt =
         `Automatic recovery ${continuation.attempt}/${continuation.maxAttempts}: the previous call to ${toolList} was rejected before execution. ` +
         `${compactInstruction} Do not claim the rejected effect occurred. Preserve every normal approval and authorization requirement; recovery does not pre-approve any tool call.`;

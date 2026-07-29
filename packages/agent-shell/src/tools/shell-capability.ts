@@ -2,6 +2,7 @@ import type {
   CreateShellSessionToolInput,
   ExecuteShellCommandToolInput,
 } from '../schemas';
+import { hasActiveShellStdin } from '../schemas';
 
 export type ShellCapabilityOperation =
   | 'create'
@@ -85,9 +86,20 @@ export function createShellCapabilityAction(
   input: ExecuteShellCommandToolInput,
   cwdPrefix: string,
 ): ShellCapabilityAction {
+  const hasCommand = (input.command ?? '').length > 0;
+  const hasStdin = hasActiveShellStdin(input.stdin);
+  if (hasStdin && (hasCommand || input.kill === true)) {
+    throw new Error(
+      'Shell stdin is mutually exclusive with non-empty command and kill.',
+    );
+  }
+  if (input.kill === true && hasCommand) {
+    throw new Error('Shell kill is mutually exclusive with non-empty command.');
+  }
+
   const operation: ShellCapabilityOperation = input.kill
     ? 'kill'
-    : input.stdin !== undefined
+    : hasStdin
       ? 'stdin'
       : (input.command ?? '') === ''
         ? 'poll'

@@ -8,12 +8,30 @@ export type ToolCallRecoveryKind =
 export type ToolCallRecoverySignal = {
   readonly kind: ToolCallRecoveryKind;
   readonly toolNames: readonly string[];
+  /** Host-generated diagnostics only; never copied from provider/tool input. */
+  readonly diagnostics?: readonly string[];
 };
 
 const TOOL_CALL_RECOVERY_KIND_PROPERTY = 'clodexToolCallRecoveryKind';
 const TOOL_CALL_RECOVERY_MESSAGE_PREFIX = 'Recoverable tool call rejection';
 const MAX_RECOVERY_TOOL_NAME_CHARS = 128;
+const MAX_RECOVERY_DIAGNOSTIC_CHARS = 4_000;
+const MAX_RECOVERY_DIAGNOSTICS_PER_STEP = 6;
 const localRecoveryKinds = new WeakMap<object, ToolCallRecoveryKind>();
+const localRecoveryDiagnostics = new WeakMap<object, string>();
+
+function genericRecoveryGuidance(kind: ToolCallRecoveryKind): string {
+  switch (kind) {
+    case 'truncated-input':
+      return 'The call was not executed because its arguments were incomplete. Retry with smaller independent calls and split large operations into bounded chunks.';
+    case 'unknown-tool':
+      return 'The requested tool is unavailable. The call was not executed. Retry using a tool currently advertised by the host.';
+    case 'invalid-input':
+      return 'The call was not executed because its arguments were invalid. Regenerate one complete schema-valid input. For mutually exclusive parameters, choose one action and omit every other optional action field entirely; do not send empty placeholders.';
+    default:
+      throw new Error('Unsupported tool-call recovery kind.');
+  }
+}
 
 /**
  * Shape we actually consume from a zod validation issue. Kept structural so
@@ -58,17 +76,28 @@ export type RepairToolCallArgs = {
 function annotateRecoverableError(
   error: unknown,
   kind: ToolCallRecoveryKind,
-  message: string,
+  modelMessage: string,
+  copyableMessage: string,
 ): null {
+  const fullMessage = `${TOOL_CALL_RECOVERY_MESSAGE_PREFIX} (${kind}): ${modelMessage}`;
+  const copyableFullMessage = `${TOOL_CALL_RECOVERY_MESSAGE_PREFIX} (${kind}): ${copyableMessage}`;
+  const diagnostic =
+    copyableFullMessage.length <= MAX_RECOVERY_DIAGNOSTIC_CHARS
+      ? copyableFullMessage
+      : `${copyableFullMessage.slice(0, MAX_RECOVERY_DIAGNOSTIC_CHARS - 1)}…`;
   if (error && typeof error === 'object') {
     // WeakMap classification survives frozen/provider-owned Error objects
     // without mutating them. Remote executors fall back to the message or to
     // the generic invalid-input classification.
     localRecoveryKinds.set(error, kind);
+    // Unlike message-prefix parsing, this WeakMap is a trusted local marker.
+    // Its payload is separately authored above and must never reuse arbitrary
+    // schema issue messages, property paths, tool input, or provider text.
+    localRecoveryDiagnostics.set(error, diagnostic);
   }
   if (error instanceof Error) {
     try {
-      error.message = `${TOOL_CALL_RECOVERY_MESSAGE_PREFIX} (${kind}): ${message}`;
+      error.message = fullMessage;
       Object.defineProperty(error, TOOL_CALL_RECOVERY_KIND_PROPERTY, {
         configurable: true,
         enumerable: false,
@@ -80,6 +109,39 @@ function annotateRecoverableError(
       // diagnostic message could not be annotated.
     }
   }
+  return null;
+}
+
+/**
+ * Re-authenticates a finite recovery classification after a trusted process or
+ * transport boundary. The caller cannot supply diagnostic text, so arbitrary
+ * remote/provider messages never become copyable runtime state.
+ */
+export function createToolCallRecoveryError(kind: ToolCallRecoveryKind): Error {
+  const guidance = genericRecoveryGuidance(kind);
+  const error = new Error(guidance);
+  annotateRecoverableError(error, kind, guidance, guidance);
+  return error;
+}
+
+function recoveryDiagnosticFromError(error: unknown): string | null {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    if (!current || typeof current !== 'object') break;
+
+    const diagnostic = localRecoveryDiagnostics.get(current);
+    if (diagnostic) return diagnostic;
+    try {
+      current = (current as Record<string, unknown>).cause;
+    } catch {
+      break;
+    }
+  }
+
   return null;
 }
 
@@ -116,12 +178,19 @@ function recoveryKindFromError(error: unknown): ToolCallRecoveryKind | null {
     const record = current as Record<string, unknown>;
     const localKind = localRecoveryKinds.get(current);
     if (localKind) return localKind;
-    const propertyKind = parseRecoveryKind(
-      record[TOOL_CALL_RECOVERY_KIND_PROPERTY],
-    );
+    let propertyValue: unknown;
+    let message: unknown;
+    let cause: unknown;
+    try {
+      propertyValue = record[TOOL_CALL_RECOVERY_KIND_PROPERTY];
+      message = record.message;
+      cause = record.cause;
+    } catch {
+      break;
+    }
+    const propertyKind = parseRecoveryKind(propertyValue);
     if (propertyKind) return propertyKind;
 
-    const message = record.message;
     if (typeof message === 'string') {
       const match = message.match(
         /^Recoverable tool call rejection \(([^)]+)\):/,
@@ -130,7 +199,7 @@ function recoveryKindFromError(error: unknown): ToolCallRecoveryKind | null {
       if (messageKind) return messageKind;
     }
 
-    current = record.cause;
+    current = cause;
   }
 
   return null;
@@ -138,14 +207,16 @@ function recoveryKindFromError(error: unknown): ToolCallRecoveryKind | null {
 
 /**
  * Finds invalid tool-call parts that are safe to retry because the rejected
- * call was never executed. The returned signal is intentionally tiny: it
- * contains no model-generated input or names and is safe for
- * logs/telemetry/prompts.
+ * call was never executed. The returned signal contains no model-generated
+ * input or names. Optional diagnostics are bounded, locally authenticated,
+ * and separately authored from fixed host text rather than schema/provider
+ * messages.
  */
 export function findToolCallRecoverySignal(
   content: readonly unknown[],
 ): ToolCallRecoverySignal | null {
   let selectedKind: ToolCallRecoveryKind | null = null;
+  const diagnostics: string[] = [];
 
   for (const value of content) {
     if (!value || typeof value !== 'object') continue;
@@ -153,6 +224,10 @@ export function findToolCallRecoverySignal(
     if (part.type !== 'tool-call' || part.invalid !== true) continue;
 
     const kind = recoveryKindFromError(part.error) ?? 'invalid-input';
+    const diagnostic = recoveryDiagnosticFromError(part.error);
+    if (diagnostic && diagnostics.length < MAX_RECOVERY_DIAGNOSTICS_PER_STEP) {
+      diagnostics.push(diagnostic);
+    }
 
     // Truncation gets priority because it needs an explicit compact/chunk
     // instruction. Otherwise retain the first concrete classification.
@@ -161,7 +236,13 @@ export function findToolCallRecoverySignal(
     }
   }
 
-  return selectedKind ? { kind: selectedKind, toolNames: ['unknown'] } : null;
+  return selectedKind
+    ? {
+        kind: selectedKind,
+        toolNames: ['unknown'],
+        ...(diagnostics.length > 0 ? { diagnostics } : {}),
+      }
+    : null;
 }
 
 /**
@@ -187,6 +268,7 @@ export async function repairToolCall({
       error,
       'unknown-tool',
       'The requested tool is not available. Retry using one of the tools currently provided by the host.',
+      'The requested tool is unavailable. The call was not executed. Retry using a tool currently advertised by the host.',
     );
   }
 
@@ -210,12 +292,14 @@ export async function repairToolCall({
         error,
         'invalid-input',
         `The call to "${verifiedToolName}" was not executed because its arguments were empty or malformed. Regenerate one complete, schema-valid JSON object.`,
+        'The call was not executed because its arguments were empty or malformed. Regenerate one complete schema-valid JSON object.',
       );
     }
     return annotateRecoverableError(
       error,
       'truncated-input',
       `The call to "${verifiedToolName}" was not executed because its JSON arguments were incomplete, usually after exceeding the model output limit. Retry with smaller independent calls and split large edits into chunks.`,
+      'The call was not executed because its JSON arguments were incomplete. Retry with smaller independent calls and split large operations into bounded chunks.',
     );
   }
 
@@ -244,12 +328,31 @@ export async function repairToolCall({
       result = undefined;
     }
     if (result && !result.success && result.error) {
+      const isExecuteShellActionConflict =
+        verifiedToolName === 'executeShellCommand' &&
+        result.error.issues.some(
+          (issue) =>
+            (issue.path[0] === 'stdin' &&
+              (issue.message ===
+                'stdin is mutually exclusive with command and kill.' ||
+                issue.message.startsWith('Choose exactly one action mode.'))) ||
+            (issue.path[0] === 'kill' &&
+              (issue.message === 'kill is mutually exclusive with command.' ||
+                issue.message.startsWith('Choose exactly one action mode.'))),
+        );
+      const correction = isExecuteShellActionConflict
+        ? 'Choose exactly one action mode. For stdin, send only explanation, session_id, stdin, and optional wait_until; omit command and kill entirely. For a command or kill, omit stdin entirely. Do not send empty placeholder fields.'
+        : "Review the tool's parameter requirements and retry with corrected input.";
+      const copyableDiagnostic = isExecuteShellActionConflict
+        ? 'Schema validation failed for "executeShellCommand". The call was not executed because command, stdin, and kill are mutually exclusive action modes. For stdin, omit command and kill; for a command or kill, omit stdin.'
+        : "Schema validation failed. The call was not executed. Review the tool's parameter requirements and retry with corrected input.";
       return annotateRecoverableError(
         error,
         'invalid-input',
         `Schema validation failed for "${verifiedToolName}":\n${formatZodIssues(
           result.error.issues,
-        )}\nReview the tool's parameter requirements and retry with corrected input.`,
+        )}\n${correction}`,
+        copyableDiagnostic,
       );
     }
   }
@@ -260,5 +363,6 @@ export async function repairToolCall({
     error,
     'invalid-input',
     `Inputs for "${verifiedToolName}" did not match the expected schema. Check the parameter requirements and retry with a smaller valid input.`,
+    "The call was not executed because its arguments did not match the expected schema. Review the tool's parameter requirements and retry.",
   );
 }

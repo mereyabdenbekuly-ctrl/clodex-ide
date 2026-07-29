@@ -26,7 +26,14 @@ export type ExceededWindow = {
 };
 
 export type AgentRuntimeError =
-  | { kind?: undefined; code?: number; message: string; stack?: string }
+  | {
+      kind?: undefined;
+      code?: number;
+      message: string;
+      stack?: string;
+      /** Bounded host-generated diagnostics for rejected, non-executed calls. */
+      recoveryDiagnostics?: string[];
+    }
   | {
       kind: 'plan-limit-exceeded';
       message: string;

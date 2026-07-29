@@ -9,6 +9,7 @@ import {
 import { MockLanguageModelV3 } from 'ai/test';
 import { z } from 'zod';
 import { BaseAgent } from './base-agent';
+import { repairToolCall } from './shared/repair-tool-call';
 
 type RecoveryState = {
   activeModelId: string;
@@ -51,9 +52,13 @@ type RecoveryHarness = {
   _stepResolvedModelId: string;
   _toolCallRecoveryTurnId: string | null;
   _toolCallRecoveryAttempts: number;
+  _toolCallRecoveryDiagnostics: string[];
   _pendingContinue: boolean | null;
   _pendingSyntheticContinuation: RecoveryContinuation;
-  _pendingToolCallRecoveryExhaustion: { message: string } | null;
+  _pendingToolCallRecoveryExhaustion: {
+    message: string;
+    diagnostics: readonly string[];
+  } | null;
   onIdle: ReturnType<typeof vi.fn>;
   emitNotificationEvent: ReturnType<typeof vi.fn>;
   shouldRunNewStep: (result: unknown, userWantsToContinue: boolean) => boolean;
@@ -87,6 +92,35 @@ function invalidToolResult(
   };
 }
 
+async function trustedInvalidToolResult(input: string) {
+  const error = new Error('provider schema error');
+  await repairToolCall({
+    toolCall: {
+      toolName: 'fake',
+      input,
+    },
+    tools: {
+      fake: tool({
+        description: 'Fake recovery tool',
+        inputSchema: z.object({ explanation: z.string() }),
+      }),
+    },
+    error,
+  });
+  return {
+    finishReason: 'stop',
+    toolCalls: [{ toolName: 'fake' }],
+    content: [
+      {
+        type: 'tool-call',
+        invalid: true,
+        toolName: 'fake',
+        error,
+      },
+    ],
+  };
+}
+
 function createRecoveryHarness() {
   const state: RecoveryState = {
     activeModelId: 'test-model',
@@ -114,6 +148,7 @@ function createRecoveryHarness() {
   agent._stepResolvedModelId = 'test-model';
   agent._toolCallRecoveryTurnId = null;
   agent._toolCallRecoveryAttempts = 0;
+  agent._toolCallRecoveryDiagnostics = [];
   agent._pendingContinue = null;
   agent._pendingSyntheticContinuation = null;
   agent._pendingToolCallRecoveryExhaustion = null;
@@ -177,6 +212,85 @@ describe('BaseAgent bounded tool-call recovery', () => {
     expect(agent._pendingSyntheticContinuation).toMatchObject({ attempt: 1 });
   });
 
+  it('publishes only trusted diagnostics from the current visible user turn', async () => {
+    const { agent, state } = createRecoveryHarness();
+    const turnAResult = await trustedInvalidToolResult(
+      '{"explanation":"oversized operation cut off before completion',
+    );
+
+    expect(agent.shouldRunNewStep(turnAResult, true)).toBe(true);
+    expect(agent._toolCallRecoveryDiagnostics).toEqual([
+      expect.stringContaining('JSON arguments were incomplete'),
+    ]);
+
+    state.history.push({ id: 'user-2', role: 'user' });
+    const turnBResult = await trustedInvalidToolResult('{}');
+    expect(agent.shouldRunNewStep(turnBResult, true)).toBe(true);
+    expect(agent.shouldRunNewStep(turnBResult, true)).toBe(true);
+    expect(agent.shouldRunNewStep(turnBResult, true)).toBe(false);
+
+    const exhaustion = agent._pendingToolCallRecoveryExhaustion;
+    expect(exhaustion?.diagnostics).toHaveLength(3);
+    expect(exhaustion?.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Schema validation failed.'),
+      ]),
+    );
+    expect(JSON.stringify(exhaustion?.diagnostics)).not.toContain(
+      'JSON arguments were incomplete',
+    );
+
+    state.history.push({ id: 'assistant-2', role: 'assistant' });
+    agent._pendingContinue = false;
+    expect(agent.settleStepContinuation(7, false)).toBe(true);
+    const publishedError =
+      agent.state.commands.recordStepError.mock.calls.at(-1)?.[0]?.error;
+    expect(publishedError?.recoveryDiagnostics).toEqual(
+      exhaustion?.diagnostics,
+    );
+    expect(JSON.stringify(publishedError)).not.toContain(
+      'JSON arguments were incomplete',
+    );
+  });
+
+  it('tells invalid-input recovery to omit mutually exclusive placeholders', () => {
+    const { agent } = createRecoveryHarness();
+
+    expect(
+      agent.shouldRunNewStep(invalidToolResult('invalid-input'), true),
+    ).toBe(true);
+    const retryContext = agent.appendSyntheticContinuationIfNeeded([
+      { role: 'tool', content: [] },
+    ]);
+    const instruction = String(retryContext.at(-1)?.content);
+
+    expect(instruction).toContain(
+      'For mutually exclusive parameters, choose one action',
+    );
+    expect(instruction).toContain(
+      'omit every other optional action field entirely',
+    );
+    expect(instruction).toContain('do not send empty placeholders');
+    expect(instruction).toContain(
+      'recovery does not pre-approve any tool call',
+    );
+    expect(instruction).not.toContain('write');
+
+    expect(
+      agent.shouldRunNewStep(invalidToolResult('invalid-input'), true),
+    ).toBe(true);
+    agent.appendSyntheticContinuationIfNeeded([{ role: 'tool', content: [] }]);
+    expect(
+      agent.shouldRunNewStep(invalidToolResult('invalid-input'), true),
+    ).toBe(false);
+    expect(agent._pendingToolCallRecoveryExhaustion?.message).toContain(
+      'Review the rejected validation details above',
+    );
+    expect(agent._pendingToolCallRecoveryExhaustion?.message).toContain(
+      'choose one action and omit every other optional action field entirely',
+    );
+  });
+
   it('never bypasses an open approval to perform autonomous recovery', () => {
     const { agent } = createRecoveryHarness();
 
@@ -193,11 +307,15 @@ describe('BaseAgent bounded tool-call recovery', () => {
     agent._pendingContinue = false;
     agent._pendingToolCallRecoveryExhaustion = {
       message: 'Automatic recovery exhausted',
+      diagnostics: ['Trusted rejected-call diagnostic'],
     };
 
     expect(agent.settleStepContinuation(7, false)).toBe(true);
     expect(agent.state.commands.recordStepError).toHaveBeenCalledWith({
-      error: { message: 'Automatic recovery exhausted' },
+      error: {
+        message: 'Automatic recovery exhausted',
+        recoveryDiagnostics: ['Trusted rejected-call diagnostic'],
+      },
       markUnread: 'mark-unread',
     });
     expect(agent.onIdle).toHaveBeenCalledOnce();

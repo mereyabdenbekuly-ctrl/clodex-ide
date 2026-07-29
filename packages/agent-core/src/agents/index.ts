@@ -50,6 +50,7 @@ export {
   type AgentStepExecutor,
 } from './agent-step-executor';
 export {
+  createToolCallRecoveryError,
   findToolCallRecoverySignal,
   type ToolCallRecoveryKind,
 } from './shared/repair-tool-call';
