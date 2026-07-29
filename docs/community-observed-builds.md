@@ -30,11 +30,11 @@ manual release-discovery link, not an updater asset or an auto-update channel.
 
 ## Current public Technical Preview
 
-Community Observed 17 (`1.16.0-communityobserved17`) is built from exact source
-[`65fd0c74215d5a50d911bf656f11521966ecc436`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/65fd0c74215d5a50d911bf656f11521966ecc436)
-by [Actions run `30334239898`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/30334239898)
-and was published on 2026-07-28 under
-[`v1.16.0-communityobserved17`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved17).
+Community Observed 19 (`1.16.0-communityobserved19`) is built from exact source
+[`623b7f733b74679468c5107602921f9e26b4a151`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/commit/623b7f733b74679468c5107602921f9e26b4a151)
+by [Actions run `30435058244`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/actions/runs/30435058244)
+and was published on 2026-07-29 under
+[`v1.16.0-communityobserved19`](https://github.com/mereyabdenbekuly-ctrl/clodex-ide/releases/tag/v1.16.0-communityobserved19).
 
 The packaged Free/managed boundary, byte-level audit, artifact identity, and
 metadata gates passed. This is still an unsigned/ad-hoc, non-notarized test
