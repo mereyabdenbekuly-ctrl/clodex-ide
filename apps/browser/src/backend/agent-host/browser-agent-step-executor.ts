@@ -1,4 +1,5 @@
 import {
+  createToolCallRecoveryError,
   findToolCallRecoverySignal,
   localAgentStepExecutor,
   type AgentStepExecution,
@@ -1212,7 +1213,10 @@ function createStepResult(
   }
   content.push(...toolCalls);
   for (const [index, rejected] of (step.rejectedToolCalls ?? []).entries()) {
-    const error = new Error(rejected.message);
+    // Re-authenticate only the finite rejection kind on the main side. The
+    // isolated `message` is transport data and must never become a trusted,
+    // copyable diagnostic even if a remote process forges it.
+    const error = createToolCallRecoveryError(rejected.kind);
     const toolCallId = idBindings.rejectedToolCallIds[index]!;
     content.push({
       type: 'tool-call',

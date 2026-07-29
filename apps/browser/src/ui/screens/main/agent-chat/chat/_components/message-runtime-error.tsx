@@ -23,6 +23,7 @@ import { useCmdEnterTarget } from '@ui/hooks/use-cmd-enter-target';
 import { CmdEnterPriority } from '@ui/utils/cmd-enter-registry';
 import { HotkeyCombo } from '@ui/components/hotkey-combo';
 import { HotkeyActions } from '@shared/hotkeys';
+import { formatRuntimeErrorReport } from './runtime-error-report';
 
 interface RetryActionProps {
   retryRef?: (element: HTMLElement | null) => void;
@@ -499,10 +500,20 @@ function GenericError({
   }
 
   const copyError = () => {
-    const errorText = `Error${error.code ? ` (Code: ${error.code})` : ''}: ${error.message}${error.stack ? `\n\nStack trace:\n${error.stack}` : ''}`;
-    navigator.clipboard.writeText(errorText);
-    setHasCopied(true);
-    setTimeout(() => setHasCopied(false), 2000);
+    const errorText = formatRuntimeErrorReport(error);
+    try {
+      void navigator.clipboard
+        .writeText(errorText)
+        .then(() => {
+          setHasCopied(true);
+          window.setTimeout(() => setHasCopied(false), 2000);
+        })
+        .catch(() => {
+          setHasCopied(false);
+        });
+    } catch {
+      setHasCopied(false);
+    }
   };
 
   const reportIssueUrl = `https://github.com/mereyabdenbekuly-ctrl/clodex-ide/issues/new?template=5.agent_issue.yml&conversation-id=${agentInstanceId}&error-data=${encodeURIComponent(JSON.stringify(error))}`;
@@ -517,6 +528,8 @@ function GenericError({
           size="icon-2xs"
           className="ml-auto"
           onClick={copyError}
+          aria-label={hasCopied ? 'Error details copied' : 'Copy error details'}
+          title={hasCopied ? 'Copied' : 'Copy full error details'}
         >
           {hasCopied ? (
             <CopyCheckIcon className="size-3" />

@@ -1,4 +1,4 @@
-## Shell (`executeShellCommand`)
+## Shell (`createShellSession` + `executeShellCommand`)
 
 Persistent interactive PTY sessions. State (variables, cwd, aliases) persists across commands in a session. The `shells/` symlink exposes session logs (`<session-id>.shell.log`) — full untruncated output history that can be re-read at any time.
 
@@ -8,9 +8,10 @@ Persistent interactive PTY sessions. State (variables, cwd, aliases) persists ac
 
 **Common mistake:** Do NOT set `idle_ms: 0` defensively "to prevent premature exit." Idle detection is your primary signal that a command is waiting for input or has gone quiet after producing useful output. Disabling it turns interactive CLIs into long hangs. The same applies to raising `timeout_ms` casually — longer waits do not make commands finish faster; they just block you.
 
-- **New session:** Omit `session_id`, set `cwd` (mount prefix). **Reuse:** pass the `session_id` from the result. `cwd` is ignored on reuse — the shell stays wherever `cd` left it.
+- **New session:** Call `createShellSession` with `cwd` set to a mount prefix, then pass its returned `session_id` to `executeShellCommand`. `executeShellCommand` never creates a session and never accepts `cwd`.
 - **Reuse sessions.** Creating a session is expensive (shell init delay). Reuse an existing session (`session_id`) whenever one is available — active sessions are listed in `<shell-sessions>` in the env-snapshot. Only create a new session when no suitable one exists or when you need parallel execution (e.g. long-running dev server in one session, short commands in another).
-- **`command`:** Writes text + Enter to the shell.
+- **Choose exactly one action mode per `executeShellCommand` call:** non-empty `command`, `stdin`, `kill: true`, or an empty `command` poll. Omit the other action fields entirely; never combine `stdin` with `command` or `kill`.
+- **`command`:** Writes text + Enter to the shell. Use `command: ""` only to poll; omit `command` entirely for stdin and kill calls.
 - **`wait_until`:** Optional; controls when the tool returns.
   - `timeout_ms` — hard cap. Normal `wait_until` max is 60 s (default 15 s). With `exited: true`, max/default is 5 min. Without `wait_until`, default is 10 s. **Leave at default unless you know the command needs a different cap.**
   - `output_pattern` — regex on output; resolves early when matched. Use for dev servers and watchers that do not exit on their own.
@@ -40,13 +41,17 @@ Persistent interactive PTY sessions. State (variables, cwd, aliases) persists ac
 
 ```jsonc
 // `explanation` is required on every call — keep it to ≤5 words.
+// Create a session first. Suppose it returns session_id "abc123".
+// createShellSession
+{ "cwd": "w1" }
 // Quick command — no wait_until needed.
-{ "explanation": "Check git status", "command": "git status", "cwd": "w1" }
+// executeShellCommand
+{ "explanation": "Check git status", "session_id": "abc123", "command": "git status" }
 // Long self-exiting command — allow up to 5 min, return earlier on exit or 15s idle.
-{ "explanation": "Run typecheck", "command": "pnpm typecheck", "cwd": "w1", "wait_until": { "exited": true } }
+{ "explanation": "Run typecheck", "session_id": "abc123", "command": "pnpm typecheck", "wait_until": { "exited": true } }
 // Interactive CLI — defaults work. Idle fires at ~5s when the prompt appears.
 // resolved_by will be 'idle'; send stdin to answer.
-{ "explanation": "Scaffold Next.js app", "command": "npx create-next-app test", "cwd": "w1" }
+{ "explanation": "Scaffold Next.js app", "session_id": "abc123", "command": "npx create-next-app test" }
 { "explanation": "Send Enter key", "session_id": "abc123", "stdin": "\r" }
 // Reuse an existing idle session for a quick command.
 { "explanation": "Check health endpoint", "session_id": "f8a3b1c2", "command": "curl localhost:3000/health" }
@@ -58,5 +63,5 @@ Persistent interactive PTY sessions. State (variables, cwd, aliases) persists ac
 // Edge case: dev server with genuinely long silent startup phases.
 // output_pattern is the correctness signal; idle_ms=0 because the server
 // legitimately pauses between log lines during startup.
-{ "explanation": "Start dev server", "command": "pnpm dev", "cwd": "w1", "wait_until": { "output_pattern": "ready|listening", "timeout_ms": 30000, "idle_ms": 0 } }
+{ "explanation": "Start dev server", "session_id": "abc123", "command": "pnpm dev", "wait_until": { "output_pattern": "ready|listening", "timeout_ms": 30000, "idle_ms": 0 } }
 ```

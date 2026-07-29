@@ -42,7 +42,7 @@ export function createIsolatedToolCallRejectionMessage(
       ? 'The call was not executed because its arguments were incomplete. Retry with smaller independent calls and split large edits into chunks.'
       : kind === 'unknown-tool'
         ? 'The call was not executed because the requested tool is unavailable. Use only tools advertised by the host.'
-        : 'The call was not executed because its arguments were invalid. Regenerate one complete schema-valid input.';
+        : 'The call was not executed because its arguments were invalid. Regenerate one complete schema-valid input. For mutually exclusive parameters, choose one action and omit every other optional action field entirely; do not send empty placeholders.';
   return `Recoverable tool call rejection (${kind}): ${guidance}`;
 }
 
@@ -529,14 +529,25 @@ function isIsolatedAgentToolCall(
 function isIsolatedAgentRejectedToolCall(
   value: unknown,
 ): value is IsolatedAgentRejectedToolCall {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyString(value.toolCallId) ||
+    !isNonEmptyString(value.toolName) ||
+    (value.kind !== 'truncated-input' &&
+      value.kind !== 'invalid-input' &&
+      value.kind !== 'unknown-tool') ||
+    typeof value.message !== 'string'
+  ) {
+    return false;
+  }
+
+  // The remote process may select only a finite rejection kind. Reject any
+  // arbitrary diagnostic string at ingress; the main process reconstructs a
+  // locally authenticated diagnostic from the validated kind.
   return (
-    isRecord(value) &&
-    isNonEmptyString(value.toolCallId) &&
-    isNonEmptyString(value.toolName) &&
-    (value.kind === 'truncated-input' ||
-      value.kind === 'invalid-input' ||
-      value.kind === 'unknown-tool') &&
-    typeof value.message === 'string'
+    value.message === createIsolatedToolCallRejectionMessage(value.kind) ||
+    (value.kind === 'invalid-input' &&
+      value.message === DUPLICATE_TOOL_CALL_ID_REJECTION_MESSAGE)
   );
 }
 

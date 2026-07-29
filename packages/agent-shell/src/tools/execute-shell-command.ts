@@ -4,6 +4,7 @@ import {
   type ExecuteShellCommandToolInput,
   type ExecuteShellCommandToolOutput,
   executeShellCommandToolInputSchema,
+  hasActiveShellStdin,
 } from '../schemas';
 import { tool } from 'ai';
 import { capToolOutput } from '@clodex/agent-core/toolbox';
@@ -558,7 +559,9 @@ export const executeShellCommand = (
     needsApproval: async (input: ExecuteShellCommandToolInput, options) => {
       const { toolCallId } = options;
       const currentCwd = shellService.getSessionCurrentCwd(input.session_id);
-      const classifierCommand = input.command ?? input.stdin ?? '';
+      const classifierCommand = hasActiveShellStdin(input.stdin)
+        ? input.stdin
+        : (input.command ?? '');
       const isPassiveOperation =
         input.kill || (classifierCommand === '' && !!input.session_id);
       const cwdPrefix =
@@ -690,6 +693,32 @@ export const executeShellCommand = (
           };
         }
 
+        const hasCommand = (params.command ?? '').length > 0;
+        const activeStdin = hasActiveShellStdin(params.stdin)
+          ? params.stdin
+          : null;
+        const hasStdin = activeStdin !== null;
+        if (hasStdin && (hasCommand || params.kill === true)) {
+          return {
+            session_id: params.session_id,
+            output: 'stdin is mutually exclusive with command and kill.',
+            exit_code: null,
+            session_exited: false,
+            timed_out: false,
+            resolved_by: 'abort' as const,
+          };
+        }
+        if (params.kill === true && hasCommand) {
+          return {
+            session_id: params.session_id,
+            output: 'kill is mutually exclusive with command.',
+            exit_code: null,
+            session_exited: false,
+            timed_out: false,
+            resolved_by: 'abort' as const,
+          };
+        }
+
         const consumeCapability = async (
           action: ReturnType<typeof createShellCapabilityAction>,
         ): Promise<void> => {
@@ -708,17 +737,7 @@ export const executeShellCommand = (
         };
 
         // Stdin mode — write raw bytes, capture output
-        if (params.stdin !== undefined) {
-          if (params.command || params.kill) {
-            return {
-              session_id: params.session_id,
-              output: 'stdin is mutually exclusive with command and kill.',
-              exit_code: null,
-              session_exited: false,
-              timed_out: false,
-              resolved_by: 'abort' as const,
-            };
-          }
+        if (hasStdin) {
           const currentCwd = shellService.getSessionCurrentCwd(
             params.session_id,
           );
@@ -728,7 +747,7 @@ export const executeShellCommand = (
           await consumeCapability(
             createShellCapabilityAction(params, cwdPrefix),
           );
-          const expandedStdin = expandCEscapes(params.stdin);
+          const expandedStdin = expandCEscapes(activeStdin);
           const result = await shellService.executeInSession(
             agentInstanceId,
             toolCallId,

@@ -1,6 +1,7 @@
-import type {
-  AgentStepExecutionRequest,
-  AgentStepExecutor,
+import {
+  findToolCallRecoverySignal,
+  type AgentStepExecutionRequest,
+  type AgentStepExecutor,
 } from '@clodex/agent-core/agents';
 import type {
   AgentStepRuntimeTelemetryEvents,
@@ -538,6 +539,14 @@ describe('BrowserAgentStepExecutor', () => {
         ]),
       }),
     );
+    const finishResult = onFinish.mock.calls[0]?.[0];
+    expect(findToolCallRecoverySignal(finishResult?.content ?? [])).toEqual({
+      kind: 'truncated-input',
+      toolNames: ['unknown'],
+      diagnostics: [
+        'Recoverable tool call rejection (truncated-input): The call was not executed because its arguments were incomplete. Retry with smaller independent calls and split large operations into bounded chunks.',
+      ],
+    });
     expect(JSON.stringify(onFinish.mock.calls)).not.toContain(
       'an oversized value cut off',
     );

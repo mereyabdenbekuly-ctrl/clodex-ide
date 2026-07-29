@@ -675,3 +675,267 @@ describe('executeShellCommand approval', () => {
     expect(smartApproval.classify).not.toHaveBeenCalled();
   });
 });
+
+describe('executeShellCommand empty stdin compatibility', () => {
+  it.each([
+    [
+      'command',
+      {
+        explanation: 'Run status',
+        session_id: 'session-1',
+        command: 'git status',
+        stdin: '',
+      },
+      'git status',
+    ],
+    [
+      'poll',
+      { explanation: 'Poll shell', session_id: 'session-1', stdin: '' },
+      '',
+    ],
+  ] as const)('stages, consumes, and executes empty stdin as %s mode', async (expectedOperation, input, expectedCommand) => {
+    const shellService = createShellService();
+    const executeInSession = vi.fn(async () => ({
+      sessionId: 'session-1',
+      output: 'ok',
+      exitCode: 0,
+      sessionExited: false,
+      timedOut: false,
+      resolvedBy: 'exit' as const,
+    }));
+    Object.assign(shellService, {
+      executeInSession,
+      clearPendingOutputs: vi.fn(),
+    });
+    const security: ShellCapabilitySecurityDeps = {
+      stage: vi.fn(async ({ authorization }) => authorization),
+      consume: vi.fn(async () => undefined),
+    };
+    const tool = executeShellCommand(
+      shellService,
+      'agent-1',
+      () => 'alwaysAllow',
+      () => new Map([['wtest', '/tmp']]),
+      createSmartApprovalDeps(),
+      undefined,
+      security,
+    );
+    if (
+      typeof tool.needsApproval !== 'function' ||
+      typeof tool.execute !== 'function'
+    ) {
+      throw new Error('Expected executable shell tool with approval hook');
+    }
+    const options = {
+      toolCallId: `tool-${expectedOperation}`,
+      messages: [],
+      ...capabilityContext,
+    };
+
+    await expect(tool.needsApproval(input, options)).resolves.toBe(false);
+    await tool.execute(input, options);
+
+    const stagedAction = vi.mocked(security.stage).mock.calls[0]?.[0].action;
+    const consumedAction = vi.mocked(security.consume).mock.calls[0]?.[0]
+      .action;
+    expect(stagedAction).toMatchObject({
+      operation: expectedOperation,
+      command: expectedCommand,
+    });
+    expect(consumedAction).toEqual(stagedAction);
+    expect(executeInSession).toHaveBeenCalledWith(
+      'agent-1',
+      `tool-${expectedOperation}`,
+      expect.objectContaining({
+        command: expectedCommand,
+        sessionId: 'session-1',
+      }),
+    );
+    expect(executeInSession.mock.calls[0]?.[2]).not.toHaveProperty('rawInput');
+  });
+
+  it('stages, consumes, and executes kill when stdin is empty', async () => {
+    const shellService = createShellService();
+    const killSession = vi.fn(async () => true);
+    const executeInSession = vi.fn();
+    Object.assign(shellService, {
+      killSession,
+      executeInSession,
+      clearPendingOutputs: vi.fn(),
+    });
+    const security: ShellCapabilitySecurityDeps = {
+      stage: vi.fn(async ({ authorization }) => authorization),
+      consume: vi.fn(async () => undefined),
+    };
+    const tool = executeShellCommand(
+      shellService,
+      'agent-1',
+      () => 'alwaysAsk',
+      () => new Map([['wtest', '/tmp']]),
+      createSmartApprovalDeps(),
+      undefined,
+      security,
+    );
+    if (
+      typeof tool.needsApproval !== 'function' ||
+      typeof tool.execute !== 'function'
+    ) {
+      throw new Error('Expected executable shell tool with approval hook');
+    }
+    const input = {
+      explanation: 'Close terminal',
+      session_id: 'session-1',
+      stdin: '',
+      kill: true,
+    };
+    const options = {
+      toolCallId: 'tool-kill-empty-stdin',
+      messages: [],
+      ...capabilityContext,
+    };
+
+    await expect(tool.needsApproval(input, options)).resolves.toBe(false);
+    await tool.execute(input, options);
+
+    const stagedAction = vi.mocked(security.stage).mock.calls[0]?.[0].action;
+    const consumedAction = vi.mocked(security.consume).mock.calls[0]?.[0]
+      .action;
+    expect(stagedAction).toMatchObject({ operation: 'kill', command: '' });
+    expect(consumedAction).toEqual(stagedAction);
+    expect(killSession).toHaveBeenCalledWith('session-1');
+    expect(executeInSession).not.toHaveBeenCalled();
+  });
+
+  it('classifies non-empty stdin even with an empty command placeholder', async () => {
+    const shellService = createShellService();
+    const executeInSession = vi.fn(async () => ({
+      sessionId: 'session-1',
+      output: 'ok',
+      exitCode: 0,
+      sessionExited: false,
+      timedOut: false,
+      resolvedBy: 'exit' as const,
+    }));
+    Object.assign(shellService, {
+      executeInSession,
+      clearPendingOutputs: vi.fn(),
+    });
+    const smartApproval = createSmartApprovalDeps();
+    const security: ShellCapabilitySecurityDeps = {
+      stage: vi.fn(async ({ authorization }) => authorization),
+      consume: vi.fn(async () => undefined),
+    };
+    const tool = executeShellCommand(
+      shellService,
+      'agent-1',
+      () => 'smart',
+      () => new Map([['wtest', '/tmp']]),
+      smartApproval,
+      undefined,
+      security,
+    );
+    if (
+      typeof tool.needsApproval !== 'function' ||
+      typeof tool.execute !== 'function'
+    ) {
+      throw new Error('Expected executable shell tool with approval hook');
+    }
+    const input = {
+      explanation: 'Answer prompt',
+      session_id: 'session-1',
+      command: '',
+      stdin: 'y\\r',
+    };
+    const options = {
+      toolCallId: 'tool-active-stdin',
+      messages: [],
+      ...capabilityContext,
+    };
+
+    await expect(tool.needsApproval(input, options)).resolves.toBe(false);
+    await tool.execute(input, options);
+
+    expect(smartApproval.classify).toHaveBeenCalledWith(
+      expect.objectContaining({ command: 'y\\r' }),
+    );
+    const stagedAction = vi.mocked(security.stage).mock.calls[0]?.[0].action;
+    const consumedAction = vi.mocked(security.consume).mock.calls[0]?.[0]
+      .action;
+    expect(stagedAction).toMatchObject({
+      operation: 'stdin',
+      command: 'y\r',
+    });
+    expect(consumedAction).toEqual(stagedAction);
+    expect(executeInSession).toHaveBeenCalledWith(
+      'agent-1',
+      'tool-active-stdin',
+      expect.objectContaining({
+        command: 'y\r',
+        rawInput: true,
+        sessionId: 'session-1',
+      }),
+    );
+  });
+
+  it.each([
+    [
+      'stdin plus command',
+      {
+        explanation: 'Conflicting input',
+        session_id: 'session-1',
+        command: 'git status',
+        stdin: '\r',
+      },
+      'stdin is mutually exclusive with command and kill.',
+    ],
+    [
+      'kill plus command',
+      {
+        explanation: 'Conflicting kill',
+        session_id: 'session-1',
+        command: 'git status',
+        kill: true,
+      },
+      'kill is mutually exclusive with command.',
+    ],
+  ] as const)('keeps %s fail-closed before capability consumption or effect', async (_case, input, expectedOutput) => {
+    const shellService = createShellService();
+    const executeInSession = vi.fn();
+    const killSession = vi.fn(async () => true);
+    Object.assign(shellService, {
+      executeInSession,
+      killSession,
+      clearPendingOutputs: vi.fn(),
+    });
+    const security: ShellCapabilitySecurityDeps = {
+      stage: vi.fn(async ({ authorization }) => authorization),
+      consume: vi.fn(async () => undefined),
+    };
+    const tool = executeShellCommand(
+      shellService,
+      'agent-1',
+      () => 'alwaysAllow',
+      () => new Map([['wtest', '/tmp']]),
+      createSmartApprovalDeps(),
+      undefined,
+      security,
+    );
+    if (typeof tool.execute !== 'function') {
+      throw new Error('Expected executeShellCommand to define execute');
+    }
+
+    const result = await tool.execute(input, {
+      toolCallId: `tool-conflict-${_case}`,
+      messages: [],
+      ...capabilityContext,
+    });
+
+    expect(result).toMatchObject({
+      output: expectedOutput,
+      resolved_by: 'abort',
+    });
+    expect(security.consume).not.toHaveBeenCalled();
+    expect(executeInSession).not.toHaveBeenCalled();
+    expect(killSession).not.toHaveBeenCalled();
+  });
+});

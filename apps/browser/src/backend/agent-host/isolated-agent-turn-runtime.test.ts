@@ -5,6 +5,10 @@ import type {
   IsolatedAgentTurnEvent,
   IsolatedAgentTurnRequest,
 } from './isolated-agent-turn';
+import {
+  createIsolatedToolCallRejectionMessage,
+  isIsolatedAgentModelCallResult,
+} from './isolated-agent-turn';
 import { executeIsolatedAgentTurn } from './isolated-agent-turn-runtime';
 
 const request: IsolatedAgentTurnRequest = {
@@ -58,6 +62,56 @@ const fileEditRequest: IsolatedAgentTurnRequest = {
 };
 
 describe('executeIsolatedAgentTurn', () => {
+  it('rejects arbitrary isolated rejection messages at ingress', () => {
+    const baseResult = {
+      text: '',
+      reasoning: '',
+      toolCalls: [],
+      finishReason: 'stop',
+      usage: {},
+    };
+
+    expect(
+      isIsolatedAgentModelCallResult({
+        ...baseResult,
+        rejectedToolCalls: [
+          {
+            toolCallId: 'call-1',
+            toolName: 'read',
+            kind: 'invalid-input',
+            message:
+              'Recoverable tool call rejection (invalid-input): secret workspace output',
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      isIsolatedAgentModelCallResult({
+        ...baseResult,
+        rejectedToolCalls: [
+          {
+            toolCallId: 'call-1',
+            toolName: 'read',
+            kind: 'invalid-input',
+            message: createIsolatedToolCallRejectionMessage('invalid-input'),
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it('gives invalid isolated calls finite mutual-exclusion guidance', () => {
+    const message = createIsolatedToolCallRejectionMessage('invalid-input');
+
+    expect(message).toContain(
+      'For mutually exclusive parameters, choose one action',
+    );
+    expect(message).toContain(
+      'omit every other optional action field entirely',
+    );
+    expect(message).toContain('do not send empty placeholders');
+  });
+
   it('owns the model/tool loop and emits ordered streaming events', async () => {
     let modelCall = 0;
     const handlers: AgentTurnHostHandlers = {
