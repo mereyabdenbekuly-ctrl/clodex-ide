@@ -11,10 +11,10 @@ import {
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const websiteDirectory = path.join(repositoryRoot, 'apps', 'website');
 
-const communityVersion = '1.16.0-communityobserved17';
+const communityVersion = '1.16.0-communityobserved19';
 const communityTag = `v${communityVersion}`;
-const communitySourceCommit = '65fd0c74215d5a50d911bf656f11521966ecc436';
-const communityRunId = '30334239898';
+const communitySourceCommit = '623b7f733b74679468c5107602921f9e26b4a151';
+const communityRunId = '30435058244';
 const repositoryUrl = 'https://github.com/mereyabdenbekuly-ctrl/clodex-ide';
 const releaseUrl = `${repositoryUrl}/releases/tag/${communityTag}`;
 const releaseAssetBase = `${repositoryUrl}/releases/download/${communityTag}`;
@@ -25,7 +25,7 @@ const installerFileNames = [
   `clodex-community-observed-${communityVersion}-x64.dmg`,
   `clodex-community-observed-${communityVersion}-x64-setup.exe`,
   `clodex-community-observed_${communityVersion}_amd64.deb`,
-  'clodex-community-observed-1.16.0.communityobserved17-1.x86_64.rpm',
+  'clodex-community-observed-1.16.0.communityobserved19-1.x86_64.rpm',
 ];
 const evidenceFileName = `clodex-community-observed-${communityVersion}-evidence.zip`;
 const installerUrls = installerFileNames.map(
@@ -286,7 +286,7 @@ test('website exposes only the exact verified Community Observed release assets'
       'utf8',
     );
     assert.match(source, /href="\/download\?lang=en"/u);
-    assert.match(source, /Download Community Observed 17/u);
+    assert.match(source, /Download Community Observed 19/u);
     assert.doesNotMatch(source, /DownloadUnavailableButton/u);
   }
 });
@@ -343,7 +343,7 @@ test('post-release documentation stays coherent with the exact observed build', 
     ),
     'utf8',
   );
-  assert.match(landingCopy, /Community Observed 17/gu);
+  assert.match(landingCopy, /Community Observed 19/gu);
   assert.doesNotMatch(
     landingCopy,
     /next verified Free build is being prepared|новая проверенная Free-сборка[^.]*готовится/iu,
@@ -361,13 +361,13 @@ test('post-release documentation stays coherent with the exact observed build', 
   );
   assert.match(homePage, /releaseNotes:\s*readyCommunityRelease\.releaseUrl/u);
   assert.match(homePage, /readyCommunityRelease\s*\?\s*\{/u);
-  assert.match(homePage, /Community Observed 17/u);
+  assert.match(homePage, /Community Observed 19/u);
 
   const downloadLayout = readFileSync(
     path.join(websiteDirectory, 'src', 'app', 'download', 'layout.tsx'),
     'utf8',
   );
-  assert.match(downloadLayout, /Download CLODEx Community Observed 17/u);
+  assert.match(downloadLayout, /Download CLODEx Community Observed 19/u);
 
   for (const [relativePath, source] of [
     ['src/app/(home)/page.tsx', homePage],
