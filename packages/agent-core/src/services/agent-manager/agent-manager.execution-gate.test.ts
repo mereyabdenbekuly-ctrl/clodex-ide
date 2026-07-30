@@ -137,4 +137,36 @@ describe('AgentManager host execution gate', () => {
     expect(isNetworkOnline).toHaveBeenCalledTimes(1);
     await manager.teardown();
   });
+
+  it('never rewrites or auto-replays non-retryable post-step failures', async () => {
+    const isNetworkOnline = vi.fn(() => false);
+    const { manager, store } = createManager({
+      isNetworkOnline,
+      storeState: {
+        agents: {
+          instances: {
+            'agent-1': {
+              state: {
+                isWorking: false,
+                history: [],
+                error: {
+                  message: 'post-step persistence network timeout',
+                  retryable: false,
+                },
+              },
+            },
+          },
+        },
+        toolbox: { 'agent-1': {} },
+      },
+    });
+    const retryLastUserMessage = seedNetworkFailedAgent(manager);
+
+    await manager.retryNetworkFailedAgentsNow('post-step-non-retryable');
+
+    expect(isNetworkOnline).not.toHaveBeenCalled();
+    expect(store.update).not.toHaveBeenCalled();
+    expect(retryLastUserMessage).not.toHaveBeenCalled();
+    await manager.teardown();
+  });
 });

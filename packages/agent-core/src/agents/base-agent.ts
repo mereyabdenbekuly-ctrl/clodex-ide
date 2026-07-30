@@ -66,6 +66,15 @@ type ProviderApiError = {
   providerCode?: string;
 };
 
+/**
+ * Marks a failure that happened after the visible model/tool step already
+ * completed. Replaying the last user message could repeat committed effects,
+ * so UI/backend retry affordances must remain disabled for this error class.
+ */
+class NonRetryablePostStepError extends Error {
+  public readonly retryable = false;
+}
+
 type ResolvedLanguageModelV3 = Extract<
   ModelWithOptions['model'],
   { specificationVersion: 'v3' }
@@ -183,6 +192,7 @@ import {
 } from './shared/repair-tool-call';
 import {
   generateSimpleCompressedHistory,
+  HistoryCompressionUnsettledTimeoutError,
   estimateMessageTokens,
 } from './shared/history-compression';
 import { AgentMemoryWriter, type MemoryWriteReason } from './shared/memory';
@@ -741,6 +751,22 @@ export abstract class BaseAgent<
    * out immediately while a compression is in progress.
    */
   private _isCompressingHistory = false;
+
+  /**
+   * Dedicated cancellation scope for the current history-compression pass.
+   *
+   * Compression runs after the model/tool stream has drained, so its lifetime
+   * is independent from the just-finished step's AbortSignal. Priority
+   * lifecycle actions such as Stop still abort this controller explicitly so
+   * a superseded turn never keeps generating or stores a stale summary.
+   */
+  private _historyCompressionAbortController: AbortController | null = null;
+
+  /** Consecutive pre-mutation generation failures used for bounded retry. */
+  private _historyCompressionGenerationFailures = 0;
+
+  /** Wall-clock gate for the next non-critical compression retry. */
+  private _historyCompressionRetryNotBefore = 0;
 
   /** Debug utility: tracks model messages per step to report cache stability. */
   private readonly _cacheAnalyzer: MessageCacheAnalyzer;
@@ -2089,6 +2115,14 @@ export abstract class BaseAgent<
     if (!currentState.error) {
       throw new Error('No error to retry');
     }
+    if (
+      currentState.error.kind === undefined &&
+      currentState.error.retryable === false
+    ) {
+      throw new Error(
+        'This post-step error cannot safely replay the last user message',
+      );
+    }
 
     // Find the last user message
     const history = currentState.history;
@@ -2269,7 +2303,10 @@ export abstract class BaseAgent<
    *
    * @note Will only be called automatically, if `summarizeChatHistoryThreshold` in agent config is set to a value greater than 0.
    */
-  protected async compressHistory(history: AgentMessage[]): Promise<string> {
+  protected async compressHistory(
+    history: AgentMessage[],
+    abortSignal?: AbortSignal,
+  ): Promise<string> {
     // The standard compaction logic is very simple. We can make this more sophisticated later on.
     return await generateSimpleCompressedHistory(
       history,
@@ -2277,6 +2314,7 @@ export abstract class BaseAgent<
       this.instanceId,
       this.state.get().activeModelId,
       this.host,
+      abortSignal,
     );
   }
 
@@ -2760,6 +2798,9 @@ export abstract class BaseAgent<
           error: {
             message: `Internal error: ${error.message}`,
             stack: error.stack,
+            ...(error instanceof NonRetryablePostStepError
+              ? { retryable: false }
+              : {}),
           },
           markUnread: 'mark-unread',
         });
@@ -3567,6 +3608,9 @@ export abstract class BaseAgent<
         error: {
           message: `Internal error: ${error.message}`,
           stack: error.stack,
+          ...(error instanceof NonRetryablePostStepError
+            ? { retryable: false }
+            : {}),
         },
         markUnread: 'mark-unread',
       });
@@ -3599,6 +3643,20 @@ export abstract class BaseAgent<
    */
   private static readonly KEPT_BUDGET_HARD_CAP_TOKENS = 40_000;
 
+  /** Delay before retrying a transient pre-mutation generation failure. */
+  private static readonly HISTORY_COMPRESSION_RETRY_BASE_MS = 15_000;
+
+  /** Upper bound for exponential compression retry backoff. */
+  private static readonly HISTORY_COMPRESSION_RETRY_MAX_MS = 120_000;
+
+  /**
+   * Once history reaches this fraction of the advertised context window, a
+   * missing summary is no longer safe to carry into another model request.
+   * Below it, transient provider/time-out failures can retry without turning
+   * an otherwise successful agent step into a visible fatal error.
+   */
+  private static readonly HISTORY_COMPRESSION_CRITICAL_FRACTION = 0.8;
+
   private async maybeCompressHistoryAfterStep(
     expectedStepGeneration: number,
     contextWindowSize: number,
@@ -3612,7 +3670,20 @@ export abstract class BaseAgent<
       fractionalTriggerTokens,
       BaseAgent.HISTORY_COMPRESSION_HARD_CAP_TOKENS,
     );
-    if (this.state.get().usedTokens <= effectiveTriggerTokens) return;
+    const usedTokens = this.state.get().usedTokens;
+    if (usedTokens <= effectiveTriggerTokens) return;
+
+    const criticalTokens =
+      contextWindowSize * BaseAgent.HISTORY_COMPRESSION_CRITICAL_FRACTION;
+    if (
+      usedTokens < criticalTokens &&
+      Date.now() < this._historyCompressionRetryNotBefore
+    ) {
+      this.host.logger.debug(
+        `[BaseAgent:${this.instanceId}] Deferring history compression retry until ${new Date(this._historyCompressionRetryNotBefore).toISOString()}.`,
+      );
+      return;
+    }
 
     await this.compressHistoryInternal(
       expectedStepGeneration,
@@ -3634,6 +3705,8 @@ export abstract class BaseAgent<
       return;
     }
     this._isCompressingHistory = true;
+    const compressionAbortController = new AbortController();
+    this._historyCompressionAbortController = compressionAbortController;
     try {
       const state = this.state.get();
       const { history } = state;
@@ -3733,13 +3806,78 @@ export abstract class BaseAgent<
         `[BaseAgent:${this.instanceId}] Compressing history (${messagesToCompact.length} messages, keeping ${actualKept})...`,
       );
 
-      const compressedHistory = await this.compressHistory(messagesToCompact);
+      let compressedHistory: string;
+      try {
+        compressedHistory = await this.compressHistory(
+          messagesToCompact,
+          compressionAbortController.signal,
+        );
+      } catch (generationError) {
+        // A priority lifecycle action owns the turn once it changes the step
+        // generation. Its dedicated abort is cancellation, not a provider or
+        // durability failure, so it must not produce a fallback request or a
+        // visible compaction error.
+        if (
+          expectedStepGeneration !== undefined &&
+          this._stepGeneration !== expectedStepGeneration &&
+          compressionAbortController.signal.aborted
+        ) {
+          this.host.logger.debug(
+            `[BaseAgent:${this.instanceId}] History compression cancelled by a superseding lifecycle action.`,
+          );
+          return;
+        }
+
+        const normalizedGenerationError =
+          generationError instanceof Error
+            ? generationError
+            : new Error(String(generationError));
+        if (
+          normalizedGenerationError instanceof
+          HistoryCompressionUnsettledTimeoutError
+        ) {
+          // The previous provider request may still be running/billing after
+          // it ignored cancellation. Starting another compressor would create
+          // overlapping side effects, so this is a non-retryable barrier
+          // failure even when there is still context headroom.
+          throw normalizedGenerationError;
+        }
+        const usedTokens = this.state.get().usedTokens;
+        const criticalTokens =
+          contextWindowSize * BaseAgent.HISTORY_COMPRESSION_CRITICAL_FRACTION;
+
+        this._historyCompressionGenerationFailures += 1;
+        const retryDelayMs = Math.min(
+          BaseAgent.HISTORY_COMPRESSION_RETRY_BASE_MS *
+            2 ** (this._historyCompressionGenerationFailures - 1),
+          BaseAgent.HISTORY_COMPRESSION_RETRY_MAX_MS,
+        );
+        this._historyCompressionRetryNotBefore = Date.now() + retryDelayMs;
+
+        if (usedTokens >= criticalTokens) {
+          throw new Error(
+            `History compression generation failed at critical context occupancy (${usedTokens}/${contextWindowSize} tokens)`,
+            { cause: normalizedGenerationError },
+          );
+        }
+
+        this.host.logger.warn(
+          `[BaseAgent:${this.instanceId}] History compression generation failed before state mutation; continuing with unchanged history and retrying in ${retryDelayMs}ms: ${normalizedGenerationError.message}`,
+        );
+        this.report(
+          normalizedGenerationError,
+          'compressHistoryGenerationTransient',
+        );
+        return;
+      }
       if (
         expectedStepGeneration !== undefined &&
         this._stepGeneration !== expectedStepGeneration
       ) {
         return;
       }
+      this._historyCompressionGenerationFailures = 0;
+      this._historyCompressionRetryNotBefore = 0;
 
       // Re-fetch by id inside the command — user could've undone/
       // manipulated messages while we were busy compressing.
@@ -3829,11 +3967,16 @@ export abstract class BaseAgent<
         `[BaseAgent:${this.instanceId}] History compression blocked the next step: ${normalizedError.message}`,
       );
       this.report(normalizedError, 'compressHistory');
-      throw new Error(
+      throw new NonRetryablePostStepError(
         `Context compression failed before the next step: ${normalizedError.message}`,
         { cause: normalizedError },
       );
     } finally {
+      if (
+        this._historyCompressionAbortController === compressionAbortController
+      ) {
+        this._historyCompressionAbortController = null;
+      }
       this._isCompressingHistory = false;
     }
   }
@@ -5296,6 +5439,14 @@ export abstract class BaseAgent<
     this._pendingSyntheticContinuation = null;
     this._pendingToolCallRecoveryExhaustion = null;
     this._pendingToolCapabilityScopeId = null;
+    try {
+      this._historyCompressionAbortController?.abort(
+        new DOMException(
+          'History compression was cancelled by a superseding lifecycle action',
+          'AbortError',
+        ),
+      );
+    } catch {}
     try {
       this.stepAbortController?.abort();
     } catch {}
