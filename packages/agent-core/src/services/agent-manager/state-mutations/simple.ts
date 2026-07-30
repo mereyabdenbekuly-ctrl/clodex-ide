@@ -87,6 +87,19 @@ export function recordUsage(
   });
 }
 
+export function setContextCompactionState(
+  store: AgentStore,
+  agentInstanceId: string,
+  args: { isCompressing: boolean; totalTokens?: number },
+): void {
+  updateAgentInstanceState(store, agentInstanceId, (state) => {
+    state.isCompressingContext = args.isCompressing;
+    if (args.totalTokens !== undefined) {
+      state.usedTokens = args.totalTokens;
+    }
+  });
+}
+
 export function setTaskGoal(
   store: AgentStore,
   agentInstanceId: string,

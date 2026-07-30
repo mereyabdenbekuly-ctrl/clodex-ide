@@ -28,6 +28,7 @@ export function hydrateInitialState(
     (state) => {
       state.title = args.initialState?.title ?? args.defaultTitle;
       state.titleLockedByUser = args.initialState?.titleLockedByUser;
+      state.isCompressingContext = false;
       state.history = args.initialState?.history ?? [];
       state.queuedMessages = args.initialState?.queuedMessages ?? [];
       state.activeModelId =

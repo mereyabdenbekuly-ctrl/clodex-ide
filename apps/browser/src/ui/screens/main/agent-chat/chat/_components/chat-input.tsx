@@ -228,6 +228,7 @@ export interface ChatInputProps {
   contextUsedPercentage?: number;
   contextUsedKb?: number;
   contextMaxKb?: number;
+  isContextCompacting?: boolean;
 
   // Queued-message status hint
   hasQueuedMessages?: boolean;
@@ -305,6 +306,7 @@ export const ChatInput = memo(function ChatInput({
   contextUsedPercentage = 0,
   contextUsedKb = 0,
   contextMaxKb = 0,
+  isContextCompacting = false,
 
   hasQueuedMessages = false,
 
@@ -881,7 +883,7 @@ export const ChatInput = memo(function ChatInput({
         (showCollaborationModeSelect ||
           showModelSelect ||
           showToolApprovalSelect ||
-          (showContextUsageRing && contextUsedPercentage > 0)) && (
+          showContextUsageRing) && (
           <div
             className={cn(
               'flex shrink-0 flex-row flex-wrap items-center justify-start gap-2 pr-2 pl-1 *:shrink-0',
@@ -897,11 +899,12 @@ export const ChatInput = memo(function ChatInput({
             {showModelSelect && (
               <ModelSelect onModelChange={handleModelSelectChange} />
             )}
-            {showContextUsageRing && contextUsedPercentage > 0 && (
+            {showContextUsageRing && (
               <ContextUsageRing
                 percentage={contextUsedPercentage}
                 usedKb={contextUsedKb}
                 maxKb={contextMaxKb}
+                isCompressing={isContextCompacting}
               />
             )}
             {showToolApprovalSelect && (

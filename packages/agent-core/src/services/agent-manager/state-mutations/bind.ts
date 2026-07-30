@@ -31,6 +31,7 @@ import {
 import {
   recordUsage,
   setActiveModel,
+  setContextCompactionState,
   setInputState,
   setIsWorkingFalse,
   setTitle,
@@ -85,6 +86,9 @@ export function bindStateMutations(store: AgentStore, agentInstanceId: string) {
       setUsageWarning(store, agentInstanceId, args),
     recordUsage: (args: Parameters<typeof recordUsage>[2]) =>
       recordUsage(store, agentInstanceId, args),
+    setContextCompactionState: (
+      args: Parameters<typeof setContextCompactionState>[2],
+    ) => setContextCompactionState(store, agentInstanceId, args),
 
     enqueueUserMessage: (args: Parameters<typeof enqueueUserMessage>[2]) =>
       enqueueUserMessage(store, agentInstanceId, args),

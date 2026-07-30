@@ -49,6 +49,24 @@ describe('state-mutations/bind', () => {
     expect(store.get().agents.instances.a1?.state.title).toBe('renamed');
   });
 
+  it('publishes compaction status and refreshed occupancy together', () => {
+    const store = new AgentStore(emptySystemState());
+    upsertAgentInstance(
+      store,
+      'a1',
+      makeEnvelope({ ...minimalState(), usedTokens: 90_000 }),
+    );
+
+    bindStateMutations(store, 'a1').setContextCompactionState({
+      isCompressing: true,
+      totalTokens: 24_000,
+    });
+
+    const state = store.get().agents.instances.a1?.state;
+    expect(state?.isCompressingContext).toBe(true);
+    expect(state?.usedTokens).toBe(24_000);
+  });
+
   it('attachEnvState writes envState entries onto the target user message', () => {
     const store = new AgentStore(emptySystemState());
     const userMsg: AgentMessage = {

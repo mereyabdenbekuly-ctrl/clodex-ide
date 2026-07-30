@@ -49,8 +49,8 @@ import {
 import { useOpenAgent } from '@ui/hooks/use-open-chat';
 import { useContentCollapsed } from '../../../_components/content-collapsed-context';
 import type { Content } from '@tiptap/core';
-import { IconMagicWandSparkle } from '@clodex/icons';
 import { MessageUserPlanAction } from './message-user-plan-action';
+import { ContextCompactionMarker } from './context-compaction-marker';
 import { Button } from '@clodex/stage-ui/components/button';
 import { GitForkIcon, LoaderCircleIcon } from 'lucide-react';
 
@@ -706,7 +706,13 @@ export const MessageUser = memo(
         /\(slash:command:implement\)/.test(p.text),
     );
 
-    if (isEmptyMessage && !hasImplementCommand && !isLastMessage) return null;
+    if (
+      isEmptyMessage &&
+      !hasImplementCommand &&
+      !isLastMessage &&
+      !msg.metadata?.compressedHistory
+    )
+      return null;
 
     // Conditional rendering: view-only mode uses lightweight renderer, edit mode uses full TipTap
     return (
@@ -722,15 +728,7 @@ export const MessageUser = memo(
           onDragLeave={isEditing ? editDragHandlers.onDragLeave : undefined}
         >
           {msg.metadata?.compressedHistory && (
-            <div
-              key={`compact-${msg.id}`}
-              className="mt-2 flex w-full flex-row items-center gap-2 text-xs"
-            >
-              <IconMagicWandSparkle className="size-3 text-muted-foreground" />
-              <span className="shimmer-duration-1500 shimmer-from-muted-foreground shimmer-text-once shimmer-to-foreground font-normal">
-                Compressed previous conversation
-              </span>
-            </div>
+            <ContextCompactionMarker key={`compact-${msg.id}`} />
           )}
           <div ref={measureRef} className="w-full">
             {/* Implement command card — compact full-width indicator */}
@@ -868,6 +866,11 @@ export const MessageUser = memo(
     )
       return false;
     if (prevProps.message.parts.length !== nextProps.message.parts.length)
+      return false;
+    if (
+      prevProps.message.metadata?.compressedHistory !==
+      nextProps.message.metadata?.compressedHistory
+    )
       return false;
 
     for (let i = 0; i < prevProps.message.parts.length; i++) {

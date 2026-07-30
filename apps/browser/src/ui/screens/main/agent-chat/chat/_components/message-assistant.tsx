@@ -52,6 +52,7 @@ import {
   CloudTaskArtifactPart,
   type CloudTaskArtifactUIPart,
 } from './cloud-task-artifact';
+import { ContextCompactionMarker } from './context-compaction-marker';
 
 type AssistantMessage = AgentMessage & { role: 'assistant' };
 
@@ -358,10 +359,12 @@ export const MessageAssistant = memo(
       }
     }, [hasSubsequentFileModifications, dispatchRestore]);
 
-    if (isEmptyMessage && !isLastMessage) return null;
+    if (isEmptyMessage && !isLastMessage && !msg.metadata?.compressedHistory)
+      return null;
 
     return (
       <div className={cn('flex w-full flex-col gap-1')}>
+        {msg.metadata?.compressedHistory && <ContextCompactionMarker />}
         <div className="w-full">
           <div
             className={cn(

@@ -55,3 +55,27 @@ export function resolveContextOccupancyTokens(
   const locallyEstimatedTokens = estimateEffectiveHistoryTokens(history);
   return Math.max(totalTokens, componentTokens, locallyEstimatedTokens);
 }
+
+/**
+ * Rebase a known occupancy after replacing the visible history prefix with a
+ * compacted summary. Provider counts include stable prompt/tool overhead that
+ * the history-only estimator cannot see, so preserve that inferred overhead
+ * while replacing only the history contribution.
+ */
+export function resolvePostCompactionOccupancyTokens(
+  previousOccupancyTokens: number,
+  previousHistoryTokens: number,
+  historyAfterCompaction: readonly AgentMessage[],
+): number {
+  const normalizedPrevious = normalizedTokenCount(previousOccupancyTokens);
+  const normalizedPreviousHistory = normalizedTokenCount(previousHistoryTokens);
+  const compactedHistoryTokens = estimateEffectiveHistoryTokens(
+    historyAfterCompaction,
+  );
+  const inferredNonHistoryTokens = Math.max(
+    0,
+    normalizedPrevious - normalizedPreviousHistory,
+  );
+
+  return inferredNonHistoryTokens + compactedHistoryTokens;
+}
