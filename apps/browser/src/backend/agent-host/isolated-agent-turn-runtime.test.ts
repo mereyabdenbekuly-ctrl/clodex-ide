@@ -187,6 +187,54 @@ describe('executeIsolatedAgentTurn', () => {
     ]);
   });
 
+  it('continues after an executed tool call even when the provider reports stop', async () => {
+    let modelCall = 0;
+    const handlers: AgentTurnHostHandlers = {
+      callModel: vi.fn(async () => {
+        modelCall++;
+        return modelCall === 1
+          ? {
+              text: '',
+              reasoning: '',
+              toolCalls: [
+                {
+                  toolCallId: 'tool-1',
+                  toolName: 'read',
+                  input: { path: 'README.md' },
+                },
+              ],
+              // Several OpenAI-compatible providers use `stop` here even
+              // though the response contains a valid tool call. Tool-call
+              // presence, not this provider label, owns continuation.
+              finishReason: 'stop',
+              usage: {},
+            }
+          : {
+              text: 'Read completed.',
+              reasoning: '',
+              toolCalls: [],
+              finishReason: 'stop',
+              usage: {},
+            };
+      }),
+      callTool: vi.fn(async () => ({ output: '# Project' })),
+    };
+
+    const result = await executeIsolatedAgentTurn(request, { handlers });
+
+    expect(result.status).toBe('completed');
+    expect(result.steps).toHaveLength(2);
+    expect(result.text).toBe('Read completed.');
+    expect(handlers.callModel).toHaveBeenCalledTimes(2);
+    expect(handlers.callTool).toHaveBeenCalledOnce();
+    expect(result.messages).toContainEqual({
+      role: 'tool',
+      toolCallId: 'tool-1',
+      toolName: 'read',
+      output: '# Project',
+    });
+  });
+
   it('starts adjacent file edits together and commits results in model order', async () => {
     let modelCall = 0;
     const resolveTool = new Map<string, (result: { output: string }) => void>();

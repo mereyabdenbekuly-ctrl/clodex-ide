@@ -173,20 +173,40 @@ export function markRecoveredCloudSequence(
 }
 
 /**
- * Attach a compressed history blob to the boundary message. Returns
- * `'missing'` if the boundary message was archived/removed in the
- * meantime, `'written'` otherwise.
+ * Attach a compressed history blob to the boundary message.
+ *
+ * Automatic compression currently runs as a pre-continuation admission
+ * barrier. This mutation still validates the ordered compacted prefix so a
+ * concurrent stop/undo/retry or any future caller cannot attach a stale
+ * summary to a different conversation.
  */
 export function storeCompressedHistory(
   store: AgentStore,
   agentInstanceId: string,
-  args: { boundaryMessageId: string; compressedHistory: string },
-): 'missing' | 'written' {
-  let result: 'missing' | 'written' = 'missing';
+  args: {
+    boundaryMessageId: string;
+    compactedMessageIds: readonly string[];
+    compressedHistory: string;
+  },
+): 'missing' | 'stale' | 'written' {
+  let result: 'missing' | 'stale' | 'written' = 'missing';
   updateAgentInstanceState(store, agentInstanceId, (state) => {
-    const boundaryMessage = state.history.find(
-      (m) => m.id === args.boundaryMessageId,
+    const boundaryIndex = state.history.findIndex(
+      (message) => message.id === args.boundaryMessageId,
     );
+    if (boundaryIndex < 0) return;
+
+    if (
+      boundaryIndex !== args.compactedMessageIds.length ||
+      args.compactedMessageIds.some(
+        (messageId, index) => state.history[index]?.id !== messageId,
+      )
+    ) {
+      result = 'stale';
+      return;
+    }
+
+    const boundaryMessage = state.history[boundaryIndex];
     if (!boundaryMessage) return;
     boundaryMessage.metadata ??= {
       createdAt: new Date(),
@@ -195,6 +215,51 @@ export function storeCompressedHistory(
     const bm = boundaryMessage.metadata as UserMessageMetadata;
     bm.compressedHistory = args.compressedHistory;
     result = 'written';
+  });
+  return result;
+}
+
+/**
+ * Roll back an in-memory compressed-history mutation after strict durable
+ * persistence fails. The expected current value prevents an older rollback
+ * from erasing a newer successful compression.
+ */
+export function restoreCompressedHistory(
+  store: AgentStore,
+  agentInstanceId: string,
+  args: {
+    boundaryMessageId: string;
+    expectedCompressedHistory: string;
+    previousCompressedHistory: string | undefined;
+  },
+): 'missing' | 'mismatch' | 'restored' {
+  let result: 'missing' | 'mismatch' | 'restored' = 'missing';
+  updateAgentInstanceState(store, agentInstanceId, (state) => {
+    const boundaryMessage = state.history.find(
+      (message) => message.id === args.boundaryMessageId,
+    );
+    if (!boundaryMessage) return;
+
+    const currentCompressedHistory =
+      boundaryMessage.metadata?.compressedHistory;
+    if (currentCompressedHistory !== args.expectedCompressedHistory) {
+      result = 'mismatch';
+      return;
+    }
+
+    if (args.previousCompressedHistory === undefined) {
+      if (boundaryMessage.metadata) {
+        delete boundaryMessage.metadata.compressedHistory;
+      }
+    } else {
+      boundaryMessage.metadata ??= {
+        createdAt: new Date(),
+        partsMetadata: [],
+      } as unknown as UserMessageMetadata;
+      boundaryMessage.metadata.compressedHistory =
+        args.previousCompressedHistory;
+    }
+    result = 'restored';
   });
   return result;
 }
