@@ -31,6 +31,8 @@ export type AgentRuntimeError =
       code?: number;
       message: string;
       stack?: string;
+      /** Stable host-generated reason for lifecycle failures. */
+      reasonCode?: 'logical-inactivity';
       /** Bounded host-generated diagnostics for rejected, non-executed calls. */
       recoveryDiagnostics?: string[];
     }

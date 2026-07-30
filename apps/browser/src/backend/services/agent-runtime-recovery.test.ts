@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type {
+  AgentLogicalInactivityRecoveryResult,
+  AgentRuntimeEffectBoundary,
+  AgentRuntimePhase,
+  AgentRuntimeProgress,
+} from '@clodex/agent-core';
 import type { AgentManagerService } from './agent-manager';
 import {
   AgentRuntimeRecoveryService,
@@ -70,6 +76,8 @@ class FakeWatchdog implements AgentRuntimeWatchdog {
 const services: AgentRuntimeRecoveryService[] = [];
 let recoverInterruptedActiveAgents: ReturnType<typeof vi.fn>;
 let retryNetworkFailedAgentsNow: ReturnType<typeof vi.fn>;
+let getActiveRuntimeProgress: ReturnType<typeof vi.fn>;
+let recoverLogicalInactivity: ReturnType<typeof vi.fn>;
 let agentManager: AgentManagerService;
 
 beforeEach(() => {
@@ -79,9 +87,17 @@ beforeEach(() => {
   electronMocks.reset();
   recoverInterruptedActiveAgents = vi.fn().mockResolvedValue(undefined);
   retryNetworkFailedAgentsNow = vi.fn().mockResolvedValue(undefined);
+  getActiveRuntimeProgress = vi.fn().mockReturnValue([]);
+  recoverLogicalInactivity = vi
+    .fn()
+    .mockResolvedValue(
+      'retried' satisfies AgentLogicalInactivityRecoveryResult,
+    );
   agentManager = {
     recoverInterruptedActiveAgents,
     retryNetworkFailedAgentsNow,
+    getActiveRuntimeProgress,
+    recoverLogicalInactivity,
   } as unknown as AgentManagerService;
 });
 
@@ -176,8 +192,10 @@ describe('AgentRuntimeRecoveryService', () => {
 
     watchdog.emit(50_000);
     electronMocks.emit('resume');
+    await vi.advanceTimersByTimeAsync(60_000);
     await flushMicrotasks();
     expect(recoverInterruptedActiveAgents).not.toHaveBeenCalled();
+    expect(getActiveRuntimeProgress).not.toHaveBeenCalled();
   });
 
   it('reconciles orphaned cloud tasks after system resume', async () => {
@@ -190,6 +208,248 @@ describe('AgentRuntimeRecoveryService', () => {
     await flushMicrotasks();
 
     expect(cloudTasks.reconcile).toHaveBeenCalledWith('system-resumed');
+  });
+
+  it('uses phase-specific logical-inactivity timeouts', async () => {
+    const now = Date.now();
+    const timedPhases = [
+      ['preparing', 300_000],
+      ['resolving-model', 300_000],
+      ['generating-context', 300_000],
+      ['waiting-model', 300_000],
+      ['streaming-model', 300_000],
+      ['policy-check', 90_000],
+      ['post-step', 120_000],
+      ['persisting', 120_000],
+      ['compressing', 150_000],
+    ] as const satisfies ReadonlyArray<readonly [AgentRuntimePhase, number]>;
+    const snapshots = timedPhases.map(([phase, timeoutMs], index) => ({
+      agentInstanceId: `agent-${phase}`,
+      progress: runtimeProgress({
+        phase,
+        lastProgressAt: now - timeoutMs,
+        stepGeneration: index + 1,
+        effectBoundary:
+          phase === 'post-step' || phase === 'persisting'
+            ? 'post-effect'
+            : 'pre-effect',
+      }),
+    }));
+    getActiveRuntimeProgress.mockReturnValue(snapshots);
+    createService(new FakeWatchdog());
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushMicrotasks();
+
+    expect(recoverLogicalInactivity).toHaveBeenCalledTimes(snapshots.length);
+    for (const snapshot of snapshots) {
+      expect(recoverLogicalInactivity).toHaveBeenCalledWith(
+        snapshot.agentInstanceId,
+        snapshot.progress,
+      );
+    }
+  });
+
+  it('does not time out progress before its phase threshold', async () => {
+    const now = Date.now();
+    getActiveRuntimeProgress.mockReturnValue([
+      {
+        agentInstanceId: 'model-agent',
+        progress: runtimeProgress({
+          phase: 'waiting-model',
+          lastProgressAt: now - (300_000 - 10_001),
+        }),
+      },
+      {
+        agentInstanceId: 'policy-agent',
+        progress: runtimeProgress({
+          phase: 'policy-check',
+          lastProgressAt: now - (90_000 - 10_001),
+        }),
+      },
+      {
+        agentInstanceId: 'persisting-agent',
+        progress: runtimeProgress({
+          phase: 'persisting',
+          lastProgressAt: now - (120_000 - 10_001),
+        }),
+      },
+      {
+        agentInstanceId: 'compression-agent',
+        progress: runtimeProgress({
+          phase: 'compressing',
+          lastProgressAt: now - (150_000 - 10_001),
+        }),
+      },
+    ]);
+    createService(new FakeWatchdog());
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushMicrotasks();
+
+    expect(recoverLogicalInactivity).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'tool-running',
+    'awaiting-approval',
+    'idle',
+  ] as const)('never applies a logical-inactivity timeout while phase is %s', async (phase) => {
+    getActiveRuntimeProgress.mockReturnValue([
+      {
+        agentInstanceId: `agent-${phase}`,
+        progress: runtimeProgress({
+          phase,
+          lastProgressAt: Date.now() - 86_400_000,
+          effectBoundary: phase === 'tool-running' ? 'uncertain' : 'pre-effect',
+        }),
+      },
+    ]);
+    createService(new FakeWatchdog());
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+
+    expect(recoverLogicalInactivity).not.toHaveBeenCalled();
+  });
+
+  it('single-flights an exact snapshot without blocking a newer generation', async () => {
+    const first = runtimeProgress({
+      phase: 'policy-check',
+      lastProgressAt: Date.now() - 120_000,
+      stepGeneration: 7,
+    });
+    const second = runtimeProgress({
+      phase: 'post-step',
+      lastProgressAt: Date.now() - 180_000,
+      stepGeneration: 8,
+      effectBoundary: 'uncertain',
+    });
+    let current = first;
+    getActiveRuntimeProgress.mockImplementation(() => [
+      { agentInstanceId: 'agent-race', progress: current },
+    ]);
+
+    let settleFirst!: (result: AgentLogicalInactivityRecoveryResult) => void;
+    const firstRecovery = new Promise<AgentLogicalInactivityRecoveryResult>(
+      (resolve) => {
+        settleFirst = resolve;
+      },
+    );
+    recoverLogicalInactivity.mockImplementation(
+      (_agentInstanceId: string, expected: AgentRuntimeProgress) =>
+        expected.stepGeneration === first.stepGeneration
+          ? firstRecovery
+          : Promise.resolve('failed-closed'),
+    );
+    createService(new FakeWatchdog());
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(recoverLogicalInactivity).toHaveBeenCalledTimes(1);
+
+    current = second;
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushMicrotasks();
+
+    expect(recoverLogicalInactivity).toHaveBeenCalledTimes(2);
+    expect(recoverLogicalInactivity).toHaveBeenNthCalledWith(
+      1,
+      'agent-race',
+      first,
+    );
+    expect(recoverLogicalInactivity).toHaveBeenNthCalledWith(
+      2,
+      'agent-race',
+      second,
+    );
+
+    settleFirst('ignored');
+    await flushMicrotasks();
+  });
+
+  it('delegates the exact snapshot so a user stop can invalidate recovery', async () => {
+    const stoppedGeneration = runtimeProgress({
+      phase: 'waiting-model',
+      lastProgressAt: Date.now() - 360_000,
+      stepGeneration: 12,
+    });
+    getActiveRuntimeProgress.mockReturnValue([
+      { agentInstanceId: 'agent-stopped', progress: stoppedGeneration },
+    ]);
+    recoverLogicalInactivity.mockResolvedValue('ignored');
+    createService(new FakeWatchdog());
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushMicrotasks();
+
+    expect(recoverLogicalInactivity).toHaveBeenCalledWith(
+      'agent-stopped',
+      stoppedGeneration,
+    );
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Ignored stale logical-inactivity observation. agentInstanceId=agent-stopped',
+      ),
+    );
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('failed closed without replay'),
+    );
+  });
+
+  it('suppresses logical recovery through suspend and the resume grace tick', async () => {
+    getActiveRuntimeProgress.mockReturnValue([
+      {
+        agentInstanceId: 'agent-suspended',
+        progress: runtimeProgress({
+          phase: 'waiting-model',
+          lastProgressAt: Date.now() - 600_000,
+        }),
+      },
+    ]);
+    createService(new FakeWatchdog());
+
+    electronMocks.emit('suspend');
+    await vi.advanceTimersByTimeAsync(60_000);
+    electronMocks.emit('resume');
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushMicrotasks();
+
+    expect(recoverInterruptedActiveAgents).toHaveBeenCalledTimes(1);
+    expect(recoverInterruptedActiveAgents).toHaveBeenCalledWith(
+      'system-resumed',
+      { stalledForMs: 60_000 },
+    );
+    expect(getActiveRuntimeProgress).not.toHaveBeenCalled();
+    expect(recoverLogicalInactivity).not.toHaveBeenCalled();
+  });
+
+  it('applies the same watchdog path to local and isolated active agents', async () => {
+    const local = runtimeProgress({
+      phase: 'generating-context',
+      lastProgressAt: Date.now() - 360_000,
+      stepGeneration: 21,
+    });
+    const isolated = runtimeProgress({
+      phase: 'generating-context',
+      lastProgressAt: Date.now() - 360_000,
+      stepGeneration: 22,
+    });
+    getActiveRuntimeProgress.mockReturnValue([
+      { agentInstanceId: 'local-agent', progress: local },
+      { agentInstanceId: 'isolated-agent', progress: isolated },
+    ]);
+    createService(new FakeWatchdog());
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushMicrotasks();
+
+    expect(recoverLogicalInactivity).toHaveBeenCalledWith('local-agent', local);
+    expect(recoverLogicalInactivity).toHaveBeenCalledWith(
+      'isolated-agent',
+      isolated,
+    );
   });
 });
 
@@ -210,4 +470,18 @@ function createService(
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function runtimeProgress(
+  overrides: Partial<AgentRuntimeProgress> &
+    Pick<AgentRuntimeProgress, 'phase' | 'lastProgressAt'>,
+): AgentRuntimeProgress {
+  return {
+    phase: overrides.phase,
+    lastProgressAt: overrides.lastProgressAt,
+    stepGeneration: overrides.stepGeneration ?? 1,
+    effectBoundary:
+      overrides.effectBoundary ??
+      ('pre-effect' satisfies AgentRuntimeEffectBoundary),
+  };
 }

@@ -53,6 +53,13 @@ import type {
   ToolApprovalInvalidationReason,
   ToolApprovalLifecycleHooks,
 } from './tool-approval-lifecycle';
+import {
+  agentRuntimeProgressMatches,
+  type AgentLogicalInactivityRecoveryResult,
+  type AgentRuntimeEffectBoundary,
+  type AgentRuntimePhase,
+  type AgentRuntimeProgress,
+} from './runtime-progress';
 
 import {
   AgentSessionCheckpointSafePointError,
@@ -753,6 +760,23 @@ export abstract class BaseAgent<
    * after a new step has already started.
    */
   private _stepGeneration = 0;
+  private _runtimeProgress: AgentRuntimeProgress = {
+    phase: 'idle',
+    lastProgressAt: Date.now(),
+    stepGeneration: 0,
+    effectBoundary: 'pre-effect',
+  };
+  /** Latest visible user message that owns the monotonic effect boundary. */
+  private _runtimeProgressTurnId: string | null = null;
+  private static readonly MAX_LOGICAL_INACTIVITY_RETRIES_PER_TURN = 1;
+  private _logicalInactivityRecoveryTurnId: string | null = null;
+  private _logicalInactivityRecoveryAttempts = 0;
+  private _logicalInactivityRecoveryInFlight = false;
+  /** Parallel policy/tool callbacks must not mask one another's active phase. */
+  private _activeRuntimePolicyChecks = 0;
+  private _activeRuntimeToolExecutions = 0;
+  /** Prevents late teed-stream chunks from downgrading the post-step tail. */
+  private _runtimeTailGeneration: number | null = null;
   /** Host-only effect scope retained while an approval chain is paused. */
   private _pendingToolCapabilityScopeId: string | null = null;
   private _stepStartTime = 0;
@@ -876,7 +900,7 @@ export abstract class BaseAgent<
    */
   private _pendingSyntheticContinuation:
     | {
-        reason: 'system-resumed' | 'event-loop-stalled';
+        reason: 'system-resumed' | 'event-loop-stalled' | 'logical-inactivity';
       }
     | {
         reason: 'tool-call-recovery';
@@ -1015,6 +1039,255 @@ export abstract class BaseAgent<
    * PUBLIC METHODS (STRANDARD API ACROSS ALL AGENTS)
    * =======================================================
    */
+
+  /** Returns a detached logical-progress snapshot for host watchdogs. */
+  public getRuntimeProgress(): AgentRuntimeProgress {
+    const progress = this.ensureRuntimeProgress();
+    return {
+      ...progress,
+      // A lifecycle action can supersede a step synchronously before its next
+      // phase heartbeat. Always expose the authoritative generation so an old
+      // watchdog observation becomes stale immediately.
+      stepGeneration: this._stepGeneration ?? progress.stepGeneration,
+      effectBoundary: progress.effectBoundary,
+    };
+  }
+
+  /**
+   * Prototype-only unit harnesses intentionally bypass the constructor. Keep
+   * progress instrumentation observational for those legacy tests instead of
+   * making every focused harness duplicate constructor state.
+   */
+  private ensureRuntimeProgress(): AgentRuntimeProgress {
+    const current = this._runtimeProgress;
+    if (current) return current;
+    const initialized: AgentRuntimeProgress = {
+      phase: 'idle',
+      lastProgressAt: Date.now(),
+      stepGeneration: this._stepGeneration ?? 0,
+      effectBoundary: 'pre-effect',
+    };
+    this._runtimeProgress = initialized;
+    return initialized;
+  }
+
+  /**
+   * Recovers one exactly observed logically inactive run.
+   *
+   * The exact snapshot check is deliberately synchronous with the priority
+   * preemption below. JavaScript cannot interleave a user Stop, resume event,
+   * tool callback, or a second watchdog poll between the check and generation
+   * bump. The serialized callback then verifies ownership again so a newer
+   * priority lifecycle action always wins while queued cleanup is pending.
+   */
+  public recoverLogicalInactivity(
+    expected: AgentRuntimeProgress,
+  ): Promise<AgentLogicalInactivityRecoveryResult> {
+    const current = this.getRuntimeProgress();
+    if (
+      !agentRuntimeProgressMatches(current, expected) ||
+      this._logicalInactivityRecoveryInFlight ||
+      !this.state.get().isWorking ||
+      current.phase === 'idle' ||
+      current.phase === 'awaiting-approval' ||
+      current.phase === 'tool-running'
+    ) {
+      return Promise.resolve('ignored');
+    }
+
+    const expectedTurnId = this.getLatestVisibleUserMessageId();
+    let claimedGeneration = -1;
+    let claimedProgress: AgentRuntimeProgress | null = null;
+    this._logicalInactivityRecoveryInFlight = true;
+    const recovery = this.enqueuePriorityHistoryLifecycleOperation(
+      () =>
+        this.recoverLogicalInactivitySerialized({
+          claimedGeneration,
+          claimedProgress,
+          expected,
+          expectedTurnId,
+        }),
+      (result) => {
+        if (result === 'retried') void this.runStep();
+      },
+    );
+    // enqueuePriorityHistoryLifecycleOperation synchronously supersedes the
+    // observed run before returning its promise.
+    claimedGeneration = this._stepGeneration;
+    this.heartbeatRuntimeProgress('preparing', claimedGeneration);
+    claimedProgress = this.getRuntimeProgress();
+    return recovery.finally(() => {
+      this._logicalInactivityRecoveryInFlight = false;
+    });
+  }
+
+  private getLatestVisibleUserMessageId(): string | null {
+    return (
+      [...this.state.get().history]
+        .reverse()
+        .find((message) => message.role === 'user')?.id ?? null
+    );
+  }
+
+  private syncRuntimeProgressTurn(expectedStepGeneration: number): void {
+    if (this._stepGeneration !== expectedStepGeneration) return;
+    const turnId = this.getLatestVisibleUserMessageId();
+    if (turnId === this._runtimeProgressTurnId) return;
+
+    this._runtimeProgressTurnId = turnId;
+    const progress = this.ensureRuntimeProgress();
+    this._runtimeProgress = {
+      ...progress,
+      stepGeneration: expectedStepGeneration,
+      effectBoundary: 'pre-effect',
+    };
+    this._logicalInactivityRecoveryTurnId = turnId;
+    this._logicalInactivityRecoveryAttempts = 0;
+  }
+
+  private advanceRuntimeEffectBoundary(
+    boundary: AgentRuntimeEffectBoundary,
+  ): void {
+    const progress = this.ensureRuntimeProgress();
+    const current = progress.effectBoundary;
+    if (current === 'post-effect') return;
+    if (current === 'uncertain' && boundary === 'pre-effect') return;
+    this._runtimeProgress = {
+      ...progress,
+      effectBoundary: boundary,
+    };
+  }
+
+  private heartbeatRuntimeProgress(
+    phase: AgentRuntimePhase,
+    expectedStepGeneration: number = this._stepGeneration,
+    effectBoundary?: AgentRuntimeEffectBoundary,
+  ): void {
+    if (this._stepGeneration !== expectedStepGeneration) return;
+    if (effectBoundary) this.advanceRuntimeEffectBoundary(effectBoundary);
+
+    const progress = this.ensureRuntimeProgress();
+    const lastProgressAt = Math.max(Date.now(), progress.lastProgressAt);
+    this._runtimeProgress = {
+      phase,
+      lastProgressAt,
+      stepGeneration: expectedStepGeneration,
+      effectBoundary: progress.effectBoundary,
+    };
+  }
+
+  private heartbeatRuntimeActivePhase(
+    fallbackPhase: 'streaming-model' | 'awaiting-approval',
+    expectedStepGeneration: number,
+    effectBoundary?: AgentRuntimeEffectBoundary,
+  ): void {
+    if (this._runtimeTailGeneration === expectedStepGeneration) {
+      if (effectBoundary) this.advanceRuntimeEffectBoundary(effectBoundary);
+      return;
+    }
+    const phase =
+      (this._activeRuntimeToolExecutions ?? 0) > 0
+        ? 'tool-running'
+        : (this._activeRuntimePolicyChecks ?? 0) > 0
+          ? 'policy-check'
+          : fallbackPhase;
+    this.heartbeatRuntimeProgress(
+      phase,
+      expectedStepGeneration,
+      effectBoundary,
+    );
+  }
+
+  private recordLogicalInactivityFailure(
+    expectedStepGeneration: number,
+    expected: AgentRuntimeProgress,
+    cleanupError?: unknown,
+  ): AgentLogicalInactivityRecoveryResult {
+    if (this._stepGeneration !== expectedStepGeneration) return 'ignored';
+
+    const cleanupDetail = cleanupError
+      ? ` Cleanup also failed: ${
+          cleanupError instanceof Error
+            ? cleanupError.message
+            : String(cleanupError)
+        }`
+      : '';
+    const inactiveForMs = Math.max(
+      0,
+      Math.round(Date.now() - expected.lastProgressAt),
+    );
+    const inactiveForSeconds = Math.ceil(inactiveForMs / 1_000);
+    this.state.commands.setIsWorkingFalse();
+    this.state.commands.recordStepError({
+      error: {
+        message: `Agent execution made no progress for ${inactiveForSeconds}s during phase "${expected.phase}" (generation ${expected.stepGeneration}); boundary=${expected.effectBoundary}; automatic replay was denied.${cleanupDetail}`,
+        reasonCode: 'logical-inactivity',
+      },
+      markUnread: 'mark-unread',
+    });
+    this.heartbeatRuntimeProgress('idle', expectedStepGeneration);
+    this.emitNotificationEvent('error');
+    return 'failed-closed';
+  }
+
+  private async recoverLogicalInactivitySerialized(input: {
+    readonly claimedGeneration: number;
+    readonly claimedProgress: AgentRuntimeProgress | null;
+    readonly expected: AgentRuntimeProgress;
+    readonly expectedTurnId: string | null;
+  }): Promise<AgentLogicalInactivityRecoveryResult> {
+    if (
+      input.claimedProgress === null ||
+      this._stepGeneration !== input.claimedGeneration ||
+      !agentRuntimeProgressMatches(
+        this.getRuntimeProgress(),
+        input.claimedProgress,
+      ) ||
+      this.getLatestVisibleUserMessageId() !== input.expectedTurnId
+    ) {
+      return 'ignored';
+    }
+
+    if (this._logicalInactivityRecoveryTurnId !== input.expectedTurnId) {
+      this._logicalInactivityRecoveryTurnId = input.expectedTurnId;
+      this._logicalInactivityRecoveryAttempts = 0;
+    }
+    const mayRetry =
+      input.expected.effectBoundary === 'pre-effect' &&
+      this._logicalInactivityRecoveryAttempts <
+        BaseAgent.MAX_LOGICAL_INACTIVITY_RETRIES_PER_TURN;
+
+    this.heartbeatRuntimeProgress('preparing', input.claimedGeneration);
+    const stopGeneration = input.claimedGeneration + 1;
+    try {
+      await this.internalStop('logical-inactivity');
+    } catch (error) {
+      this.host.logger.error(
+        `[BaseAgent:${this.instanceId}] Logical-inactivity cleanup failed: ${this.formatError(
+          error instanceof Error ? error : new Error(String(error)),
+        )}`,
+      );
+      return this.recordLogicalInactivityFailure(
+        stopGeneration,
+        input.expected,
+        error,
+      );
+    }
+    if (this._stepGeneration !== stopGeneration) return 'ignored';
+
+    this.state.commands.setIsWorkingFalse();
+    this.heartbeatRuntimeProgress('idle', stopGeneration);
+    if (mayRetry) {
+      this._logicalInactivityRecoveryAttempts += 1;
+      this._pendingSyntheticContinuation = { reason: 'logical-inactivity' };
+      this.host.logger.warn(
+        `[BaseAgent:${this.instanceId}] Retrying logically inactive pre-effect run (${this._logicalInactivityRecoveryAttempts}/${BaseAgent.MAX_LOGICAL_INACTIVITY_RETRIES_PER_TURN}).`,
+      );
+      return 'retried';
+    }
+
+    return this.recordLogicalInactivityFailure(stopGeneration, input.expected);
+  }
 
   private enqueueHistoryLifecycleOperation<T>(
     operation: () => Promise<T>,
@@ -1743,6 +2016,8 @@ export abstract class BaseAgent<
       }
       if (replayWasPreempted) return 'duplicate';
       replayStepGeneration = ++this._stepGeneration;
+      this.syncRuntimeProgressTurn(replayStepGeneration);
+      this.heartbeatRuntimeProgress('streaming-model', replayStepGeneration);
       this._recoveredReplayExecutionId = input.executionId;
       this._recoveredReplayStepGeneration = replayStepGeneration;
     } else if (this._recoveredReplayExecutionId !== input.executionId) {
@@ -1758,6 +2033,7 @@ export abstract class BaseAgent<
       replayStepGeneration = existingGeneration;
     }
     try {
+      this.heartbeatRuntimeProgress('streaming-model', replayStepGeneration);
       await this.handleUiStream(
         singleChunkUiStream(input.chunk),
         lastAssistantMessage,
@@ -1782,7 +2058,10 @@ export abstract class BaseAgent<
         sequence: input.sequence,
         recoveredAt: new Date().toISOString(),
       });
-      await this.saveState();
+      await this.saveState(undefined, {
+        expectedStepGeneration: replayStepGeneration,
+        resumePhase: 'streaming-model',
+      });
       if (
         this._recoveredReplayExecutionId !== input.executionId ||
         this._recoveredReplayStepGeneration !== replayStepGeneration ||
@@ -1819,6 +2098,7 @@ export abstract class BaseAgent<
     if (this._recoveredReplayExecutionId !== input.executionId) return;
     const replayStepGeneration = this._recoveredReplayStepGeneration;
     if (replayStepGeneration === null) return;
+    this.heartbeatRuntimeProgress('post-step', replayStepGeneration);
     if (input.outcome === 'failed') {
       this.state.commands.recordStepError({
         error: {
@@ -1835,7 +2115,10 @@ export abstract class BaseAgent<
         markUnread: 'if-assistant-history',
       });
     }
-    await this.saveState();
+    await this.saveState(undefined, {
+      expectedStepGeneration: replayStepGeneration,
+      resumePhase: 'post-step',
+    });
     if (
       this._recoveredReplayExecutionId !== input.executionId ||
       this._recoveredReplayStepGeneration !== replayStepGeneration ||
@@ -1845,6 +2128,7 @@ export abstract class BaseAgent<
     }
     this.scheduleMemorySnapshotWrite('post-step');
     await this.onIdle();
+    this.heartbeatRuntimeProgress('idle', replayStepGeneration);
     if (
       this._recoveredReplayExecutionId === input.executionId &&
       this._recoveredReplayStepGeneration === replayStepGeneration
@@ -1868,12 +2152,14 @@ export abstract class BaseAgent<
    * @note DO NOT OVERRIDE
    */
   public async flushQueue(): Promise<void> {
-    return await this.enqueuePriorityHistoryLifecycleOperation(
+    const flush = this.enqueuePriorityHistoryLifecycleOperation(
       () => this.flushQueueSerialized(),
       () => {
         void this.runStep();
       },
     );
+    this.heartbeatRuntimeProgress('preparing', this._stepGeneration);
+    return await flush;
   }
 
   private async flushQueueSerialized(): Promise<void> {
@@ -1906,10 +2192,14 @@ export abstract class BaseAgent<
    *
    * @note DO NOT OVERRIDE
    */
-  public async stop(): Promise<void> {
-    return await this.enqueuePriorityHistoryLifecycleOperation(() =>
+  public stop(): Promise<void> {
+    const stop = this.enqueuePriorityHistoryLifecycleOperation(() =>
       this.stopSerialized(),
     );
+    // Publish the user-owned idle boundary synchronously with the generation
+    // bump so a watchdog observation cannot race an explicitly requested Stop.
+    this.heartbeatRuntimeProgress('idle', this._stepGeneration);
+    return stop;
   }
 
   private async stopSerialized(): Promise<void> {
@@ -1918,6 +2208,7 @@ export abstract class BaseAgent<
     this._queuedDrainRequested = false;
     await this.internalStop('user-stopped');
     this.state.commands.setIsWorkingFalse();
+    this.heartbeatRuntimeProgress('idle', this._stepGeneration);
   }
 
   /**
@@ -1927,15 +2218,17 @@ export abstract class BaseAgent<
    *
    * @note DO NOT OVERRIDE
    */
-  public async recoverInterruptedRun(
+  public recoverInterruptedRun(
     reason: 'system-resumed' | 'event-loop-stalled',
   ): Promise<void> {
-    return await this.enqueuePriorityHistoryLifecycleOperation(
+    const recovery = this.enqueuePriorityHistoryLifecycleOperation(
       () => this.recoverInterruptedRunSerialized(reason),
       () => {
         void this.runStep();
       },
     );
+    this.heartbeatRuntimeProgress('preparing', this._stepGeneration);
+    return recovery;
   }
 
   private async recoverInterruptedRunSerialized(
@@ -1949,6 +2242,7 @@ export abstract class BaseAgent<
 
     await this.internalStop('system-interrupted');
     this.state.commands.setIsWorkingFalse();
+    this.heartbeatRuntimeProgress('idle', this._stepGeneration);
 
     this._pendingSyntheticContinuation = { reason };
   }
@@ -2717,6 +3011,10 @@ export abstract class BaseAgent<
     // Increment step generation so stale callbacks from previous steps are
     // ignored. Capture it in a local const for the closures below.
     const stepGen = ++this._stepGeneration;
+    this._activeRuntimePolicyChecks = 0;
+    this._activeRuntimeToolExecutions = 0;
+    this._runtimeTailGeneration = null;
+    this.heartbeatRuntimeProgress('preparing', stepGen);
     let resolveStepSettlement!: (settlement: AgentStepSettlement) => void;
     const stepSettlement = new Promise<AgentStepSettlement>((resolve) => {
       resolveStepSettlement = resolve;
@@ -2763,6 +3061,7 @@ export abstract class BaseAgent<
           },
           markUnread: 'mark-unread',
         });
+        this.heartbeatRuntimeProgress('idle', this._stepGeneration);
         this.emitNotificationEvent('error');
         outcome = 'failed';
       }
@@ -2809,6 +3108,7 @@ export abstract class BaseAgent<
       (pending === true || hasLateQueuedFollowUp) && !stepHasApprovalRequest;
 
     if (shouldScheduleContinuation) {
+      this.heartbeatRuntimeProgress('preparing', stepGen);
       // setTimeout to keep the call stack clean (unbounded recursion).
       setTimeout(() => {
         if (this._stepGeneration === stepGen) void this.runStep();
@@ -2834,6 +3134,7 @@ export abstract class BaseAgent<
           },
           markUnread: 'mark-unread',
         });
+        this.heartbeatRuntimeProgress('idle', stepGen);
         this.onIdle();
         this.emitNotificationEvent('error');
         return true;
@@ -2842,6 +3143,10 @@ export abstract class BaseAgent<
         error: undefined,
         markUnread: 'if-assistant-history',
       });
+      this.heartbeatRuntimeProgress(
+        stepHasApprovalRequest ? 'awaiting-approval' : 'idle',
+        stepGen,
+      );
       this.onIdle();
       // Only notify "done" for a genuine turn completion: there must
       // be an assistant message and the agent must not be paused on an
@@ -2937,6 +3242,8 @@ export abstract class BaseAgent<
     const { queueFlushIndex: flushedIndex } = this.state.commands.beginStep({
       flushQueue: !isApprovalContinuation,
     });
+    this.syncRuntimeProgressTurn(stepGen);
+    this.heartbeatRuntimeProgress('preparing', stepGen);
     if (flushedIndex !== undefined) {
       this._queuedDrainRequested = this.state.get().queuedMessages.length > 0;
       this.scheduleMemorySnapshotWrite('queued-messages');
@@ -2960,6 +3267,7 @@ export abstract class BaseAgent<
     const requestedModelId = this.state.get().activeModelId;
     const stepTaskRole = this.getModelTaskRoleForNextStep();
     let stepModelId = requestedModelId;
+    this.heartbeatRuntimeProgress('resolving-model', stepGen);
     try {
       const routedModelId = await this.host.models.selectModelForTask?.({
         currentModelId: requestedModelId,
@@ -2967,6 +3275,7 @@ export abstract class BaseAgent<
         agentType: this.agentType,
         traceId: this.instanceId,
       });
+      this.heartbeatRuntimeProgress('resolving-model', stepGen);
       if (routedModelId) stepModelId = routedModelId;
     } catch (error) {
       this.host.logger.warn(
@@ -2984,6 +3293,7 @@ export abstract class BaseAgent<
     // or endpoint doesn't wedge the agent with isWorking=true and no error.
     let modelWithOptions: ModelWithOptions;
     try {
+      this.heartbeatRuntimeProgress('resolving-model', stepGen);
       modelWithOptions = await this.host.models.getWithOptions(
         stepModelId,
         this.instanceId,
@@ -2998,6 +3308,7 @@ export abstract class BaseAgent<
         },
       );
       if (this._stepGeneration !== stepGen) return 'superseded';
+      this.heartbeatRuntimeProgress('resolving-model', stepGen);
       this._stepProviderMode = modelWithOptions.providerMode;
       this._stepCodingPlanId = modelWithOptions.connectedCodingPlanId;
     } catch (error) {
@@ -3015,6 +3326,7 @@ export abstract class BaseAgent<
         },
         markUnread: 'always',
       });
+      this.heartbeatRuntimeProgress('idle', stepGen);
       this.emitNotificationEvent('error');
       return 'failed';
     }
@@ -3026,16 +3338,19 @@ export abstract class BaseAgent<
     let tools: Awaited<ReturnType<typeof this.getToolsForStep>>;
     let resolvedConfig: BaseAgentConfig<TFinishToolOutputSchema>;
     try {
+      this.heartbeatRuntimeProgress('generating-context', stepGen);
       modelMessages = await this.generateContextForNewStep(
         queueFlushIndex >= 0 ? queueFlushIndex : undefined,
         modelWithOptions.reasoningSignatureSource,
         stepGen,
       );
       if (this._stepGeneration !== stepGen) return 'superseded';
+      this.heartbeatRuntimeProgress('generating-context', stepGen);
       tools = await this.getToolsForStep();
       if (this._stepGeneration !== stepGen) return 'superseded';
+      this.heartbeatRuntimeProgress('generating-context', stepGen);
       this.resetToolCallExecutionTracking();
-      tools = this.wrapToolsWithTiming(tools);
+      tools = this.wrapToolsWithTiming(tools, stepGen);
       tools = this.wrapToolsWithOutputBudget(tools);
       if (modelWithOptions.stripStrictFromTools) {
         tools = this.stripStrictFromTools(tools);
@@ -3044,6 +3359,7 @@ export abstract class BaseAgent<
         ...this.config,
         ...(await this.getModelSettings(this.messages)),
       };
+      this.heartbeatRuntimeProgress('generating-context', stepGen);
     } catch (e) {
       if (this._stepGeneration !== stepGen) return 'superseded';
       const error = e as Error;
@@ -3059,6 +3375,7 @@ export abstract class BaseAgent<
         },
         markUnread: 'always',
       });
+      this.heartbeatRuntimeProgress('idle', stepGen);
       this.emitNotificationEvent('error');
       return 'failed';
     }
@@ -3069,6 +3386,7 @@ export abstract class BaseAgent<
 
     const stepModel = this.wrapModelWithToolCallIdentityFence(
       modelWithOptions.model,
+      stepGen,
     );
 
     // Debug: analyse cache stability of the final model messages before the LLM call.
@@ -3080,6 +3398,7 @@ export abstract class BaseAgent<
 
     let stream: Awaited<ReturnType<AgentStepExecutor['execute']>>;
     try {
+      this.heartbeatRuntimeProgress('waiting-model', stepGen);
       stream = await this.stepExecutor.execute({
         context: {
           agentInstanceId: this.instanceId,
@@ -3136,10 +3455,13 @@ export abstract class BaseAgent<
               this._pendingToolCapabilityScopeId = null;
             }
             this.state.commands.setIsWorkingFalse();
+            this.heartbeatRuntimeProgress('idle', stepGen);
           },
           onFinish: async (result) => {
             // Guard: ignore if a newer step has started (e.g. queue flush)
             if (this._stepGeneration !== stepGen) return;
+
+            this._runtimeTailGeneration = stepGen;
 
             stepHasApprovalRequest = result.content.some(
               (part) => part.type === 'tool-approval-request',
@@ -3152,6 +3474,7 @@ export abstract class BaseAgent<
               this._pendingToolCapabilityScopeId = null;
             }
             finishedResult = result;
+            this.heartbeatRuntimeProgress('post-step', stepGen);
 
             // Log step completion details
             this.host.logger.debug(
@@ -3312,6 +3635,7 @@ export abstract class BaseAgent<
               this.stepAbortController?.abort();
             } catch {}
             this.stepAbortController = null;
+            this.heartbeatRuntimeProgress('idle', stepGen);
           },
           experimental_repairToolCall: repairToolCall,
           experimental_transform: smoothStream({
@@ -3329,6 +3653,7 @@ export abstract class BaseAgent<
         },
       });
       if (this._stepGeneration !== stepGen) return 'superseded';
+      this.heartbeatRuntimeProgress('waiting-model', stepGen);
       this._stepModelWithOptions =
         stream.modelRouteBinding === 'request-model' ? modelWithOptions : null;
     } catch (rawError) {
@@ -3365,6 +3690,7 @@ export abstract class BaseAgent<
         },
         markUnread: 'mark-unread',
       });
+      this.heartbeatRuntimeProgress('idle', this._stepGeneration);
       this.emitNotificationEvent('error');
       return 'failed';
     }
@@ -3407,6 +3733,7 @@ export abstract class BaseAgent<
       ]);
 
       if (this._stepGeneration !== stepGen) return 'superseded';
+      this.heartbeatRuntimeProgress('post-step', stepGen);
 
       // ─── Populate pathReferences on the assistant message ───────────
       // MUST run AFTER Promise.all resolves so the UI stream has fully
@@ -3466,7 +3793,10 @@ export abstract class BaseAgent<
       // Re-persist so the DB row carries the just-populated references.
       // The initial saveState() in handlePostStep ran before the refs
       // were known, so this second save is required for crash safety.
-      await this.saveState();
+      await this.saveState(undefined, {
+        expectedStepGeneration: stepGen,
+        resumePhase: 'post-step',
+      });
       if (this._stepGeneration !== stepGen) return 'superseded';
       this.scheduleMemorySnapshotWrite('post-step');
       const latestAssistantMessage = [...this.state.get().history]
@@ -3570,6 +3900,7 @@ export abstract class BaseAgent<
         },
         markUnread: 'mark-unread',
       });
+      this.heartbeatRuntimeProgress('idle', this._stepGeneration);
       this.emitNotificationEvent('error');
       return 'failed';
     }
@@ -3618,6 +3949,7 @@ export abstract class BaseAgent<
       expectedStepGeneration,
       contextWindowSize,
     );
+    this.heartbeatRuntimeProgress('post-step', expectedStepGeneration);
   }
 
   private async compressHistoryInternal(
@@ -3634,6 +3966,9 @@ export abstract class BaseAgent<
       return;
     }
     this._isCompressingHistory = true;
+    if (expectedStepGeneration !== undefined) {
+      this.heartbeatRuntimeProgress('compressing', expectedStepGeneration);
+    }
     try {
       const state = this.state.get();
       const { history } = state;
@@ -3651,6 +3986,12 @@ export abstract class BaseAgent<
           contextWindowSize = (
             await this.host.models.getWithOptions(state.activeModelId, '')
           ).contextWindowSize;
+          if (expectedStepGeneration !== undefined) {
+            this.heartbeatRuntimeProgress(
+              'compressing',
+              expectedStepGeneration,
+            );
+          }
         } catch {
           // Model may have been deleted — fall back to a conservative size
           contextWindowSize = 100_000;
@@ -3733,12 +4074,22 @@ export abstract class BaseAgent<
         `[BaseAgent:${this.instanceId}] Compressing history (${messagesToCompact.length} messages, keeping ${actualKept})...`,
       );
 
+      if (expectedStepGeneration !== undefined) {
+        this.heartbeatRuntimeProgress('compressing', expectedStepGeneration);
+      }
       const compressedHistory = await this.compressHistory(messagesToCompact);
       if (
         expectedStepGeneration !== undefined &&
         this._stepGeneration !== expectedStepGeneration
       ) {
         return;
+      }
+      if (expectedStepGeneration !== undefined) {
+        this.heartbeatRuntimeProgress(
+          'compressing',
+          expectedStepGeneration,
+          'uncertain',
+        );
       }
 
       // Re-fetch by id inside the command — user could've undone/
@@ -3762,6 +4113,13 @@ export abstract class BaseAgent<
         this.host.logger.debug(
           `[BaseAgent:${this.instanceId}] Stored compressed history in message ${boundaryMessageId}`,
         );
+        if (expectedStepGeneration !== undefined) {
+          this.heartbeatRuntimeProgress(
+            'compressing',
+            expectedStepGeneration,
+            'post-effect',
+          );
+        }
       }
 
       const boundarySeq = this.state
@@ -3770,6 +4128,13 @@ export abstract class BaseAgent<
       if (boundarySeq < 0) return;
       if (this.config.persistent) {
         try {
+          if (expectedStepGeneration !== undefined) {
+            this.heartbeatRuntimeProgress(
+              'persisting',
+              expectedStepGeneration,
+              'uncertain',
+            );
+          }
           await this.state.persist({
             dirtyMessageIndices: [boundarySeq],
             expectedMessageBindings: [
@@ -3777,6 +4142,13 @@ export abstract class BaseAgent<
             ],
             throwOnError: true,
           });
+          if (expectedStepGeneration !== undefined) {
+            this.heartbeatRuntimeProgress(
+              'compressing',
+              expectedStepGeneration,
+              'post-effect',
+            );
+          }
         } catch (persistenceError) {
           const rollbackResult = this.state.commands.restoreCompressedHistory({
             boundaryMessageId,
@@ -4129,10 +4501,30 @@ export abstract class BaseAgent<
   /**
    * Updates the persisted state of the agent
    */
-  private async saveState(dirtyMessageIndices?: number[]): Promise<void> {
+  private async saveState(
+    dirtyMessageIndices?: number[],
+    progress?: {
+      readonly expectedStepGeneration: number;
+      readonly resumePhase: AgentRuntimePhase;
+    },
+  ): Promise<void> {
     if (!this.config.persistent) return;
 
+    if (progress) {
+      this.heartbeatRuntimeProgress(
+        'persisting',
+        progress.expectedStepGeneration,
+        'uncertain',
+      );
+    }
     await this.state.persist(dirtyMessageIndices);
+    if (progress) {
+      this.heartbeatRuntimeProgress(
+        progress.resumePhase,
+        progress.expectedStepGeneration,
+        'post-effect',
+      );
+    }
   }
 
   private async saveQueuedMessagesStrict(): Promise<void> {
@@ -4373,6 +4765,7 @@ export abstract class BaseAgent<
     expectedStepGeneration: number,
   ): Promise<boolean | null> {
     if (this._stepGeneration !== expectedStepGeneration) return null;
+    this.heartbeatRuntimeProgress('post-step', expectedStepGeneration);
     this.state.commands.recordUsage({
       totalTokens: resolveContextOccupancyTokens(
         result.usage,
@@ -4383,8 +4776,12 @@ export abstract class BaseAgent<
     this.updateUsageWarning(result);
 
     // Save the agent state for recovery
-    await this.saveState();
+    await this.saveState(undefined, {
+      expectedStepGeneration,
+      resumePhase: 'post-step',
+    });
     if (this._stepGeneration !== expectedStepGeneration) return null;
+    this.heartbeatRuntimeProgress('post-step', expectedStepGeneration);
 
     // Drain any host-produced attachments (e.g. files written by a
     // sandbox/runtime side-channel during this step) into
@@ -4429,6 +4826,7 @@ export abstract class BaseAgent<
 
     const userWantsToContinue = (await this.onStepFinished(result)) ?? true;
     if (this._stepGeneration !== expectedStepGeneration) return null;
+    this.heartbeatRuntimeProgress('post-step', expectedStepGeneration);
     const shouldRunNewStep = this.shouldRunNewStep(result, userWantsToContinue);
 
     if (!shouldRunNewStep) {
@@ -4501,6 +4899,12 @@ export abstract class BaseAgent<
     ) {
       return [];
     }
+    if (expectedStepGeneration !== undefined) {
+      this.heartbeatRuntimeProgress(
+        'generating-context',
+        expectedStepGeneration,
+      );
+    }
     if (entries.size > 0) {
       this.state.commands.attachEnvState({
         entries,
@@ -4519,6 +4923,12 @@ export abstract class BaseAgent<
     ) {
       return [];
     }
+    if (expectedStepGeneration !== undefined) {
+      this.heartbeatRuntimeProgress(
+        'generating-context',
+        expectedStepGeneration,
+      );
+    }
 
     // ─── Build model messages from history ────────────────────────────
     const messages = this.state.get().history;
@@ -4530,6 +4940,12 @@ export abstract class BaseAgent<
     ) {
       return [];
     }
+    if (expectedStepGeneration !== undefined) {
+      this.heartbeatRuntimeProgress(
+        'generating-context',
+        expectedStepGeneration,
+      );
+    }
 
     const systemPrompt = await this.getSystemPrompt();
     if (
@@ -4537,6 +4953,12 @@ export abstract class BaseAgent<
       this._stepGeneration !== expectedStepGeneration
     ) {
       return [];
+    }
+    if (expectedStepGeneration !== undefined) {
+      this.heartbeatRuntimeProgress(
+        'generating-context',
+        expectedStepGeneration,
+      );
     }
 
     const modelMessages = await this.transformMessagesToModelMessages(
@@ -4551,6 +4973,12 @@ export abstract class BaseAgent<
     ) {
       return [];
     }
+    if (expectedStepGeneration !== undefined) {
+      this.heartbeatRuntimeProgress(
+        'generating-context',
+        expectedStepGeneration,
+      );
+    }
 
     // Then, we allow another step to modify the final model messages
     const transformedModelMessages =
@@ -4561,6 +4989,12 @@ export abstract class BaseAgent<
     ) {
       return [];
     }
+    if (expectedStepGeneration !== undefined) {
+      this.heartbeatRuntimeProgress(
+        'generating-context',
+        expectedStepGeneration,
+      );
+    }
     const evidenceAugmentedMessages = await this.injectEvidenceContextIfEnabled(
       transformedModelMessages,
     );
@@ -4569,6 +5003,12 @@ export abstract class BaseAgent<
       this._stepGeneration !== expectedStepGeneration
     ) {
       return [];
+    }
+    if (expectedStepGeneration !== undefined) {
+      this.heartbeatRuntimeProgress(
+        'generating-context',
+        expectedStepGeneration,
+      );
     }
 
     const finalModelMessages = this.appendSyntheticContinuationIfNeeded(
@@ -5016,6 +5456,33 @@ export abstract class BaseAgent<
       ) {
         continue;
       }
+      if (expectedStepGeneration !== undefined) {
+        const providerExecutedEffect = uiMessage.parts.some((part) => {
+          if (!part || typeof part !== 'object') return false;
+          const record = part as unknown as Record<string, unknown>;
+          return (
+            record.providerExecuted === true &&
+            (record.type === 'dynamic-tool' ||
+              (typeof record.type === 'string' &&
+                record.type.startsWith('tool-')))
+          );
+        });
+        const hasApprovalRequest = uiMessage.parts.some((part) => {
+          if (!part || typeof part !== 'object') return false;
+          const record = part as unknown as Record<string, unknown>;
+          return (
+            (record.type === 'dynamic-tool' ||
+              (typeof record.type === 'string' &&
+                record.type.startsWith('tool-'))) &&
+            record.state === 'approval-requested'
+          );
+        });
+        this.heartbeatRuntimeActivePhase(
+          hasApprovalRequest ? 'awaiting-approval' : 'streaming-model',
+          expectedStepGeneration,
+          providerExecutedEffect ? 'post-effect' : undefined,
+        );
+      }
       this.state.commands.mergeUIMessageStream({
         uiMessage,
         onApprovalRequested: ({ approvalId, toolPart }) => {
@@ -5034,6 +5501,12 @@ export abstract class BaseAgent<
               tool_call_id: approvalId,
             });
             this.emitNotificationEvent('question');
+          }
+          if (expectedStepGeneration !== undefined) {
+            this.heartbeatRuntimeActivePhase(
+              'awaiting-approval',
+              expectedStepGeneration,
+            );
           }
         },
       });
@@ -5296,6 +5769,9 @@ export abstract class BaseAgent<
     this._pendingSyntheticContinuation = null;
     this._pendingToolCallRecoveryExhaustion = null;
     this._pendingToolCapabilityScopeId = null;
+    this._activeRuntimePolicyChecks = 0;
+    this._activeRuntimeToolExecutions = 0;
+    this._runtimeTailGeneration = null;
     try {
       this.stepAbortController?.abort();
     } catch {}
@@ -5322,7 +5798,8 @@ export abstract class BaseAgent<
     stopReason:
       | 'user-stopped'
       | 'user-flushed-queue'
-      | 'system-interrupted' = 'user-stopped',
+      | 'system-interrupted'
+      | 'logical-inactivity' = 'user-stopped',
   ): Promise<void> {
     this.supersedeCurrentStep();
 
@@ -5337,22 +5814,26 @@ export abstract class BaseAgent<
 
     try {
       const toolCallAbortReason =
-        stopReason === 'system-interrupted'
-          ? 'System was suspended or stalled before tool call finished.'
-          : stopReason === 'user-stopped'
-            ? (this.config.stopToolCallAbortReason ??
-              'User stopped agent before tool call finished.')
-            : (this.config.flushQueueToolCallAbortReason ??
-              'User sent new message before tool call finished.');
+        stopReason === 'logical-inactivity'
+          ? 'No runtime progress was observed; the tool call was stopped without replay.'
+          : stopReason === 'system-interrupted'
+            ? 'System was suspended or stalled before tool call finished.'
+            : stopReason === 'user-stopped'
+              ? (this.config.stopToolCallAbortReason ??
+                'User stopped agent before tool call finished.')
+              : (this.config.flushQueueToolCallAbortReason ??
+                'User sent new message before tool call finished.');
 
       const toolCallRequestApprovalAbortReason =
-        stopReason === 'system-interrupted'
-          ? 'System was suspended or stalled before tool call approval was granted.'
-          : stopReason === 'user-stopped'
-            ? (this.config.stopToolCallRequestApprovalReason ??
-              'User stopped agent before tool call approval was granted.')
-            : (this.config.flushQueueToolCallRequestApprovalReason ??
-              'User sent new message before tool call approval was granted.');
+        stopReason === 'logical-inactivity'
+          ? 'No runtime progress was observed before tool call approval was granted; execution was stopped without replay.'
+          : stopReason === 'system-interrupted'
+            ? 'System was suspended or stalled before tool call approval was granted.'
+            : stopReason === 'user-stopped'
+              ? (this.config.stopToolCallRequestApprovalReason ??
+                'User stopped agent before tool call approval was granted.')
+              : (this.config.flushQueueToolCallRequestApprovalReason ??
+                'User sent new message before tool call approval was granted.');
 
       await this.applyAndPersistApprovalSweep(() =>
         this.state.commands.terminateNonTerminalToolPartsInLastAssistant({
@@ -6085,6 +6566,7 @@ export abstract class BaseAgent<
 
   private wrapModelWithToolCallIdentityFence(
     model: ModelWithOptions['model'],
+    expectedStepGeneration: number,
   ): ModelWithOptions['model'] {
     if (typeof model === 'string' || model.specificationVersion !== 'v3') {
       return model;
@@ -6099,7 +6581,22 @@ export abstract class BaseAgent<
       ambiguousReferenceProviderIds: new Set(),
     });
     const doGenerate: typeof modelV3.doGenerate = async (options) => {
+      this.heartbeatRuntimeProgress('waiting-model', expectedStepGeneration);
       const result = await modelV3.doGenerate(options);
+      const providerExecutedEffect = result.content.some((part) => {
+        if (!part || typeof part !== 'object') return false;
+        const record = part as unknown as Record<string, unknown>;
+        return (
+          record.providerExecuted === true &&
+          typeof record.type === 'string' &&
+          record.type.includes('tool')
+        );
+      });
+      this.heartbeatRuntimeActivePhase(
+        'streaming-model',
+        expectedStepGeneration,
+        providerExecutedEffect ? 'post-effect' : undefined,
+      );
       const state = createState();
       return {
         ...result,
@@ -6109,13 +6606,32 @@ export abstract class BaseAgent<
       };
     };
     const doStream: typeof modelV3.doStream = async (options) => {
+      this.heartbeatRuntimeProgress('waiting-model', expectedStepGeneration);
       const result = await modelV3.doStream(options);
+      this.heartbeatRuntimeActivePhase(
+        'streaming-model',
+        expectedStepGeneration,
+      );
       const state = createState();
       return {
         ...result,
         stream: result.stream.pipeThrough(
           new TransformStream({
             transform: (part, controller) => {
+              const record =
+                part && typeof part === 'object'
+                  ? (part as unknown as Record<string, unknown>)
+                  : null;
+              const providerExecutedEffect = Boolean(
+                record?.providerExecuted === true &&
+                  typeof record.type === 'string' &&
+                  record.type.includes('tool'),
+              );
+              this.heartbeatRuntimeActivePhase(
+                'streaming-model',
+                expectedStepGeneration,
+                providerExecutedEffect ? 'post-effect' : undefined,
+              );
               controller.enqueue(
                 this.rewriteModelToolCallIdentityPart(part, state, 'stream'),
               );
@@ -6133,7 +6649,10 @@ export abstract class BaseAgent<
     });
   }
 
-  private wrapToolsWithTiming(tools: Partial<ToolSet>): Partial<ToolSet> {
+  private wrapToolsWithTiming(
+    tools: Partial<ToolSet>,
+    expectedStepGeneration: number,
+  ): Partial<ToolSet> {
     const wrapped: Partial<ToolSet> = {};
     for (const [name, t] of Object.entries(tools)) {
       if (!t || typeof t !== 'object' || !('execute' in t) || !t.execute) {
@@ -6166,6 +6685,10 @@ export abstract class BaseAgent<
       const wrappedTool: Record<string, unknown> = {
         ...t,
         onInputStart: async (options: { toolCallId: string }) => {
+          this.heartbeatRuntimeActivePhase(
+            'streaming-model',
+            expectedStepGeneration,
+          );
           const decision = this.admitToolCallLifecycleStage(
             name,
             options.toolCallId,
@@ -6173,11 +6696,19 @@ export abstract class BaseAgent<
           );
           if (decision.kind === 'duplicate') return;
           await originalOnInputStart?.(options);
+          this.heartbeatRuntimeActivePhase(
+            'streaming-model',
+            expectedStepGeneration,
+          );
         },
         onInputDelta: async (options: {
           toolCallId: string;
           inputTextDelta: string;
         }) => {
+          this.heartbeatRuntimeActivePhase(
+            'streaming-model',
+            expectedStepGeneration,
+          );
           const decision = this.admitToolCallLifecycleStage(
             name,
             options.toolCallId,
@@ -6185,11 +6716,19 @@ export abstract class BaseAgent<
           );
           if (decision.kind === 'duplicate') return;
           await originalOnInputDelta?.(options);
+          this.heartbeatRuntimeActivePhase(
+            'streaming-model',
+            expectedStepGeneration,
+          );
         },
         onInputAvailable: async (options: {
           toolCallId: string;
           input: unknown;
         }) => {
+          this.heartbeatRuntimeActivePhase(
+            'streaming-model',
+            expectedStepGeneration,
+          );
           const decision = this.admitToolCallLifecycleStage(
             name,
             options.toolCallId,
@@ -6197,6 +6736,10 @@ export abstract class BaseAgent<
           );
           if (decision.kind === 'duplicate') return;
           await originalOnInputAvailable?.(options);
+          this.heartbeatRuntimeActivePhase(
+            'streaming-model',
+            expectedStepGeneration,
+          );
         },
         execute: async (input: unknown, options: { toolCallId: string }) => {
           const decision = this.admitToolCallLifecycleStage(
@@ -6207,6 +6750,17 @@ export abstract class BaseAgent<
           if (decision.kind === 'duplicate') throw decision.error;
           const { occurrence } = decision.admission;
           const start = Date.now();
+          const ownsRuntimeProgress =
+            this._stepGeneration === expectedStepGeneration;
+          if (ownsRuntimeProgress) {
+            this._activeRuntimeToolExecutions =
+              (this._activeRuntimeToolExecutions ?? 0) + 1;
+            this.heartbeatRuntimeProgress(
+              'tool-running',
+              expectedStepGeneration,
+              'uncertain',
+            );
+          }
           try {
             return await (
               originalExecute as (
@@ -6216,6 +6770,17 @@ export abstract class BaseAgent<
             )(input, options);
           } finally {
             occurrence.durationMs = Date.now() - start;
+            if (this._stepGeneration === expectedStepGeneration) {
+              this._activeRuntimeToolExecutions = Math.max(
+                0,
+                (this._activeRuntimeToolExecutions ?? 0) - 1,
+              );
+              this.heartbeatRuntimeActivePhase(
+                'streaming-model',
+                expectedStepGeneration,
+                'post-effect',
+              );
+            }
           }
         },
       };
@@ -6230,14 +6795,38 @@ export abstract class BaseAgent<
             'needs-approval',
           );
           if (decision.kind === 'duplicate') return false;
-          const needsApproval = await (
-            originalNeedsApproval as (
-              input: unknown,
-              options: { toolCallId: string },
-            ) => boolean | PromiseLike<boolean>
-          )(input, options);
-          decision.admission.primaryNeedsApproval = needsApproval;
-          return needsApproval;
+          const ownsRuntimeProgress =
+            this._stepGeneration === expectedStepGeneration;
+          if (ownsRuntimeProgress) {
+            this._activeRuntimePolicyChecks =
+              (this._activeRuntimePolicyChecks ?? 0) + 1;
+            this.heartbeatRuntimeActivePhase(
+              'streaming-model',
+              expectedStepGeneration,
+            );
+          }
+          let needsApproval = false;
+          try {
+            needsApproval = await (
+              originalNeedsApproval as (
+                input: unknown,
+                options: { toolCallId: string },
+              ) => boolean | PromiseLike<boolean>
+            )(input, options);
+            decision.admission.primaryNeedsApproval = needsApproval;
+            return needsApproval;
+          } finally {
+            if (this._stepGeneration === expectedStepGeneration) {
+              this._activeRuntimePolicyChecks = Math.max(
+                0,
+                (this._activeRuntimePolicyChecks ?? 0) - 1,
+              );
+              this.heartbeatRuntimeActivePhase(
+                needsApproval ? 'awaiting-approval' : 'streaming-model',
+                expectedStepGeneration,
+              );
+            }
+          }
         };
       } else if (typeof originalNeedsApproval === 'boolean') {
         wrappedTool.needsApproval = async (
@@ -6250,8 +6839,29 @@ export abstract class BaseAgent<
             'needs-approval',
           );
           if (decision.kind === 'duplicate') return false;
-          decision.admission.primaryNeedsApproval = originalNeedsApproval;
-          return originalNeedsApproval;
+          if (this._stepGeneration === expectedStepGeneration) {
+            this._activeRuntimePolicyChecks =
+              (this._activeRuntimePolicyChecks ?? 0) + 1;
+            this.heartbeatRuntimeActivePhase(
+              'streaming-model',
+              expectedStepGeneration,
+            );
+          }
+          try {
+            decision.admission.primaryNeedsApproval = originalNeedsApproval;
+            return originalNeedsApproval;
+          } finally {
+            if (this._stepGeneration === expectedStepGeneration) {
+              this._activeRuntimePolicyChecks = Math.max(
+                0,
+                (this._activeRuntimePolicyChecks ?? 0) - 1,
+              );
+              this.heartbeatRuntimeActivePhase(
+                originalNeedsApproval ? 'awaiting-approval' : 'streaming-model',
+                expectedStepGeneration,
+              );
+            }
+          }
         };
       }
       (wrapped as Record<string, unknown>)[name] = wrappedTool;

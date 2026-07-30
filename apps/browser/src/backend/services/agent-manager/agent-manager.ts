@@ -11,6 +11,8 @@ import type {
   CommandRegistry,
   CommandName,
   CommandContext,
+  AgentLogicalInactivityRecoveryResult,
+  AgentRuntimeProgress,
 } from '@clodex/agent-core';
 import { AgentManager } from '@clodex/agent-core';
 import type { AgentHost } from '@clodex/agent-core/host';
@@ -223,6 +225,23 @@ export class AgentManagerService extends DisposableService {
     details?: { stalledForMs?: number },
   ): Promise<void> {
     await this.manager.recoverInterruptedActiveAgents(reason, details);
+  }
+
+  public getActiveRuntimeProgress(): Array<{
+    agentInstanceId: string;
+    progress: AgentRuntimeProgress;
+  }> {
+    return this.manager.getActiveRuntimeProgress();
+  }
+
+  public async recoverLogicalInactivity(
+    agentInstanceId: string,
+    expected: AgentRuntimeProgress,
+  ): Promise<AgentLogicalInactivityRecoveryResult> {
+    return await this.manager.recoverLogicalInactivity(
+      agentInstanceId,
+      expected,
+    );
   }
 
   public async retryNetworkFailedAgentsNow(reason: string): Promise<void> {
