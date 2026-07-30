@@ -92,6 +92,21 @@ function invalidToolResult(
   };
 }
 
+function validToolResult(
+  finishReason: string,
+  toolName = 'read',
+  includeApproval = false,
+) {
+  return {
+    finishReason,
+    toolCalls: [{ toolName }],
+    toolResults: [{ toolName, output: { ok: true } }],
+    content: includeApproval
+      ? [{ type: 'tool-approval-request', approvalId: 'approval-1' }]
+      : [],
+  };
+}
+
 async function trustedInvalidToolResult(input: string) {
   const error = new Error('provider schema error');
   await repairToolCall({
@@ -299,6 +314,77 @@ describe('BaseAgent bounded tool-call recovery', () => {
     ).toBe(false);
     expect(agent._toolCallRecoveryAttempts).toBe(0);
     expect(agent._pendingSyntheticContinuation).toBeNull();
+  });
+
+  it('continues after a valid tool call when the provider mislabels it as stop', () => {
+    const { agent } = createRecoveryHarness();
+
+    expect(agent.shouldRunNewStep(validToolResult('stop'), true)).toBe(true);
+    expect(agent.host.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Continuing after completed tool activity despite provider finishReason="stop"',
+      ),
+    );
+    expect(agent._toolCallRecoveryAttempts).toBe(0);
+    expect(agent._pendingSyntheticContinuation).toBeNull();
+  });
+
+  it('does not continue filtered output or a mislabeled call without a result', () => {
+    const { agent } = createRecoveryHarness();
+
+    expect(
+      agent.shouldRunNewStep(validToolResult('content-filter'), true),
+    ).toBe(false);
+    expect(
+      agent.shouldRunNewStep(
+        {
+          finishReason: 'stop',
+          toolCalls: [{ toolName: 'read' }],
+          toolResults: [],
+          content: [],
+        },
+        true,
+      ),
+    ).toBe(false);
+  });
+
+  it('continues a tool-result-only approval continuation mislabeled as stop', () => {
+    const { agent } = createRecoveryHarness();
+
+    expect(
+      agent.shouldRunNewStep(
+        {
+          finishReason: 'stop',
+          toolCalls: [],
+          toolResults: [{ toolName: 'read', output: { ok: true } }],
+          content: [],
+        },
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps ordinary text-only stop terminal', () => {
+    const { agent } = createRecoveryHarness();
+
+    expect(
+      agent.shouldRunNewStep(
+        { finishReason: 'stop', toolCalls: [], toolResults: [], content: [] },
+        true,
+      ),
+    ).toBe(false);
+  });
+
+  it('does not bypass approval or explicit finish semantics', () => {
+    const { agent } = createRecoveryHarness();
+
+    expect(
+      agent.shouldRunNewStep(validToolResult('stop', 'read', true), true),
+    ).toBe(false);
+    expect(
+      agent.shouldRunNewStep(validToolResult('stop', 'finish'), true),
+    ).toBe(false);
+    expect(agent.shouldRunNewStep(validToolResult('stop'), false)).toBe(false);
   });
 
   it('publishes an error rather than a done event when retry budget is exhausted', () => {

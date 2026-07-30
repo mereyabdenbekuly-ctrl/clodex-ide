@@ -11,6 +11,7 @@ import { upsertAgentInstance, type AgentInstanceEnvelope } from './instances';
 import {
   markRecoveredCloudSequence,
   mergeUIMessageStream,
+  restoreCompressedHistory,
   setAssistantOwnedReasoningDetails,
   storeCompressedHistory,
 } from './streaming';
@@ -215,6 +216,7 @@ describe('state-mutations/streaming', () => {
 
     const result = storeCompressedHistory(store, 'a1', {
       boundaryMessageId: 'never-existed',
+      compactedMessageIds: [],
       compressedHistory: 'blob',
     });
 
@@ -233,12 +235,147 @@ describe('state-mutations/streaming', () => {
 
     const result = storeCompressedHistory(store, 'a1', {
       boundaryMessageId: 'b-1',
+      compactedMessageIds: [],
       compressedHistory: 'blob',
     });
 
     expect(result).toBe('written');
     const after = store.get().agents.instances.a1!.state.history[0]!;
     expect(after.metadata?.compressedHistory).toBe('blob');
+  });
+
+  it('storeCompressedHistory rejects a stale compacted prefix', () => {
+    const store = new AgentStore(emptySystemState());
+    const rewrittenPrefix: AgentMessage = {
+      id: 'rewritten-prefix',
+      role: 'user',
+      parts: [{ type: 'text', text: 'new history' }],
+      metadata: { createdAt: new Date(), partsMetadata: [{}] },
+    };
+    const boundary: AgentMessage = {
+      id: 'b-1',
+      role: 'assistant',
+      parts: [{ type: 'text', text: '', state: 'done' }],
+      metadata: { createdAt: new Date(), partsMetadata: [{}] },
+    };
+    upsertAgentInstance(
+      store,
+      'a1',
+      makeEnvelope(baseState([rewrittenPrefix, boundary])),
+    );
+
+    const result = storeCompressedHistory(store, 'a1', {
+      boundaryMessageId: 'b-1',
+      compactedMessageIds: ['original-prefix'],
+      compressedHistory: 'must not be attached',
+    });
+
+    expect(result).toBe('stale');
+    const after = store.get().agents.instances.a1!.state.history[1]!;
+    expect(after.metadata?.compressedHistory).toBeUndefined();
+  });
+
+  it('storeCompressedHistory permits messages appended after the boundary', () => {
+    const store = new AgentStore(emptySystemState());
+    const prefix: AgentMessage = {
+      id: 'prefix-1',
+      role: 'user',
+      parts: [{ type: 'text', text: 'original history' }],
+      metadata: { createdAt: new Date(), partsMetadata: [{}] },
+    };
+    const boundary: AgentMessage = {
+      id: 'b-1',
+      role: 'assistant',
+      parts: [{ type: 'text', text: '', state: 'done' }],
+      metadata: { createdAt: new Date(), partsMetadata: [{}] },
+    };
+    const appended: AgentMessage = {
+      id: 'later-step',
+      role: 'assistant',
+      parts: [{ type: 'text', text: 'continued', state: 'done' }],
+      metadata: { createdAt: new Date(), partsMetadata: [{}] },
+    };
+    upsertAgentInstance(
+      store,
+      'a1',
+      makeEnvelope(baseState([prefix, boundary, appended])),
+    );
+
+    const result = storeCompressedHistory(store, 'a1', {
+      boundaryMessageId: 'b-1',
+      compactedMessageIds: ['prefix-1'],
+      compressedHistory: 'durable summary',
+    });
+
+    expect(result).toBe('written');
+    const after = store.get().agents.instances.a1!.state.history[1]!;
+    expect(after.metadata?.compressedHistory).toBe('durable summary');
+  });
+
+  it('restoreCompressedHistory rolls back only the expected in-memory value', () => {
+    const store = new AgentStore(emptySystemState());
+    const boundary: AgentMessage = {
+      id: 'b-1',
+      role: 'assistant',
+      parts: [{ type: 'text', text: '', state: 'done' }],
+      metadata: {
+        createdAt: new Date(),
+        partsMetadata: [{}],
+        compressedHistory: 'new summary',
+      },
+    };
+    upsertAgentInstance(store, 'a1', makeEnvelope(baseState([boundary])));
+
+    expect(
+      restoreCompressedHistory(store, 'a1', {
+        boundaryMessageId: 'b-1',
+        expectedCompressedHistory: 'different summary',
+        previousCompressedHistory: undefined,
+      }),
+    ).toBe('mismatch');
+    expect(
+      store.get().agents.instances.a1!.state.history[0]!.metadata
+        ?.compressedHistory,
+    ).toBe('new summary');
+
+    expect(
+      restoreCompressedHistory(store, 'a1', {
+        boundaryMessageId: 'b-1',
+        expectedCompressedHistory: 'new summary',
+        previousCompressedHistory: 'previous summary',
+      }),
+    ).toBe('restored');
+    expect(
+      store.get().agents.instances.a1!.state.history[0]!.metadata
+        ?.compressedHistory,
+    ).toBe('previous summary');
+  });
+
+  it('restoreCompressedHistory removes a newly-created summary', () => {
+    const store = new AgentStore(emptySystemState());
+    const boundary: AgentMessage = {
+      id: 'b-1',
+      role: 'assistant',
+      parts: [{ type: 'text', text: '', state: 'done' }],
+      metadata: {
+        createdAt: new Date(),
+        partsMetadata: [{}],
+        compressedHistory: 'new summary',
+      },
+    };
+    upsertAgentInstance(store, 'a1', makeEnvelope(baseState([boundary])));
+
+    expect(
+      restoreCompressedHistory(store, 'a1', {
+        boundaryMessageId: 'b-1',
+        expectedCompressedHistory: 'new summary',
+        previousCompressedHistory: undefined,
+      }),
+    ).toBe('restored');
+    expect(
+      store.get().agents.instances.a1!.state.history[0]!.metadata
+        ?.compressedHistory,
+    ).toBeUndefined();
   });
 
   it('setAssistantOwnedReasoningDetails replaces the array on the target message', () => {

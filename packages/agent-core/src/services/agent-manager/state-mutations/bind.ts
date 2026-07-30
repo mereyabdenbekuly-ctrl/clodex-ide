@@ -40,6 +40,7 @@ import {
 import {
   markRecoveredCloudSequence,
   mergeUIMessageStream,
+  restoreCompressedHistory,
   setAssistantOwnedReasoningDetails,
   storeCompressedHistory,
 } from './streaming';
@@ -136,6 +137,9 @@ export function bindStateMutations(store: AgentStore, agentInstanceId: string) {
     storeCompressedHistory: (
       args: Parameters<typeof storeCompressedHistory>[2],
     ) => storeCompressedHistory(store, agentInstanceId, args),
+    restoreCompressedHistory: (
+      args: Parameters<typeof restoreCompressedHistory>[2],
+    ) => restoreCompressedHistory(store, agentInstanceId, args),
     setAssistantOwnedReasoningDetails: (
       args: Parameters<typeof setAssistantOwnedReasoningDetails>[2],
     ) => setAssistantOwnedReasoningDetails(store, agentInstanceId, args),

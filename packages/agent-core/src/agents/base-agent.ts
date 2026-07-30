@@ -212,6 +212,7 @@ import { type DomainAdapterRegistry, resolveEffectiveEnvStates } from '../env';
 import { MessageCacheAnalyzer } from './shared/message-cache-analyzer';
 import { stripStrictFromToolSet } from './shared/strip-strict-from-tools';
 import { reasoningSourcesMatch } from './shared/reasoning-signatures';
+import { resolveContextOccupancyTokens } from './shared/context-usage';
 import type { SkillDefinition } from '../types/skills';
 import type {
   AttachmentMetadata,
@@ -3420,18 +3421,23 @@ export abstract class BaseAgent<
       await this.populatePathReferencesOnAssistantMessage(stepGen);
       if (this._stepGeneration !== stepGen) return 'superseded';
 
+      // Assigned by the asynchronous `onFinish` callback while the teed
+      // stream drains. TypeScript cannot model that cross-callback mutation,
+      // so capture the post-drain value explicitly.
+      const completedStepResult = finishedResult as StepResult<ToolSet> | null;
+
       // ─── Capture signed reasoning_details onto the assistant message ──
       // MUST run here (after the UI stream drained) and only when the host
       // route carries a `reasoningSignatureSource`. Guarded by stepGen so a
       // superseded step never tags a stale message.
       if (
-        finishedResult &&
+        completedStepResult &&
         this._stepGeneration === stepGen &&
         modelWithOptions.reasoningSignatureSource
       ) {
         try {
           this.populateReasoningDetailsOnAssistantMessage(
-            finishedResult,
+            completedStepResult,
             modelWithOptions.reasoningSignatureSource,
           );
         } catch (err) {
@@ -3441,6 +3447,20 @@ export abstract class BaseAgent<
             )}`,
           );
         }
+      }
+
+      // `onFinish` fires before the teed UI stream has fully merged the
+      // current assistant/tool-result message. Recompute occupancy now that
+      // those bytes are present so a large tool result can trigger compaction
+      // before the next model request even when provider usage is stale or
+      // omitted.
+      if (completedStepResult) {
+        this.state.commands.recordUsage({
+          totalTokens: resolveContextOccupancyTokens(
+            completedStepResult.usage,
+            this.state.get().history,
+          ),
+        });
       }
 
       // Re-persist so the DB row carries the just-populated references.
@@ -3477,6 +3497,19 @@ export abstract class BaseAgent<
           },
         );
       }
+
+      // History compression is an admission barrier, not detached background
+      // work. A normal autonomous continuation increments `_stepGeneration`;
+      // launching compression fire-and-forget therefore caused every
+      // continuous tool loop to discard its completed summary as stale. Run
+      // it after the UI stream and final persistence have drained, but before
+      // the next step can be scheduled, so the next model request is
+      // guaranteed to observe the compacted boundary.
+      await this.maybeCompressHistoryAfterStep(
+        stepGen,
+        modelWithOptions.contextWindowSize,
+      );
+      if (this._stepGeneration !== stepGen) return 'superseded';
 
       // ─── Tail: consume the deferred continuation decision ──────────
       // `onFinish` set `_pendingContinue` before returning; now that
@@ -3566,8 +3599,30 @@ export abstract class BaseAgent<
    */
   private static readonly KEPT_BUDGET_HARD_CAP_TOKENS = 40_000;
 
+  private async maybeCompressHistoryAfterStep(
+    expectedStepGeneration: number,
+    contextWindowSize: number,
+  ): Promise<void> {
+    const compactionThreshold = this.config.historyCompressionThreshold ?? 0.65;
+    if (compactionThreshold < 0) return;
+    if (this._stepGeneration !== expectedStepGeneration) return;
+
+    const fractionalTriggerTokens = compactionThreshold * contextWindowSize;
+    const effectiveTriggerTokens = Math.min(
+      fractionalTriggerTokens,
+      BaseAgent.HISTORY_COMPRESSION_HARD_CAP_TOKENS,
+    );
+    if (this.state.get().usedTokens <= effectiveTriggerTokens) return;
+
+    await this.compressHistoryInternal(
+      expectedStepGeneration,
+      contextWindowSize,
+    );
+  }
+
   private async compressHistoryInternal(
     expectedStepGeneration?: number,
+    contextWindowSizeOverride?: number,
   ): Promise<void> {
     // Prevent concurrent compression runs — a second trigger while
     // compression is in-flight would see stale history and produce
@@ -3585,13 +3640,21 @@ export abstract class BaseAgent<
 
       // ── Compute token budget for kept messages ────────────────────
       let contextWindowSize: number;
-      try {
-        contextWindowSize = (
-          await this.host.models.getWithOptions(state.activeModelId, '')
-        ).contextWindowSize;
-      } catch {
-        // Model may have been deleted — fall back to a conservative size
-        contextWindowSize = 100_000;
+      if (
+        typeof contextWindowSizeOverride === 'number' &&
+        Number.isFinite(contextWindowSizeOverride) &&
+        contextWindowSizeOverride > 0
+      ) {
+        contextWindowSize = contextWindowSizeOverride;
+      } else {
+        try {
+          contextWindowSize = (
+            await this.host.models.getWithOptions(state.activeModelId, '')
+          ).contextWindowSize;
+        } catch {
+          // Model may have been deleted — fall back to a conservative size
+          contextWindowSize = 100_000;
+        }
       }
       if (
         expectedStepGeneration !== undefined &&
@@ -3655,11 +3718,16 @@ export abstract class BaseAgent<
 
       const boundaryMessageId = history[boundaryIndex]?.id;
       if (!boundaryMessageId) return;
+      const previousCompressedHistory =
+        history[boundaryIndex]?.metadata?.compressedHistory;
 
       // If the boundary message already has compressed history, the
       // previous summary is included in messagesToCompact and will be
       // folded into the new summary by the LLM.
       const messagesToCompact = history.slice(0, boundaryIndex);
+      const compactedMessageIds = messagesToCompact.map(
+        (message) => message.id,
+      );
 
       this.host.logger.debug(
         `[BaseAgent:${this.instanceId}] Compressing history (${messagesToCompact.length} messages, keeping ${actualKept})...`,
@@ -3677,12 +3745,19 @@ export abstract class BaseAgent<
       // manipulated messages while we were busy compressing.
       const writeResult = this.state.commands.storeCompressedHistory({
         boundaryMessageId,
+        compactedMessageIds,
         compressedHistory,
       });
       if (writeResult === 'missing') {
         this.host.logger.warn(
           `[BaseAgent:${this.instanceId}] Boundary message not found in history after compression. The user may have undone or manipulated messages.`,
         );
+        return;
+      } else if (writeResult === 'stale') {
+        this.host.logger.warn(
+          `[BaseAgent:${this.instanceId}] History changed while compression was running; discarding stale summary.`,
+        );
+        return;
       } else {
         this.host.logger.debug(
           `[BaseAgent:${this.instanceId}] Stored compressed history in message ${boundaryMessageId}`,
@@ -3692,7 +3767,39 @@ export abstract class BaseAgent<
       const boundarySeq = this.state
         .get()
         .history.findIndex((m) => m.id === boundaryMessageId);
-      await this.saveState(boundarySeq >= 0 ? [boundarySeq] : undefined);
+      if (boundarySeq < 0) return;
+      if (this.config.persistent) {
+        try {
+          await this.state.persist({
+            dirtyMessageIndices: [boundarySeq],
+            expectedMessageBindings: [
+              { messageIndex: boundarySeq, messageId: boundaryMessageId },
+            ],
+            throwOnError: true,
+          });
+        } catch (persistenceError) {
+          const rollbackResult = this.state.commands.restoreCompressedHistory({
+            boundaryMessageId,
+            expectedCompressedHistory: compressedHistory,
+            previousCompressedHistory,
+          });
+          if (rollbackResult !== 'restored') {
+            throw new AggregateError(
+              [
+                persistenceError,
+                new Error(
+                  `Unable to roll back compressed history after persistence failure: ${rollbackResult}`,
+                ),
+              ],
+              'History compression persistence and exact in-memory rollback failed',
+            );
+          }
+          throw new Error(
+            'History compression could not be persisted durably',
+            { cause: persistenceError },
+          );
+        }
+      }
       if (
         expectedStepGeneration !== undefined &&
         this._stepGeneration !== expectedStepGeneration
@@ -3715,15 +3822,17 @@ export abstract class BaseAgent<
           ingestionKey: `compression:${boundaryMessageId}`,
         },
       );
-    } catch (e) {
-      // Fail silently — compression is best-effort. The agent continues
-      // without compression until the context window is exhausted, at which
-      // point the normal model error handling will show an error in the chat.
-      const error = e as Error;
+    } catch (error) {
+      const normalizedError =
+        error instanceof Error ? error : new Error(String(error));
       this.host.logger.error(
-        `[BaseAgent:${this.instanceId}] History compression failed silently: ${error.message}`,
+        `[BaseAgent:${this.instanceId}] History compression blocked the next step: ${normalizedError.message}`,
       );
-      this.report(error, 'compressHistory');
+      this.report(normalizedError, 'compressHistory');
+      throw new Error(
+        `Context compression failed before the next step: ${normalizedError.message}`,
+        { cause: normalizedError },
+      );
     } finally {
       this._isCompressingHistory = false;
     }
@@ -4212,6 +4321,27 @@ export abstract class BaseAgent<
     // We assume that approved tool calls are executed and results are attached,
     // because this is what AI-SDK with controlled tool execution promises us
 
+    // Some OpenAI-compatible providers incorrectly report `stop`
+    // even though they emitted and completed valid tool calls. A terminal tool
+    // result must be sent back to the model on a following step. Approval
+    // pauses, model-invalid calls, explicit `finish`, and agent-specific vetoes
+    // were all handled above. Other reasons (for example content filtering)
+    // remain terminal rather than broadening autonomous execution.
+    const hasCompletedToolActivity =
+      r.toolCalls.length > 0 || r.toolResults.length > 0;
+    const providerAllowsToolContinuation =
+      r.finishReason === 'tool-calls' ||
+      r.finishReason === 'length' ||
+      (r.finishReason === 'stop' && r.toolResults.length > 0);
+    if (hasCompletedToolActivity && providerAllowsToolContinuation) {
+      if (r.finishReason !== 'tool-calls') {
+        this.host.logger.warn(
+          `[BaseAgent:${this.instanceId}] Continuing after completed tool activity despite provider finishReason="${r.finishReason}". toolCalls=${r.toolCalls.length}, toolResults=${r.toolResults.length}`,
+        );
+      }
+      return true;
+    }
+
     // When the model hits the output token limit without emitting an invalid
     // tool-call part, continue once more so it can finish its response. The
     // invalid-tool path above owns the separately bounded compact/chunk retry.
@@ -4244,7 +4374,10 @@ export abstract class BaseAgent<
   ): Promise<boolean | null> {
     if (this._stepGeneration !== expectedStepGeneration) return null;
     this.state.commands.recordUsage({
-      totalTokens: result.usage.totalTokens ?? 0,
+      totalTokens: resolveContextOccupancyTokens(
+        result.usage,
+        this.state.get().history,
+      ),
     });
 
     this.updateUsageWarning(result);
@@ -4293,34 +4426,6 @@ export abstract class BaseAgent<
     });
 
     this.emitToolCallEvents(result);
-
-    // Check the current token usage. If necessary, summarize the chat history.
-    // Compress when used tokens exceed MIN(fraction * contextWindow, hardCap)
-    // — the hard cap prevents large-context models (1M+) from accumulating
-    // far more tokens than the fractional sweet-spot tuned for 200k models.
-    const compactionThreshold = this.config.historyCompressionThreshold ?? 0.65;
-    try {
-      const contextWindowSize = (
-        await this.host.models.getWithOptions(
-          this._stepResolvedModelId || this.state.get().activeModelId,
-          '',
-        )
-      ).contextWindowSize;
-      if (this._stepGeneration !== expectedStepGeneration) return null;
-      const fractionalTriggerTokens = compactionThreshold * contextWindowSize;
-      const effectiveTriggerTokens = Math.min(
-        fractionalTriggerTokens,
-        BaseAgent.HISTORY_COMPRESSION_HARD_CAP_TOKENS,
-      );
-      if (
-        compactionThreshold >= 0 &&
-        this.state.get().usedTokens > effectiveTriggerTokens
-      ) {
-        void this.compressHistoryInternal(expectedStepGeneration);
-      }
-    } catch {
-      // Model may have been deleted between step start and finish — skip compaction check
-    }
 
     const userWantsToContinue = (await this.onStepFinished(result)) ?? true;
     if (this._stepGeneration !== expectedStepGeneration) return null;
