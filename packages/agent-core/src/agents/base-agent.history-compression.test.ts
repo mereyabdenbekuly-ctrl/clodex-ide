@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentMessage } from '../types/agent';
 import { BaseAgent } from './base-agent';
+import { HistoryCompressionUnsettledTimeoutError } from './shared/history-compression';
 
 type CompressionState = {
   activeModelId: string;
@@ -13,6 +14,11 @@ type CompressionHarness = {
   _stepGeneration: number;
   _stepResolvedModelId: string;
   _isCompressingHistory: boolean;
+  _historyCompressionAbortController: AbortController | null;
+  _historyCompressionGenerationFailures: number;
+  _historyCompressionRetryNotBefore: number;
+  stepAbortController: AbortController | null;
+  _recoveredReplayExecutionId: string | null;
   host: {
     models: { getWithOptions: ReturnType<typeof vi.fn> };
     logger: {
@@ -37,6 +43,7 @@ type CompressionHarness = {
     expectedStepGeneration: number,
     contextWindowSize: number,
   ) => Promise<void>;
+  supersedeCurrentStep: () => void;
 };
 
 function makeMessage(index: number): AgentMessage {
@@ -56,10 +63,12 @@ function makeMessage(index: number): AgentMessage {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolver) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolver, rejecter) => {
     resolve = resolver;
+    reject = rejecter;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function createCompressionHarness(persistent = true) {
@@ -132,6 +141,11 @@ function createCompressionHarness(persistent = true) {
   agent._stepGeneration = 7;
   agent._stepResolvedModelId = 'test-model';
   agent._isCompressingHistory = false;
+  agent._historyCompressionAbortController = null;
+  agent._historyCompressionGenerationFailures = 0;
+  agent._historyCompressionRetryNotBefore = 0;
+  agent.stepAbortController = null;
+  agent._recoveredReplayExecutionId = null;
   agent.host = {
     models: {
       getWithOptions: vi.fn(async () => ({ contextWindowSize: 200 })),
@@ -222,6 +236,127 @@ describe('BaseAgent history-compression admission barrier', () => {
     expect(agent.scheduleMemorySnapshotWrite).not.toHaveBeenCalled();
   });
 
+  it('uses a fresh compression signal instead of an already-aborted step signal', async () => {
+    const { agent } = createCompressionHarness();
+    const finishedStepController = new AbortController();
+    finishedStepController.abort();
+    agent.stepAbortController = finishedStepController;
+    let compressionSignal: AbortSignal | undefined;
+    agent.compressHistory.mockImplementationOnce(
+      async (_history: AgentMessage[], signal?: AbortSignal) => {
+        compressionSignal = signal;
+        return 'A summary generated in an independent cancellation scope.';
+      },
+    );
+
+    await agent.maybeCompressHistoryAfterStep(7, 200);
+
+    expect(compressionSignal).toBeInstanceOf(AbortSignal);
+    expect(compressionSignal).not.toBe(finishedStepController.signal);
+    expect(compressionSignal?.aborted).toBe(false);
+  });
+
+  it('treats pre-mutation generation failure as transient and backs off below critical occupancy', async () => {
+    const { agent, storeCompressedHistory } = createCompressionHarness();
+    agent.compressHistory.mockRejectedValueOnce(
+      new DOMException('The operation was aborted', 'AbortError'),
+    );
+
+    await expect(
+      agent.maybeCompressHistoryAfterStep(7, 200),
+    ).resolves.toBeUndefined();
+
+    expect(storeCompressedHistory).not.toHaveBeenCalled();
+    expect(agent.state.persist).not.toHaveBeenCalled();
+    expect(agent.report).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'AbortError' }),
+      'compressHistoryGenerationTransient',
+    );
+    expect(agent._historyCompressionGenerationFailures).toBe(1);
+    expect(agent._historyCompressionRetryNotBefore).toBeGreaterThan(Date.now());
+
+    await agent.maybeCompressHistoryAfterStep(7, 200);
+    expect(agent.compressHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts a stopped compression without fallback, storage, reporting, or retry backoff', async () => {
+    const { agent, storeCompressedHistory } = createCompressionHarness();
+    const started = deferred<void>();
+    let stoppedSignal: AbortSignal | undefined;
+    agent.compressHistory.mockImplementationOnce(
+      async (_history: AgentMessage[], signal?: AbortSignal) => {
+        stoppedSignal = signal;
+        started.resolve();
+        return await new Promise<string>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason), {
+            once: true,
+          });
+        });
+      },
+    );
+
+    const stoppedBarrier = agent.maybeCompressHistoryAfterStep(7, 200);
+    await started.promise;
+    agent.supersedeCurrentStep();
+    await expect(stoppedBarrier).resolves.toBeUndefined();
+
+    expect(stoppedSignal?.aborted).toBe(true);
+    expect(storeCompressedHistory).not.toHaveBeenCalled();
+    expect(agent.state.persist).not.toHaveBeenCalled();
+    expect(agent.report).not.toHaveBeenCalled();
+    expect(agent._historyCompressionGenerationFailures).toBe(0);
+    expect(agent._historyCompressionRetryNotBefore).toBe(0);
+
+    let retrySignal: AbortSignal | undefined;
+    agent.compressHistory.mockImplementationOnce(
+      async (_history: AgentMessage[], signal?: AbortSignal) => {
+        retrySignal = signal;
+        return 'A fresh compression succeeds after the user starts again.';
+      },
+    );
+    await agent.maybeCompressHistoryAfterStep(8, 200);
+
+    expect(retrySignal).toBeInstanceOf(AbortSignal);
+    expect(retrySignal).not.toBe(stoppedSignal);
+    expect(retrySignal?.aborted).toBe(false);
+    expect(storeCompressedHistory).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed with a non-retryable post-step error at critical occupancy', async () => {
+    const { agent, state, storeCompressedHistory } = createCompressionHarness();
+    state.usedTokens = 160;
+    agent.compressHistory.mockRejectedValueOnce(
+      new Error('all compression routes unavailable'),
+    );
+
+    await expect(
+      agent.maybeCompressHistoryAfterStep(7, 200),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining(
+        'Context compression failed before the next step',
+      ),
+      retryable: false,
+    });
+    expect(storeCompressedHistory).not.toHaveBeenCalled();
+    expect(agent.state.persist).not.toHaveBeenCalled();
+  });
+
+  it('fails closed instead of overlapping a compressor that ignored abort', async () => {
+    const { agent, storeCompressedHistory } = createCompressionHarness();
+    agent.compressHistory.mockRejectedValueOnce(
+      new HistoryCompressionUnsettledTimeoutError('stuck-model'),
+    );
+
+    await expect(
+      agent.maybeCompressHistoryAfterStep(7, 200),
+    ).rejects.toMatchObject({ retryable: false });
+
+    expect(storeCompressedHistory).not.toHaveBeenCalled();
+    expect(agent.state.persist).not.toHaveBeenCalled();
+    expect(agent._historyCompressionGenerationFailures).toBe(0);
+    expect(agent._historyCompressionRetryNotBefore).toBe(0);
+  });
+
   it('rolls back and fails closed when strict persistence rejects', async () => {
     const { agent, state, compression, restoreCompressedHistory } =
       createCompressionHarness();
@@ -238,6 +373,7 @@ describe('BaseAgent history-compression admission barrier', () => {
     await expect(barrier).rejects.toThrow(
       'Context compression failed before the next step',
     );
+    await expect(barrier).rejects.toMatchObject({ retryable: false });
     expect(restoreCompressedHistory).toHaveBeenCalledOnce();
     expect(
       state.history.some(
@@ -272,5 +408,28 @@ describe('BaseAgent history-compression admission barrier', () => {
           'An in-memory summary for a non-persistent agent.',
       ),
     ).toBe(true);
+  });
+});
+
+describe('BaseAgent post-step retry safety', () => {
+  it('refuses to replay a user turn for a non-retryable post-step error', async () => {
+    const agent = Object.create(BaseAgent.prototype) as any;
+    agent.state = {
+      get: () => ({
+        error: {
+          message: 'Context compression could not be persisted durably',
+          retryable: false,
+        },
+        history: [makeMessage(0)],
+      }),
+    };
+    agent.revertToUserMessageSerialized = vi.fn();
+    agent.sendUserMessageSerialized = vi.fn();
+
+    await expect(agent.retryLastUserMessageSerialized()).rejects.toThrow(
+      'cannot safely replay the last user message',
+    );
+    expect(agent.revertToUserMessageSerialized).not.toHaveBeenCalled();
+    expect(agent.sendUserMessageSerialized).not.toHaveBeenCalled();
   });
 });

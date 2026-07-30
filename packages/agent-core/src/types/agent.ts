@@ -31,6 +31,11 @@ export type AgentRuntimeError =
       code?: number;
       message: string;
       stack?: string;
+      /**
+       * False when replaying the last user turn could repeat effects that
+       * already committed before this post-step failure surfaced.
+       */
+      retryable?: boolean;
       /** Bounded host-generated diagnostics for rejected, non-executed calls. */
       recoveryDiagnostics?: string[];
     }

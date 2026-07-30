@@ -24,6 +24,7 @@ import { CmdEnterPriority } from '@ui/utils/cmd-enter-registry';
 import { HotkeyCombo } from '@ui/components/hotkey-combo';
 import { HotkeyActions } from '@shared/hotkeys';
 import { formatRuntimeErrorReport } from './runtime-error-report';
+import { shouldShowRuntimeErrorRetry } from './runtime-error-retry';
 
 interface RetryActionProps {
   retryRef?: (element: HTMLElement | null) => void;
@@ -86,7 +87,7 @@ export function MessageRuntimeError({
    *  that bypass the `canRetry` last-message gate (e.g. upstream-overload). */
   isWorking?: boolean;
 }) {
-  const canShowRetry = canRetry || !isWorking;
+  const canShowRetry = shouldShowRuntimeErrorRetry(error, canRetry, isWorking);
 
   const { setRef: retryRef, isWinner: retryIsWinner } = useCmdEnterTarget({
     id: `message-runtime-error-retry-${agentInstanceId}`,

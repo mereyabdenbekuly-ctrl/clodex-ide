@@ -790,7 +790,10 @@ describe('generateSimpleCompressedHistory', () => {
     expect(mps.getWithOptions).toHaveBeenCalledWith(
       'gemini-3.1-flash-lite',
       'agent-1',
-      expect.objectContaining({ $ai_span_name: 'history-compression' }),
+      expect.objectContaining({
+        $ai_span_name: 'history-compression',
+        $model_request_purpose: 'internal',
+      }),
     );
   });
 
@@ -879,7 +882,7 @@ describe('generateSimpleCompressedHistory', () => {
     expect(generateTextMock).toHaveBeenCalledTimes(2);
   });
 
-  it('aborts a hanging first model via the 30s timeout and falls back', async () => {
+  it('aborts a hanging first model via the 75s timeout and falls back', async () => {
     generateTextMock.mockImplementationOnce(({ abortSignal }: any) => {
       return new Promise((_resolve, reject) => {
         abortSignal.addEventListener('abort', () => {
@@ -898,7 +901,7 @@ describe('generateSimpleCompressedHistory', () => {
       'agent-1',
     );
 
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(75_000);
 
     const result = await promise;
     expect(result).toBe(
@@ -927,7 +930,7 @@ describe('generateSimpleCompressedHistory', () => {
       generateSimpleCompressedHistory(makeMessages(4), mps, 'agent-1'),
     ).rejects.toThrow('timed out and did not settle after abort');
 
-    await vi.advanceTimersByTimeAsync(32_000);
+    await vi.advanceTimersByTimeAsync(77_000);
     await promise;
     expect(generateTextMock).toHaveBeenCalledTimes(1);
     expect(mps.getWithOptions).toHaveBeenCalledTimes(1);
@@ -969,6 +972,78 @@ describe('generateSimpleCompressedHistory', () => {
     expect(mps.getWithOptions).toHaveBeenNthCalledWith(
       3,
       'claude-haiku-4.5',
+      'agent-1',
+      expect.any(Object),
+    );
+  });
+
+  it('stops immediately without model fallback when the caller aborts', async () => {
+    const externalController = new AbortController();
+    generateTextMock.mockImplementationOnce(({ abortSignal }: any) => {
+      return new Promise((_resolve, reject) => {
+        abortSignal.addEventListener(
+          'abort',
+          () => reject(abortSignal.reason),
+          { once: true },
+        );
+      });
+    });
+
+    const mps = makeMockHostModels();
+    const promise = generateSimpleCompressedHistory(
+      makeMessages(4),
+      mps,
+      'agent-1',
+      'selected-model',
+      undefined,
+      externalController.signal,
+    );
+    await vi.waitFor(() => expect(generateTextMock).toHaveBeenCalledOnce());
+
+    externalController.abort(
+      new DOMException('User stopped the agent', 'AbortError'),
+    );
+
+    await expect(promise).rejects.toMatchObject({
+      name: 'AbortError',
+      message: 'User stopped the agent',
+    });
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+    expect(mps.getWithOptions).toHaveBeenCalledTimes(1);
+    expect(mps.getWithOptions).toHaveBeenCalledWith(
+      'selected-model',
+      'agent-1',
+      expect.any(Object),
+    );
+  });
+
+  it('bounds all settled timeout fallbacks by the 150s total budget', async () => {
+    generateTextMock.mockImplementation(({ abortSignal }: any) => {
+      return new Promise((_resolve, reject) => {
+        abortSignal.addEventListener(
+          'abort',
+          () => reject(abortSignal.reason),
+          { once: true },
+        );
+      });
+    });
+
+    const mps = makeMockHostModels();
+    const rejection = generateSimpleCompressedHistory(
+      makeMessages(4),
+      mps,
+      'agent-1',
+      'selected-model',
+    ).catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(150_000);
+    await expect(rejection).resolves.toMatchObject({
+      message: expect.stringContaining('150000ms total generation budget'),
+    });
+    expect(generateTextMock).toHaveBeenCalledTimes(2);
+    expect(mps.getWithOptions).toHaveBeenNthCalledWith(
+      1,
+      'selected-model',
       'agent-1',
       expect.any(Object),
     );
@@ -1027,6 +1102,30 @@ describe('generateSimpleCompressedHistory', () => {
     expect(generateTextMock).toHaveBeenCalledTimes(2);
   });
 
+  it('never stores a summary truncated by the output-token ceiling', async () => {
+    generateTextMock
+      .mockResolvedValueOnce({
+        text: 'This partial summary is long enough but incomplete.',
+        finishReason: 'length',
+      } as any)
+      .mockResolvedValueOnce({
+        text: 'This complete fallback summary preserves the required context.',
+        finishReason: 'stop',
+      } as any);
+
+    const mps = makeMockHostModels();
+    const result = await generateSimpleCompressedHistory(
+      makeMessages(4),
+      mps,
+      'agent-1',
+    );
+
+    expect(result).toBe(
+      'This complete fallback summary preserves the required context.',
+    );
+    expect(generateTextMock).toHaveBeenCalledTimes(2);
+  });
+
   it('passes an abortSignal to generateText', async () => {
     generateTextMock.mockResolvedValueOnce({
       text: 'The assistant provided a valid summary of events.',
@@ -1037,6 +1136,45 @@ describe('generateSimpleCompressedHistory', () => {
 
     const callArgs = generateTextMock.mock.calls[0][0] as any;
     expect(callArgs.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(callArgs.maxRetries).toBe(0);
+    expect(callArgs.maxOutputTokens).toBe(8_192);
+  });
+
+  it('disables provider reasoning budgets for bounded compression', async () => {
+    generateTextMock.mockResolvedValueOnce({
+      text: 'The assistant provided a bounded summary without hidden reasoning.',
+    } as any);
+    const mps = makeMockHostModels();
+    vi.mocked(mps.getWithOptions).mockResolvedValueOnce({
+      model: { id: 'mock-model' } as any,
+      providerOptions: {
+        clodex: { reasoning: { effort: 'high' }, keep: true },
+        openai: { reasoningEffort: 'high', reasoningSummary: 'auto' },
+        google: {
+          thinkingConfig: { includeThoughts: true, thinkingLevel: 'high' },
+        },
+        anthropic: {
+          thinking: { type: 'enabled', budgetTokens: 10_000 },
+          effort: 'high',
+        },
+      },
+      headers: {},
+      contextWindowSize: 100_000,
+      providerMode: 'clodex',
+    } as any);
+
+    await generateSimpleCompressedHistory(makeMessages(4), mps, 'agent-1');
+
+    const providerOptions = (generateTextMock.mock.calls[0][0] as any)
+      .providerOptions;
+    expect(providerOptions.clodex).toEqual({ keep: true });
+    expect(providerOptions.openai).toEqual({ reasoningEffort: 'none' });
+    expect(providerOptions.google).toEqual({
+      thinkingConfig: { includeThoughts: false },
+    });
+    expect(providerOptions.anthropic).toEqual({
+      thinking: { type: 'disabled' },
+    });
   });
 
   it('uses second-person "you" POV and includes key prompt elements', async () => {
@@ -1096,17 +1234,13 @@ describe('generateSimpleCompressedHistory', () => {
   });
 
   // -----------------------------------------------------------------------
-  // fallbackModelId (active chat model as last resort)
+  // fallbackModelId (active chat model gets the first bounded attempt)
   // -----------------------------------------------------------------------
 
-  it('tries fallbackModelId after all cheap models fail', async () => {
-    generateTextMock
-      .mockRejectedValueOnce(new Error('Gemini failed'))
-      .mockRejectedValueOnce(new Error('GPT failed'))
-      .mockRejectedValueOnce(new Error('Haiku failed'))
-      .mockResolvedValueOnce({
-        text: 'The assistant provided a fallback-model summary of events.',
-      } as any);
+  it('tries the active model before generic compression fallbacks', async () => {
+    generateTextMock.mockResolvedValueOnce({
+      text: 'The assistant provided an active-model summary of events.',
+    } as any);
 
     const mps = makeMockHostModels();
     const result = await generateSimpleCompressedHistory(
@@ -1117,11 +1251,11 @@ describe('generateSimpleCompressedHistory', () => {
     );
 
     expect(result).toBe(
-      'The assistant provided a fallback-model summary of events.',
+      'The assistant provided an active-model summary of events.',
     );
-    expect(generateTextMock).toHaveBeenCalledTimes(4);
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
     expect(mps.getWithOptions).toHaveBeenNthCalledWith(
-      4,
+      1,
       'claude-sonnet-4.6',
       'agent-1',
       expect.objectContaining({ $ai_span_name: 'history-compression' }),
@@ -1130,6 +1264,31 @@ describe('generateSimpleCompressedHistory', () => {
 
   it('skips fallbackModelId if it matches a cheap model ID', async () => {
     generateTextMock
+      .mockRejectedValueOnce(new Error('Haiku failed'))
+      .mockRejectedValueOnce(new Error('Gemini failed'))
+      .mockRejectedValueOnce(new Error('GPT failed'));
+
+    const mps = makeMockHostModels();
+    await expect(
+      generateSimpleCompressedHistory(
+        makeMessages(4),
+        mps,
+        'agent-1',
+        'claude-haiku-4.5' as any,
+      ),
+    ).rejects.toThrow('GPT failed');
+    expect(mps.getWithOptions).toHaveBeenCalledTimes(3);
+    expect(mps.getWithOptions).toHaveBeenNthCalledWith(
+      1,
+      'claude-haiku-4.5',
+      'agent-1',
+      expect.any(Object),
+    );
+  });
+
+  it('throws when fallback model also fails', async () => {
+    generateTextMock
+      .mockRejectedValueOnce(new Error('Sonnet failed'))
       .mockRejectedValueOnce(new Error('Gemini failed'))
       .mockRejectedValueOnce(new Error('GPT failed'))
       .mockRejectedValueOnce(new Error('Haiku failed'));
@@ -1140,32 +1299,13 @@ describe('generateSimpleCompressedHistory', () => {
         makeMessages(4),
         mps,
         'agent-1',
-        'claude-haiku-4.5' as any,
-      ),
-    ).rejects.toThrow('Haiku failed');
-    expect(mps.getWithOptions).toHaveBeenCalledTimes(3);
-  });
-
-  it('throws when fallback model also fails', async () => {
-    generateTextMock
-      .mockRejectedValueOnce(new Error('Gemini failed'))
-      .mockRejectedValueOnce(new Error('GPT failed'))
-      .mockRejectedValueOnce(new Error('Haiku failed'))
-      .mockRejectedValueOnce(new Error('Sonnet failed'));
-
-    const mps = makeMockHostModels();
-    await expect(
-      generateSimpleCompressedHistory(
-        makeMessages(4),
-        mps,
-        'agent-1',
         'claude-sonnet-4.6' as any,
       ),
-    ).rejects.toThrow('Sonnet failed');
+    ).rejects.toThrow('Haiku failed');
     expect(generateTextMock).toHaveBeenCalledTimes(4);
   });
 
-  it('does not try fallbackModelId when a cheap model succeeds', async () => {
+  it('does not spend budget on generic fallbacks when the active model succeeds', async () => {
     generateTextMock.mockResolvedValueOnce({
       text: 'The user asked the assistant to help with a task.',
     } as any);
@@ -1182,7 +1322,7 @@ describe('generateSimpleCompressedHistory', () => {
     expect(generateTextMock).toHaveBeenCalledTimes(1);
     expect(mps.getWithOptions).toHaveBeenCalledTimes(1);
     expect(mps.getWithOptions).toHaveBeenCalledWith(
-      'gemini-3.1-flash-lite',
+      'claude-sonnet-4.6',
       'agent-1',
       expect.any(Object),
     );
