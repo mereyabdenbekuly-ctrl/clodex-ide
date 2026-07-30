@@ -17,6 +17,66 @@ export function appendHistoryMessage(
 }
 
 /**
+ * Removes only transport bookkeeping appended after an exact history prefix.
+ *
+ * Provider reconnect uses this instead of a broad tool/approval sweep when a
+ * request disconnected before producing a model token or tool call. Queued
+ * user messages are deliberately preserved. A caller must fail closed when
+ * this function reports `conflict`; that result means the live history cannot
+ * be proven equivalent to the pre-stream baseline.
+ */
+export type RemoveTransportOnlyAssistantTailResult =
+  | { readonly status: 'no-tail' }
+  | { readonly status: 'removed' }
+  | {
+      readonly status: 'conflict';
+      readonly reason: 'baseline-mismatch' | 'non-transport-tail';
+    };
+
+export function removeTransportOnlyAssistantTail(
+  store: AgentStore,
+  agentInstanceId: string,
+  args: { baselineMessageIds: readonly string[] },
+): RemoveTransportOnlyAssistantTailResult {
+  let result: RemoveTransportOnlyAssistantTailResult = {
+    status: 'conflict',
+    reason: 'baseline-mismatch',
+  };
+  updateAgentInstanceState(store, agentInstanceId, (state) => {
+    if (
+      state.history.length < args.baselineMessageIds.length ||
+      args.baselineMessageIds.some(
+        (messageId, index) => state.history[index]?.id !== messageId,
+      )
+    ) {
+      result = { status: 'conflict', reason: 'baseline-mismatch' };
+      return;
+    }
+    const appended = state.history.slice(args.baselineMessageIds.length);
+    if (appended.length === 0) {
+      result = { status: 'no-tail' };
+      return;
+    }
+    const transportOnly = appended.every(
+      (message) =>
+        message.role === 'assistant' &&
+        message.parts.every((part) => {
+          if (part.type === 'step-start') return true;
+          if (part.type !== 'text' && part.type !== 'reasoning') return false;
+          return !('text' in part) || part.text.length === 0;
+        }),
+    );
+    if (!transportOnly) {
+      result = { status: 'conflict', reason: 'non-transport-tail' };
+      return;
+    }
+    state.history = state.history.slice(0, args.baselineMessageIds.length);
+    result = { status: 'removed' };
+  });
+  return result;
+}
+
+/**
  * Truncate history at `messageIndex` and clear the queue. Defensive
  * no-op on missing ids — used both as a normal interrupt path and on
  * revert flows where the agent may already be gone.

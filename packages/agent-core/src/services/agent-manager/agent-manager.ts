@@ -123,6 +123,7 @@ function getNetworkRetryableErrorMessage(
   if (error.kind === 'model-restricted') return null;
   if (error.kind === 'upstream-overload') return null;
   if (error.kind === 'waiting-for-connection') return error.originalMessage;
+  if (error.kind === 'upstream-disconnected') return null;
   if (error.retryable === false) return null;
 
   const message = error.message.toLowerCase();

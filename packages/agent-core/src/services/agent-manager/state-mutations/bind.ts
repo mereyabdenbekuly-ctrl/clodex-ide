@@ -10,6 +10,7 @@ import {
 } from './approvals';
 import {
   appendHistoryMessage,
+  removeTransportOnlyAssistantTail,
   replaceUserMessage,
   truncateHistoryAt,
 } from './history';
@@ -100,6 +101,9 @@ export function bindStateMutations(store: AgentStore, agentInstanceId: string) {
 
     appendHistoryMessage: (args: Parameters<typeof appendHistoryMessage>[2]) =>
       appendHistoryMessage(store, agentInstanceId, args),
+    removeTransportOnlyAssistantTail: (
+      args: Parameters<typeof removeTransportOnlyAssistantTail>[2],
+    ) => removeTransportOnlyAssistantTail(store, agentInstanceId, args),
     truncateHistoryAt: (args: Parameters<typeof truncateHistoryAt>[2]) =>
       truncateHistoryAt(store, agentInstanceId, args),
     replaceUserMessage: (args: Parameters<typeof replaceUserMessage>[2]) =>

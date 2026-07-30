@@ -159,6 +159,10 @@ export class BrowserAgentStepExecutor implements AgentStepExecutor {
     this.streamTextFn = streamTextFn;
   }
 
+  public resolveModelRouteBinding(): 'request-model' {
+    return 'request-model';
+  }
+
   public async execute(
     request: AgentStepExecutionRequest,
   ): Promise<AgentStepExecution> {

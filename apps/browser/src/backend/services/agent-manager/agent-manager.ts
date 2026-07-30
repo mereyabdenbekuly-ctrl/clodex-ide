@@ -21,6 +21,7 @@ import type {
   AgentStepExecutionRequest,
   ToolApprovalLifecycleHooks,
 } from '@clodex/agent-core/agents';
+import { bindAgentStepExecutionErrorToRoute } from '@clodex/agent-core/agents';
 import type { ProcessedImageCacheService } from '@clodex/agent-core/processed-image-cache';
 import type { FileReadCacheService } from '@clodex/agent-core/file-read-cache';
 import type { AttachmentsService } from '@clodex/agent-core/attachments';
@@ -92,13 +93,33 @@ export function createAutomaticSwarmStepExecutor({
   getHandler: () => AutomaticSwarmStepHandler | null;
 }): AgentStepExecutor {
   return {
+    resolveModelRouteBinding(request) {
+      if (
+        request.context.executionTarget !== 'cloud' &&
+        getHandler() !== null
+      ) {
+        return undefined;
+      }
+      return delegate.resolveModelRouteBinding?.(request);
+    },
     async execute(request) {
       const handler = getHandler();
       if (request.context.executionTarget !== 'cloud' && handler) {
-        const execution = await handler(request);
-        if (execution) return execution;
+        try {
+          const execution = await handler(request);
+          if (execution) return execution;
+        } catch (error) {
+          throw bindAgentStepExecutionErrorToRoute(error, 'external');
+        }
       }
-      return await delegate.execute(request);
+      try {
+        return await delegate.execute(request);
+      } catch (error) {
+        throw bindAgentStepExecutionErrorToRoute(
+          error,
+          delegate.resolveModelRouteBinding?.(request),
+        );
+      }
     },
   };
 }

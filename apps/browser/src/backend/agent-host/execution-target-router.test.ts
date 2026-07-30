@@ -4,6 +4,7 @@ import type {
   AgentStepExecutionRequest,
   AgentStepExecutor,
 } from '@clodex/agent-core/agents';
+import { getAgentStepExecutionErrorRoute } from '@clodex/agent-core/agents';
 import type { AsyncIterableStream, InferUIMessageChunk, UIMessage } from 'ai';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -321,6 +322,32 @@ describe('ExecutionTargetRouter', () => {
     expect(router.getTask('task-cloud')?.failureReason).toBe(
       'adapter-unavailable',
     );
+  });
+
+  it('preserves a local pre-stream route attestation through router failure tracking', async () => {
+    const local: AgentStepExecutor = {
+      resolveModelRouteBinding: () => 'request-model',
+      execute: vi.fn(async () => {
+        throw new Error('stream disconnected before completion');
+      }),
+    };
+    const router = new ExecutionTargetRouter({
+      localExecutor: local,
+      isCloudEnabled: () => false,
+      isLocalExecutionAllowed: () => true,
+      createTaskId: () => 'task-local-disconnect',
+      now: sequenceClock(),
+    });
+
+    const rejected = await router
+      .execute(createRequest('local'))
+      .catch((error) => Promise.resolve(error));
+
+    expect(getAgentStepExecutionErrorRoute(rejected)).toBe('request-model');
+    expect(router.getTask('task-local-disconnect')).toMatchObject({
+      status: 'failed',
+      failureReason: 'execution-error',
+    });
   });
 
   it('routes an enabled cloud task and records completion', async () => {
