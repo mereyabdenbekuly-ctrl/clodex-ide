@@ -22,6 +22,13 @@ export type {
   AgentStatePersistOptions,
   AgentStatePersistRequest,
 } from './state-persistence';
+export {
+  agentRuntimeProgressMatches,
+  type AgentLogicalInactivityRecoveryResult,
+  type AgentRuntimeEffectBoundary,
+  type AgentRuntimePhase,
+  type AgentRuntimeProgress,
+} from './runtime-progress';
 export { type AgentsMap, toAgentsMap } from './agents-map';
 export {
   BaseAgent,

@@ -8,6 +8,10 @@ import type {
   QueuedMessageUpdateResult,
   SendUserMessageResult,
 } from '../../agents/base-agent';
+import type {
+  AgentLogicalInactivityRecoveryResult,
+  AgentRuntimeProgress,
+} from '../../agents/runtime-progress';
 import type { AgentTypeRegistry } from '../../agents/agents-registry';
 import { toAgentsMap, type AgentsMap } from '../../agents/agents-map';
 import type { AgentHost } from '../../host/host';
@@ -123,6 +127,7 @@ function getNetworkRetryableErrorMessage(
   if (error.kind === 'model-restricted') return null;
   if (error.kind === 'upstream-overload') return null;
   if (error.kind === 'waiting-for-connection') return error.originalMessage;
+  if (error.reasonCode === 'logical-inactivity') return null;
 
   const message = error.message.toLowerCase();
   return NETWORK_RETRYABLE_ERROR_PATTERNS.some((pattern) =>
@@ -1375,6 +1380,42 @@ export class AgentManager extends DisposableService {
         );
       }
     }
+  }
+
+  /**
+   * Returns host-neutral, in-memory progress snapshots for every live agent.
+   * Runtime progress is deliberately not persisted into AgentStore: it is a
+   * process-local watchdog signal, not durable chat state.
+   */
+  public getActiveRuntimeProgress(): Array<{
+    agentInstanceId: string;
+    progress: AgentRuntimeProgress;
+  }> {
+    return [...this.activeAgents.entries()].map(([agentInstanceId, agent]) => ({
+      agentInstanceId,
+      progress: agent.getRuntimeProgress(),
+    }));
+  }
+
+  /**
+   * Delegates an exact logical-inactivity observation to one live agent.
+   * The agent owns the generation/heartbeat compare-and-preempt operation so
+   * a stale host timer can never abort a newer step.
+   */
+  public async recoverLogicalInactivity(
+    agentInstanceId: string,
+    expected: AgentRuntimeProgress,
+  ): Promise<AgentLogicalInactivityRecoveryResult> {
+    if (!this.canRunAgentWork()) {
+      this.logger.debug(
+        `[AgentManager] Logical-inactivity recovery suspended by the host execution gate. agentInstanceId=${agentInstanceId}`,
+      );
+      return 'ignored';
+    }
+
+    const agent = this.activeAgents.get(agentInstanceId);
+    if (!agent) return 'ignored';
+    return await agent.recoverLogicalInactivity(expected);
   }
 
   /**
