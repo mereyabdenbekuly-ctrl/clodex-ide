@@ -568,6 +568,21 @@ export interface EventProperties
     provider_name?: string;
     status_code?: number;
   };
+  'upstream-disconnected': {
+    agent_type: string;
+    model_id: string;
+    provider_mode: string;
+    reconnect_attempts_used: number;
+  };
+  'upstream-reconnect-scheduled': {
+    agent_type: string;
+    agent_instance_id: string;
+    model_id: string;
+    attempt: number;
+    max_attempts: number;
+    mode: 'retry-step' | 'continue';
+    delay_ms: number;
+  };
 
   // UI actions (routed via karton RPC from the renderer)
   'devtools-opened': {
@@ -1017,6 +1032,24 @@ const COMMUNITY_OBSERVED_EVENT_POLICY: Readonly<
         'unknown',
       ],
       provider_mode: ['clodex', 'official', 'custom'],
+    },
+  },
+  'upstream-disconnected': {
+    numbers: {
+      reconnect_attempts_used: 5,
+    },
+    strings: {
+      provider_mode: ['clodex', 'official', 'custom'],
+    },
+  },
+  'upstream-reconnect-scheduled': {
+    numbers: {
+      attempt: 5,
+      delay_ms: 60_000,
+      max_attempts: 5,
+    },
+    strings: {
+      mode: ['retry-step', 'continue'],
     },
   },
   'tool-call-executed': {

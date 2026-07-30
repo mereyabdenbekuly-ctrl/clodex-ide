@@ -184,6 +184,50 @@ describe('state-mutations/streaming', () => {
     );
   });
 
+  it('replaces a preliminary tool result with the final result', () => {
+    const store = new AgentStore(emptySystemState());
+    const preliminary: AgentMessage = {
+      id: 'asst-1',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-runShell',
+          toolCallId: 'tc_1',
+          state: 'output-available',
+          input: { command: 'build' },
+          output: { status: 'running' },
+          preliminary: true,
+        } as unknown as AgentToolUIPart,
+      ],
+      metadata: { createdAt: new Date(), partsMetadata: [] },
+    };
+    upsertAgentInstance(store, 'a1', makeEnvelope(baseState([preliminary])));
+
+    const final: AgentMessage = {
+      ...preliminary,
+      parts: [
+        {
+          type: 'tool-runShell',
+          toolCallId: 'tc_1',
+          state: 'output-available',
+          input: { command: 'build' },
+          output: { status: 'done' },
+          preliminary: false,
+        } as unknown as AgentToolUIPart,
+      ],
+    };
+
+    mergeUIMessageStream(store, 'a1', { uiMessage: final });
+
+    expect(
+      store.get().agents.instances.a1!.state.history[0]!.parts[0],
+    ).toMatchObject({
+      state: 'output-available',
+      preliminary: false,
+      output: { status: 'done' },
+    });
+  });
+
   it('persists the recovered cloud sequence on the existing assistant message', () => {
     const store = new AgentStore(emptySystemState());
     const assistant: AgentMessage = {

@@ -24,7 +24,11 @@ import { CmdEnterPriority } from '@ui/utils/cmd-enter-registry';
 import { HotkeyCombo } from '@ui/components/hotkey-combo';
 import { HotkeyActions } from '@shared/hotkeys';
 import { formatRuntimeErrorReport } from './runtime-error-report';
-import { shouldShowRuntimeErrorRetry } from './runtime-error-retry';
+import {
+  formatUpstreamDisconnectedErrorReport,
+  getUpstreamDisconnectedPresentation,
+  shouldShowRuntimeErrorRetry,
+} from './runtime-error-retry';
 
 interface RetryActionProps {
   retryRef?: (element: HTMLElement | null) => void;
@@ -100,6 +104,17 @@ export function MessageRuntimeError({
     showRetryHotkey: retryIsWinner,
   };
 
+  if (error.kind === 'upstream-disconnected') {
+    return (
+      <UpstreamDisconnectedError
+        error={error}
+        canReconnect={canShowRetry}
+        onReconnect={onRetry}
+        {...retryProps}
+      />
+    );
+  }
+
   if (error.kind === 'upstream-overload') {
     return (
       <UpstreamOverloadError
@@ -152,6 +167,108 @@ export function MessageRuntimeError({
       onRetry={onRetry}
       {...retryProps}
     />
+  );
+}
+
+function UpstreamDisconnectedError({
+  error,
+  canReconnect,
+  onReconnect,
+  retryRef,
+  showRetryHotkey,
+}: {
+  error: Extract<AgentRuntimeError, { kind: 'upstream-disconnected' }>;
+  canReconnect: boolean;
+  onReconnect: () => void;
+} & RetryActionProps) {
+  const [hasCopied, setHasCopied] = useState(false);
+  const presentation = getUpstreamDisconnectedPresentation(error);
+  const blocked = error.resumeMode === 'blocked';
+
+  const copyDiagnostics = () => {
+    const report = formatUpstreamDisconnectedErrorReport(error);
+    try {
+      void navigator.clipboard
+        .writeText(report)
+        .then(() => {
+          setHasCopied(true);
+          window.setTimeout(() => setHasCopied(false), 2000);
+        })
+        .catch(() => {
+          setHasCopied(false);
+        });
+    } catch {
+      setHasCopied(false);
+    }
+  };
+
+  return (
+    <div
+      className={cn(
+        'mt-6 flex w-full flex-col gap-2 rounded-lg border p-3 text-sm',
+        blocked
+          ? 'border-warning-solid/30 bg-warning-background'
+          : 'border-derived bg-surface-1',
+      )}
+    >
+      <div className="flex flex-row items-center gap-1.5">
+        {blocked && (
+          <IconTriangleWarning className="size-3.5 shrink-0 text-warning-foreground" />
+        )}
+        <span
+          className={cn(
+            'font-medium',
+            blocked ? 'text-warning-foreground' : 'text-foreground',
+          )}
+        >
+          {presentation.heading}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon-2xs"
+          className="ml-auto"
+          onClick={copyDiagnostics}
+          aria-label={
+            hasCopied
+              ? 'Disconnect diagnostics copied'
+              : 'Copy disconnect diagnostics'
+          }
+          title={hasCopied ? 'Copied' : 'Copy full disconnect diagnostics'}
+        >
+          {hasCopied ? (
+            <CopyCheckIcon className="size-3" />
+          ) : (
+            <CopyIcon className="size-3" />
+          )}
+        </Button>
+      </div>
+
+      <span className="text-muted-foreground text-xs">
+        {presentation.description}
+      </span>
+
+      {canReconnect && (
+        <div className="flex flex-row items-center justify-end gap-2 pt-2">
+          <Button
+            ref={retryRef}
+            variant="primary"
+            size="xs"
+            onClick={onReconnect}
+          >
+            <RefreshCcwIcon className="size-3" />
+            Reconnect
+            {showRetryHotkey && (
+              <HotkeyCombo
+                action={HotkeyActions.CMD_ENTER}
+                size="xs"
+                variant="solid"
+                className="ml-0.5"
+              />
+            )}
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 

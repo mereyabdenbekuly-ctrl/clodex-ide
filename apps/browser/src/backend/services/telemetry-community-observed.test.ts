@@ -192,6 +192,64 @@ describe('TelemetryService community-observed privacy contract', () => {
     await service.teardown();
   });
 
+  it('emits only bounded reconnect lifecycle fields', async () => {
+    const { service } = makeHarness('anonymous');
+    const endpointId = '62b8b1d2-f4bc-43bc-93c3-ce086afc5cd0';
+    const privatePrompt = 'private reconnect prompt';
+
+    service.capture('upstream-disconnected', {
+      agent_type: 'private-agent-type',
+      model_id: 'private-model-id',
+      provider_mode: 'official',
+      reconnect_attempts_used: 3,
+      endpointId,
+      prompt: privatePrompt,
+      error: 'private disconnect error',
+      source_url: 'https://example.invalid/private',
+    } as never);
+    service.capture('upstream-reconnect-scheduled', {
+      agent_type: 'private-agent-type',
+      agent_instance_id: 'private-agent-instance-id',
+      model_id: 'private-model-id',
+      attempt: 4,
+      max_attempts: 5,
+      mode: 'continue',
+      delay_ms: 4_000,
+      endpoint_uuid: endpointId,
+      prompt: privatePrompt,
+      originalMessage: 'private raw provider message',
+      source: '/Users/person/private/source.ts',
+    } as never);
+
+    expect(posthogClient.capture).toHaveBeenCalledTimes(2);
+    expect(posthogClient.capture.mock.calls[0]?.[0]).toMatchObject({
+      event: 'upstream-disconnected',
+      properties: expect.objectContaining({
+        provider_mode: 'official',
+        reconnect_attempts_used: 3,
+      }),
+    });
+    expect(posthogClient.capture.mock.calls[1]?.[0]).toMatchObject({
+      event: 'upstream-reconnect-scheduled',
+      properties: expect.objectContaining({
+        attempt: 4,
+        max_attempts: 5,
+        mode: 'continue',
+        delay_ms: 4_000,
+      }),
+    });
+    for (const event of posthogClient.capture.mock.calls.map(
+      ([captured]) => captured,
+    )) {
+      expect(event.properties).not.toHaveProperty('agent_type');
+      expect(event.properties).not.toHaveProperty('agent_instance_id');
+      expect(event.properties).not.toHaveProperty('model_id');
+      expect(JSON.stringify(event)).not.toContain(endpointId);
+      expect(JSON.stringify(event)).not.toContain(privatePrompt);
+    }
+    await service.teardown();
+  });
+
   it('emits lifecycle events without inspecting the host process list', async () => {
     const { service } = makeHarness('anonymous');
 
@@ -347,5 +405,67 @@ describe('sanitizeCommunityObservedProperties', () => {
         success: true,
       }),
     ).toBeNull();
+  });
+
+  it('drops endpoint, prompt, source, error, URL and free-form reconnect fields', () => {
+    const forbidden = {
+      endpoint_id: '62b8b1d2-f4bc-43bc-93c3-ce086afc5cd0',
+      endpoint_uuid: '62b8b1d2-f4bc-43bc-93c3-ce086afc5cd0',
+      endpointId: '62b8b1d2-f4bc-43bc-93c3-ce086afc5cd0',
+      prompt: 'private prompt',
+      source: '/Users/person/private/source.ts',
+      error: 'ServerDisconnectedError with private details',
+      error_message: 'private provider error',
+      stack: 'private provider stack',
+      original_message: 'private raw upstream message',
+      originalMessage: 'private raw upstream message',
+      url: 'https://example.invalid/private',
+      source_url: 'https://example.invalid/private-source',
+      base_url: 'https://example.invalid/private-base',
+      reason: 'attacker-controlled reason',
+      arbitrary_text: 'attacker-controlled free-form string',
+      agent_type: 'private-agent-type',
+      agent_instance_id: 'private-agent-instance-id',
+      model_id: 'private-model-id',
+    };
+
+    expect(
+      sanitizeCommunityObservedProperties('upstream-disconnected', {
+        ...forbidden,
+        provider_mode: 'official',
+        reconnect_attempts_used: 99,
+      }),
+    ).toEqual({
+      provider_mode: 'official',
+      reconnect_attempts_used: 5,
+    });
+    expect(
+      sanitizeCommunityObservedProperties('upstream-disconnected', {
+        provider_mode: 'attacker-controlled',
+        reconnect_attempts_used: 1,
+      }),
+    ).toEqual({ reconnect_attempts_used: 1 });
+    expect(
+      sanitizeCommunityObservedProperties('upstream-reconnect-scheduled', {
+        ...forbidden,
+        attempt: 99,
+        max_attempts: 99,
+        mode: 'continue',
+        delay_ms: 999_999,
+      }),
+    ).toEqual({
+      attempt: 5,
+      max_attempts: 5,
+      mode: 'continue',
+      delay_ms: 60_000,
+    });
+    expect(
+      sanitizeCommunityObservedProperties('upstream-reconnect-scheduled', {
+        attempt: 1,
+        max_attempts: 5,
+        mode: 'private-free-form-mode',
+        delay_ms: 500,
+      }),
+    ).toEqual({ attempt: 1, max_attempts: 5, delay_ms: 500 });
   });
 });

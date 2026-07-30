@@ -37,6 +37,11 @@
  * - `usage-limit-reached` — Hard usage limit hit; the run is halted.
  * - `upstream-overload` — Provider returned an overload / rate-limit
  *   signal causing the run to back off or abort.
+ * - `upstream-disconnected` — Provider transport disconnected. Carries
+ *   content-free route mode and reconnect-attempt metadata, never the raw
+ *   provider error or endpoint identifier.
+ * - `upstream-reconnect-scheduled` — A phase-aware retry or continuation was
+ *   scheduled. Carries timing/counter fields and a fixed recovery mode.
  *
  * Host adapters may receive additional event names from future code
  * paths; the contract is that unknown names must not throw.

@@ -25,6 +25,39 @@ export type ExceededWindow = {
   resetsAt: string;
 };
 
+type UpstreamDisconnectedRuntimeErrorBase = {
+  kind: 'upstream-disconnected';
+  message: string;
+  originalMessage: string;
+  endpointId?: string;
+  stack?: string;
+  modelId?: string;
+  attempts: number;
+};
+
+export type UpstreamDisconnectRecoveryState =
+  | {
+      phase: 'before-output';
+      resumeMode: 'retry-step';
+      retryAsApprovalContinuation?: boolean;
+      retryApprovalOriginScopeId?: string;
+    }
+  | {
+      phase: 'partial-output';
+      resumeMode: 'continue';
+    }
+  | {
+      phase: 'unknown-tool-outcome';
+      resumeMode: 'blocked';
+    }
+  | {
+      phase: 'route-unverified';
+      resumeMode: 'blocked';
+    };
+
+export type UpstreamDisconnectedRuntimeError =
+  UpstreamDisconnectedRuntimeErrorBase & UpstreamDisconnectRecoveryState;
+
 export type AgentRuntimeError =
   | {
       kind?: undefined;
@@ -64,7 +97,8 @@ export type AgentRuntimeError =
       originalMessage: string;
       code?: number;
       stack?: string;
-    };
+    }
+  | UpstreamDisconnectedRuntimeError;
 
 export type TaskGoalStatus = 'active' | 'completed' | 'cancelled' | 'blocked';
 

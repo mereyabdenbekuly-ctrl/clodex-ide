@@ -13,13 +13,15 @@ import {
 } from 'ai';
 import type { z } from 'zod';
 import nodePath from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile as fsReadFile } from '../fs';
 import type {
   AgentMessage,
   AgentRuntimeError,
   AgentState,
   AgentToolUIPart,
+  UpstreamDisconnectedRuntimeError,
+  UpstreamDisconnectRecoveryState,
 } from '../types/agent';
 import type { AgentTypes } from '../types/agent';
 import type { ModelCapabilities } from '../types/models';
@@ -34,10 +36,12 @@ import {
 } from '../host/models';
 import type { AgentCtor, AgentTypeRegistry } from './agents-registry';
 import {
+  getAgentStepExecutionErrorRoute,
   localAgentStepExecutor,
   resolveAgentToolCapabilityScopes,
   TOOL_CAPABILITY_APPROVAL_ORIGIN_SCOPE_CONTEXT_KEY,
   TOOL_CAPABILITY_CURRENT_SCOPE_CONTEXT_KEY,
+  type AgentStepExecutionRequest,
   type AgentStepExecutor,
 } from './agent-step-executor';
 import {
@@ -59,6 +63,14 @@ import {
   assertAgentSessionCheckpointSafePoint,
   resolveAgentSessionCheckpointFromMessages,
 } from './session-checkpoint';
+import {
+  MAX_UPSTREAM_RECONNECT_ATTEMPTS,
+  UpstreamStepRecoveryTracker,
+  decideUpstreamDisconnectRecovery,
+  isValidUpstreamDisconnectRecoveryState,
+  parseUpstreamDisconnectError,
+  type UpstreamDisconnectInfo,
+} from './shared/upstream-reconnect';
 
 type ProviderApiError = {
   message?: string;
@@ -73,6 +85,15 @@ type ProviderApiError = {
  */
 class NonRetryablePostStepError extends Error {
   public readonly retryable = false;
+}
+
+class UpstreamReconnectReplayBlockedError extends Error {
+  public constructor(toolName: string) {
+    super(
+      `Reconnect safety blocked a repeated completed tool call to "${toolName}"`,
+    );
+    this.name = 'UpstreamReconnectReplayBlockedError';
+  }
 }
 
 type ResolvedLanguageModelV3 = Extract<
@@ -138,6 +159,127 @@ function getMessageText(message: AgentMessage): string {
     )
     .map((part) => part.text)
     .join('\n');
+}
+
+type UiMessageProgressPart = {
+  readonly type: string;
+  readonly state: string;
+  readonly toolCallId: string;
+  readonly payloadLength: number;
+  readonly preliminary: boolean;
+  readonly providerExecuted: boolean;
+};
+
+function snapshotUiMessageProgress(
+  message: AgentMessage | undefined,
+): UiMessageProgressPart[] {
+  if (!message) return [];
+  const progress: UiMessageProgressPart[] = [];
+  for (const part of message.parts) {
+    if (part.type === 'step-start') continue;
+    if (part.type === 'text' || part.type === 'reasoning') {
+      const text =
+        'text' in part && typeof part.text === 'string' ? part.text : '';
+      // Empty start/end markers are transport bookkeeping, not a committed
+      // model token. Omitting them preserves safe pre-token reconnect.
+      if (text.length === 0) continue;
+      progress.push({
+        type: part.type,
+        state:
+          'state' in part && typeof part.state === 'string' ? part.state : '',
+        toolCallId: '',
+        payloadLength: text.length,
+        preliminary: false,
+        providerExecuted: false,
+      });
+      continue;
+    }
+    if (part.type === 'dynamic-tool' || part.type.startsWith('tool-')) {
+      const toolPart = part as AgentToolUIPart | DynamicToolUIPart;
+      progress.push({
+        type: part.type,
+        state: typeof toolPart.state === 'string' ? toolPart.state : '',
+        toolCallId:
+          typeof toolPart.toolCallId === 'string' ? toolPart.toolCallId : '',
+        payloadLength: boundedSerializedLength(
+          'input' in toolPart ? toolPart.input : undefined,
+        ),
+        preliminary: 'preliminary' in toolPart && toolPart.preliminary === true,
+        providerExecuted:
+          'providerExecuted' in toolPart && toolPart.providerExecuted === true,
+      });
+      continue;
+    }
+    progress.push({
+      type: part.type,
+      state: '',
+      toolCallId: '',
+      payloadLength: boundedSerializedLength(part),
+      preliminary: false,
+      providerExecuted: false,
+    });
+  }
+  return progress;
+}
+
+function boundedSerializedLength(value: unknown): number {
+  try {
+    return Math.min(1_000_000, JSON.stringify(value)?.length ?? 0);
+  } catch {
+    return 1;
+  }
+}
+
+function uiProgressPartEqual(
+  left: UiMessageProgressPart | undefined,
+  right: UiMessageProgressPart | undefined,
+): boolean {
+  return (
+    left?.type === right?.type &&
+    left?.state === right?.state &&
+    left?.toolCallId === right?.toolCallId &&
+    left?.payloadLength === right?.payloadLength &&
+    left?.preliminary === right?.preliminary &&
+    left?.providerExecuted === right?.providerExecuted
+  );
+}
+
+function reconnectToolSignature(toolName: string, input: unknown): string {
+  return createHash('sha256')
+    .update(toolName)
+    .update('\0')
+    .update(stableReconnectStringify(input))
+    .digest('hex');
+}
+
+function stableReconnectStringify(value: unknown): string {
+  const seen = new Set<object>();
+  const canonicalize = (input: unknown): unknown => {
+    if (
+      input === null ||
+      typeof input === 'string' ||
+      typeof input === 'boolean' ||
+      typeof input === 'number'
+    ) {
+      return input;
+    }
+    if (typeof input === 'bigint') return input.toString();
+    if (typeof input === 'undefined') return '[undefined]';
+    if (typeof input !== 'object') return String(input);
+    if (seen.has(input)) return '[circular]';
+    seen.add(input);
+    try {
+      if (Array.isArray(input)) return input.map(canonicalize);
+      return Object.fromEntries(
+        Object.entries(input as Record<string, unknown>)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, nested]) => [key, canonicalize(nested)]),
+      );
+    } finally {
+      seen.delete(input);
+    }
+  };
+  return JSON.stringify(canonicalize(value));
 }
 
 function findLatestCompressedHistory(
@@ -807,6 +949,12 @@ export abstract class BaseAgent<
   private _recoveredReplayExecutionId: string | null = null;
   private _recoveredReplayStepGeneration: number | null = null;
   private readonly _closedRecoveredReplayExecutionIds = new Set<string>();
+  private _upstreamReconnectTurnId: string | null = null;
+  private _upstreamReconnectAttempts = 0;
+  private _upstreamReconnectNeedsContinuation = false;
+  private readonly _upstreamReconnectCompletedToolSignatures =
+    new Set<string>();
+  private _upstreamReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Number of explicit approval responses crossing durable barriers. */
   private _approvalDurabilityInFlight = 0;
@@ -908,6 +1056,11 @@ export abstract class BaseAgent<
         reason: 'tool-call-recovery';
         kind: ToolCallRecoveryKind;
         toolNames: readonly string[];
+        attempt: number;
+        maxAttempts: number;
+      }
+    | {
+        reason: 'upstream-disconnected';
         attempt: number;
         maxAttempts: number;
       }
@@ -2115,6 +2268,41 @@ export abstract class BaseAgent<
     if (!currentState.error) {
       throw new Error('No error to retry');
     }
+    if (currentState.error.kind === 'upstream-disconnected') {
+      if (!isValidUpstreamDisconnectRecoveryState(currentState.error)) {
+        throw new Error(
+          'Reconnect is blocked because the persisted recovery state is invalid',
+        );
+      }
+      if (currentState.error.resumeMode === 'blocked') {
+        throw new Error(
+          'Reconnect is blocked because a dispatched tool has no durable terminal result',
+        );
+      }
+      this.clearUpstreamReconnectTimer();
+      this._upstreamReconnectTurnId = this.getLatestUserMessageId();
+      this._upstreamReconnectAttempts = 0;
+      this._upstreamReconnectNeedsContinuation =
+        currentState.error.resumeMode === 'continue';
+      if (currentState.error.resumeMode === 'continue') {
+        this._pendingSyntheticContinuation = {
+          reason: 'upstream-disconnected',
+          attempt: 1,
+          maxAttempts: MAX_UPSTREAM_RECONNECT_ATTEMPTS,
+        };
+      } else if (
+        currentState.error.retryAsApprovalContinuation === true &&
+        currentState.error.retryApprovalOriginScopeId
+      ) {
+        this._pendingToolCapabilityScopeId =
+          currentState.error.retryApprovalOriginScopeId;
+      }
+      void this.runStep(
+        currentState.error.resumeMode === 'retry-step' &&
+          currentState.error.retryAsApprovalContinuation === true,
+      );
+      return;
+    }
     if (
       currentState.error.kind === undefined &&
       currentState.error.retryable === false
@@ -2145,6 +2333,558 @@ export abstract class BaseAgent<
     // Revert to the last user message and resend it
     await this.revertToUserMessageSerialized(lastUserMessage.id, false);
     await this.sendUserMessageSerialized(lastUserMessage);
+  }
+
+  private getLatestUserMessageId(): string | null {
+    return (
+      [...this.state.get().history]
+        .reverse()
+        .find((message) => message.role === 'user')?.id ?? null
+    );
+  }
+
+  private getUpstreamReconnectAttemptsForCurrentTurn(): number {
+    const turnId = this.getLatestUserMessageId();
+    if (turnId !== this._upstreamReconnectTurnId) {
+      this._upstreamReconnectTurnId = turnId;
+      this._upstreamReconnectAttempts = 0;
+      this._upstreamReconnectNeedsContinuation = false;
+      this._upstreamReconnectCompletedToolSignatures?.clear();
+    }
+    return this._upstreamReconnectAttempts;
+  }
+
+  private resetUpstreamReconnectState(): void {
+    this._upstreamReconnectTurnId = this.getLatestUserMessageId();
+    this._upstreamReconnectAttempts = 0;
+    this._upstreamReconnectNeedsContinuation = false;
+    this.clearUpstreamReconnectTimer();
+  }
+
+  private clearUpstreamReconnectReplayFence(): void {
+    this._upstreamReconnectCompletedToolSignatures?.clear();
+  }
+
+  private clearUpstreamReconnectTimer(): void {
+    if (!this._upstreamReconnectTimer) return;
+    clearTimeout(this._upstreamReconnectTimer);
+    this._upstreamReconnectTimer = null;
+  }
+
+  private scheduleUpstreamReconnect(input: {
+    readonly decision: Extract<
+      ReturnType<typeof decideUpstreamDisconnectRecovery>,
+      { kind: 'retry-step' | 'continue' }
+    >;
+    readonly stepGeneration: number;
+    readonly retryAsApprovalContinuation: boolean;
+  }): void {
+    this.clearUpstreamReconnectTimer();
+    this._upstreamReconnectAttempts = input.decision.attempt;
+    if (input.decision.kind === 'continue') {
+      this._upstreamReconnectNeedsContinuation = true;
+    }
+    if (
+      input.decision.kind === 'continue' ||
+      this._upstreamReconnectNeedsContinuation
+    ) {
+      this._pendingSyntheticContinuation = {
+        reason: 'upstream-disconnected',
+        attempt: input.decision.attempt,
+        maxAttempts: MAX_UPSTREAM_RECONNECT_ATTEMPTS,
+      };
+    }
+    this.host.logger.warn(
+      `[BaseAgent:${this.instanceId}] Scheduling upstream reconnect ${input.decision.attempt}/${MAX_UPSTREAM_RECONNECT_ATTEMPTS}. mode=${input.decision.kind}, delayMs=${input.decision.delayMs}`,
+    );
+    this.host.telemetry?.capture('upstream-reconnect-scheduled', {
+      agent_type: this.agentType,
+      agent_instance_id: this.instanceId,
+      model_id: this._stepResolvedModelId || this.state.get().activeModelId,
+      attempt: input.decision.attempt,
+      max_attempts: MAX_UPSTREAM_RECONNECT_ATTEMPTS,
+      mode: input.decision.kind,
+      delay_ms: input.decision.delayMs,
+    });
+    this._upstreamReconnectTimer = setTimeout(() => {
+      this._upstreamReconnectTimer = null;
+      if (
+        this._stepGeneration !== input.stepGeneration ||
+        this.state.get().error
+      ) {
+        return;
+      }
+      void this.runStep(
+        input.decision.kind === 'retry-step' &&
+          input.retryAsApprovalContinuation,
+      );
+    }, input.decision.delayMs);
+  }
+
+  private captureCompletedToolSignaturesForReconnect(
+    tracker: UpstreamStepRecoveryTracker,
+  ): void {
+    const terminalIds = new Set(tracker.snapshot().terminalToolCallIds);
+    if (terminalIds.size === 0) return;
+    for (const message of this.state.get().history) {
+      if (message.role !== 'assistant') continue;
+      for (const part of message.parts) {
+        if (!(part.type === 'dynamic-tool' || part.type.startsWith('tool-'))) {
+          continue;
+        }
+        const toolPart = part as AgentToolUIPart | DynamicToolUIPart;
+        if (
+          !terminalIds.has(toolPart.toolCallId) ||
+          toolPart.state !== 'output-available' ||
+          ('preliminary' in toolPart && toolPart.preliminary === true)
+        ) {
+          continue;
+        }
+        const toolName =
+          part.type === 'dynamic-tool' &&
+          'toolName' in toolPart &&
+          typeof toolPart.toolName === 'string'
+            ? toolPart.toolName
+            : part.type.replace(/^tool-/, '');
+        if (!toolName) continue;
+        this._upstreamReconnectCompletedToolSignatures.add(
+          reconnectToolSignature(
+            toolName,
+            'input' in toolPart ? toolPart.input : undefined,
+          ),
+        );
+      }
+    }
+  }
+
+  private async persistLatestAssistantForReconnectStrict(
+    expectedStepGeneration: number,
+  ): Promise<void> {
+    if (!this.config.persistent) return;
+    const history = this.state.get().history;
+    let messageIndex = -1;
+    for (let index = history.length - 1; index >= 0; index -= 1) {
+      if (history[index]?.role === 'assistant') {
+        messageIndex = index;
+        break;
+      }
+    }
+    if (messageIndex < 0) {
+      throw new Error(
+        'Reconnect continuation has no assistant progress to persist',
+      );
+    }
+    const messageId = history[messageIndex]!.id;
+    await this.state.persist({
+      dirtyMessageIndices: [messageIndex],
+      expectedMessageBindings: [{ messageIndex, messageId }],
+      throwOnError: true,
+    });
+    if (this._stepGeneration !== expectedStepGeneration) {
+      throw new Error('Reconnect persistence was superseded');
+    }
+  }
+
+  private async removeTransportOnlyReconnectTailStrict(
+    baselineMessageIds: readonly string[],
+  ): Promise<void> {
+    const result = this.state.commands.removeTransportOnlyAssistantTail({
+      baselineMessageIds,
+    });
+    if (result.status === 'conflict') {
+      throw new Error(`Reconnect history boundary conflict: ${result.reason}`);
+    }
+    if (result.status === 'removed' && this.config.persistent) {
+      await this.state.persist({ throwOnError: true });
+    }
+  }
+
+  private hasOpenApprovalRequestInLastAssistant(): boolean {
+    const lastAssistant = [...this.state.get().history]
+      .reverse()
+      .find((message) => message.role === 'assistant');
+    return (
+      lastAssistant?.parts.some(
+        (part) =>
+          (part.type === 'dynamic-tool' || part.type.startsWith('tool-')) &&
+          (part as AgentToolUIPart | DynamicToolUIPart).state ===
+            'approval-requested',
+      ) ?? false
+    );
+  }
+
+  private publishUpstreamDisconnectError(input: {
+    readonly disconnect: {
+      readonly error: Error;
+      readonly info: UpstreamDisconnectInfo;
+    };
+    readonly attempts: number;
+    readonly recovery: UpstreamDisconnectRecoveryState;
+    readonly modelId: string;
+  }): void {
+    const message =
+      input.recovery.phase === 'unknown-tool-outcome'
+        ? 'The model connection was interrupted after a tool started, and its terminal result could not be verified. Automatic replay was stopped to avoid repeating a possible effect.'
+        : input.recovery.phase === 'route-unverified'
+          ? 'The external execution route disconnected before it produced resumable evidence. Automatic replay was stopped.'
+          : input.recovery.phase === 'partial-output'
+            ? `The model connection could not be restored after ${input.attempts} reconnect attempts. The committed partial response and tool results were preserved.`
+            : `The model connection could not be restored after ${input.attempts} reconnect attempts.`;
+    const error: UpstreamDisconnectedRuntimeError = {
+      kind: 'upstream-disconnected',
+      message,
+      originalMessage: input.disconnect.info.message,
+      ...(input.disconnect.info.endpointId
+        ? { endpointId: input.disconnect.info.endpointId }
+        : {}),
+      stack: input.disconnect.error.stack,
+      modelId: input.modelId,
+      attempts: input.attempts,
+      ...input.recovery,
+    };
+    this.state.commands.recordStepError({
+      error,
+      markUnread: 'mark-unread',
+    });
+    this.emitNotificationEvent('error');
+  }
+
+  private async handleUpstreamDisconnect(input: {
+    readonly disconnect: {
+      readonly error: Error;
+      readonly info: UpstreamDisconnectInfo;
+    };
+    readonly tracker: UpstreamStepRecoveryTracker;
+    readonly stepGeneration: number;
+    readonly isApprovalContinuation: boolean;
+    readonly modelId: string;
+    readonly modelRouteBinding: 'request-model' | 'external' | undefined;
+    readonly toolCapabilityScopeId: string;
+    readonly approvalOriginScopeId: string | null;
+    readonly historyMessageIdsBeforeStream: readonly string[];
+  }): Promise<'completed' | 'failed' | 'superseded'> {
+    if (this._stepGeneration !== input.stepGeneration) return 'superseded';
+    this._pendingContinue = null;
+    this.stepAbortController = null;
+
+    const progress = input.tracker.snapshot();
+    const attemptsUsed = this.getUpstreamReconnectAttemptsForCurrentTurn();
+    const partial =
+      progress.firstTokenObserved ||
+      progress.outputCommitted ||
+      progress.terminalToolCallIds.length > 0;
+    const chainHasCommittedProgress =
+      partial || this._upstreamReconnectNeedsContinuation;
+    if (input.modelRouteBinding === 'request-model') {
+      this.captureCompletedToolSignaturesForReconnect(input.tracker);
+    }
+
+    // An unresolved dispatched tool always wins over an approval pause. A
+    // provider can emit multiple parallel calls, so preserving one pending
+    // approval must never hide the unknown outcome of a sibling effect.
+    if (
+      progress.unresolvedToolCallIds.length === 0 &&
+      this.hasOpenApprovalRequestInLastAssistant()
+    ) {
+      try {
+        await this.populatePathReferencesOnAssistantMessage(
+          input.stepGeneration,
+        );
+        if (this._stepGeneration !== input.stepGeneration) {
+          return 'superseded';
+        }
+        await this.persistLatestAssistantForReconnectStrict(
+          input.stepGeneration,
+        );
+      } catch (persistenceError) {
+        if (this._stepGeneration !== input.stepGeneration) return 'superseded';
+        const normalized =
+          persistenceError instanceof Error
+            ? persistenceError
+            : new Error(String(persistenceError));
+        this.state.commands.recordStepError({
+          error: {
+            message: `Internal error: unable to persist the pending approval after an upstream disconnect: ${normalized.message}`,
+            stack: normalized.stack,
+            retryable: false,
+          },
+          markUnread: 'mark-unread',
+        });
+        this.emitNotificationEvent('error');
+        return 'failed';
+      }
+      if (this._stepGeneration !== input.stepGeneration) return 'superseded';
+      if (input.modelRouteBinding === 'request-model') {
+        try {
+          this.emitDisconnectedTerminalToolEvents(input.tracker);
+        } catch (evidenceError) {
+          this.report(
+            evidenceError as Error,
+            'finalizeDisconnectedToolEvidence',
+          );
+        }
+      }
+      this.scheduleMemorySnapshotWrite('post-step');
+      this.state.commands.setIsWorkingFalse();
+      return 'completed';
+    }
+    let decision = decideUpstreamDisconnectRecovery({
+      attemptsUsed,
+      maxAttempts: MAX_UPSTREAM_RECONNECT_ATTEMPTS,
+      progress,
+    });
+    if (
+      input.modelRouteBinding !== 'request-model' &&
+      !(
+        decision.kind === 'fail-closed' &&
+        decision.reason === 'unknown-tool-outcome'
+      )
+    ) {
+      decision = {
+        kind: 'fail-closed',
+        reason: 'route-unverified',
+        attempt: attemptsUsed,
+      };
+    }
+    if (decision.kind === 'fail-closed') {
+      try {
+        if (decision.reason === 'unknown-tool-outcome') {
+          await this.applyAndPersistApprovalSweep(() =>
+            this.state.commands.terminateNonTerminalToolPartsInLastAssistant({
+              approvalDenyReason:
+                'The provider disconnected before this approval could complete.',
+              outputErrorText:
+                'The provider disconnected after tool dispatch. The operation outcome is unknown; do not replay it automatically.',
+            }),
+          );
+          if (partial) {
+            await this.populatePathReferencesOnAssistantMessage(
+              input.stepGeneration,
+            );
+            if (this._stepGeneration !== input.stepGeneration) {
+              return 'superseded';
+            }
+            await this.persistLatestAssistantForReconnectStrict(
+              input.stepGeneration,
+            );
+          }
+          if (input.modelRouteBinding === 'request-model') {
+            try {
+              this.emitDisconnectedTerminalToolEvents(input.tracker);
+            } catch (evidenceError) {
+              this.report(
+                evidenceError as Error,
+                'finalizeDisconnectedToolEvidence',
+              );
+            }
+          }
+        } else if (decision.reason === 'route-unverified') {
+          if (partial) {
+            await this.applyAndPersistApprovalSweep(() =>
+              this.state.commands.terminateNonTerminalToolPartsInLastAssistant({
+                approvalDenyReason:
+                  'The external execution route disconnected before approval was completed.',
+                outputErrorText:
+                  'The external execution route disconnected before this tool call reached a trusted terminal result. Automatic replay is blocked.',
+              }),
+            );
+            await this.populatePathReferencesOnAssistantMessage(
+              input.stepGeneration,
+            );
+            if (this._stepGeneration !== input.stepGeneration) {
+              return 'superseded';
+            }
+            await this.persistLatestAssistantForReconnectStrict(
+              input.stepGeneration,
+            );
+          } else {
+            await this.removeTransportOnlyReconnectTailStrict(
+              input.historyMessageIdsBeforeStream,
+            );
+          }
+        } else if (partial) {
+          await this.applyAndPersistApprovalSweep(() =>
+            this.state.commands.terminateNonTerminalToolPartsInLastAssistant({
+              approvalDenyReason:
+                'The provider disconnected before approval was completed.',
+              outputErrorText:
+                'The provider disconnected before this tool call executed. Continue from the preserved history.',
+            }),
+          );
+          await this.populatePathReferencesOnAssistantMessage(
+            input.stepGeneration,
+          );
+          if (this._stepGeneration !== input.stepGeneration) {
+            return 'superseded';
+          }
+          await this.persistLatestAssistantForReconnectStrict(
+            input.stepGeneration,
+          );
+          if (input.modelRouteBinding === 'request-model') {
+            try {
+              this.emitDisconnectedTerminalToolEvents(input.tracker);
+            } catch (evidenceError) {
+              this.report(
+                evidenceError as Error,
+                'finalizeDisconnectedToolEvidence',
+              );
+            }
+          }
+        } else {
+          await this.removeTransportOnlyReconnectTailStrict(
+            input.historyMessageIdsBeforeStream,
+          );
+        }
+      } catch (persistenceError) {
+        if (this._stepGeneration !== input.stepGeneration) return 'superseded';
+        const normalized =
+          persistenceError instanceof Error
+            ? persistenceError
+            : new Error(String(persistenceError));
+        this.report(normalized, 'persistExhaustedUpstreamReconnect');
+        this.publishUpstreamDisconnectError({
+          disconnect: {
+            error: normalized,
+            info: {
+              message: `Reconnect persistence barrier failed: ${normalized.message}`,
+              ...(input.disconnect.info.endpointId
+                ? { endpointId: input.disconnect.info.endpointId }
+                : {}),
+            },
+          },
+          attempts: attemptsUsed,
+          recovery: {
+            phase: 'unknown-tool-outcome',
+            resumeMode: 'blocked',
+          },
+          modelId: input.modelId,
+        });
+        return 'failed';
+      }
+      if (this._stepGeneration !== input.stepGeneration) return 'superseded';
+      if (
+        decision.reason === 'retry-exhausted' &&
+        !chainHasCommittedProgress &&
+        input.isApprovalContinuation
+      ) {
+        this._pendingToolCapabilityScopeId = input.approvalOriginScopeId;
+      } else if (
+        this._pendingToolCapabilityScopeId === input.toolCapabilityScopeId
+      ) {
+        this._pendingToolCapabilityScopeId = null;
+      }
+      const recovery: UpstreamDisconnectRecoveryState =
+        decision.reason === 'unknown-tool-outcome'
+          ? {
+              phase: 'unknown-tool-outcome',
+              resumeMode: 'blocked',
+            }
+          : decision.reason === 'route-unverified'
+            ? {
+                phase: 'route-unverified',
+                resumeMode: 'blocked',
+              }
+            : chainHasCommittedProgress
+              ? {
+                  phase: 'partial-output',
+                  resumeMode: 'continue',
+                }
+              : {
+                  phase: 'before-output',
+                  resumeMode: 'retry-step',
+                  retryAsApprovalContinuation: input.isApprovalContinuation,
+                  ...(input.approvalOriginScopeId
+                    ? {
+                        retryApprovalOriginScopeId: input.approvalOriginScopeId,
+                      }
+                    : {}),
+                };
+      this.publishUpstreamDisconnectError({
+        disconnect: input.disconnect,
+        attempts:
+          decision.reason === 'retry-exhausted'
+            ? MAX_UPSTREAM_RECONNECT_ATTEMPTS
+            : attemptsUsed,
+        recovery,
+        modelId: input.modelId,
+      });
+      return 'failed';
+    }
+
+    try {
+      if (decision.kind === 'retry-step') {
+        await this.removeTransportOnlyReconnectTailStrict(
+          input.historyMessageIdsBeforeStream,
+        );
+      } else {
+        await this.applyAndPersistApprovalSweep(() =>
+          this.state.commands.terminateNonTerminalToolPartsInLastAssistant({
+            approvalDenyReason:
+              'The provider disconnected before approval was completed.',
+            outputErrorText:
+              'The provider disconnected before this tool call executed. Continue from the preserved history.',
+          }),
+        );
+        await this.populatePathReferencesOnAssistantMessage(
+          input.stepGeneration,
+        );
+        if (this._stepGeneration !== input.stepGeneration) return 'superseded';
+        await this.persistLatestAssistantForReconnectStrict(
+          input.stepGeneration,
+        );
+        try {
+          this.emitDisconnectedTerminalToolEvents(input.tracker);
+        } catch (evidenceError) {
+          this.report(
+            evidenceError as Error,
+            'finalizeDisconnectedToolEvidence',
+          );
+        }
+        this.scheduleMemorySnapshotWrite('post-step');
+      }
+    } catch (persistenceError) {
+      if (this._stepGeneration !== input.stepGeneration) return 'superseded';
+      const normalized =
+        persistenceError instanceof Error
+          ? persistenceError
+          : new Error(String(persistenceError));
+      this.report(normalized, 'persistUpstreamReconnectBoundary');
+      this.publishUpstreamDisconnectError({
+        disconnect: {
+          error: normalized,
+          info: {
+            message: `Reconnect persistence barrier failed: ${normalized.message}`,
+            ...(input.disconnect.info.endpointId
+              ? { endpointId: input.disconnect.info.endpointId }
+              : {}),
+          },
+        },
+        attempts: attemptsUsed,
+        recovery: {
+          phase: 'unknown-tool-outcome',
+          resumeMode: 'blocked',
+        },
+        modelId: input.modelId,
+      });
+      return 'failed';
+    }
+
+    if (this._stepGeneration !== input.stepGeneration) return 'superseded';
+    if (decision.kind === 'retry-step' && input.isApprovalContinuation) {
+      this._pendingToolCapabilityScopeId = input.approvalOriginScopeId;
+    } else if (
+      this._pendingToolCapabilityScopeId === input.toolCapabilityScopeId &&
+      decision.kind === 'continue'
+    ) {
+      this._pendingToolCapabilityScopeId = null;
+    }
+    this.scheduleUpstreamReconnect({
+      decision,
+      stepGeneration: input.stepGeneration,
+      retryAsApprovalContinuation:
+        decision.kind === 'retry-step' && input.isApprovalContinuation,
+    });
+    return 'failed';
   }
 
   /**
@@ -2864,6 +3604,7 @@ export abstract class BaseAgent<
         .get()
         .history.some((m) => m.role === 'assistant');
       if (recoveryExhaustion && !stepHasApprovalRequest) {
+        this.clearUpstreamReconnectReplayFence();
         this.state.commands.recordStepError({
           error: {
             message: recoveryExhaustion.message,
@@ -2883,6 +3624,9 @@ export abstract class BaseAgent<
         error: undefined,
         markUnread: 'if-assistant-history',
       });
+      if (!stepHasApprovalRequest) {
+        this.clearUpstreamReconnectReplayFence();
+      }
       this.onIdle();
       // Only notify "done" for a genuine turn completion: there must
       // be an assistant message and the agent must not be paused on an
@@ -2971,6 +3715,11 @@ export abstract class BaseAgent<
     // `state.history` — see `populateReasoningDetailsOnAssistantMessage`.
     let finishedResult: StepResult<ToolSet> | null = null;
     let stepCallbackFailed = false;
+    let upstreamDisconnect: {
+      readonly error: Error;
+      readonly info: UpstreamDisconnectInfo;
+    } | null = null;
+    const upstreamRecoveryTracker = new UpstreamStepRecoveryTracker();
 
     // Skip flush on approval continuations — the approval step must
     // complete in isolation first. Queued messages will be picked up
@@ -2983,6 +3732,10 @@ export abstract class BaseAgent<
       this.scheduleMemorySnapshotWrite('queued-messages');
     }
     const queueFlushIndex = flushedIndex ?? -1;
+    // A queued/admitted user message starts a new turn and must release every
+    // reconnect-only replay fence from the previous turn before tools are
+    // prepared or executed.
+    this.getUpstreamReconnectAttemptsForCurrentTurn();
     const toolCapabilityScopes = resolveAgentToolCapabilityScopes({
       agentInstanceId: this.instanceId,
       stepGeneration: stepGen,
@@ -3076,7 +3829,7 @@ export abstract class BaseAgent<
       tools = await this.getToolsForStep();
       if (this._stepGeneration !== stepGen) return 'superseded';
       this.resetToolCallExecutionTracking();
-      tools = this.wrapToolsWithTiming(tools);
+      tools = this.wrapToolsWithTiming(tools, upstreamRecoveryTracker);
       tools = this.wrapToolsWithOutputBudget(tools);
       if (modelWithOptions.stripStrictFromTools) {
         tools = this.stripStrictFromTools(tools);
@@ -3110,288 +3863,358 @@ export abstract class BaseAgent<
 
     const stepModel = this.wrapModelWithToolCallIdentityFence(
       modelWithOptions.model,
+      upstreamRecoveryTracker,
     );
 
     // Debug: analyse cache stability of the final model messages before the LLM call.
     this._cacheAnalyzer.trackStep(modelMessages);
+    const historyMessageIdsBeforeStream = this.state
+      .get()
+      .history.map((message) => message.id);
 
     this.host.logger.debug(`[BaseAgent:${this.instanceId}] Running step`);
 
     this.stepAbortController = new AbortController();
 
-    let stream: Awaited<ReturnType<AgentStepExecutor['execute']>>;
-    try {
-      stream = await this.stepExecutor.execute({
-        context: {
-          agentInstanceId: this.instanceId,
-          agentType: this.agentType,
-          traceId: this.instanceId,
-          requestedModelId,
-          resolvedModelId: stepModelId,
-          isApprovalContinuation,
-          executionTarget: this.getExecutionTargetForCurrentTurn(),
-          snapshotSelection: resolveAgentTaskSnapshotSelectionFromMessages(
+    const stepExecutionRequest: AgentStepExecutionRequest = {
+      context: {
+        agentInstanceId: this.instanceId,
+        agentType: this.agentType,
+        traceId: this.instanceId,
+        requestedModelId,
+        resolvedModelId: stepModelId,
+        isApprovalContinuation,
+        executionTarget: this.getExecutionTargetForCurrentTurn(),
+        snapshotSelection: resolveAgentTaskSnapshotSelectionFromMessages(
+          this.state.get().history,
+        ),
+        metadata: {
+          $ai_span_name: `${this.agentType}-history`,
+          $ai_parent_id: this.instanceId,
+          [MODEL_REQUEST_PURPOSE_METADATA_KEY]: 'agent-step',
+          [MODEL_TASK_ROLE_METADATA_KEY]: stepTaskRole,
+          task_role: stepTaskRole,
+          requested_model_id: requestedModelId,
+          routed_model_id: stepModelId,
+          session_checkpoint: resolveAgentSessionCheckpointFromMessages(
             this.state.get().history,
           ),
-          metadata: {
-            $ai_span_name: `${this.agentType}-history`,
-            $ai_parent_id: this.instanceId,
-            [MODEL_REQUEST_PURPOSE_METADATA_KEY]: 'agent-step',
-            [MODEL_TASK_ROLE_METADATA_KEY]: stepTaskRole,
-            task_role: stepTaskRole,
-            requested_model_id: requestedModelId,
-            routed_model_id: stepModelId,
-            session_checkpoint: resolveAgentSessionCheckpointFromMessages(
-              this.state.get().history,
-            ),
-          },
         },
-        options: {
-          model: stepModel,
-          providerOptions: modelWithOptions.providerOptions,
-          headers: modelWithOptions.headers,
-          messages: modelMessages,
-          tools: tools as ToolSet,
-          timeout: resolvedConfig.maxTime
-            ? {
-                totalMs: resolvedConfig.maxTime,
-              }
-            : undefined,
-          maxRetries: resolvedConfig.maxRetries ?? 1,
-          maxOutputTokens: resolvedConfig.maxOutputTokens,
-          abortSignal: this.stepAbortController.signal,
-          experimental_context: {
-            [TOOL_CAPABILITY_CURRENT_SCOPE_CONTEXT_KEY]:
-              toolCapabilityScopes.currentScopeId,
-            [TOOL_CAPABILITY_APPROVAL_ORIGIN_SCOPE_CONTEXT_KEY]:
-              toolCapabilityScopes.approvalOriginScopeId,
-          },
-          onAbort: () => {
-            // Guard: ignore if a newer step has started (e.g. queue flush)
-            if (this._stepGeneration !== stepGen) return;
-            stepCallbackFailed = true;
-            if (
-              this._pendingToolCapabilityScopeId ===
-              toolCapabilityScopes.currentScopeId
-            ) {
-              this._pendingToolCapabilityScopeId = null;
+      },
+      options: {
+        model: stepModel,
+        providerOptions: modelWithOptions.providerOptions,
+        headers: modelWithOptions.headers,
+        messages: modelMessages,
+        tools: tools as ToolSet,
+        timeout: resolvedConfig.maxTime
+          ? {
+              totalMs: resolvedConfig.maxTime,
             }
-            this.state.commands.setIsWorkingFalse();
-          },
-          onFinish: async (result) => {
-            // Guard: ignore if a newer step has started (e.g. queue flush)
-            if (this._stepGeneration !== stepGen) return;
-
-            stepHasApprovalRequest = result.content.some(
-              (part) => part.type === 'tool-approval-request',
-            );
-            if (
-              !stepHasApprovalRequest &&
-              this._pendingToolCapabilityScopeId ===
-                toolCapabilityScopes.currentScopeId
-            ) {
-              this._pendingToolCapabilityScopeId = null;
-            }
-            finishedResult = result;
-
-            // Log step completion details
+          : undefined,
+        // BaseAgent owns the complete reconnect budget. Hidden AI SDK
+        // retries would otherwise add untracked provider executions before
+        // the five visible, phase-aware reconnect attempts.
+        maxRetries: 0,
+        maxOutputTokens: resolvedConfig.maxOutputTokens,
+        abortSignal: this.stepAbortController.signal,
+        experimental_context: {
+          [TOOL_CAPABILITY_CURRENT_SCOPE_CONTEXT_KEY]:
+            toolCapabilityScopes.currentScopeId,
+          [TOOL_CAPABILITY_APPROVAL_ORIGIN_SCOPE_CONTEXT_KEY]:
+            toolCapabilityScopes.approvalOriginScopeId,
+        },
+        onAbort: () => {
+          // Guard: ignore if a newer step has started (e.g. queue flush)
+          if (this._stepGeneration !== stepGen) return;
+          stepCallbackFailed = true;
+          if (
+            this._pendingToolCapabilityScopeId ===
+            toolCapabilityScopes.currentScopeId
+          ) {
+            this._pendingToolCapabilityScopeId = null;
+          }
+          this.state.commands.setIsWorkingFalse();
+        },
+        onFinish: async (result) => {
+          // Guard: ignore if a newer step has started (e.g. queue flush)
+          if (this._stepGeneration !== stepGen) return;
+          // AI SDK may invoke onFinish after emitting an error chunk. The
+          // disconnect recovery path owns lifecycle, retry budget, approval
+          // scope, and persistence in that case; normal finish handling must
+          // not reset or schedule anything behind its back.
+          if (upstreamDisconnect) {
             this.host.logger.debug(
-              `[BaseAgent:${this.instanceId}] Step finished | finishReason=${result.finishReason} | outputTokens=${result.usage.outputTokens} | inputTokens=${result.usage.inputTokens} | cacheRead=${result.usage.inputTokenDetails.cacheReadTokens} | cacheWrite=${result.usage.inputTokenDetails.cacheWriteTokens} | totalTokens=${result.usage.totalTokens} | toolCalls=${result.toolCalls.length}`,
+              `[BaseAgent:${this.instanceId}] Ignoring onFinish after captured upstream disconnect.`,
             );
+            return;
+          }
 
-            if (result.finishReason === 'length') {
-              this.host.logger.warn(
-                `[BaseAgent:${this.instanceId}] Output truncated (finishReason=length). ` +
-                  `outputTokens=${result.usage.outputTokens}, toolCalls=${result.toolCalls.length}. ` +
-                  `The model hit maxOutputTokens and its response was cut off. ` +
-                  `Tool calls in this step may have been incomplete/dropped.`,
-              );
-            }
-
-            try {
-              const shouldContinue = await this.handlePostStep(result, stepGen);
-              // Re-check after async work — internalStop may have been called
-              if (shouldContinue === null || this._stepGeneration !== stepGen) {
-                return;
-              }
-              this.stepAbortController = null;
-
-              // Defer both scheduling the next step and flipping to idle
-              // until `runStep`'s tail — AFTER populatePathReferences +
-              // saveState — so the next step (or any user-initiated
-              // follow-up) cannot read a half-populated history.
-              // See `_pendingContinue` for the full rationale.
-              this._pendingContinue = shouldContinue;
-            } catch (err) {
-              stepCallbackFailed = true;
-              const error = err as Error;
-              this.host.logger.error(
-                `[BaseAgent:${this.instanceId}] Error in onFinish: ${this.formatError(error)}`,
-              );
-              this.report(error, 'onFinish');
-              // Guard: only reset if this step is still current
-              if (this._stepGeneration === stepGen) {
-                this.stepAbortController = null;
-                this.state.commands.recordStepError({
-                  error: {
-                    message: `Internal error: ${error.message ?? 'Unknown error'}`,
-                    stack: error.stack,
-                  },
-                  markUnread: 'mark-unread',
-                });
-                this.emitNotificationEvent('error');
-              }
-            }
-          },
-          onError: (ev) => {
-            // Guard: ignore if a newer step has started (e.g. queue flush)
-            if (this._stepGeneration !== stepGen) return;
-            stepCallbackFailed = true;
-            if (
-              this._pendingToolCapabilityScopeId ===
+          stepHasApprovalRequest = result.content.some(
+            (part) => part.type === 'tool-approval-request',
+          );
+          if (
+            !stepHasApprovalRequest &&
+            this._pendingToolCapabilityScopeId ===
               toolCapabilityScopes.currentScopeId
-            ) {
-              this._pendingToolCapabilityScopeId = null;
-            }
-            // ev.error may not be a real Error instance (e.g. network abort
-            // events, plain objects from the AI SDK). Normalize so every
-            // downstream consumer (logger, PostHog, UI state) gets a proper Error.
-            const raw = ev.error;
-            const error =
-              raw instanceof Error
-                ? raw
-                : new Error(
-                    typeof raw === 'string'
-                      ? raw
-                      : (raw as Record<string, unknown>)?.message
-                        ? String((raw as Record<string, unknown>).message)
-                        : 'Unknown error',
-                  );
-            this.host.logger.error(
-              `[BaseAgent:${this.instanceId}] Error in 'streamText': ${this.formatError(error)}`,
-            );
-            this.report(error, 'streamText');
+          ) {
+            this._pendingToolCapabilityScopeId = null;
+          }
+          finishedResult = result;
+          this.resetUpstreamReconnectState();
 
-            const parsedPlanLimit = this.parsePlanLimitError(error);
-            if (parsedPlanLimit?.kind === 'plan-limit-exceeded') {
-              const sortedWindows = [...parsedPlanLimit.exceededWindows].sort(
-                (a, b) =>
-                  new Date(a.resetsAt).getTime() -
-                  new Date(b.resetsAt).getTime(),
-              );
-              this.host.telemetry?.capture('usage-limit-reached', {
-                agent_type: this.agentType,
-                model_id: stepModelId,
-                provider_mode: this._stepProviderMode,
-                plan: parsedPlanLimit.plan ?? 'unknown',
-                window_types: sortedWindows.map((w) => w.type),
-                first_window_resets_at: sortedWindows[0]?.resetsAt ?? '',
-                exceeded_window_count: sortedWindows.length,
-              });
+          // Log step completion details
+          this.host.logger.debug(
+            `[BaseAgent:${this.instanceId}] Step finished | finishReason=${result.finishReason} | outputTokens=${result.usage.outputTokens} | inputTokens=${result.usage.inputTokens} | cacheRead=${result.usage.inputTokenDetails.cacheReadTokens} | cacheWrite=${result.usage.inputTokenDetails.cacheWriteTokens} | totalTokens=${result.usage.totalTokens} | toolCalls=${result.toolCalls.length}`,
+          );
+
+          if (result.finishReason === 'length') {
+            this.host.logger.warn(
+              `[BaseAgent:${this.instanceId}] Output truncated (finishReason=length). ` +
+                `outputTokens=${result.usage.outputTokens}, toolCalls=${result.toolCalls.length}. ` +
+                `The model hit maxOutputTokens and its response was cut off. ` +
+                `Tool calls in this step may have been incomplete/dropped.`,
+            );
+          }
+
+          try {
+            const shouldContinue = await this.handlePostStep(result, stepGen);
+            // Re-check after async work — internalStop may have been called
+            if (shouldContinue === null || this._stepGeneration !== stepGen) {
+              return;
             }
-            const parsedModelRestricted = this.parseModelRestrictedError(error);
-            if (parsedModelRestricted?.kind === 'model-restricted') {
-              this.host.telemetry?.capture('model-restricted', {
-                agent_type: this.agentType,
-                model_id: stepModelId,
-                provider_mode: this._stepProviderMode,
-                plan: parsedModelRestricted.plan ?? 'unknown',
-              });
-            }
-            const parsedProviderError = this.parseProviderError(error);
-            const parsedOverloadBase =
-              parsedPlanLimit ||
-              parsedModelRestricted ||
-              this.isZaiBillingOrQuotaError(
-                parsedProviderError,
-                modelWithOptions.reasoningSignatureSource,
-              )
-                ? null
-                : this.parseUpstreamOverloadError(error);
-            const parsedOverload: Extract<
-              AgentRuntimeError,
-              { kind: 'upstream-overload' }
-            > | null =
-              parsedOverloadBase?.kind === 'upstream-overload'
-                ? {
-                    ...parsedOverloadBase,
-                    modelId: stepModelId,
-                  }
-                : null;
-            if (parsedOverload?.kind === 'upstream-overload') {
-              this.host.telemetry?.capture('upstream-overload', {
-                agent_type: this.agentType,
-                model_id: stepModelId,
-                provider_mode: this._stepProviderMode,
-                provider_name: parsedOverload.providerName,
-                status_code: parsedOverload.statusCode,
-              });
-            }
-            this.state.commands.recordStepError({
-              error: parsedPlanLimit ??
-                parsedModelRestricted ??
-                parsedOverload ?? {
-                  message: `LLM provider error: ${parsedProviderError?.message ?? error.message}`,
+            this.stepAbortController = null;
+
+            // Defer both scheduling the next step and flipping to idle
+            // until `runStep`'s tail — AFTER populatePathReferences +
+            // saveState — so the next step (or any user-initiated
+            // follow-up) cannot read a half-populated history.
+            // See `_pendingContinue` for the full rationale.
+            this._pendingContinue = shouldContinue;
+          } catch (err) {
+            stepCallbackFailed = true;
+            const error = err as Error;
+            this.host.logger.error(
+              `[BaseAgent:${this.instanceId}] Error in onFinish: ${this.formatError(error)}`,
+            );
+            this.report(error, 'onFinish');
+            // Guard: only reset if this step is still current
+            if (this._stepGeneration === stepGen) {
+              this.stepAbortController = null;
+              this.state.commands.recordStepError({
+                error: {
+                  message: `Internal error: ${error.message ?? 'Unknown error'}`,
                   stack: error.stack,
                 },
-              markUnread: 'mark-unread',
-            });
-            // Plan-limit and model-restricted errors surface their own dedicated
-            // UI affordance, so we suppress the generic error notification in
-            // those cases (matches the browser host's pre-extraction behavior).
-            if (!parsedPlanLimit && !parsedModelRestricted) {
+                markUnread: 'mark-unread',
+              });
               this.emitNotificationEvent('error');
             }
-            this.host.logger.debug(
-              `[BaseAgent:${this.instanceId}] Wrote error to public state`,
-            );
-            // Drop any deferred continuation decision from a previous
-            // successful step so the error cannot be followed by a stale
-            // next-step scheduling in runStep's tail.
-            this._pendingContinue = null;
-            try {
-              this.stepAbortController?.abort();
-            } catch {}
-            this.stepAbortController = null;
-          },
-          experimental_repairToolCall: repairToolCall,
-          experimental_transform: smoothStream({
-            delayInMs: 10,
-            chunking: 'word',
-          }),
-          temperature: resolvedConfig.temperature,
-          stopWhen: () => true, // We always stop immediately and handle the execution of the next step manually
-          topP: resolvedConfig.topP,
-          topK: resolvedConfig.topK,
-          presencePenalty: resolvedConfig.presencePenalty,
-          frequencyPenalty: resolvedConfig.frequencyPenalty,
-          stopSequences: resolvedConfig.stopSequences,
-          seed: resolvedConfig.seed,
+          }
         },
-      });
+        onError: (ev) => {
+          // Guard: ignore if a newer step has started (e.g. queue flush)
+          if (this._stepGeneration !== stepGen) return;
+          stepCallbackFailed = true;
+          // ev.error may not be a real Error instance (e.g. network abort
+          // events, plain objects from the AI SDK). Normalize so every
+          // downstream consumer (logger, PostHog, UI state) gets a proper Error.
+          const raw = ev.error;
+          const error =
+            raw instanceof Error
+              ? raw
+              : new Error(
+                  typeof raw === 'string'
+                    ? raw
+                    : (raw as Record<string, unknown>)?.message
+                      ? String((raw as Record<string, unknown>).message)
+                      : 'Unknown error',
+                );
+          this.host.logger.error(
+            `[BaseAgent:${this.instanceId}] Error in 'streamText': ${this.formatError(error)}`,
+          );
+          this.report(error, 'streamText');
+
+          const disconnectInfo = this.stepAbortController?.signal.aborted
+            ? null
+            : (parseUpstreamDisconnectError(raw) ??
+              parseUpstreamDisconnectError(error));
+          if (disconnectInfo) {
+            upstreamDisconnect ??= { error, info: disconnectInfo };
+            this._pendingContinue = null;
+            this.host.telemetry?.capture('upstream-disconnected', {
+              agent_type: this.agentType,
+              model_id: stepModelId,
+              provider_mode: this._stepProviderMode,
+              reconnect_attempts_used:
+                this.getUpstreamReconnectAttemptsForCurrentTurn(),
+            });
+            this.host.logger.warn(
+              `[BaseAgent:${this.instanceId}] Deferring upstream disconnect handling until stream/tool settlement.`,
+            );
+            return;
+          }
+
+          if (
+            this._pendingToolCapabilityScopeId ===
+            toolCapabilityScopes.currentScopeId
+          ) {
+            this._pendingToolCapabilityScopeId = null;
+          }
+
+          const parsedPlanLimit = this.parsePlanLimitError(error);
+          if (parsedPlanLimit?.kind === 'plan-limit-exceeded') {
+            const sortedWindows = [...parsedPlanLimit.exceededWindows].sort(
+              (a, b) =>
+                new Date(a.resetsAt).getTime() - new Date(b.resetsAt).getTime(),
+            );
+            this.host.telemetry?.capture('usage-limit-reached', {
+              agent_type: this.agentType,
+              model_id: stepModelId,
+              provider_mode: this._stepProviderMode,
+              plan: parsedPlanLimit.plan ?? 'unknown',
+              window_types: sortedWindows.map((w) => w.type),
+              first_window_resets_at: sortedWindows[0]?.resetsAt ?? '',
+              exceeded_window_count: sortedWindows.length,
+            });
+          }
+          const parsedModelRestricted = this.parseModelRestrictedError(error);
+          if (parsedModelRestricted?.kind === 'model-restricted') {
+            this.host.telemetry?.capture('model-restricted', {
+              agent_type: this.agentType,
+              model_id: stepModelId,
+              provider_mode: this._stepProviderMode,
+              plan: parsedModelRestricted.plan ?? 'unknown',
+            });
+          }
+          const parsedProviderError = this.parseProviderError(error);
+          const parsedOverloadBase =
+            parsedPlanLimit ||
+            parsedModelRestricted ||
+            this.isZaiBillingOrQuotaError(
+              parsedProviderError,
+              modelWithOptions.reasoningSignatureSource,
+            )
+              ? null
+              : this.parseUpstreamOverloadError(error);
+          const parsedOverload: Extract<
+            AgentRuntimeError,
+            { kind: 'upstream-overload' }
+          > | null =
+            parsedOverloadBase?.kind === 'upstream-overload'
+              ? {
+                  ...parsedOverloadBase,
+                  modelId: stepModelId,
+                }
+              : null;
+          if (parsedOverload?.kind === 'upstream-overload') {
+            this.host.telemetry?.capture('upstream-overload', {
+              agent_type: this.agentType,
+              model_id: stepModelId,
+              provider_mode: this._stepProviderMode,
+              provider_name: parsedOverload.providerName,
+              status_code: parsedOverload.statusCode,
+            });
+          }
+          this.state.commands.recordStepError({
+            error: parsedPlanLimit ??
+              parsedModelRestricted ??
+              parsedOverload ?? {
+                message: `LLM provider error: ${parsedProviderError?.message ?? error.message}`,
+                stack: error.stack,
+              },
+            markUnread: 'mark-unread',
+          });
+          // Plan-limit and model-restricted errors surface their own dedicated
+          // UI affordance, so we suppress the generic error notification in
+          // those cases (matches the browser host's pre-extraction behavior).
+          if (!parsedPlanLimit && !parsedModelRestricted) {
+            this.emitNotificationEvent('error');
+          }
+          this.host.logger.debug(
+            `[BaseAgent:${this.instanceId}] Wrote error to public state`,
+          );
+          // Drop any deferred continuation decision from a previous
+          // successful step so the error cannot be followed by a stale
+          // next-step scheduling in runStep's tail.
+          this._pendingContinue = null;
+          try {
+            this.stepAbortController?.abort();
+          } catch {}
+          this.stepAbortController = null;
+        },
+        experimental_repairToolCall: repairToolCall,
+        experimental_transform: smoothStream({
+          delayInMs: 10,
+          chunking: 'word',
+        }),
+        temperature: resolvedConfig.temperature,
+        stopWhen: () => true, // We always stop immediately and handle the execution of the next step manually
+        topP: resolvedConfig.topP,
+        topK: resolvedConfig.topK,
+        presencePenalty: resolvedConfig.presencePenalty,
+        frequencyPenalty: resolvedConfig.frequencyPenalty,
+        stopSequences: resolvedConfig.stopSequences,
+        seed: resolvedConfig.seed,
+      },
+    };
+    const preStreamModelRouteBinding =
+      this.stepExecutor.resolveModelRouteBinding?.(stepExecutionRequest);
+
+    let stream: Awaited<ReturnType<AgentStepExecutor['execute']>>;
+    try {
+      stream = await this.stepExecutor.execute(stepExecutionRequest);
       if (this._stepGeneration !== stepGen) return 'superseded';
       this._stepModelWithOptions =
         stream.modelRouteBinding === 'request-model' ? modelWithOptions : null;
     } catch (rawError) {
       if (this._stepGeneration !== stepGen) return 'superseded';
-      if (
-        this._pendingToolCapabilityScopeId ===
-        toolCapabilityScopes.currentScopeId
-      ) {
-        this._pendingToolCapabilityScopeId = null;
-      }
       const error =
         rawError instanceof Error
           ? rawError
           : new Error(
               typeof rawError === 'string'
                 ? rawError
-                : 'Agent step executor failed before returning a stream',
+                : (rawError as Record<string, unknown>)?.message
+                  ? String((rawError as Record<string, unknown>).message)
+                  : 'Agent step executor failed before returning a stream',
             );
       this.host.logger.error(
         `[BaseAgent:${this.instanceId}] Step executor failed: ${this.formatError(error)}`,
       );
       this.report(error, 'executeStep');
+      const disconnectInfo = this.stepAbortController?.signal.aborted
+        ? null
+        : (parseUpstreamDisconnectError(rawError) ??
+          parseUpstreamDisconnectError(error));
+      if (disconnectInfo) {
+        this.host.telemetry?.capture('upstream-disconnected', {
+          agent_type: this.agentType,
+          model_id: stepModelId,
+          provider_mode: this._stepProviderMode,
+          reconnect_attempts_used:
+            this.getUpstreamReconnectAttemptsForCurrentTurn(),
+        });
+        return await this.handleUpstreamDisconnect({
+          disconnect: { error, info: disconnectInfo },
+          tracker: upstreamRecoveryTracker,
+          stepGeneration: stepGen,
+          isApprovalContinuation,
+          modelId: stepModelId,
+          modelRouteBinding:
+            getAgentStepExecutionErrorRoute(rawError) ??
+            preStreamModelRouteBinding,
+          toolCapabilityScopeId: toolCapabilityScopes.currentScopeId,
+          approvalOriginScopeId: toolCapabilityScopes.approvalOriginScopeId,
+          historyMessageIdsBeforeStream,
+        });
+      }
+      if (
+        this._pendingToolCapabilityScopeId ===
+        toolCapabilityScopes.currentScopeId
+      ) {
+        this._pendingToolCapabilityScopeId = null;
+      }
       this._stepGeneration++;
       this._pendingContinue = null;
       this._pendingSyntheticContinuation = null;
@@ -3438,16 +4261,37 @@ export abstract class BaseAgent<
       // Both branches must drain concurrently: toUIMessageStream() and
       // consumeStream() read from the same teed stream and share
       // back-pressure — awaiting them sequentially would deadlock.
-      await Promise.all([
+      const drainResults = await Promise.allSettled([
         this.handleUiStream(
           uiStream,
           isApprovalContinuation ? lastAssistantMessage : undefined,
           stepGen,
+          upstreamRecoveryTracker,
         ),
         stream.consumeStream(),
       ]);
 
       if (this._stepGeneration !== stepGen) return 'superseded';
+
+      if (upstreamDisconnect) {
+        return await this.handleUpstreamDisconnect({
+          disconnect: upstreamDisconnect,
+          tracker: upstreamRecoveryTracker,
+          stepGeneration: stepGen,
+          isApprovalContinuation,
+          modelId: stepModelId,
+          modelRouteBinding: stream.modelRouteBinding,
+          toolCapabilityScopeId: toolCapabilityScopes.currentScopeId,
+          approvalOriginScopeId: toolCapabilityScopes.approvalOriginScopeId,
+          historyMessageIdsBeforeStream,
+        });
+      }
+
+      const drainFailure = drainResults.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === 'rejected',
+      );
+      if (drainFailure) throw drainFailure.reason;
 
       // ─── Populate pathReferences on the assistant message ───────────
       // MUST run AFTER Promise.all resolves so the UI stream has fully
@@ -3572,12 +4416,6 @@ export abstract class BaseAgent<
       if (this._stepGeneration !== stepGen) {
         return 'superseded';
       }
-      if (
-        this._pendingToolCapabilityScopeId ===
-        toolCapabilityScopes.currentScopeId
-      ) {
-        this._pendingToolCapabilityScopeId = null;
-      }
       const raw = err;
       const error =
         raw instanceof Error
@@ -3589,6 +4427,29 @@ export abstract class BaseAgent<
                   ? String((raw as Record<string, unknown>).message)
                   : 'Unknown error',
             );
+      const disconnectInfo = this.stepAbortController?.signal.aborted
+        ? null
+        : (parseUpstreamDisconnectError(raw) ??
+          parseUpstreamDisconnectError(error));
+      if (disconnectInfo) {
+        return await this.handleUpstreamDisconnect({
+          disconnect: { error, info: disconnectInfo },
+          tracker: upstreamRecoveryTracker,
+          stepGeneration: stepGen,
+          isApprovalContinuation,
+          modelId: stepModelId,
+          modelRouteBinding: stream.modelRouteBinding,
+          toolCapabilityScopeId: toolCapabilityScopes.currentScopeId,
+          approvalOriginScopeId: toolCapabilityScopes.approvalOriginScopeId,
+          historyMessageIdsBeforeStream,
+        });
+      }
+      if (
+        this._pendingToolCapabilityScopeId ===
+        toolCapabilityScopes.currentScopeId
+      ) {
+        this._pendingToolCapabilityScopeId = null;
+      }
       this.host.logger.error(
         `[BaseAgent:${this.instanceId}] Error in 'runStep': ${this.formatError(error)}`,
       );
@@ -4766,6 +5627,25 @@ export abstract class BaseAgent<
       return [...modelMessages, { role: 'user', content: recoveryPrompt }];
     }
 
+    if (continuation.reason === 'upstream-disconnected') {
+      // A real user follow-up supersedes autonomous reconnect. A trailing
+      // tool result is intentionally allowed: the whole point of this mode is
+      // to continue from already committed results without replaying them.
+      if (lastMessage?.role === 'user') {
+        this.host.logger.info(
+          `[BaseAgent:${this.instanceId}] Upstream reconnect continuation not appended because model context already ends with user input.`,
+        );
+        return modelMessages;
+      }
+      const recoveryPrompt =
+        `Reconnect continuation ${continuation.attempt}/${continuation.maxAttempts}: continue from the partial assistant output and every terminal tool result already present in the conversation. ` +
+        'Do not repeat any tool call that already has a terminal result. If any operation outcome appears missing or ambiguous, stop and report that ambiguity instead of guessing or replaying the operation.';
+      this.host.logger.info(
+        `[BaseAgent:${this.instanceId}] Appending upstream reconnect continuation. attempt=${continuation.attempt}/${continuation.maxAttempts}, previousLastRole=${lastMessage?.role ?? 'none'}`,
+      );
+      return [...modelMessages, { role: 'user', content: recoveryPrompt }];
+    }
+
     if (lastMessage?.role === 'user' || lastMessage?.role === 'tool') {
       this.host.logger.info(
         `[BaseAgent:${this.instanceId}] Synthetic continuation not appended because model context already ends with ${lastMessage.role}. reason=${continuation.reason}`,
@@ -5144,7 +6024,9 @@ export abstract class BaseAgent<
     uiStream: AsyncIterableStream<InferUIMessageChunk<AgentMessage>>,
     lastAssistantMessage?: AgentMessage,
     expectedStepGeneration?: number,
+    recoveryTracker?: UpstreamStepRecoveryTracker,
   ): Promise<void> {
+    let previousProgress = snapshotUiMessageProgress(lastAssistantMessage);
     for await (const uiMessage of readUIMessageStream<AgentMessage>({
       stream: uiStream,
       message: lastAssistantMessage
@@ -5158,6 +6040,38 @@ export abstract class BaseAgent<
         this._stepGeneration !== expectedStepGeneration
       ) {
         continue;
+      }
+      const nextProgress = snapshotUiMessageProgress(uiMessage);
+      let committedProgress = nextProgress.length !== previousProgress.length;
+      const changedProgressIndexes: number[] = [];
+      const comparedLength = Math.max(
+        previousProgress.length,
+        nextProgress.length,
+      );
+      for (let index = 0; index < comparedLength; index += 1) {
+        if (
+          !uiProgressPartEqual(previousProgress[index], nextProgress[index])
+        ) {
+          committedProgress = true;
+          changedProgressIndexes.push(index);
+        }
+      }
+      if (committedProgress) recoveryTracker?.markOutputCommitted();
+      for (const index of changedProgressIndexes) {
+        const progressPart = nextProgress[index];
+        if (!progressPart?.toolCallId) continue;
+        if (progressPart.providerExecuted) {
+          recoveryTracker?.markToolDispatched(progressPart.toolCallId);
+        }
+        const terminalWithoutUnknownEffect =
+          (progressPart.state === 'output-available' &&
+            !progressPart.preliminary) ||
+          ((progressPart.state === 'output-error' ||
+            progressPart.state === 'output-denied') &&
+            !recoveryTracker?.hasToolDispatched(progressPart.toolCallId));
+        if (terminalWithoutUnknownEffect) {
+          recoveryTracker?.markToolTerminal(progressPart.toolCallId);
+        }
       }
       this.state.commands.mergeUIMessageStream({
         uiMessage,
@@ -5180,6 +6094,7 @@ export abstract class BaseAgent<
           }
         },
       });
+      previousProgress = nextProgress;
     }
   }
 
@@ -5428,6 +6343,8 @@ export abstract class BaseAgent<
   }
 
   private supersedeCurrentStep(): void {
+    this.clearUpstreamReconnectTimer();
+    this.clearUpstreamReconnectReplayFence();
     // Invalidate pending callbacks BEFORE firing abort — onAbort fires
     // synchronously and must see the new generation to be ignored.
     this._stepGeneration++;
@@ -6105,12 +7022,22 @@ export abstract class BaseAgent<
     part: T,
     state: ModelToolCallIdentityState,
     delivery: 'generate' | 'stream',
+    recoveryTracker?: UpstreamStepRecoveryTracker,
   ): T {
     if (!part || typeof part !== 'object') return part;
     const record = part as Record<string, unknown>;
     const type = record.type;
     if (typeof type !== 'string') {
       return part;
+    }
+    if (type === 'text-delta' || type === 'reasoning-delta') {
+      const delta =
+        typeof record.delta === 'string'
+          ? record.delta
+          : typeof record.text === 'string'
+            ? record.text
+            : '';
+      if (delta.length > 0) recoveryTracker?.markFirstToken();
     }
     const usesStreamInputId =
       type === 'tool-input-start' ||
@@ -6171,6 +7098,7 @@ export abstract class BaseAgent<
       if (isRejected) {
         state.ambiguousReferenceProviderIds.add(providerToolCallId);
         if (record.providerExecuted === true) {
+          recoveryTracker?.markToolDispatched(executionToolCallId);
           return this.rejectAmbiguousModelToolCallPart(delivery);
         }
       } else {
@@ -6227,6 +7155,12 @@ export abstract class BaseAgent<
     }
 
     if (!executionToolCallId) return part;
+    if (
+      record.providerExecuted === true &&
+      (type === 'tool-call' || usesStreamInputId)
+    ) {
+      recoveryTracker?.markToolDispatched(executionToolCallId);
+    }
     return (
       usesStreamInputId
         ? { ...record, id: executionToolCallId }
@@ -6236,6 +7170,7 @@ export abstract class BaseAgent<
 
   private wrapModelWithToolCallIdentityFence(
     model: ModelWithOptions['model'],
+    recoveryTracker?: UpstreamStepRecoveryTracker,
   ): ModelWithOptions['model'] {
     if (typeof model === 'string' || model.specificationVersion !== 'v3') {
       return model;
@@ -6255,7 +7190,12 @@ export abstract class BaseAgent<
       return {
         ...result,
         content: result.content.map((part) =>
-          this.rewriteModelToolCallIdentityPart(part, state, 'generate'),
+          this.rewriteModelToolCallIdentityPart(
+            part,
+            state,
+            'generate',
+            recoveryTracker,
+          ),
         ),
       };
     };
@@ -6268,7 +7208,12 @@ export abstract class BaseAgent<
           new TransformStream({
             transform: (part, controller) => {
               controller.enqueue(
-                this.rewriteModelToolCallIdentityPart(part, state, 'stream'),
+                this.rewriteModelToolCallIdentityPart(
+                  part,
+                  state,
+                  'stream',
+                  recoveryTracker,
+                ),
               );
             },
           }),
@@ -6284,7 +7229,10 @@ export abstract class BaseAgent<
     });
   }
 
-  private wrapToolsWithTiming(tools: Partial<ToolSet>): Partial<ToolSet> {
+  private wrapToolsWithTiming(
+    tools: Partial<ToolSet>,
+    recoveryTracker?: UpstreamStepRecoveryTracker,
+  ): Partial<ToolSet> {
     const wrapped: Partial<ToolSet> = {};
     for (const [name, t] of Object.entries(tools)) {
       if (!t || typeof t !== 'object' || !('execute' in t) || !t.execute) {
@@ -6357,6 +7305,14 @@ export abstract class BaseAgent<
           );
           if (decision.kind === 'duplicate') throw decision.error;
           const { occurrence } = decision.admission;
+          if (
+            this._upstreamReconnectCompletedToolSignatures?.has(
+              reconnectToolSignature(name, input),
+            ) === true
+          ) {
+            throw new UpstreamReconnectReplayBlockedError(name);
+          }
+          recoveryTracker?.markToolDispatched(options.toolCallId);
           const start = Date.now();
           try {
             return await (
@@ -6568,6 +7524,80 @@ export abstract class BaseAgent<
     this.resetToolCallExecutionTracking();
   }
 
+  /**
+   * Finalizes evidence for successful terminal tool results preserved across a
+   * provider disconnect. Failed/ambiguous executions are intentionally not
+   * recorded as completed; the unknown-outcome error remains their receipt.
+   */
+  private emitDisconnectedTerminalToolEvents(
+    tracker: UpstreamStepRecoveryTracker,
+  ): void {
+    const terminalIds = new Set(tracker.snapshot().terminalToolCallIds);
+    if (terminalIds.size === 0) return;
+    const modelId = this._stepResolvedModelId || this.state.get().activeModelId;
+    for (const message of this.state.get().history) {
+      if (message.role !== 'assistant') continue;
+      for (const part of message.parts) {
+        if (!(part.type === 'dynamic-tool' || part.type.startsWith('tool-'))) {
+          continue;
+        }
+        const toolPart = part as AgentToolUIPart | DynamicToolUIPart;
+        if (
+          !terminalIds.has(toolPart.toolCallId) ||
+          toolPart.state !== 'output-available' ||
+          ('preliminary' in toolPart && toolPart.preliminary === true)
+        ) {
+          continue;
+        }
+        const toolName =
+          part.type === 'dynamic-tool' &&
+          'toolName' in toolPart &&
+          typeof toolPart.toolName === 'string'
+            ? toolPart.toolName
+            : part.type.replace(/^tool-/, '');
+        if (!toolName || toolName === 'finish') continue;
+        const providerToolCallId =
+          this._toolCallProviderIds.get(toolPart.toolCallId) ??
+          toolPart.toolCallId;
+        const occurrence = this.takeToolCallExecutionOccurrence(
+          toolPart.toolCallId,
+          providerToolCallId,
+        );
+        this.recordToolEvidence(
+          {
+            type: 'tool-result',
+            toolCallId: toolPart.toolCallId,
+            toolName,
+            input: 'input' in toolPart ? toolPart.input : {},
+            output: 'output' in toolPart ? toolPart.output : undefined,
+          } as Extract<
+            StepResult<ToolSet>['content'][number],
+            { type: 'tool-result' }
+          >,
+          occurrence,
+        );
+        this.host.telemetry?.capture('tool-call-executed', {
+          tool_name: toolName,
+          agent_type: this.agentType,
+          agent_instance_id: this.instanceId,
+          model_id: modelId,
+          selected_model_id:
+            this._stepRequestedModelId || this.state.get().activeModelId,
+          task_role: this._stepTaskRole,
+          success: true,
+          input_keys:
+            'input' in toolPart &&
+            typeof toolPart.input === 'object' &&
+            toolPart.input !== null
+              ? Object.keys(toolPart.input as Record<string, unknown>)
+              : [],
+          duration_ms: occurrence.durationMs,
+          recovered_after_upstream_disconnect: true,
+        });
+      }
+    }
+  }
+
   private recordToolEvidence(
     part: Extract<
       StepResult<ToolSet>['content'][number],
@@ -6710,6 +7740,8 @@ export abstract class BaseAgent<
    * Must be called when the agent is torn down (deleted or closed) to clean up/ free resources (e.g. sandbox memory, state, etc.).
    */
   public async onTeardown(): Promise<void> {
+    this.clearUpstreamReconnectTimer();
+    this.clearUpstreamReconnectReplayFence();
     if (this._memoryWriteTimer) {
       clearTimeout(this._memoryWriteTimer);
       this._memoryWriteTimer = null;

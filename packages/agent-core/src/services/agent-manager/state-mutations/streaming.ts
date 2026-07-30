@@ -92,7 +92,8 @@ export function mergeUIMessageStream(
         if (
           ep.type === ip.type &&
           ep.state === ip.state &&
-          SETTLED_PART_STATES.has(ep.state as string)
+          SETTLED_PART_STATES.has(ep.state as string) &&
+          (ep.preliminary === true) === (ip.preliminary === true)
         )
           continue;
         existing[i] = incoming[i]!;

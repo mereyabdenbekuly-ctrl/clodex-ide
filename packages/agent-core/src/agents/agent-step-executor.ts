@@ -60,9 +60,50 @@ export interface AgentStepExecution {
 }
 
 export interface AgentStepExecutor {
+  resolveModelRouteBinding?(
+    request: AgentStepExecutionRequest,
+  ): AgentStepExecution['modelRouteBinding'];
   execute(
     request: AgentStepExecutionRequest,
   ): AgentStepExecution | PromiseLike<AgentStepExecution>;
+}
+
+export class AgentStepExecutionRouteError extends Error {
+  public constructor(
+    cause: unknown,
+    public readonly modelRouteBinding: NonNullable<
+      AgentStepExecution['modelRouteBinding']
+    >,
+  ) {
+    super(
+      cause instanceof Error
+        ? cause.message
+        : typeof cause === 'string'
+          ? cause
+          : 'Agent step execution failed before route settlement',
+      { cause },
+    );
+    this.name =
+      cause instanceof Error ? cause.name : 'AgentStepExecutionRouteError';
+  }
+}
+
+export function bindAgentStepExecutionErrorToRoute(
+  error: unknown,
+  modelRouteBinding: AgentStepExecution['modelRouteBinding'],
+): unknown {
+  if (!modelRouteBinding || error instanceof AgentStepExecutionRouteError) {
+    return error;
+  }
+  return new AgentStepExecutionRouteError(error, modelRouteBinding);
+}
+
+export function getAgentStepExecutionErrorRoute(
+  error: unknown,
+): AgentStepExecution['modelRouteBinding'] {
+  return error instanceof AgentStepExecutionRouteError
+    ? error.modelRouteBinding
+    : undefined;
 }
 
 export const TOOL_CAPABILITY_CURRENT_SCOPE_CONTEXT_KEY =
@@ -113,6 +154,10 @@ export class LocalAgentStepExecutor implements AgentStepExecutor {
   public constructor(
     private readonly streamTextFn: typeof streamText = streamText,
   ) {}
+
+  public resolveModelRouteBinding(): 'request-model' {
+    return 'request-model';
+  }
 
   public execute(request: AgentStepExecutionRequest): AgentStepExecution {
     const execution = this.streamTextFn(request.options);

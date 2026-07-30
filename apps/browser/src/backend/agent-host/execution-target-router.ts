@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  bindAgentStepExecutionErrorToRoute,
   createAgentExecutionTaskRecord,
   transitionAgentExecutionTask,
   type AgentExecutionTarget,
@@ -70,6 +71,12 @@ export class LocalExecutionTargetAdapter
     return true;
   }
 
+  public resolveModelRouteBinding(
+    request: AgentStepExecutionRequest,
+  ): AgentStepExecution['modelRouteBinding'] {
+    return this.executor.resolveModelRouteBinding?.(request);
+  }
+
   public execute(
     request: AgentStepExecutionRequest,
   ): AgentStepExecution | PromiseLike<AgentStepExecution> {
@@ -84,6 +91,10 @@ export class UnavailableCloudExecutionTargetAdapter
 
   public isAvailable(): boolean {
     return false;
+  }
+
+  public resolveModelRouteBinding(): 'external' {
+    return 'external';
   }
 
   public execute(): never {
@@ -162,6 +173,15 @@ export class ExecutionTargetRouter implements AgentStepExecutor {
       options.isLocalExecutionAllowed ?? (() => false);
   }
 
+  public resolveModelRouteBinding(
+    request: AgentStepExecutionRequest,
+  ): AgentStepExecution['modelRouteBinding'] {
+    const target = request.context.executionTarget ?? 'local';
+    return target === 'cloud'
+      ? 'external'
+      : this.localAdapter.resolveModelRouteBinding?.(request);
+  }
+
   public async execute(
     request: AgentStepExecutionRequest,
   ): Promise<AgentStepExecution> {
@@ -221,7 +241,12 @@ export class ExecutionTargetRouter implements AgentStepExecutor {
       await snapshotCleanup?.().catch(() => {});
       const failure = classifyExecutionError(error);
       this.markTerminal(taskId, failure.status, failure.reason);
-      throw error;
+      throw bindAgentStepExecutionErrorToRoute(
+        error,
+        target === 'cloud'
+          ? 'external'
+          : adapter.resolveModelRouteBinding?.(routedRequest),
+      );
     }
     if (snapshotCleanup) {
       try {

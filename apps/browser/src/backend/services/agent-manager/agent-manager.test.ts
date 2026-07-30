@@ -4,6 +4,7 @@ import type {
   AgentStepExecution,
   AgentStepExecutionRequest,
 } from '@clodex/agent-core/agents';
+import { getAgentStepExecutionErrorRoute } from '@clodex/agent-core/agents';
 import { createAutomaticSwarmStepExecutor } from './agent-manager';
 
 function createStepRequest(
@@ -78,6 +79,48 @@ describe('createAutomaticSwarmStepExecutor', () => {
     await expect(executor.execute(request)).resolves.toBe(ordinaryExecution);
     expect(handler).not.toHaveBeenCalled();
     expect(delegate.execute).toHaveBeenCalledOnce();
+  });
+
+  it('attests an automatic-handler preparation failure as external', async () => {
+    const failure = new Error('stream disconnected before completion');
+    const handler = vi.fn(async () => {
+      throw failure;
+    });
+    const delegate = {
+      resolveModelRouteBinding: vi.fn(() => 'request-model' as const),
+      execute: vi.fn(async () => ordinaryExecution),
+    };
+    const executor = createAutomaticSwarmStepExecutor({
+      delegate,
+      getHandler: () => handler,
+    });
+
+    const rejected = await Promise.resolve(
+      executor.execute(createStepRequest()),
+    ).catch((error: unknown) => error);
+
+    expect(getAgentStepExecutionErrorRoute(rejected)).toBe('external');
+    expect(delegate.execute).not.toHaveBeenCalled();
+  });
+
+  it('preserves the delegate route when ordinary execution rejects before a stream', async () => {
+    const failure = new Error('stream disconnected before completion');
+    const delegate = {
+      resolveModelRouteBinding: vi.fn(() => 'request-model' as const),
+      execute: vi.fn(async () => {
+        throw failure;
+      }),
+    };
+    const executor = createAutomaticSwarmStepExecutor({
+      delegate,
+      getHandler: () => null,
+    });
+
+    const rejected = await Promise.resolve(
+      executor.execute(createStepRequest()),
+    ).catch((error: unknown) => error);
+
+    expect(getAgentStepExecutionErrorRoute(rejected)).toBe('request-model');
   });
 });
 
