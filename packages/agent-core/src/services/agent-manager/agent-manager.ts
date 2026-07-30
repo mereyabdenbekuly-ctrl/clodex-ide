@@ -1450,6 +1450,7 @@ export class AgentManager extends DisposableService {
     const defaultState: AgentState = {
       title: '',
       isWorking: false,
+      isCompressingContext: false,
       history: [],
       queuedMessages: [],
       activeModelId: 'claude-sonnet-4.6',
@@ -1659,6 +1660,7 @@ export class AgentManager extends DisposableService {
         usedTokens: agent.usedTokens,
         goal: agent.goal,
         isWorking: false,
+        isCompressingContext: false,
       },
       instanceId,
     );

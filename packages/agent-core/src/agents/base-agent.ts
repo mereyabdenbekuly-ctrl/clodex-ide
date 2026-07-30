@@ -212,7 +212,11 @@ import { type DomainAdapterRegistry, resolveEffectiveEnvStates } from '../env';
 import { MessageCacheAnalyzer } from './shared/message-cache-analyzer';
 import { stripStrictFromToolSet } from './shared/strip-strict-from-tools';
 import { reasoningSourcesMatch } from './shared/reasoning-signatures';
-import { resolveContextOccupancyTokens } from './shared/context-usage';
+import {
+  estimateEffectiveHistoryTokens,
+  resolveContextOccupancyTokens,
+  resolvePostCompactionOccupancyTokens,
+} from './shared/context-usage';
 import type { SkillDefinition } from '../types/skills';
 import type {
   AttachmentMetadata,
@@ -3634,6 +3638,7 @@ export abstract class BaseAgent<
       return;
     }
     this._isCompressingHistory = true;
+    let contextCompactionAnnounced = false;
     try {
       const state = this.state.get();
       const { history } = state;
@@ -3728,11 +3733,17 @@ export abstract class BaseAgent<
       const compactedMessageIds = messagesToCompact.map(
         (message) => message.id,
       );
+      const previousUsedTokens = this.state.get().usedTokens;
+      const previousHistoryTokens = estimateEffectiveHistoryTokens(
+        this.state.get().history,
+      );
 
       this.host.logger.debug(
         `[BaseAgent:${this.instanceId}] Compressing history (${messagesToCompact.length} messages, keeping ${actualKept})...`,
       );
 
+      this.state.commands.setContextCompactionState({ isCompressing: true });
+      contextCompactionAnnounced = true;
       const compressedHistory = await this.compressHistory(messagesToCompact);
       if (
         expectedStepGeneration !== undefined &&
@@ -3768,6 +3779,15 @@ export abstract class BaseAgent<
         .get()
         .history.findIndex((m) => m.id === boundaryMessageId);
       if (boundarySeq < 0) return;
+      const compactedUsedTokens = resolvePostCompactionOccupancyTokens(
+        previousUsedTokens,
+        previousHistoryTokens,
+        this.state.get().history,
+      );
+      this.state.commands.setContextCompactionState({
+        isCompressing: true,
+        totalTokens: compactedUsedTokens,
+      });
       if (this.config.persistent) {
         try {
           await this.state.persist({
@@ -3782,6 +3802,10 @@ export abstract class BaseAgent<
             boundaryMessageId,
             expectedCompressedHistory: compressedHistory,
             previousCompressedHistory,
+          });
+          this.state.commands.setContextCompactionState({
+            isCompressing: true,
+            totalTokens: previousUsedTokens,
           });
           if (rollbackResult !== 'restored') {
             throw new AggregateError(
@@ -3834,6 +3858,11 @@ export abstract class BaseAgent<
         { cause: normalizedError },
       );
     } finally {
+      if (contextCompactionAnnounced) {
+        this.state.commands.setContextCompactionState({
+          isCompressing: false,
+        });
+      }
       this._isCompressingHistory = false;
     }
   }

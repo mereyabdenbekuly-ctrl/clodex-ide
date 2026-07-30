@@ -99,6 +99,10 @@ import {
 import { resolveFeatureGate } from '@shared/feature-gates';
 import { useTranslation } from 'react-i18next';
 import { shouldDisableSwarmControls } from './swarm-control-state';
+import {
+  calculateContextUsedPercentage,
+  shouldShowContextUsageRing,
+} from './context-usage-display';
 
 // Stable empty arrays to avoid new-reference re-renders
 const EMPTY_HISTORY: AgentMessage[] = [];
@@ -840,10 +844,6 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
     else setChatInputActive(false);
   }, [elementSelectionActive, stopContextSelector]);
 
-  const isVerboseMode = useKartonState(
-    (s) => s.appInfo.releaseChannel === 'dev',
-  );
-
   const enableInputField = useMemo(() => {
     // Only disable input if agent is not connected or reconnecting
     // Input is now always enabled when connected (allows typing while agent works)
@@ -1227,6 +1227,11 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
       : 0;
     return Math.round(raw / 1000) * 1000;
   });
+  const isContextCompacting = useKartonState((s) =>
+    openAgent
+      ? (s.agents.instances[openAgent]?.state.isCompressingContext ?? false)
+      : false,
+  );
   const maxTokens = useKartonState((s) =>
     activeModelId
       ? resolveModelContextWindow({
@@ -1240,9 +1245,7 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
   );
 
   const contextUsed = useMemo(() => {
-    if (!maxTokens) return 0;
-    const used = usedTokens ?? 0;
-    return Math.min(100, Math.round((used / maxTokens) * 100));
+    return calculateContextUsedPercentage(usedTokens ?? 0, maxTokens);
   }, [usedTokens, maxTokens]);
 
   const queuedMessages = useKartonState((s) =>
@@ -1931,14 +1934,11 @@ export const ChatPanelFooter = memo(function ChatPanelFooter() {
             collaborationModeDisabled={isWorking || hasPendingQuestion}
             showModelSelect
             onModelChange={handleModelChange}
-            showContextUsageRing={
-              maxTokens !== undefined &&
-              !!usedTokens &&
-              (isVerboseMode || contextUsed > 80)
-            }
+            showContextUsageRing={shouldShowContextUsageRing(maxTokens)}
             contextUsedPercentage={contextUsed}
             contextUsedKb={usedTokens ? usedTokens / 1000 : 0}
             contextMaxKb={maxTokens ? maxTokens / 1000 : 0}
+            isContextCompacting={isContextCompacting}
             hasQueuedMessages={(queuedMessages?.length ?? 0) > 0}
             onFocus={onInputFocus}
             onBlur={onInputBlur}

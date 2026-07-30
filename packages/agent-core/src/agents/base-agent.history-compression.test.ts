@@ -5,6 +5,7 @@ import { BaseAgent } from './base-agent';
 type CompressionState = {
   activeModelId: string;
   usedTokens: number;
+  isCompressingContext?: boolean;
   history: AgentMessage[];
 };
 
@@ -26,6 +27,7 @@ type CompressionHarness = {
     commands: {
       storeCompressedHistory: ReturnType<typeof vi.fn>;
       restoreCompressedHistory: ReturnType<typeof vi.fn>;
+      setContextCompactionState: ReturnType<typeof vi.fn>;
     };
     persist: ReturnType<typeof vi.fn>;
   };
@@ -66,7 +68,8 @@ function createCompressionHarness(persistent = true) {
   const history = Array.from({ length: 14 }, (_, index) => makeMessage(index));
   const state: CompressionState = {
     activeModelId: 'test-model',
-    usedTokens: 101,
+    usedTokens: 100_000,
+    isCompressingContext: false,
     history,
   };
   const compression = deferred<string>();
@@ -116,6 +119,12 @@ function createCompressionHarness(persistent = true) {
       return 'restored' as const;
     },
   );
+  const setContextCompactionState = vi.fn(
+    (args: { isCompressing: boolean; totalTokens?: number }) => {
+      state.isCompressingContext = args.isCompressing;
+      if (args.totalTokens !== undefined) state.usedTokens = args.totalTokens;
+    },
+  );
 
   const agent = Object.create(BaseAgent.prototype) as CompressionHarness;
   Object.defineProperties(agent, {
@@ -140,7 +149,11 @@ function createCompressionHarness(persistent = true) {
   };
   agent.state = {
     get: () => state,
-    commands: { storeCompressedHistory, restoreCompressedHistory },
+    commands: {
+      storeCompressedHistory,
+      restoreCompressedHistory,
+      setContextCompactionState,
+    },
     persist: vi.fn(async () => {}),
   };
   agent.compressHistory = vi.fn(async () => await compression.promise);
@@ -172,11 +185,15 @@ describe('BaseAgent history-compression admission barrier', () => {
     );
     expect(settled).toBe(false);
     expect(storeCompressedHistory).not.toHaveBeenCalled();
+    expect(state.isCompressingContext).toBe(true);
+    expect(state.usedTokens).toBe(100_000);
 
     compression.resolve('A durable compressed history that is long enough.');
     await barrier;
 
     expect(storeCompressedHistory).toHaveBeenCalledOnce();
+    expect(state.isCompressingContext).toBe(false);
+    expect(state.usedTokens).toBeLessThan(100_000);
     expect(agent.state.persist).toHaveBeenCalledWith({
       dirtyMessageIndices: [expect.any(Number)],
       expectedMessageBindings: [
@@ -218,6 +235,7 @@ describe('BaseAgent history-compression admission barrier', () => {
     await barrier;
 
     expect(storeCompressedHistory).not.toHaveBeenCalled();
+    expect(agent.state.get().isCompressingContext).toBe(false);
     expect(agent.state.persist).not.toHaveBeenCalled();
     expect(agent.scheduleMemorySnapshotWrite).not.toHaveBeenCalled();
   });
@@ -239,6 +257,8 @@ describe('BaseAgent history-compression admission barrier', () => {
       'Context compression failed before the next step',
     );
     expect(restoreCompressedHistory).toHaveBeenCalledOnce();
+    expect(state.isCompressingContext).toBe(false);
+    expect(state.usedTokens).toBe(100_000);
     expect(
       state.history.some(
         (message) => message.metadata?.compressedHistory !== undefined,
@@ -265,6 +285,8 @@ describe('BaseAgent history-compression admission barrier', () => {
     await barrier;
 
     expect(agent.state.persist).not.toHaveBeenCalled();
+    expect(state.isCompressingContext).toBe(false);
+    expect(state.usedTokens).toBeLessThan(100_000);
     expect(
       state.history.some(
         (message) =>

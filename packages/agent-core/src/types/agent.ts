@@ -101,6 +101,8 @@ export type AgentState<TMessage = AgentMessage> = {
   titleLockedByUser?: boolean;
   /** @persistence ephemeral — always reset to `false` on `resumeAgent` and set by the agent runloop. */
   isWorking: boolean;
+  /** @persistence ephemeral — true only while the runloop is awaiting context compaction. */
+  isCompressingContext?: boolean;
   /**
    * @persistence persisted-core — stored on the `agentMessages` side-table
    * keyed by `agentInstanceId, seq` (one row per message) rather than the

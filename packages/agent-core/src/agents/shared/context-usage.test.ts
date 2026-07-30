@@ -3,6 +3,7 @@ import type { AgentMessage } from '../../types/agent';
 import {
   estimateEffectiveHistoryTokens,
   resolveContextOccupancyTokens,
+  resolvePostCompactionOccupancyTokens,
 } from './context-usage';
 
 function message(id: string, text: string): AgentMessage {
@@ -66,5 +67,24 @@ describe('context occupancy resolution', () => {
     const withoutArchived = estimateEffectiveHistoryTokens([boundary, latest]);
 
     expect(effective).toBe(withoutArchived);
+  });
+
+  it('preserves inferred non-history overhead when rebasing after compaction', () => {
+    const archived = message('archived', 'x'.repeat(40_000));
+    const boundary = message('boundary', 'recent');
+    const before = [archived, boundary];
+    const previousHistoryTokens = estimateEffectiveHistoryTokens(before);
+    const providerOverhead = 2_000;
+
+    boundary.metadata!.compressedHistory = 'compact briefing';
+    const after = [archived, boundary];
+
+    expect(
+      resolvePostCompactionOccupancyTokens(
+        previousHistoryTokens + providerOverhead,
+        previousHistoryTokens,
+        after,
+      ),
+    ).toBe(estimateEffectiveHistoryTokens(after) + providerOverhead);
   });
 });
