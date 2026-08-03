@@ -333,6 +333,7 @@ import {
   type ToolCallRecoveryKind,
 } from './shared/repair-tool-call';
 import {
+  generateDeterministicCompressedHistory,
   generateSimpleCompressedHistory,
   HistoryCompressionUnsettledTimeoutError,
   estimateMessageTokens,
@@ -358,13 +359,17 @@ import {
   resolveMountedPath,
   hashPath,
   deriveMaxReadChars,
+  deriveMaxPreviewBytes,
 } from '../file-read-transformer';
 import { hashProtectedMountedFile, readProtectedMountedFile } from '../host';
 import { type DomainAdapterRegistry, resolveEffectiveEnvStates } from '../env';
 import { MessageCacheAnalyzer } from './shared/message-cache-analyzer';
 import { stripStrictFromToolSet } from './shared/strip-strict-from-tools';
 import { reasoningSourcesMatch } from './shared/reasoning-signatures';
-import { resolveContextOccupancyTokens } from './shared/context-usage';
+import {
+  estimateEffectiveHistoryTokens,
+  resolveContextOccupancyTokens,
+} from './shared/context-usage';
 import type { SkillDefinition } from '../types/skills';
 import type {
   AttachmentMetadata,
@@ -930,6 +935,7 @@ export abstract class BaseAgent<
   private _stepRequestedModelId = '';
   private _stepResolvedModelId = '';
   private _stepTaskRole: ModelTaskRole = 'analysis';
+  private _stepResolvedMaxOutputTokens: number | undefined;
   private _toolCallExecutions = new Map<string, ToolCallExecutionOccurrence>();
   private _toolCallAdmissions = new Map<string, ToolCallAdmission>();
   private _toolCallProviderIds = new Map<string, string>();
@@ -3696,6 +3702,7 @@ export abstract class BaseAgent<
     // provider binding.
     this._stepRequestedModelId = '';
     this._stepResolvedModelId = '';
+    this._stepResolvedMaxOutputTokens = undefined;
     this._stepProviderMode = '';
     this._stepModelWithOptions = null;
     this._stepCodingPlanId = undefined;
@@ -3838,6 +3845,7 @@ export abstract class BaseAgent<
         ...this.config,
         ...(await this.getModelSettings(this.messages)),
       };
+      this._stepResolvedMaxOutputTokens = resolvedConfig.maxOutputTokens;
     } catch (e) {
       if (this._stepGeneration !== stepGen) return 'superseded';
       const error = e as Error;
@@ -4518,6 +4526,143 @@ export abstract class BaseAgent<
    */
   private static readonly HISTORY_COMPRESSION_CRITICAL_FRACTION = 0.8;
 
+  /** Minimum context reserve for the next model output. */
+  private static readonly HISTORY_COMPRESSION_MIN_OUTPUT_RESERVE_FRACTION = 0.2;
+
+  /**
+   * Additional reserve for system/tool/skill/evidence changes that are not
+   * represented by persisted history token estimates.
+   */
+  private static readonly HISTORY_COMPRESSION_GENERAL_RESERVE_FRACTION = 0.1;
+
+  private static estimateKeptHistoryTokensAfterCompression(
+    history: readonly AgentMessage[],
+    boundaryIndex: number,
+  ): number {
+    let estimatedTokens = 0;
+    for (let index = boundaryIndex; index < history.length; index += 1) {
+      const message = history[index];
+      if (!message) continue;
+      const retainedMessage =
+        index === boundaryIndex &&
+        message.metadata?.compressedHistory !== undefined
+          ? ({
+              ...message,
+              metadata: {
+                ...message.metadata,
+                compressedHistory: undefined,
+              },
+            } as AgentMessage)
+          : message;
+      const heuristicTokens = estimateMessageTokens(retainedMessage);
+      const utf8RiskTokens = Math.ceil(
+        BaseAgent.estimateMessageUtf8Bytes(retainedMessage) / 2,
+      );
+      estimatedTokens += Math.max(heuristicTokens, utf8RiskTokens);
+    }
+    return estimatedTokens;
+  }
+
+  private static estimateMessageUtf8Bytes(message: AgentMessage): number {
+    let bytes = 128;
+    for (const part of message.parts) {
+      if (part.type === 'text') {
+        bytes += BaseAgent.utf8Length(part.text ?? '');
+        continue;
+      }
+      try {
+        bytes += BaseAgent.utf8Length(JSON.stringify(part) ?? '');
+      } catch {
+        return Number.MAX_SAFE_INTEGER;
+      }
+    }
+    if (message.metadata) {
+      try {
+        bytes += BaseAgent.utf8Length(JSON.stringify(message.metadata) ?? '');
+      } catch {
+        return Number.MAX_SAFE_INTEGER;
+      }
+    }
+    return Math.min(Number.MAX_SAFE_INTEGER, bytes);
+  }
+
+  private static utf8Length(value: string): number {
+    let bytes = 0;
+    for (const codePoint of value) {
+      const scalar = codePoint.codePointAt(0) ?? 0;
+      bytes +=
+        scalar <= 0x7f ? 1 : scalar <= 0x7ff ? 2 : scalar <= 0xffff ? 3 : 4;
+    }
+    return bytes;
+  }
+
+  private static estimateRetainedFileInjectionTokens(
+    history: readonly AgentMessage[],
+    boundaryIndex: number,
+    contextWindowSize: number,
+  ): number {
+    const maxReadChars = deriveMaxReadChars(contextWindowSize);
+    const fullReadTokens = maxReadChars + 512;
+    const previewTokens = deriveMaxPreviewBytes(maxReadChars) + 512;
+    const coveredReferences = new Set<string>();
+    let estimatedTokens = 0;
+    const addTokens = (tokens: number): void => {
+      estimatedTokens = Math.min(
+        Number.MAX_SAFE_INTEGER,
+        estimatedTokens + tokens,
+      );
+    };
+    const referenceKey = (path: string, hash: string): string =>
+      `${path}\0${hash}`;
+
+    for (let index = boundaryIndex; index < history.length; index += 1) {
+      const message = history[index];
+      if (!message) continue;
+      const pathReferences = message.metadata?.pathReferences;
+      if (message.role !== 'assistant') {
+        for (const [path, hash] of Object.entries(pathReferences ?? {})) {
+          const key = referenceKey(path, hash);
+          if (coveredReferences.has(key)) continue;
+          coveredReferences.add(key);
+          addTokens(path.startsWith('att/') ? fullReadTokens : previewTokens);
+        }
+        continue;
+      }
+
+      const completedReadPaths = new Set<string>();
+      for (const part of message.parts) {
+        if (
+          part.type !== 'tool-read' ||
+          !('state' in part) ||
+          part.state !== 'output-available' ||
+          !('input' in part) ||
+          typeof part.input !== 'object' ||
+          part.input === null
+        ) {
+          continue;
+        }
+        const input = part.input as { path?: unknown; preview?: unknown };
+        const path = input.path;
+        if (typeof path !== 'string' || path.length === 0) continue;
+        const hash = pathReferences?.[path];
+        if (typeof hash !== 'string' || hash.length === 0) continue;
+        addTokens(input.preview === true ? previewTokens : fullReadTokens);
+        completedReadPaths.add(path);
+        coveredReferences.add(referenceKey(path, hash));
+      }
+
+      for (const [path, hash] of Object.entries(pathReferences ?? {})) {
+        if (completedReadPaths.has(path)) continue;
+        const key = referenceKey(path, hash);
+        if (coveredReferences.has(key)) continue;
+        coveredReferences.add(key);
+        addTokens(fullReadTokens);
+      }
+    }
+
+    return estimatedTokens;
+  }
+
   private async maybeCompressHistoryAfterStep(
     expectedStepGeneration: number,
     contextWindowSize: number,
@@ -4629,8 +4774,13 @@ export abstract class BaseAgent<
           break;
         }
 
-        // Scanned everything, it all fits — nothing to compress
-        if (i === 0) return;
+        // Scanned everything. Defer the final no-op/fail-closed decision until
+        // we have enforced monotonic movement past any existing compression
+        // boundary below.
+        if (i === 0) {
+          boundaryIndex = 0;
+          break;
+        }
       }
 
       // Edge case: even the last message alone exceeds the budget
@@ -4641,7 +4791,32 @@ export abstract class BaseAgent<
         );
       }
 
-      if (boundaryIndex < 1) return; // nothing meaningful to compress
+      // A new summary must always be attached strictly after the latest
+      // existing summary. Otherwise message conversion will keep using the
+      // later old boundary, or the write will overwrite a durable briefing
+      // that was excluded from `messagesToCompact`.
+      let latestCompressedBoundaryIndex = -1;
+      for (let index = history.length - 1; index >= 0; index -= 1) {
+        if (history[index]?.metadata?.compressedHistory !== undefined) {
+          latestCompressedBoundaryIndex = index;
+          break;
+        }
+      }
+      if (boundaryIndex <= latestCompressedBoundaryIndex) {
+        boundaryIndex = latestCompressedBoundaryIndex + 1;
+      }
+
+      if (boundaryIndex < 1 || boundaryIndex >= history.length) {
+        const usedTokens = state.usedTokens;
+        const criticalTokens =
+          contextWindowSize * BaseAgent.HISTORY_COMPRESSION_CRITICAL_FRACTION;
+        if (usedTokens >= criticalTokens) {
+          throw new Error(
+            `History compression found no newer reducible history at critical context occupancy (${usedTokens}/${contextWindowSize} tokens)`,
+          );
+        }
+        return;
+      }
 
       const actualKept = history.length - boundaryIndex;
       if (actualKept < preferredFloor) {
@@ -4655,9 +4830,9 @@ export abstract class BaseAgent<
       const previousCompressedHistory =
         history[boundaryIndex]?.metadata?.compressedHistory;
 
-      // If the boundary message already has compressed history, the
-      // previous summary is included in messagesToCompact and will be
-      // folded into the new summary by the LLM.
+      // Monotonic boundary selection above guarantees that any previous
+      // compressed-history message is included here and folded into the new
+      // summary rather than overwritten unseen.
       const messagesToCompact = history.slice(0, boundaryIndex);
       const compactedMessageIds = messagesToCompact.map(
         (message) => message.id,
@@ -4668,6 +4843,20 @@ export abstract class BaseAgent<
       );
 
       let compressedHistory: string;
+      let compressionStrategy: 'model' | 'deterministic-emergency' = 'model';
+      let compressionGenerationFailureCount = 0;
+      let emergencyCompressionProjection:
+        | {
+            targetInputTokens: number;
+            outputReserveTokens: number;
+            generalReserveTokens: number;
+            inferredNonHistoryTokens: number;
+            keptHistoryTokens: number;
+            retainedFileInjectionTokens: number;
+            snapshotTokenUpperBound: number;
+            projectedInputTokens: number;
+          }
+        | undefined;
       try {
         compressedHistory = await this.compressHistory(
           messagesToCompact,
@@ -4708,28 +4897,143 @@ export abstract class BaseAgent<
           contextWindowSize * BaseAgent.HISTORY_COMPRESSION_CRITICAL_FRACTION;
 
         this._historyCompressionGenerationFailures += 1;
-        const retryDelayMs = Math.min(
-          BaseAgent.HISTORY_COMPRESSION_RETRY_BASE_MS *
-            2 ** (this._historyCompressionGenerationFailures - 1),
-          BaseAgent.HISTORY_COMPRESSION_RETRY_MAX_MS,
-        );
-        this._historyCompressionRetryNotBefore = Date.now() + retryDelayMs;
+        compressionGenerationFailureCount =
+          this._historyCompressionGenerationFailures;
 
         if (usedTokens >= criticalTokens) {
-          throw new Error(
-            `History compression generation failed at critical context occupancy (${usedTokens}/${contextWindowSize} tokens)`,
-            { cause: normalizedGenerationError },
-          );
-        }
+          try {
+            const fallbackState = this.state.get();
+            const fallbackHistory = fallbackState.history;
+            const fallbackBoundaryIndex = fallbackHistory.findIndex(
+              (message) => message.id === boundaryMessageId,
+            );
+            if (fallbackBoundaryIndex < 0) {
+              throw new Error(
+                'Emergency history compression boundary message is missing',
+              );
+            }
+            if (
+              fallbackBoundaryIndex !== compactedMessageIds.length ||
+              compactedMessageIds.some(
+                (messageId, index) => fallbackHistory[index]?.id !== messageId,
+              )
+            ) {
+              throw new Error(
+                'Emergency history compression prefix changed before fallback generation',
+              );
+            }
 
-        this.host.logger.warn(
-          `[BaseAgent:${this.instanceId}] History compression generation failed before state mutation; continuing with unchanged history and retrying in ${retryDelayMs}ms: ${normalizedGenerationError.message}`,
-        );
-        this.report(
-          normalizedGenerationError,
-          'compressHistoryGenerationTransient',
-        );
-        return;
+            const effectiveHistoryTokens =
+              estimateEffectiveHistoryTokens(fallbackHistory);
+            const inferredNonHistoryTokens = Math.max(
+              0,
+              usedTokens - effectiveHistoryTokens,
+            );
+            const keptHistoryTokens =
+              BaseAgent.estimateKeptHistoryTokensAfterCompression(
+                fallbackHistory,
+                fallbackBoundaryIndex,
+              );
+            const retainedFileInjectionTokens =
+              BaseAgent.estimateRetainedFileInjectionTokens(
+                fallbackHistory,
+                fallbackBoundaryIndex,
+                contextWindowSize,
+              );
+            const resolvedMaxOutputTokens =
+              this._stepResolvedMaxOutputTokens ?? this.config.maxOutputTokens;
+            const configuredOutputReserveTokens =
+              typeof resolvedMaxOutputTokens === 'number' &&
+              Number.isFinite(resolvedMaxOutputTokens) &&
+              resolvedMaxOutputTokens > 0
+                ? Math.ceil(resolvedMaxOutputTokens)
+                : 0;
+            const outputReserveTokens = Math.max(
+              configuredOutputReserveTokens,
+              Math.floor(
+                contextWindowSize *
+                  BaseAgent.HISTORY_COMPRESSION_MIN_OUTPUT_RESERVE_FRACTION,
+              ),
+            );
+            const generalReserveTokens = Math.floor(
+              contextWindowSize *
+                BaseAgent.HISTORY_COMPRESSION_GENERAL_RESERVE_FRACTION,
+            );
+            const targetInputTokens =
+              contextWindowSize - outputReserveTokens - generalReserveTokens;
+            const maxUtf8Bytes =
+              targetInputTokens -
+              inferredNonHistoryTokens -
+              keptHistoryTokens -
+              retainedFileInjectionTokens;
+            if (targetInputTokens <= 0 || maxUtf8Bytes <= 0) {
+              throw new Error(
+                `Emergency history compression has no safe snapshot budget (inputTarget=${targetInputTokens}, outputReserve=${outputReserveTokens}, generalReserve=${generalReserveTokens}, nonHistory=${inferredNonHistoryTokens}, kept=${keptHistoryTokens}, retainedFileInjection=${retainedFileInjectionTokens} tokens)`,
+              );
+            }
+
+            // Treat each UTF-8 byte as at most one tokenizer token. This is
+            // intentionally conservative for the generated snapshot while
+            // avoiding a provider-specific tokenizer dependency.
+            compressedHistory = generateDeterministicCompressedHistory(
+              fallbackHistory.slice(0, fallbackBoundaryIndex),
+              this.host,
+              { maxUtf8Bytes },
+            );
+            const snapshotTokenUpperBound = new TextEncoder().encode(
+              compressedHistory,
+            ).length;
+            const projectedInputTokens =
+              inferredNonHistoryTokens +
+              keptHistoryTokens +
+              retainedFileInjectionTokens +
+              snapshotTokenUpperBound;
+            if (projectedInputTokens > targetInputTokens) {
+              throw new Error(
+                `Emergency history compression exceeded its projected input target (${projectedInputTokens}/${targetInputTokens} tokens)`,
+              );
+            }
+            emergencyCompressionProjection = {
+              targetInputTokens,
+              outputReserveTokens,
+              generalReserveTokens,
+              inferredNonHistoryTokens,
+              keptHistoryTokens,
+              retainedFileInjectionTokens,
+              snapshotTokenUpperBound,
+              projectedInputTokens,
+            };
+            compressionStrategy = 'deterministic-emergency';
+          } catch (fallbackError) {
+            throw new AggregateError(
+              [normalizedGenerationError, fallbackError],
+              `History compression generation and emergency fallback failed at critical context occupancy (${usedTokens}/${contextWindowSize} tokens)`,
+            );
+          }
+          this.host.logger.warn(
+            `[BaseAgent:${this.instanceId}] History compression generation failed at critical context occupancy (${usedTokens}/${contextWindowSize} tokens); stored a bounded deterministic continuity snapshot instead (projected input ${emergencyCompressionProjection?.projectedInputTokens}/${emergencyCompressionProjection?.targetInputTokens} tokens): ${normalizedGenerationError.message}`,
+          );
+          this.report(
+            normalizedGenerationError,
+            'compressHistoryGenerationEmergencyFallback',
+          );
+        } else {
+          const retryDelayMs = Math.min(
+            BaseAgent.HISTORY_COMPRESSION_RETRY_BASE_MS *
+              2 ** (this._historyCompressionGenerationFailures - 1),
+            BaseAgent.HISTORY_COMPRESSION_RETRY_MAX_MS,
+          );
+          this._historyCompressionRetryNotBefore = Date.now() + retryDelayMs;
+
+          this.host.logger.warn(
+            `[BaseAgent:${this.instanceId}] History compression generation failed before state mutation; continuing with unchanged history and retrying in ${retryDelayMs}ms: ${normalizedGenerationError.message}`,
+          );
+          this.report(
+            normalizedGenerationError,
+            'compressHistoryGenerationTransient',
+          );
+          return;
+        }
       }
       if (
         expectedStepGeneration !== undefined &&
@@ -4737,9 +5041,6 @@ export abstract class BaseAgent<
       ) {
         return;
       }
-      this._historyCompressionGenerationFailures = 0;
-      this._historyCompressionRetryNotBefore = 0;
-
       // Re-fetch by id inside the command — user could've undone/
       // manipulated messages while we were busy compressing.
       const writeResult = this.state.commands.storeCompressedHistory({
@@ -4747,21 +5048,34 @@ export abstract class BaseAgent<
         compactedMessageIds,
         compressedHistory,
       });
-      if (writeResult === 'missing') {
+      if (writeResult !== 'written') {
+        const conflictReason =
+          writeResult === 'missing'
+            ? 'boundary message missing'
+            : 'history prefix changed';
         this.host.logger.warn(
-          `[BaseAgent:${this.instanceId}] Boundary message not found in history after compression. The user may have undone or manipulated messages.`,
+          writeResult === 'missing'
+            ? `[BaseAgent:${this.instanceId}] Boundary message not found in history after compression. The user may have undone or manipulated messages.`
+            : `[BaseAgent:${this.instanceId}] History changed while compression was running; discarding stale summary.`,
         );
+        const currentUsedTokens = this.state.get().usedTokens;
+        if (
+          expectedStepGeneration === undefined ||
+          this._stepGeneration === expectedStepGeneration
+        ) {
+          const criticalTokens =
+            contextWindowSize * BaseAgent.HISTORY_COMPRESSION_CRITICAL_FRACTION;
+          if (currentUsedTokens >= criticalTokens) {
+            throw new Error(
+              `History compression could not establish an exact boundary at critical context occupancy (${currentUsedTokens}/${contextWindowSize} tokens): ${conflictReason}`,
+            );
+          }
+        }
         return;
-      } else if (writeResult === 'stale') {
-        this.host.logger.warn(
-          `[BaseAgent:${this.instanceId}] History changed while compression was running; discarding stale summary.`,
-        );
-        return;
-      } else {
-        this.host.logger.debug(
-          `[BaseAgent:${this.instanceId}] Stored compressed history in message ${boundaryMessageId}`,
-        );
       }
+      this.host.logger.debug(
+        `[BaseAgent:${this.instanceId}] Stored compressed history in message ${boundaryMessageId}`,
+      );
 
       const boundarySeq = this.state
         .get()
@@ -4799,6 +5113,8 @@ export abstract class BaseAgent<
           );
         }
       }
+      this._historyCompressionGenerationFailures = 0;
+      this._historyCompressionRetryNotBefore = 0;
       if (
         expectedStepGeneration !== undefined &&
         this._stepGeneration !== expectedStepGeneration
@@ -4813,6 +5129,11 @@ export abstract class BaseAgent<
           compactedMessageCount: messagesToCompact.length,
           keptMessageCount: actualKept,
           compressedCharacters: compressedHistory.length,
+          strategy: compressionStrategy,
+          generationFailureCount: compressionGenerationFailureCount,
+          ...(emergencyCompressionProjection
+            ? { emergencyProjection: emergencyCompressionProjection }
+            : {}),
         },
         {
           messageId: boundaryMessageId,

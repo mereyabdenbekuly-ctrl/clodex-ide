@@ -21,7 +21,7 @@ import type { UserMessageMetadata } from '../../../types/metadata';
 type WideAgentMessage = AgentMessage<UITools, any>;
 type WideAgentMessagePart = WideAgentMessage['parts'][number];
 
-const escapeTextForXML = (text: string): string => {
+export const escapeTextForCompactHistory = (text: string): string => {
   return String(text ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -31,7 +31,7 @@ const escapeTextForXML = (text: string): string => {
 };
 
 const escapeSummaryValue = (value: unknown): string =>
-  escapeTextForXML(String(value ?? ''));
+  escapeTextForCompactHistory(String(value ?? ''));
 
 // ─── Tool part → compact one-liner ─────────────────────────────────────────
 
@@ -66,11 +66,16 @@ const getErrorSuffix = (part: WideAgentMessagePart): string | undefined => {
  * to enrich the universal one-liners (e.g. write create-vs-update).
  * Error states are surfaced with a ✗ marker.
  */
-const serializeToolPart = (
+export const serializeToolPartForCompactHistory = (
   part: WideAgentMessagePart,
   host: AgentHost | undefined,
 ): string | undefined => {
-  if (!('input' in part) || !part.input) return undefined;
+  const isToolPart =
+    part.type === 'dynamic-tool' || part.type.startsWith('tool-');
+  if (!isToolPart) return undefined;
+  if (!('input' in part) || !part.input) {
+    return `[${part.type}: invalid-input]`;
+  }
 
   const err = getErrorSuffix(part);
   // Tool inputs/outputs vary per tool. Since we narrow on `part.type`
@@ -152,9 +157,15 @@ const serializeToolPart = (
 
     default: {
       // Not a universal tool: try the host registry, then fall back.
-      if (!part.type.startsWith('tool-')) return undefined;
-
-      const bareName = part.type.slice('tool-'.length);
+      const bareName =
+        part.type === 'dynamic-tool' &&
+        'toolName' in part &&
+        typeof part.toolName === 'string'
+          ? part.toolName
+          : part.type.startsWith('tool-')
+            ? part.type.slice('tool-'.length)
+            : undefined;
+      if (!bareName) return `[${part.type}: invalid-identity${err ?? ''}]`;
       const hostFn = host?.getToolPartSerializer(bareName);
       if (hostFn) {
         try {
@@ -168,7 +179,9 @@ const serializeToolPart = (
         }
       }
 
-      return `[${part.type}${err ?? ''}]`;
+      return part.type === 'dynamic-tool'
+        ? `[dynamic-tool: ${escapeSummaryValue(bareName)}${err ?? ''}]`
+        : `[${part.type}${err ?? ''}]`;
     }
   }
 };
@@ -183,9 +196,9 @@ const safeSerializePart = (
 ): string | undefined => {
   try {
     if (part.type === 'text') {
-      return escapeTextForXML(part.text);
+      return escapeTextForCompactHistory(part.text);
     }
-    return serializeToolPart(part, host);
+    return serializeToolPartForCompactHistory(part, host);
   } catch {
     // Return a best-effort marker so the part isn't silently lost
     const tag = typeof part?.type === 'string' ? part.type : 'unknown';
@@ -411,7 +424,7 @@ export const convertAgentMessagesToCompactMessageHistoryString = (
           .map((part) => {
             try {
               if (part?.type === 'text') {
-                return escapeTextForXML(part.text);
+                return escapeTextForCompactHistory(part.text);
               }
             } catch {
               // Skip malformed user part

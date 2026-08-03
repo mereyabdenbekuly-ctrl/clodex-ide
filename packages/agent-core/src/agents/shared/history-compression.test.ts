@@ -13,7 +13,9 @@ vi.mock('ai', () => ({
 
 import { generateText } from 'ai';
 import {
+  COMPRESSION_TARGET_CHARS,
   generateSimpleCompressedHistory,
+  generateDeterministicCompressedHistory,
   convertAgentMessagesToCompactMessageHistoryString,
   estimateMessageTokens,
 } from './history-compression';
@@ -35,6 +37,21 @@ function makeMessages(count: number): AgentMessage[] {
     } as AgentMessage);
   }
   return msgs;
+}
+
+function makeEmergencyHost(
+  serializers: Record<
+    string,
+    (ctx: {
+      input: any;
+      output: any;
+      err: string | undefined;
+    }) => string | undefined
+  >,
+): AgentHost {
+  const host = createTestAgentHost();
+  host.registerToolPartSerializers(serializers);
+  return host;
 }
 
 function makeMockHostModels(): HostModels {
@@ -329,7 +346,7 @@ describe('convertAgentMessagesToCompactMessageHistoryString', () => {
       } as unknown as AgentMessage,
     ];
 
-    const host = makeHost({
+    const host = makeEmergencyHost({
       hostThing: ({ input }) => `[host: ${input.label}]`,
     });
 
@@ -365,7 +382,7 @@ describe('convertAgentMessagesToCompactMessageHistoryString', () => {
       } as unknown as AgentMessage,
     ];
 
-    const host = makeHost({
+    const host = makeEmergencyHost({
       skipMe: () => undefined,
     });
 
@@ -1326,6 +1343,498 @@ describe('generateSimpleCompressedHistory', () => {
       'agent-1',
       expect.any(Object),
     );
+  });
+});
+
+describe('generateDeterministicCompressedHistory', () => {
+  const generateEmergency = (
+    messages: AgentMessage[],
+    maxUtf8Bytes = 40_000,
+    host?: AgentHost,
+  ) =>
+    generateDeterministicCompressedHistory(messages, host, {
+      maxUtf8Bytes,
+    });
+
+  it('fails closed when the safety envelope would make a small prefix larger', () => {
+    const messages = makeMessages(4);
+    messages[0]!.parts = [
+      { type: 'text', text: `Message 0 ${'context '.repeat(2_000)}` },
+    ];
+    expect(() => generateEmergency(messages)).toThrow(
+      'did not reduce the effective history prefix',
+    );
+  });
+
+  it('bounds large history while retaining the earliest goal and latest state', () => {
+    const messages = makeMessages(6);
+    messages[0]!.parts = [
+      { type: 'text', text: `INITIAL_GOAL ${'a'.repeat(35_000)}` },
+    ];
+    messages[3]!.parts = [
+      { type: 'text', text: `MIDDLE_DETAIL ${'b'.repeat(35_000)}` },
+    ];
+    messages[5]!.parts = [
+      { type: 'text', text: `LATEST_STATE ${'c'.repeat(35_000)}` },
+    ];
+
+    const result = generateEmergency(messages, 8_000);
+
+    expect(result.length).toBeLessThanOrEqual(COMPRESSION_TARGET_CHARS);
+    expect(result).toContain('INITIAL_GOAL');
+    expect(result).toContain('LATEST_STATE');
+    expect(result).toContain('## Omitted middle history');
+    expect(result).not.toContain('MIDDLE_DETAIL');
+  });
+
+  it('retains a prior briefing alongside the earliest goal and latest state', () => {
+    const messages = makeMessages(4);
+    messages[0]!.metadata!.compressedHistory =
+      'PRIOR_DECISION: keep the public client secure and useful.';
+    messages[0]!.parts = [
+      { type: 'text', text: `EARLIEST_GOAL ${'a'.repeat(35_000)}` },
+    ];
+    messages[3]!.parts = [
+      { type: 'text', text: `LATEST_STATE ${'z'.repeat(35_000)}` },
+    ];
+
+    const result = generateEmergency(messages, 4_000);
+
+    expect(result).toContain('PRIOR_DECISION');
+    expect(result).toContain('EARLIEST_GOAL');
+    expect(result).toContain('LATEST_STATE');
+    expect(result.length).toBeLessThanOrEqual(COMPRESSION_TARGET_CHARS);
+  });
+
+  it('retains both ends of a 20KB prior briefing, including a trailing effect receipt', () => {
+    const messages = makeMessages(4);
+    messages[0]!.metadata!.compressedHistory =
+      `PRIOR_BRIEFING_START ${'p'.repeat(20_000)} TERMINAL_EFFECT_RECEIPT`;
+    messages[0]!.parts = [
+      { type: 'text', text: `EARLIEST_NEW_GOAL ${'a'.repeat(20_000)}` },
+    ];
+    messages[3]!.parts = [
+      { type: 'text', text: `LATEST_NEW_STATE ${'z'.repeat(20_000)}` },
+    ];
+
+    const result = generateEmergency(messages, 12_000);
+
+    expect(result).toContain('PRIOR_BRIEFING_START');
+    expect(result).toContain('TERMINAL_EFFECT_RECEIPT');
+    expect(result).toContain('EARLIEST_NEW_GOAL');
+    expect(result).toContain('LATEST_NEW_STATE');
+    expect(result).toContain('## Omitted middle of prior briefing');
+    expect(new TextEncoder().encode(result).length).toBeLessThanOrEqual(12_000);
+  });
+
+  it('enforces the UTF-8 byte budget without splitting Unicode code points', () => {
+    const messages = makeMessages(3);
+    messages[0]!.parts = [
+      { type: 'text', text: `UNICODE_INITIAL ${'🚀'.repeat(20_000)}` },
+    ];
+    messages[2]!.parts = [
+      { type: 'text', text: `UNICODE_LATEST ${'🧭'.repeat(20_000)}` },
+    ];
+
+    const result = generateEmergency(messages, 6_000);
+
+    expect(result).toContain('UNICODE_INITIAL');
+    expect(result).toContain('UNICODE_LATEST');
+    expect(result).not.toContain('\uFFFD');
+    expect(result.length).toBeLessThanOrEqual(COMPRESSION_TARGET_CHARS);
+    expect(new TextEncoder().encode(result).length).toBeLessThanOrEqual(6_000);
+  });
+
+  it('fails closed when the byte budget cannot fit required safety metadata', () => {
+    const messages = makeMessages(3);
+    messages[0]!.parts = [
+      { type: 'text', text: `INITIAL ${'a'.repeat(20_000)}` },
+    ];
+
+    expect(() => generateEmergency(messages, 100)).toThrow(
+      'too small for required safety metadata',
+    );
+  });
+
+  it('bounds retained memory to the requested excerpt while scanning a very large prefix', () => {
+    const messages = makeMessages(3);
+    messages[0]!.parts = [
+      { type: 'text', text: `VERY_LARGE_INITIAL ${'a'.repeat(500_000)}` },
+    ];
+    messages[2]!.parts = [
+      { type: 'text', text: `VERY_LARGE_LATEST ${'z'.repeat(500_000)}` },
+    ];
+
+    const result = generateEmergency(messages, 4_000);
+
+    expect(result).toContain('VERY_LARGE_INITIAL');
+    expect(result).toContain('VERY_LARGE_LATEST');
+    expect(new TextEncoder().encode(result).length).toBeLessThanOrEqual(4_000);
+  });
+
+  it('refuses to discard history when nothing can be serialized', () => {
+    const messages = [
+      {
+        id: 'system-only',
+        role: 'system',
+        parts: [],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    expect(() => generateEmergency(messages)).toThrow('empty history');
+  });
+
+  it.each([
+    'input-streaming',
+    'input-available',
+    'approval-requested',
+    'approval-responded',
+    'unknown-state',
+  ])('fails closed for a tool outcome in state %s', (state) => {
+    const messages = [
+      {
+        id: 'assistant-with-pending-effect',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-write',
+            toolCallId: 'write-1',
+            state,
+            input: { path: 'w1/src/file.ts', content: 'changed' },
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    expect(() => generateEmergency(messages)).toThrow(
+      'refused ambiguous tool outcome',
+    );
+  });
+
+  it.each([
+    ['missing toolCallId', { type: 'tool-write' }],
+    ['blank toolCallId', { type: 'tool-write', toolCallId: '   ' }],
+    ['NUL toolCallId', { type: 'tool-write', toolCallId: 'write\0id' }],
+    ['empty static name', { type: 'tool-', toolCallId: 'write-1' }],
+    [
+      'blank dynamic name',
+      { type: 'dynamic-tool', toolName: ' ', toolCallId: 'dynamic-1' },
+    ],
+  ])('fails closed for terminal tool identity with %s', (_label, identity) => {
+    const messages = [
+      {
+        id: 'assistant-with-invalid-terminal-identity',
+        role: 'assistant',
+        parts: [
+          {
+            ...identity,
+            state: 'output-available',
+            input: { path: 'w1/src/file.ts', content: 'changed' },
+            output: { ok: true },
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    expect(() => generateEmergency(messages)).toThrow(
+      'refused ambiguous tool outcome',
+    );
+  });
+
+  it('ignores ambiguous tool parts older than the latest durable briefing', () => {
+    const messages = [
+      {
+        id: 'old-ambiguous-effect',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-write',
+            toolCallId: 'old-write',
+            state: 'input-available',
+            input: { path: 'w1/old.ts', content: 'unknown' },
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+      {
+        id: 'durable-boundary',
+        role: 'user',
+        parts: [{ type: 'text', text: 'Continue from the durable briefing.' }],
+        metadata: {
+          createdAt: new Date(),
+          partsMetadata: [],
+          compressedHistory: 'The old tool outcome was resolved safely.',
+        },
+      },
+      {
+        id: 'recent-message',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'text',
+            text: `Current work is still in progress. ${'context '.repeat(2_000)}`,
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = generateEmergency(messages, 4_000);
+
+    expect(result).toContain('The old tool outcome was resolved safely.');
+    expect(result).toContain('Current work is still in progress.');
+    expect(result).not.toContain('w1/old.ts');
+  });
+
+  it('preserves a terminal dynamic tool effect in the emergency snapshot', () => {
+    const messages = [
+      {
+        id: 'assistant-with-dynamic-effect',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'text',
+            text: `Completed external operation context ${'detail '.repeat(1_000)}`,
+          },
+          {
+            type: 'dynamic-tool',
+            toolName: 'mcp_write_record',
+            toolCallId: 'dynamic-1',
+            state: 'output-available',
+            input: { recordId: 'record-1' },
+            output: { ok: true },
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = generateEmergency(messages, 4_000);
+
+    expect(result).toContain('[dynamic-tool: mcp_write_record]');
+    expect(result).toContain('toolCallId=dynamic-1');
+  });
+
+  it('keeps every write, shell, and MCP receipt even when their messages fall in the omitted middle', () => {
+    const host = makeEmergencyHost({
+      executeShellCommand: ({ output }) =>
+        `[shell: build → ${output?.exit_code === 0 ? '✓' : `exit ${output?.exit_code}`}]`,
+      mcp_write_record: ({ output }) =>
+        `[mcp: record ${output?.ok ? 'saved' : 'failed'}]`,
+    });
+    const messages = makeMessages(7);
+    messages[0]!.parts = [
+      { type: 'text', text: `LEDGER_INITIAL ${'a'.repeat(35_000)}` },
+    ];
+    messages[2] = {
+      id: 'middle-write',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-write',
+          toolCallId: 'write-middle',
+          state: 'output-available',
+          input: { path: 'w1/middle.ts', content: 'changed' },
+          output: { ok: true },
+        },
+      ],
+      metadata: { createdAt: new Date(), partsMetadata: [] },
+    } as unknown as AgentMessage;
+    messages[3] = {
+      id: 'middle-shell-mcp',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-executeShellCommand',
+          toolCallId: 'shell-middle',
+          state: 'output-available',
+          input: { command: 'pnpm test' },
+          output: { exit_code: 0 },
+        },
+        {
+          type: 'dynamic-tool',
+          toolName: 'mcp_write_record',
+          toolCallId: 'mcp-middle',
+          state: 'output-available',
+          input: { recordId: 'record-1' },
+          output: { ok: true },
+        },
+      ],
+      metadata: { createdAt: new Date(), partsMetadata: [] },
+    } as unknown as AgentMessage;
+    messages[4]!.parts = [
+      { type: 'text', text: `OMITTED_MIDDLE_SENTINEL ${'m'.repeat(35_000)}` },
+    ];
+    messages[6]!.parts = [
+      { type: 'text', text: `LEDGER_LATEST ${'z'.repeat(35_000)}` },
+    ];
+
+    const result = generateEmergency(messages, 8_000, host);
+
+    expect(result).toContain('## Terminal tool-effect ledger');
+    expect(result).toContain('toolCallId=write-middle');
+    expect(result).toContain('[wrote: w1/middle.ts]');
+    expect(result).toContain('toolCallId=shell-middle');
+    expect(result).toContain('[shell: build → ✓]');
+    expect(result).toContain('toolCallId=mcp-middle');
+    expect(result).toContain('[mcp: record saved]');
+    expect(result).not.toContain('OMITTED_MIDDLE_SENTINEL');
+  });
+
+  it('fails closed when all mandatory terminal receipts cannot fit', () => {
+    const messages = [
+      {
+        id: 'large-user-prefix',
+        role: 'user',
+        parts: [{ type: 'text', text: `PREFIX ${'a'.repeat(100_000)}` }],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+      {
+        id: 'many-terminal-effects',
+        role: 'assistant',
+        parts: Array.from({ length: 80 }, (_, index) => ({
+          type: 'tool-bulkEffect',
+          toolCallId: `bulk-effect-${index}`,
+          state: 'output-available',
+          input: { index },
+          output: { ok: true },
+        })),
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    expect(() => generateEmergency(messages, 2_000)).toThrow(
+      'terminal-effect ledger cannot fit all receipts',
+    );
+  });
+
+  it('preserves host serializer success, exit, and timeout outcomes in the mandatory ledger', () => {
+    const host = makeEmergencyHost({
+      executeShellCommand: ({ input, output }) => {
+        const label = input.command;
+        if (output?.timed_out) return `[shell: ${label} → timed out]`;
+        if (output?.exit_code !== 0)
+          return `[shell: ${label} → exit ${output?.exit_code}]`;
+        return `[shell: ${label} → ✓]`;
+      },
+    });
+    const messages = [
+      {
+        id: 'large-shell-prefix',
+        role: 'user',
+        parts: [{ type: 'text', text: `SHELL_PREFIX ${'a'.repeat(40_000)}` }],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+      {
+        id: 'shell-outcomes',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-executeShellCommand',
+            toolCallId: 'shell-success',
+            state: 'output-available',
+            input: { command: 'test-success' },
+            output: { exit_code: 0 },
+          },
+          {
+            type: 'tool-executeShellCommand',
+            toolCallId: 'shell-exit-1',
+            state: 'output-available',
+            input: { command: 'test-failure' },
+            output: { exit_code: 1 },
+          },
+          {
+            type: 'tool-executeShellCommand',
+            toolCallId: 'shell-timeout',
+            state: 'output-available',
+            input: { command: 'test-timeout' },
+            output: { timed_out: true },
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+      {
+        id: 'large-shell-tail',
+        role: 'assistant',
+        parts: [{ type: 'text', text: `SHELL_LATEST ${'z'.repeat(40_000)}` }],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = generateEmergency(messages, 7_000, host);
+
+    expect(result).toContain('[shell: test-success → ✓]');
+    expect(result).toContain('[shell: test-failure → exit 1]');
+    expect(result).toContain('[shell: test-timeout → timed out]');
+    expect(result).toContain('toolCallId=shell-success');
+    expect(result).toContain('toolCallId=shell-exit-1');
+    expect(result).toContain('toolCallId=shell-timeout');
+  });
+
+  it('fails closed for preliminary terminal-looking tool output', () => {
+    const messages = [
+      {
+        id: 'assistant-with-preliminary-effect',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'text',
+            text: `Write operation context ${'detail '.repeat(1_000)}`,
+          },
+          {
+            type: 'tool-write',
+            toolCallId: 'write-preliminary',
+            state: 'output-available',
+            preliminary: true,
+            input: { path: 'w1/src/file.ts', content: 'changed' },
+            output: { ok: true },
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    expect(() => generateEmergency(messages)).toThrow(
+      'refused ambiguous tool outcome',
+    );
+  });
+
+  it.each([
+    ['output-available', undefined, '[wrote: w1/src/file.ts]'],
+    ['output-error', 'write failed', '✗ write failed'],
+    ['output-denied', undefined, '✗ denied'],
+  ] as const)('preserves a terminal write outcome in state %s', (state, errorText, expected) => {
+    const messages = [
+      {
+        id: `write-${state}`,
+        role: 'assistant',
+        parts: [
+          {
+            type: 'text',
+            text: `Terminal write context ${'detail '.repeat(2_000)}`,
+          },
+          {
+            type: 'tool-write',
+            toolCallId: `write-${state}`,
+            state,
+            input: { path: 'w1/src/file.ts', content: 'changed' },
+            ...(state === 'output-available'
+              ? { output: { message: 'Successfully updated file' } }
+              : {}),
+            ...(errorText ? { errorText } : {}),
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = generateEmergency(messages, 4_000);
+
+    expect(result).toContain(expected);
+    expect(result).toContain(`toolCallId=write-${state}`);
   });
 });
 

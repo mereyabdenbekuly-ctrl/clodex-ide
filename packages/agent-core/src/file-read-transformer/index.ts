@@ -34,9 +34,13 @@ import {
 } from './serialization';
 import {
   baseMetadata,
+  CONTENT_BYTE_TRUNCATION_MARKER,
+  deriveMaxPreviewBytes,
   getMaxReadChars,
   getMaxPreviewLines,
   isBinaryBuffer,
+  PREVIEW_BYTE_TRUNCATION_MARKER,
+  truncateUtf8Prefix,
 } from './format-utils';
 
 /** Default content limits used when callers don't supply explicit values. */
@@ -384,6 +388,8 @@ export async function fileReadTransformer(
   // reassign it when a small file's preview request is promoted to a
   // full-content read.
   let effectiveReadParams: ReadParams = readParams ?? {};
+  const previewWasRequested = effectiveReadParams.preview === true;
+  let previewWasPromoted = false;
 
   // ── 1. Resolve to absolute path + stat ──────────────────────────────
   const absolutePath = resolveMountedPath(
@@ -502,7 +508,11 @@ export async function fileReadTransformer(
   if (
     effectiveReadParams.preview &&
     !isDirectory &&
-    buf.length <= PREVIEW_PROMOTION_MAX_BYTES &&
+    buf.length <=
+      Math.min(
+        PREVIEW_PROMOTION_MAX_BYTES,
+        deriveMaxPreviewBytes(maxReadChars),
+      ) &&
     !isBinaryBuffer(buf)
   ) {
     const lineCount = buf.toString('utf-8').split('\n').length;
@@ -516,6 +526,7 @@ export async function fileReadTransformer(
       // practice; defensive).
       const { preview: _preview, ...rest } = effectiveReadParams;
       effectiveReadParams = rest;
+      previewWasPromoted = true;
     }
   }
 
@@ -565,7 +576,7 @@ export async function fileReadTransformer(
     }
 
     // Cache miss — run transformer.
-    const result = await runTransformer(
+    let result = await runTransformer(
       buf,
       mountedPath,
       stat,
@@ -583,10 +594,36 @@ export async function fileReadTransformer(
       },
       originalFileName,
     );
+    result = capTransformTextOutput(
+      result,
+      effectiveReadParams,
+      effectiveReadParams.preview || previewWasPromoted
+        ? deriveMaxPreviewBytes(maxReadChars)
+        : maxReadChars,
+      effectiveReadParams.preview ? 'preview' : 'content',
+    );
 
     // Store in cache (fire-and-forget).
+    // A promoted preview normally shares the full-read cache key. If its
+    // transformed representation expanded past the preview byte budget,
+    // however, keep that truncated artifact under the original preview key
+    // so it cannot poison a later explicit full read.
+    const resultCacheKey =
+      previewWasRequested &&
+      previewWasPromoted &&
+      result.metadata.contentTruncated === 'true'
+        ? FileReadCacheService.buildCacheKey(
+            currentHash,
+            ext,
+            buildReadParamsSuffix(
+              { ...(readParams ?? {}), preview: true },
+              maxReadChars,
+              maxPreviewLines,
+            ),
+          )
+        : currentCacheKey;
     cache
-      .set(currentCacheKey, serializeTransformResult(result), stat.size)
+      .set(resultCacheKey, serializeTransformResult(result), stat.size)
       .catch((e: unknown) => {
         logger.warn('[fileReadTransformer] Cache write failed', e);
       });
@@ -689,6 +726,93 @@ async function runTransformer(
   return transformer(buf, mountedPath, stats, ctx, originalFileName);
 }
 
+/**
+ * Enforce one central UTF-8 byte ceiling over all text parts emitted by a
+ * preview transformer. This runs after core/host transformation but before
+ * cache serialization and XML wrapping, so no transformer can bypass it.
+ */
+function capTransformTextOutput(
+  result: FileTransformResult,
+  requestedParams: ReadParams,
+  maxUtf8Bytes: number,
+  mode: 'preview' | 'content',
+): FileTransformResult {
+  const textBytes = result.parts.reduce(
+    (sum, part) =>
+      part.type === 'text' ? sum + Buffer.byteLength(part.text, 'utf8') : sum,
+    0,
+  );
+  if (textBytes <= maxUtf8Bytes) return result;
+
+  const marker =
+    mode === 'preview'
+      ? PREVIEW_BYTE_TRUNCATION_MARKER
+      : CONTENT_BYTE_TRUNCATION_MARKER;
+  const markerBytes = Buffer.byteLength(marker, 'utf8');
+  if (markerBytes >= maxUtf8Bytes) {
+    throw new Error(
+      `Transform text byte budget ${maxUtf8Bytes} is too small for the truncation marker`,
+    );
+  }
+
+  let remainingBytes = maxUtf8Bytes - markerBytes;
+  let markerWritten = false;
+  const parts: FileTransformResult['parts'] = [];
+  for (const part of result.parts) {
+    if (part.type !== 'text') {
+      parts.push(part);
+      continue;
+    }
+    if (markerWritten) continue;
+
+    const truncated = truncateUtf8Prefix(part.text, remainingBytes);
+    const prefixBytes = Buffer.byteLength(truncated.text, 'utf8');
+    remainingBytes -= prefixBytes;
+    if (truncated.truncated) {
+      parts.push({
+        ...part,
+        text: truncated.text + marker,
+      });
+      markerWritten = true;
+      continue;
+    }
+    parts.push({ ...part, text: truncated.text });
+  }
+
+  // The aggregate byte count proved truncation was necessary, so reaching
+  // the end without placing the marker would indicate a broken accounting
+  // invariant. Fail closed rather than caching an unlabeled partial preview.
+  if (!markerWritten) {
+    throw new Error('Transform byte cap failed to mark truncated text output');
+  }
+
+  const priorEffectiveParams = result.effectiveReadParams ?? requestedParams;
+  const effectiveReadParams =
+    mode === 'preview'
+      ? { ...priorEffectiveParams, preview: true }
+      : narrowEffectiveReadParamsAfterByteCap(priorEffectiveParams);
+  return {
+    ...result,
+    metadata: {
+      ...result.metadata,
+      [mode === 'preview' ? 'previewTruncated' : 'contentTruncated']: 'true',
+    },
+    parts,
+    effectiveReadParams,
+  };
+}
+
+function narrowEffectiveReadParamsAfterByteCap(
+  delivered: ReadParams,
+): ReadParams {
+  if (delivered.startPage !== undefined || delivered.endPage !== undefined) {
+    const startPage = Math.max(1, delivered.startPage ?? 1);
+    return { ...delivered, startPage, endPage: startPage };
+  }
+  const startLine = Math.max(1, delivered.startLine ?? 1);
+  return { ...delivered, startLine, endLine: startLine };
+}
+
 // ---------------------------------------------------------------------------
 // XML wrapping
 // ---------------------------------------------------------------------------
@@ -735,10 +859,12 @@ function wrapResult(
   // `truncated="true"` attribute so the model knows the full requested
   // range was NOT delivered.
   const wasTruncated =
-    delivered !== undefined &&
-    requestedParams !== undefined &&
-    result.effectiveReadParams !== undefined &&
-    !readParamsEqual(requestedParams, result.effectiveReadParams);
+    result.metadata.previewTruncated === 'true' ||
+    result.metadata.contentTruncated === 'true' ||
+    (delivered !== undefined &&
+      requestedParams !== undefined &&
+      result.effectiveReadParams !== undefined &&
+      !readParamsEqual(requestedParams, result.effectiveReadParams));
 
   // Include read-param attributes on <file> tags only (not <dir>).
   // These reflect what was *actually delivered*, not what was requested.
@@ -868,6 +994,9 @@ function buildReadParamsSuffix(
   maxPreviewLines: number,
 ): string {
   const parts: string[] = [];
+  // Central aggregate UTF-8 cap version. This applies to preview and
+  // non-preview results, so it must participate in every cache key.
+  parts.push('tcv=1');
   if (params.startLine !== undefined) parts.push(`sl=${params.startLine}`);
   if (params.endLine !== undefined) parts.push(`el=${params.endLine}`);
   if (params.startPage !== undefined) parts.push(`sp=${params.startPage}`);
@@ -875,7 +1004,7 @@ function buildReadParamsSuffix(
   if (params.preview) parts.push('pv=1');
   // Version tag — bump when preview output format changes
   // (e.g. AST outline replaces line-based preview for source files).
-  if (params.preview) parts.push('pvv=8');
+  if (params.preview) parts.push('pvv=9');
   if (params.depth !== undefined) parts.push(`d=${params.depth}`);
 
   // Include the runtime content-limit settings so that changing them
@@ -922,6 +1051,7 @@ export { hashPath, hashBuffer, hashFile, hashDirectory } from './hash';
 export { textBlobTransformer } from './transformers/text-blob';
 export {
   deriveMaxReadChars,
+  deriveMaxPreviewBytes,
   prefixLineNumbers,
   formatBytes,
   inferLanguage,

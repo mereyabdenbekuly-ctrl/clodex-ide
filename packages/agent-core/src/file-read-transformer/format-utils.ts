@@ -190,6 +190,55 @@ export function deriveMaxReadChars(contextWindowTokens: number): number {
 }
 
 /**
+ * Hard UTF-8 byte budget for preview text produced by any transformer.
+ *
+ * Previews are intentionally much smaller than explicit full/range reads:
+ * one eighth of the read-character budget, clamped to a useful 2–16 KB
+ * envelope. The central transformer pipeline enforces this after host/core
+ * transformation and before caching, so a minified line or custom preview
+ * transformer cannot bypass the limit.
+ */
+export function deriveMaxPreviewBytes(maxReadChars: number): number {
+  if (!Number.isFinite(maxReadChars) || maxReadChars < 1) {
+    throw new RangeError('maxReadChars must be a positive finite number');
+  }
+  return Math.max(2_000, Math.min(16_000, Math.floor(maxReadChars / 8)));
+}
+
+/** Marker appended inside a preview when the central UTF-8 cap truncates it. */
+export const PREVIEW_BYTE_TRUNCATION_MARKER =
+  '\n… (preview truncated — byte budget reached)';
+
+/** Marker appended when a full/range transform exceeds its UTF-8 byte cap. */
+export const CONTENT_BYTE_TRUNCATION_MARKER =
+  '\n… (file output truncated — byte budget reached)';
+
+/**
+ * Return the longest code-point-safe prefix that fits `maxUtf8Bytes`.
+ */
+export function truncateUtf8Prefix(
+  value: string,
+  maxUtf8Bytes: number,
+): { text: string; truncated: boolean } {
+  if (!Number.isSafeInteger(maxUtf8Bytes) || maxUtf8Bytes < 0) {
+    throw new RangeError('maxUtf8Bytes must be a non-negative safe integer');
+  }
+  let bytes = 0;
+  let endIndex = 0;
+  for (const codePoint of value) {
+    const scalar = codePoint.codePointAt(0) ?? 0;
+    const codePointBytes =
+      scalar <= 0x7f ? 1 : scalar <= 0x7ff ? 2 : scalar <= 0xffff ? 3 : 4;
+    if (bytes + codePointBytes > maxUtf8Bytes) {
+      return { text: value.slice(0, endIndex), truncated: true };
+    }
+    bytes += codePointBytes;
+    endIndex += codePoint.length;
+  }
+  return { text: value, truncated: false };
+}
+
+/**
  * Given an array of text lines, determine how many can be included
  * within the current `maxReadChars` budget, starting from index 0.
  *
