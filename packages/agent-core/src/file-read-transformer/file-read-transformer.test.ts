@@ -456,7 +456,7 @@ describe('fileReadTransformer – cache integration (hash match)', () => {
     const cacheKey = FileReadCacheService.buildCacheKey(
       hash,
       '.txt',
-      `mrc=${getMaxReadChars()}`,
+      `tcv=1,mrc=${getMaxReadChars()}`,
     );
     const cached = await waitForCache(ctx.cache, cacheKey);
     expect(cached).not.toBeNull();
@@ -477,7 +477,7 @@ describe('fileReadTransformer – cache integration (hash match)', () => {
     const cacheKey = FileReadCacheService.buildCacheKey(
       hash,
       '.txt',
-      `mrc=${getMaxReadChars()}`,
+      `tcv=1,mrc=${getMaxReadChars()}`,
     );
     await ctx.cache.set(cacheKey, 'not valid json {{{{', content.length);
 
@@ -518,7 +518,7 @@ describe('fileReadTransformer – hash mismatch', () => {
     const oldCacheKey = FileReadCacheService.buildCacheKey(
       oldHash,
       '.txt',
-      `mrc=${getMaxReadChars()}`,
+      `tcv=1,mrc=${getMaxReadChars()}`,
     );
     await ctx.cache.set(
       oldCacheKey,

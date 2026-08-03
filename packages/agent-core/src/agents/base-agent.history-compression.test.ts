@@ -10,6 +10,12 @@ type CompressionState = {
 };
 
 type CompressionHarness = {
+  config: {
+    persistent: boolean;
+    historyCompressionThreshold: number;
+    minUncompressedMessages: number;
+    maxOutputTokens?: number;
+  };
   instanceId: string;
   _stepGeneration: number;
   _stepResolvedModelId: string;
@@ -59,6 +65,41 @@ function makeMessage(index: number): AgentMessage {
     ],
     metadata: { createdAt: new Date(), partsMetadata: [{}] },
   } as AgentMessage;
+}
+
+function prepareLargeCriticalHistory(
+  state: CompressionState,
+  usedTokens = 161_166,
+): void {
+  state.usedTokens = usedTokens;
+  state.history[0]!.parts = [
+    {
+      type: 'text',
+      text: `0: INITIAL_GOAL ${'historic context '.repeat(30_000)}`,
+    },
+  ];
+  state.history[8]!.parts = [
+    {
+      type: 'text',
+      text: '8: LATEST_COMPACTED_STATE continue the active implementation safely',
+    },
+  ];
+}
+
+function prepareSmallWindowCriticalHistory(state: CompressionState): void {
+  state.usedTokens = 6_401;
+  state.history[0]!.parts = [
+    {
+      type: 'text',
+      text: `0: SMALL_WINDOW_GOAL ${'a'.repeat(6_000)}`,
+    },
+  ];
+  state.history[8]!.parts = [
+    {
+      type: 'text',
+      text: '8: SMALL_WINDOW_LATEST_STATE',
+    },
+  ];
 }
 
 function deferred<T>() {
@@ -322,23 +363,298 @@ describe('BaseAgent history-compression admission barrier', () => {
     expect(storeCompressedHistory).toHaveBeenCalledOnce();
   });
 
-  it('fails closed with a non-retryable post-step error at critical occupancy', async () => {
+  it('stores a deterministic fallback and continues at critical occupancy', async () => {
     const { agent, state, storeCompressedHistory } = createCompressionHarness();
-    state.usedTokens = 160;
+    prepareLargeCriticalHistory(state);
     agent.compressHistory.mockRejectedValueOnce(
       new Error('all compression routes unavailable'),
     );
 
     await expect(
-      agent.maybeCompressHistoryAfterStep(7, 200),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining(
-        'Context compression failed before the next step',
-      ),
+      agent.maybeCompressHistoryAfterStep(7, 200_000),
+    ).resolves.toBeUndefined();
+
+    expect(agent.compressHistory).toHaveBeenCalledOnce();
+    expect(storeCompressedHistory).toHaveBeenCalledOnce();
+    const storedHistory =
+      storeCompressedHistory.mock.calls[0]?.[0]?.compressedHistory;
+    expect(storedHistory).toContain('## Emergency continuity snapshot');
+    expect(storedHistory).toContain('INITIAL_GOAL');
+    expect(storedHistory).toContain('LATEST_COMPACTED_STATE');
+    expect(new TextEncoder().encode(storedHistory).length).toBeLessThanOrEqual(
+      30_000,
+    );
+    expect(state.history).toHaveLength(14);
+    expect(agent.state.persist).toHaveBeenCalledOnce();
+    expect(agent.report).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'all compression routes unavailable',
+      }),
+      'compressHistoryGenerationEmergencyFallback',
+    );
+    expect(agent._historyCompressionGenerationFailures).toBe(0);
+    expect(agent._historyCompressionRetryNotBefore).toBe(0);
+    expect(agent.recordEvidenceEvent).toHaveBeenCalledWith(
+      'compression_completed',
+      expect.objectContaining({
+        strategy: 'deterministic-emergency',
+        generationFailureCount: 1,
+        emergencyProjection: expect.objectContaining({
+          targetInputTokens: 140_000,
+          outputReserveTokens: 40_000,
+          generalReserveTokens: 20_000,
+          projectedInputTokens: expect.any(Number),
+          snapshotTokenUpperBound: expect.any(Number),
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('shrinks the emergency snapshot budget for a small context window', async () => {
+    const { agent, state, storeCompressedHistory } = createCompressionHarness();
+    prepareSmallWindowCriticalHistory(state);
+    agent.compressHistory.mockRejectedValueOnce(
+      new Error('all compression routes unavailable'),
+    );
+
+    await expect(
+      agent.maybeCompressHistoryAfterStep(7, 8_000),
+    ).resolves.toBeUndefined();
+
+    const storedHistory =
+      storeCompressedHistory.mock.calls[0]?.[0]?.compressedHistory;
+    const snapshotUtf8Bytes = new TextEncoder().encode(storedHistory).length;
+    expect(snapshotUtf8Bytes).toBeLessThan(5_600);
+    expect(agent.recordEvidenceEvent).toHaveBeenCalledWith(
+      'compression_completed',
+      expect.objectContaining({
+        emergencyProjection: expect.objectContaining({
+          targetInputTokens: 5_600,
+          outputReserveTokens: 1_600,
+          generalReserveTokens: 800,
+          snapshotTokenUpperBound: snapshotUtf8Bytes,
+          projectedInputTokens: expect.any(Number),
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('folds a same-boundary prior briefing into a later emergency boundary', async () => {
+    const { agent, state, storeCompressedHistory } = createCompressionHarness();
+    state.usedTokens = 8_001;
+    state.history[9]!.metadata!.compressedHistory =
+      `PRIOR_BRIEFING_START ${'p'.repeat(19_000)} PRIOR_TOOL_RECEIPT_END`;
+    agent.compressHistory.mockRejectedValueOnce(
+      new Error('all compression routes unavailable'),
+    );
+
+    await expect(
+      agent.maybeCompressHistoryAfterStep(7, 10_000),
+    ).resolves.toBeUndefined();
+
+    expect(storeCompressedHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boundaryMessageId: 'message-10',
+        compactedMessageIds: expect.arrayContaining(['message-9']),
+        compressedHistory: expect.stringContaining('PRIOR_TOOL_RECEIPT_END'),
+      }),
+    );
+  });
+
+  it('fails closed when no boundary exists after the latest durable briefing', async () => {
+    const { agent, state, storeCompressedHistory } = createCompressionHarness();
+    state.usedTokens = 8_001;
+    state.history.at(-1)!.metadata!.compressedHistory =
+      'The latest message already carries the durable briefing.';
+
+    await expect(
+      agent.maybeCompressHistoryAfterStep(7, 10_000),
+    ).rejects.toMatchObject({ retryable: false });
+
+    expect(agent.compressHistory).not.toHaveBeenCalled();
+    expect(storeCompressedHistory).not.toHaveBeenCalled();
+  });
+
+  it('reserves retained file injections and fails closed when they consume the safe input budget', async () => {
+    const { agent, state, storeCompressedHistory } = createCompressionHarness();
+    prepareSmallWindowCriticalHistory(state);
+    state.history[10]!.metadata!.pathReferences = {
+      'w1/a.ts': 'a',
+      'w1/b.ts': 'b',
+    };
+    agent.compressHistory.mockRejectedValueOnce(
+      new Error('all compression routes unavailable'),
+    );
+
+    await expect(
+      agent.maybeCompressHistoryAfterStep(7, 8_000),
+    ).rejects.toMatchObject({ retryable: false });
+
+    expect(storeCompressedHistory).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates repeated retained user previews by path and content hash', async () => {
+    const { agent, state } = createCompressionHarness();
+    prepareLargeCriticalHistory(state);
+    state.history[10]!.metadata!.pathReferences = { 'w1/shared.ts': 'hash-1' };
+    state.history[12]!.metadata!.pathReferences = { 'w1/shared.ts': 'hash-1' };
+    agent.compressHistory.mockRejectedValueOnce(
+      new Error('all compression routes unavailable'),
+    );
+
+    await expect(
+      agent.maybeCompressHistoryAfterStep(7, 200_000),
+    ).resolves.toBeUndefined();
+
+    expect(agent.recordEvidenceEvent).toHaveBeenCalledWith(
+      'compression_completed',
+      expect.objectContaining({
+        emergencyProjection: expect.objectContaining({
+          retainedFileInjectionTokens: 10_512,
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('reserves the resolved maximum output budget before admitting a fallback', async () => {
+    const { agent, state, storeCompressedHistory } = createCompressionHarness();
+    prepareSmallWindowCriticalHistory(state);
+    agent.config.maxOutputTokens = 6_000;
+    agent.compressHistory.mockRejectedValueOnce(
+      new Error('all compression routes unavailable'),
+    );
+
+    await expect(
+      agent.maybeCompressHistoryAfterStep(7, 8_000),
+    ).rejects.toMatchObject({ retryable: false });
+
+    expect(storeCompressedHistory).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a retained CJK tail exceeds the conservative input budget', async () => {
+    const { agent, state, storeCompressedHistory } = createCompressionHarness();
+    prepareSmallWindowCriticalHistory(state);
+    for (let index = 9; index < state.history.length; index += 1) {
+      const message = state.history[index]!;
+      message.parts = [
+        {
+          type: 'text',
+          text: `RETAINED_CJK_${index} ${'界'.repeat(500)}`,
+          ...(message.role === 'assistant' ? { state: 'done' as const } : {}),
+        },
+      ];
+    }
+    agent.compressHistory.mockRejectedValueOnce(
+      new Error('all compression routes unavailable'),
+    );
+
+    await expect(
+      agent.maybeCompressHistoryAfterStep(7, 8_000),
+    ).rejects.toMatchObject({ retryable: false });
+
+    expect(storeCompressedHistory).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds the emergency prefix from current same-id message content', async () => {
+    const { agent, state, compression, storeCompressedHistory } =
+      createCompressionHarness();
+    prepareSmallWindowCriticalHistory(state);
+
+    const barrier = agent.maybeCompressHistoryAfterStep(7, 8_000);
+    await vi.waitFor(() =>
+      expect(agent.compressHistory).toHaveBeenCalledOnce(),
+    );
+    state.history[0] = {
+      ...state.history[0]!,
+      parts: [
+        {
+          type: 'text',
+          text: `0: CURRENT_SAME_ID_CONTENT ${'b'.repeat(6_000)}`,
+        },
+      ],
+    } as AgentMessage;
+    compression.reject(new Error('all compression routes unavailable'));
+
+    await expect(barrier).resolves.toBeUndefined();
+    const storedHistory =
+      storeCompressedHistory.mock.calls[0]?.[0]?.compressedHistory;
+    expect(storedHistory).toContain('CURRENT_SAME_ID_CONTENT');
+    expect(storedHistory).not.toContain('SMALL_WINDOW_GOAL');
+  });
+
+  it.each([
+    ['missing', 'boundary message missing'],
+    ['stale', 'history prefix changed'],
+  ] as const)('fails closed when the critical exact-prefix store is %s', async (writeResult, expectedMessage) => {
+    const { agent, state, compression, storeCompressedHistory } =
+      createCompressionHarness();
+    state.usedTokens = 160;
+    storeCompressedHistory.mockReturnValueOnce(writeResult);
+
+    const barrier = agent.maybeCompressHistoryAfterStep(7, 200);
+    await vi.waitFor(() =>
+      expect(agent.compressHistory).toHaveBeenCalledOnce(),
+    );
+    compression.resolve('A model summary whose prefix binding became stale.');
+
+    await expect(barrier).rejects.toMatchObject({
+      message: expect.stringContaining(expectedMessage),
       retryable: false,
     });
+    expect(agent.state.persist).not.toHaveBeenCalled();
+    expect(agent.recordEvidenceEvent).not.toHaveBeenCalled();
+  });
+
+  it('rolls back a critical deterministic fallback when persistence rejects', async () => {
+    const { agent, state, restoreCompressedHistory } =
+      createCompressionHarness();
+    prepareLargeCriticalHistory(state);
+    agent.compressHistory.mockRejectedValueOnce(
+      new Error('all compression routes unavailable'),
+    );
+    agent.state.persist.mockRejectedValueOnce(
+      new Error('database unavailable'),
+    );
+
+    await expect(
+      agent.maybeCompressHistoryAfterStep(7, 200_000),
+    ).rejects.toMatchObject({ retryable: false });
+
+    expect(restoreCompressedHistory).toHaveBeenCalledOnce();
+    expect(
+      state.history.some(
+        (message) => message.metadata?.compressedHistory !== undefined,
+      ),
+    ).toBe(false);
+    expect(agent.recordEvidenceEvent).not.toHaveBeenCalled();
+    expect(agent._historyCompressionGenerationFailures).toBe(1);
+  });
+
+  it('fails closed instead of archiving an ambiguous tool outcome locally', async () => {
+    const { agent, state, storeCompressedHistory } = createCompressionHarness();
+    prepareLargeCriticalHistory(state);
+    state.history[2]!.parts = [
+      {
+        type: 'tool-write',
+        toolCallId: 'write-with-unknown-outcome',
+        state: 'input-available',
+        input: { path: 'w1/src/file.ts', content: 'changed' },
+      },
+    ] as any;
+    agent.compressHistory.mockRejectedValueOnce(
+      new Error('all compression routes unavailable'),
+    );
+
+    await expect(
+      agent.maybeCompressHistoryAfterStep(7, 200_000),
+    ).rejects.toMatchObject({ retryable: false });
+
     expect(storeCompressedHistory).not.toHaveBeenCalled();
     expect(agent.state.persist).not.toHaveBeenCalled();
+    expect(agent.recordEvidenceEvent).not.toHaveBeenCalled();
   });
 
   it('fails closed instead of overlapping a compressor that ignored abort', async () => {

@@ -17,13 +17,20 @@ import path from 'node:path';
 import nodeFs from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { FileReadCacheService } from '../services/file-read-cache';
-import { fileReadTransformer, type FileReadTransformerOptions } from './index';
+import {
+  fileReadTransformer,
+  type FileReadTransformerOptions,
+  type FileTransformer,
+} from './index';
 import type { HostPaths } from '../host';
 import {
   setMaxReadChars,
   setMaxPreviewLines,
   getMaxReadChars,
   getMaxPreviewLines,
+  deriveMaxPreviewBytes,
+  CONTENT_BYTE_TRUNCATION_MARKER,
+  PREVIEW_BYTE_TRUNCATION_MARKER,
 } from './format-utils';
 
 // ---------------------------------------------------------------------------
@@ -120,7 +127,7 @@ function makeOpts(
   readParams?: FileReadTransformerOptions['readParams'],
   overrides?: Pick<
     FileReadTransformerOptions,
-    'maxReadChars' | 'maxPreviewLines'
+    'maxReadChars' | 'maxPreviewLines' | 'extraTransformers'
   >,
 ): FileReadTransformerOptions {
   return {
@@ -143,6 +150,24 @@ function allText(parts: any[]): string {
     .filter((p: any) => p.type === 'text')
     .map((p: any) => p.text)
     .join('');
+}
+
+function previewBody(parts: any[]): string {
+  const text = allText(parts);
+  const opener = '<preview>\n';
+  const start = text.indexOf(opener);
+  const end = text.lastIndexOf('\n</preview>');
+  if (start < 0 || end < 0) throw new Error('Preview envelope not found');
+  return text.slice(start + opener.length, end);
+}
+
+function contentBody(parts: any[]): string {
+  const text = allText(parts);
+  const opener = '<content>\n';
+  const start = text.indexOf(opener);
+  const end = text.lastIndexOf('\n</content>');
+  if (start < 0 || end < 0) throw new Error('Content envelope not found');
+  return text.slice(start + opener.length, end);
 }
 
 /**
@@ -199,19 +224,21 @@ describe('content limits – full read truncation', () => {
     );
     const text = allText(result.parts);
 
-    // Should contain lines 1-10 but not line 11.
+    // The central UTF-8 cap also accounts for numbering and markers.
     expect(text).toContain('1|line 0001');
-    expect(text).toContain('10|line 0010');
-    expect(text).not.toContain('11|line 0011');
+    expect(text).not.toContain('10|line 0010');
+    expect(
+      Buffer.byteLength(contentBody(result.parts), 'utf8'),
+    ).toBeLessThanOrEqual(budgetForLines(10));
 
     // Should show truncation indicator.
     expect(text).toContain('truncated');
-    expect(text).toContain('more lines remaining');
+    expect(text).toContain('byte budget reached');
 
     // effectiveReadParams should reflect the actual range delivered.
     expect(result.effectiveReadParams).toEqual({
       startLine: 1,
-      endLine: 10,
+      endLine: 1,
     });
   });
 
@@ -269,8 +296,96 @@ describe('content limits – full read truncation', () => {
     expect(text).toContain('truncated');
     expect(result.effectiveReadParams).toEqual({
       startLine: 1,
-      endLine: 5,
+      endLine: 1,
     });
+  });
+
+  it('hard-caps a minified ASCII one-line full read by UTF-8 bytes', async () => {
+    const maxReadChars = 4_000;
+    const content = `FULL_ASCII_START_${'a'.repeat(100_000)}_END`;
+    const filePath = path.join(ctx.workDir, 'full-minified.txt');
+    await nodeFs.writeFile(filePath, content);
+    const hash = sha256(content);
+
+    const result = await fileReadTransformer(
+      makeOpts(ctx, `${ctx.mountPrefix}/full-minified.txt`, hash, undefined, {
+        maxReadChars,
+      }),
+    );
+    const body = contentBody(result.parts);
+    const wrapped = allText(result.parts);
+
+    expect(Buffer.byteLength(body, 'utf8')).toBeLessThanOrEqual(maxReadChars);
+    expect(body).toContain('FULL_ASCII_START');
+    expect(body).toContain(CONTENT_BYTE_TRUNCATION_MARKER.trim());
+    expect(body).not.toContain('_END');
+    expect(result.effectiveReadParams).toEqual({ startLine: 1, endLine: 1 });
+    expect(wrapped).toContain('truncated="true"');
+    expect(wrapped).toContain('contentTruncated:true');
+  });
+
+  it('hard-caps a CJK one-line full read without splitting UTF-8 code points', async () => {
+    const maxReadChars = 4_000;
+    const content = `FULL_CJK_START_${'界'.repeat(40_000)}_END`;
+    const filePath = path.join(ctx.workDir, 'full-cjk.txt');
+    await nodeFs.writeFile(filePath, content);
+    const hash = sha256(content);
+
+    const result = await fileReadTransformer(
+      makeOpts(ctx, `${ctx.mountPrefix}/full-cjk.txt`, hash, undefined, {
+        maxReadChars,
+      }),
+    );
+    const body = contentBody(result.parts);
+
+    expect(Buffer.byteLength(body, 'utf8')).toBeLessThanOrEqual(maxReadChars);
+    expect(body).toContain('FULL_CJK_START');
+    expect(body).toContain(CONTENT_BYTE_TRUNCATION_MARKER.trim());
+    expect(body).not.toContain('\uFFFD');
+    expect(body).not.toContain('_END');
+    expect(result.effectiveReadParams).toEqual({ startLine: 1, endLine: 1 });
+  });
+
+  it('caps host full-read output before caching', async () => {
+    const maxReadChars = 4_000;
+    let transformCalls = 0;
+    const hostFullTransformer: FileTransformer = async () => {
+      transformCalls += 1;
+      return {
+        metadata: { format: 'host-full' },
+        parts: [
+          { type: 'text', text: `HOST_FULL_START_${'x'.repeat(100_000)}` },
+        ],
+      };
+    };
+    const content = 'host full source'.repeat(1_000);
+    const filePath = path.join(ctx.workDir, 'capture.hostfull');
+    await nodeFs.writeFile(filePath, content);
+    const hash = sha256(content);
+    const opts = makeOpts(
+      ctx,
+      `${ctx.mountPrefix}/capture.hostfull`,
+      hash,
+      undefined,
+      {
+        maxReadChars,
+        extraTransformers: { '.hostfull': hostFullTransformer },
+      },
+    );
+
+    const first = await fileReadTransformer(opts);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const second = await fileReadTransformer(opts);
+
+    expect(
+      Buffer.byteLength(contentBody(first.parts), 'utf8'),
+    ).toBeLessThanOrEqual(maxReadChars);
+    expect(contentBody(first.parts)).toContain(
+      CONTENT_BYTE_TRUNCATION_MARKER.trim(),
+    );
+    expect(contentBody(second.parts)).toBe(contentBody(first.parts));
+    expect(second.effectiveReadParams).toEqual({ startLine: 1, endLine: 1 });
+    expect(transformCalls).toBe(1);
   });
 });
 
@@ -304,19 +419,21 @@ describe('content limits – line-range truncation', () => {
     );
     const text = allText(result.parts);
 
-    // Should contain lines 20-29 (10 lines fitting in the budget from startLine).
+    // Coverage remains fail-conservative after the aggregate UTF-8 cap.
     expect(text).toContain('20|line 0020');
-    expect(text).toContain('29|line 0029');
-    expect(text).not.toContain('30|line 0030');
+    expect(text).not.toContain('29|line 0029');
+    expect(
+      Buffer.byteLength(contentBody(result.parts), 'utf8'),
+    ).toBeLessThanOrEqual(budgetForLines(10));
 
     // Should show truncation with remaining count.
     expect(text).toContain('truncated');
-    expect(text).toContain('more lines until line 80');
+    expect(text).toContain('byte budget reached');
 
     // effectiveReadParams reports what was actually delivered.
     expect(result.effectiveReadParams).toEqual({
       startLine: 20,
-      endLine: 29,
+      endLine: 20,
     });
   });
 
@@ -378,6 +495,167 @@ describe('content limits – preview mode', () => {
     expect(text).not.toContain('6|line 0006');
     expect(text).toContain('195 more lines');
   });
+
+  it('hard-caps a minified ASCII one-line preview by UTF-8 bytes', async () => {
+    const maxReadChars = 40_000;
+    const maxPreviewBytes = deriveMaxPreviewBytes(maxReadChars);
+    const content = `MINIFIED_ASCII_START_${'a'.repeat(100_000)}_END`;
+    const filePath = path.join(ctx.workDir, 'minified.txt');
+    await nodeFs.writeFile(filePath, content);
+    const hash = sha256(content);
+
+    const result = await fileReadTransformer(
+      makeOpts(
+        ctx,
+        `${ctx.mountPrefix}/minified.txt`,
+        hash,
+        { preview: true },
+        { maxReadChars },
+      ),
+    );
+    const body = previewBody(result.parts);
+    const wrapped = allText(result.parts);
+
+    expect(Buffer.byteLength(body, 'utf8')).toBeLessThanOrEqual(
+      maxPreviewBytes,
+    );
+    expect(body).toContain('MINIFIED_ASCII_START');
+    expect(body).toContain(PREVIEW_BYTE_TRUNCATION_MARKER.trim());
+    expect(body).not.toContain('_END');
+    expect(wrapped).toContain('truncated="true"');
+    expect(wrapped).toContain('previewTruncated:true');
+  });
+
+  it('hard-caps a CJK preview without splitting UTF-8 code points', async () => {
+    const maxReadChars = 40_000;
+    const maxPreviewBytes = deriveMaxPreviewBytes(maxReadChars);
+    const content = `CJK_START_${'界'.repeat(40_000)}_END`;
+    const filePath = path.join(ctx.workDir, 'cjk.txt');
+    await nodeFs.writeFile(filePath, content);
+    const hash = sha256(content);
+
+    const result = await fileReadTransformer(
+      makeOpts(
+        ctx,
+        `${ctx.mountPrefix}/cjk.txt`,
+        hash,
+        { preview: true },
+        { maxReadChars },
+      ),
+    );
+    const body = previewBody(result.parts);
+
+    expect(Buffer.byteLength(body, 'utf8')).toBeLessThanOrEqual(
+      maxPreviewBytes,
+    );
+    expect(body).toContain('CJK_START');
+    expect(body).toContain(PREVIEW_BYTE_TRUNCATION_MARKER.trim());
+    expect(body).not.toContain('\uFFFD');
+    expect(body).not.toContain('_END');
+  });
+
+  it('caps host transformer preview output before caching', async () => {
+    const maxReadChars = 40_000;
+    const maxPreviewBytes = deriveMaxPreviewBytes(maxReadChars);
+    let transformCalls = 0;
+    const hostPreviewTransformer: FileTransformer = async () => {
+      transformCalls += 1;
+      return {
+        metadata: { format: 'host-preview' },
+        parts: [
+          { type: 'text', text: `HOST_PREVIEW_START_${'x'.repeat(100_000)}` },
+        ],
+        effectiveReadParams: { preview: true },
+      };
+    };
+    const content = 'host source'.repeat(1_000);
+    const filePath = path.join(ctx.workDir, 'capture.hostpreview');
+    await nodeFs.writeFile(filePath, content);
+    const hash = sha256(content);
+    const opts = makeOpts(
+      ctx,
+      `${ctx.mountPrefix}/capture.hostpreview`,
+      hash,
+      { preview: true },
+      {
+        maxReadChars,
+        extraTransformers: { '.hostpreview': hostPreviewTransformer },
+      },
+    );
+
+    const first = await fileReadTransformer(opts);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const second = await fileReadTransformer(opts);
+
+    expect(
+      Buffer.byteLength(previewBody(first.parts), 'utf8'),
+    ).toBeLessThanOrEqual(maxPreviewBytes);
+    expect(previewBody(first.parts)).toContain(
+      PREVIEW_BYTE_TRUNCATION_MARKER.trim(),
+    );
+    expect(previewBody(second.parts)).toBe(previewBody(first.parts));
+    expect(transformCalls).toBe(1);
+  });
+
+  it('keeps an expanded promoted preview within preview budget without poisoning the full-read cache', async () => {
+    const maxReadChars = 4_000;
+    const maxPreviewBytes = deriveMaxPreviewBytes(maxReadChars);
+    let transformCalls = 0;
+    const expandingHostTransformer: FileTransformer = async () => {
+      transformCalls += 1;
+      return {
+        metadata: { format: 'expanded-host' },
+        parts: [
+          { type: 'text', text: `EXPANDED_HOST_START_${'x'.repeat(100_000)}` },
+        ],
+      };
+    };
+    const content = 'small host source';
+    const filePath = path.join(ctx.workDir, 'expanded.hostpromo');
+    await nodeFs.writeFile(filePath, content);
+    const hash = sha256(content);
+    const common = {
+      maxReadChars,
+      extraTransformers: { '.hostpromo': expandingHostTransformer },
+    };
+    const previewOpts = makeOpts(
+      ctx,
+      `${ctx.mountPrefix}/expanded.hostpromo`,
+      hash,
+      { preview: true },
+      common,
+    );
+
+    const firstPreview = await fileReadTransformer(previewOpts);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const cachedPreview = await fileReadTransformer(previewOpts);
+    const fullRead = await fileReadTransformer(
+      makeOpts(
+        ctx,
+        `${ctx.mountPrefix}/expanded.hostpromo`,
+        hash,
+        undefined,
+        common,
+      ),
+    );
+
+    expect(
+      Buffer.byteLength(contentBody(firstPreview.parts), 'utf8'),
+    ).toBeLessThanOrEqual(maxPreviewBytes);
+    expect(contentBody(firstPreview.parts)).toContain(
+      CONTENT_BYTE_TRUNCATION_MARKER.trim(),
+    );
+    expect(contentBody(cachedPreview.parts)).toBe(
+      contentBody(firstPreview.parts),
+    );
+    expect(
+      Buffer.byteLength(contentBody(fullRead.parts), 'utf8'),
+    ).toBeLessThanOrEqual(maxReadChars);
+    expect(
+      Buffer.byteLength(contentBody(fullRead.parts), 'utf8'),
+    ).toBeGreaterThan(maxPreviewBytes);
+    expect(transformCalls).toBe(2);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -413,7 +691,7 @@ describe('content limits – configurability', () => {
     const r1 = await fileReadTransformer(
       makeOpts(ctx, `${ctx.mountPrefix}/cfg1.ts`, sha256(content1)),
     );
-    expect(r1.effectiveReadParams).toEqual({ startLine: 1, endLine: 5 });
+    expect(r1.effectiveReadParams).toEqual({ startLine: 1, endLine: 1 });
 
     // 15-line budget
     setMaxReadChars(budgetForLines(15));
@@ -422,7 +700,7 @@ describe('content limits – configurability', () => {
     const r2 = await fileReadTransformer(
       makeOpts(ctx, `${ctx.mountPrefix}/cfg2.ts`, sha256(content2)),
     );
-    expect(r2.effectiveReadParams).toEqual({ startLine: 1, endLine: 15 });
+    expect(r2.effectiveReadParams).toEqual({ startLine: 1, endLine: 1 });
 
     // Budget above file size — no truncation.
     setMaxReadChars(budgetForLines(100));
@@ -460,7 +738,7 @@ describe('content limits – cache key isolation', () => {
     const r1 = await fileReadTransformer(
       makeOpts(ctx, `${ctx.mountPrefix}/cached.ts`, hash),
     );
-    expect(r1.effectiveReadParams).toEqual({ startLine: 1, endLine: 10 });
+    expect(r1.effectiveReadParams).toEqual({ startLine: 1, endLine: 1 });
 
     // Wait for cache write.
     await new Promise((r) => setTimeout(r, 50));
@@ -475,7 +753,7 @@ describe('content limits – cache key isolation', () => {
     const text2 = allText(r2.parts);
 
     expect(text2).toContain('11|line 0011');
-    expect(text2).toContain('20|line 0020');
+    expect(text2).not.toContain('20|line 0020');
     expect(text2).not.toContain('1|line 0001');
   });
 
@@ -496,7 +774,7 @@ describe('content limits – cache key isolation', () => {
     );
     const text1 = allText(r1.parts);
     expect(text1).toContain('1|line 0001');
-    expect(text1).toContain('10|line 0010');
+    expect(text1).not.toContain('10|line 0010');
     expect(text1).not.toContain('11|');
 
     // Read lines 11-20.
@@ -508,7 +786,7 @@ describe('content limits – cache key isolation', () => {
     );
     const text2 = allText(r2.parts);
     expect(text2).toContain('11|line 0011');
-    expect(text2).toContain('20|line 0020');
+    expect(text2).not.toContain('20|line 0020');
 
     // Read lines 21-30.
     const r3 = await fileReadTransformer(
@@ -519,7 +797,7 @@ describe('content limits – cache key isolation', () => {
     );
     const text3 = allText(r3.parts);
     expect(text3).toContain('21|line 0021');
-    expect(text3).toContain('30|line 0030');
+    expect(text3).not.toContain('30|line 0030');
   });
 });
 
@@ -559,12 +837,12 @@ describe('content limits – per-request options override globals', () => {
 
     // Should truncate at 8 lines despite the global allowing 500.
     expect(text).toContain('1|line 0001');
-    expect(text).toContain('8|line 0008');
+    expect(text).not.toContain('8|line 0008');
     expect(text).not.toContain('9|line 0009');
     expect(text).toContain('truncated');
     expect(result.effectiveReadParams).toEqual({
       startLine: 1,
-      endLine: 8,
+      endLine: 1,
     });
   });
 
@@ -619,12 +897,12 @@ describe('content limits – per-request options override globals', () => {
     const text = allText(result.parts);
 
     expect(text).toContain('20|line 0020');
-    expect(text).toContain('29|line 0029');
+    expect(text).not.toContain('29|line 0029');
     expect(text).not.toContain('30|line 0030');
     expect(text).toContain('truncated');
     expect(result.effectiveReadParams).toEqual({
       startLine: 20,
-      endLine: 29,
+      endLine: 20,
     });
   });
 
@@ -643,11 +921,11 @@ describe('content limits – per-request options override globals', () => {
     );
     const text = allText(result.parts);
 
-    expect(text).toContain('6|line 0006');
+    expect(text).not.toContain('6|line 0006');
     expect(text).not.toContain('7|line 0007');
     expect(result.effectiveReadParams).toEqual({
       startLine: 1,
-      endLine: 6,
+      endLine: 1,
     });
   });
 });
