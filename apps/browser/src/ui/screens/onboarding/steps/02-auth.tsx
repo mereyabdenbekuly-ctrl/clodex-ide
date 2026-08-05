@@ -27,6 +27,7 @@ import {
   supportsProviderAuthMethod,
 } from '@shared/provider-auth';
 import { useTranslation } from 'react-i18next';
+import { supportsIdentifiableTelemetryOptIn } from './02-auth-model';
 
 type AuthMode = 'clodex' | 'api-keys' | 'local';
 type CompletionAuthMode = 'clodex' | 'api-keys' | 'local';
@@ -128,10 +129,14 @@ export function StepAuth({
       ? 'authentication-validated'
       : 'form-input',
   );
-  // Community onboarding is private by default. Identifiable telemetry is an
-  // explicit opt-in available only after the user selects Clodex Cloud.
+  // Onboarding is private by default. Identifiable telemetry is an explicit
+  // opt-in after the user selects Clodex Cloud, but only standard official
+  // builds are allowed to offer it.
   const [telemetry, setTelemetry] = useState<TelemetryLevel>('off');
   const [showMoreProviders, setShowMoreProviders] = useState(false);
+  const canOfferIdentifiableTelemetry = supportsIdentifiableTelemetryOptIn(
+    __APP_TELEMETRY_MODE__,
+  );
 
   // API-keys list scroll fadeout — mirrors the models-list pattern in
   // agent-settings.models-providers.tsx.
@@ -300,32 +305,36 @@ export function StepAuth({
             {t('auth.useDifferentAccount')}
           </Button>
         </div>
-        <div className="app-no-drag mt-2 flex items-center gap-2">
-          <Checkbox
-            size="xs"
-            id="telemetry-full-checkbox"
-            checked={telemetry === 'full'}
-            onCheckedChange={(checked: boolean) => {
-              setTelemetry(checked ? 'full' : 'off');
-              void preferencesUpdate([
-                {
-                  op: 'replace',
-                  path: ['privacy', 'telemetryLevel'],
-                  value: checked ? 'full' : 'off',
-                },
-              ]);
-            }}
-          />
-          <label
-            htmlFor="telemetry-full-checkbox"
-            className="text-muted-foreground text-xs"
-          >
-            {t('auth.telemetry.identifiableLabel')}
-          </label>
-        </div>
-        <p className="mt-1 max-w-sm text-center text-[11px] text-muted-foreground/80">
-          {t('auth.telemetry.defaultOffNote')}
-        </p>
+        {canOfferIdentifiableTelemetry && (
+          <>
+            <div className="app-no-drag mt-2 flex items-center gap-2">
+              <Checkbox
+                size="xs"
+                id="telemetry-full-checkbox"
+                checked={telemetry === 'full'}
+                onCheckedChange={(checked: boolean) => {
+                  setTelemetry(checked ? 'full' : 'off');
+                  void preferencesUpdate([
+                    {
+                      op: 'replace',
+                      path: ['privacy', 'telemetryLevel'],
+                      value: checked ? 'full' : 'off',
+                    },
+                  ]);
+                }}
+              />
+              <label
+                htmlFor="telemetry-full-checkbox"
+                className="text-muted-foreground text-xs"
+              >
+                {t('auth.telemetry.identifiableLabel')}
+              </label>
+            </div>
+            <p className="mt-1 max-w-sm text-center text-[11px] text-muted-foreground/80">
+              {t('auth.telemetry.defaultOffNote')}
+            </p>
+          </>
+        )}
       </div>
     );
   }
