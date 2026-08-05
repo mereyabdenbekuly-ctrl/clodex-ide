@@ -191,7 +191,7 @@ export const executeSandboxJsToolInputSchema = z.object({
   explanation: z
     .string()
     .describe(
-      'Concise (max 5 words) human-readable description of what this script does. Examples: "Take a screenshot", "Read workspace files", "Query DOM elements", "Process API response", "Generate image thumbnail"',
+      'Concise (max 5 words) human-readable description of what this script does. Examples: "Take a screenshot", "Query DOM elements", "Process API response", "Monitor network requests", "Create output attachment"',
     ),
   script: z.string().describe('JavaScript code to execute'),
 });

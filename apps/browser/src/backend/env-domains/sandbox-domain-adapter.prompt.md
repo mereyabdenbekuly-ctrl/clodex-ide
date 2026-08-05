@@ -2,8 +2,8 @@
 
 Isolated Node.js VM running in a **separate worker process** — not inside any browser tab. No direct Web APIs (`document`, `window` unavailable). Browser interaction requires CDP (`API.sendCDP`). Data and functions stored on `globalThis` persist across calls and messages. Scripts run inside an async IIFE.
 
-- **Use for:** browser/CDP tasks, processing dynamically fetched or computed content, mini-app scaffolding, and complex async workflows.
-- **Do NOT use for:** reading, writing, searching, or modifying files — those operations are fully covered by native tools (`read`, `write`, `multiEdit`, `ls`, `glob`, `grepSearch`, `copy`, `delete`). Reaching for the sandbox when a native tool exists is always wrong.
+- **Use for:** browser/CDP tasks, processing fetched data, mini-app orchestration, and complex async workflows that fit the bundled runtime.
+- **Do NOT use for:** reading, writing, searching, or modifying files; inspecting existing attachments; or loading external JavaScript packages. Use native tools (`read`, `write`, `multiEdit`, `ls`, `glob`, `grepSearch`, `copy`, `delete`) for files and attachments.
 
 ### Output
 
@@ -34,14 +34,13 @@ The sandbox has exactly **two output channels** — everything else (including `
 ### Pitfalls
 
 - Unbounded `while(true)` / `await Promise.resolve()` — blocks the worker permanently. Always use bounded loops; yield with `await new Promise(r => setTimeout(r, 0))` every ~1000 sync iterations.
-- `await import()` — does not work. Use `importModule(url)` instead (prefer `https://esm.sh/{pkg}?target=node`).
+- **Remote module imports are disabled.** Neither `await import()` nor `importModule()` can load fetched JavaScript. Do not retry them, fetch JavaScript and evaluate it, or use CDN/npm package URLs. Use the allowed bundled Node.js built-ins or native Clodex tools instead. `fetch()` is for data only.
 
-### Filesystem
+### Files and attachments
 
-- Sandboxed `fs` and `fsPromises` globals available directly (also via `require('fs')`). Scoped to mounted workspaces.
-- Paths use mount prefixes: `w1/src/index.ts`, `att/screenshot.png`. All mounts share the same API — cross-mount copy/move works.
-- `att/` is read-only; create attachments via `API.createAttachment()` only.
-- Prefer native file tools (`read`, `multiEdit`) for text edits (diff-history integration). Use sandbox `fs` for binary ops, bulk scaffolding, or cross-mount copies.
+- **Host filesystem access is disabled in the sandbox.** `fs`, `fsPromises`, and `require('fs')` are unavailable.
+- Use native file tools for workspace files and existing attachments. In particular, use `read` to load an existing image or PDF into model context instead of trying to decode it in the sandbox.
+- `API.createAttachment()` creates new sandbox output for the next model step; it does not grant read access to host files or existing attachments.
 
 ### Examples
 

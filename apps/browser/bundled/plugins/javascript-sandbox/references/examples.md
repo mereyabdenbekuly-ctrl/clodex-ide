@@ -1,32 +1,14 @@
 # JavaScript Sandbox — Usage Examples
 
-## Reading and Listing Files
+## Files and Existing Attachments
 
-### Read a workspace file
+Host filesystem access is disabled in the sandbox. Use native Clodex tools for files and existing attachments:
 
-```js
-const content = await fsPromises.readFile('w1/src/index.ts', 'utf-8');
-API.output(`File has ${content.split('\n').length} lines`);
-return content.slice(0, 500);
-```
+- `read` loads a workspace file, image, PDF, or attachment into model context.
+- `ls`, `glob`, and `grepSearch` locate files.
+- `write`, `multiEdit`, `copy`, and `delete` change workspace files with normal diff and approval handling.
 
-### List files in a directory
-
-```js
-const files = await fsPromises.readdir('w1/src', { recursive: true });
-return files.filter(f => f.endsWith('.ts'));
-```
-
-### Read an uploaded attachment
-
-Read a user-uploaded file from the `att/` mount and copy it into the workspace:
-
-```js
-const content = await fsPromises.readFile('att/abc123');
-API.output(`Attachment size: ${content.length} bytes`);
-await fsPromises.writeFile('w1/assets/uploaded-image.png', content);
-return "Copied attachment to workspace.";
-```
+`API.createAttachment()` only creates new output from bytes already available to the script; it does not read host files.
 
 ---
 
@@ -83,23 +65,9 @@ return globalThis.networkRequests;
 
 ---
 
-## External Packages
+## Dependencies and Remote Code
 
-### Import via esm.sh
-
-Always use `importModule()` (never `await import()`). Support both named and default exports:
-
-```js
-// Named exports
-const { chunk, map } = await importModule('https://esm.sh/lodash-es?target=node');
-return chunk([1, 2, 3, 4, 5, 6], 2);
-```
-
-```js
-// Default export
-const dayjs = (await importModule('https://esm.sh/dayjs?target=node')).default;
-return dayjs().format('YYYY-MM-DD');
-```
+Remote module imports are disabled. Neither `await import()` nor `importModule()` may load fetched JavaScript, and JavaScript returned by `fetch()` must never be evaluated. Use pure JavaScript, the allowlisted Node.js built-ins, or a native Clodex tool. `fetch()` is for data only.
 
 ---
 

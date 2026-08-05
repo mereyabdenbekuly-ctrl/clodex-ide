@@ -3,6 +3,9 @@ import {
   SANDBOX_DOMAIN_SCHEMA_VERSION,
   createSandboxDomainAdapter,
 } from './sandbox-domain-adapter';
+import JavaScriptSandboxSkill from '../../../bundled/plugins/javascript-sandbox/SKILL.md?raw';
+import JavaScriptSandboxExamples from '../../../bundled/plugins/javascript-sandbox/references/examples.md?raw';
+import SandboxWorkerSource from '../services/sandbox/sandbox-worker.ts?raw';
 
 describe('createSandboxDomainAdapter', () => {
   it('reports the expected contract metadata', () => {
@@ -44,5 +47,33 @@ describe('createSandboxDomainAdapter', () => {
     expect(section).toContain('Sandbox');
     expect(section).toContain('API.output');
     expect(section).toContain('API.sendCDP');
+  });
+
+  it('keeps agent guidance aligned with the fail-closed runtime boundary', () => {
+    const adapter = createSandboxDomainAdapter({ getSessionId: () => null });
+    const guidance = [
+      adapter.promptSection ?? '',
+      JavaScriptSandboxSkill,
+      JavaScriptSandboxExamples,
+    ];
+
+    for (const document of guidance) {
+      expect(document).toContain('Remote module imports are disabled');
+      expect(document).toContain('Host filesystem access');
+    }
+
+    const combinedGuidance = guidance.join('\n');
+    expect(combinedGuidance).not.toContain('https://esm.sh');
+    expect(combinedGuidance).not.toContain('Always use `importModule()`');
+    expect(combinedGuidance).not.toContain('Modules cached per session');
+    expect(combinedGuidance).not.toContain(
+      'Sandboxed `fs` and `fsPromises` globals are available',
+    );
+
+    expect(SandboxWorkerSource).toContain('Remote module imports are disabled');
+    expect(SandboxWorkerSource).toContain('Host filesystem access is disabled');
+    expect(SandboxWorkerSource).not.toContain(
+      'importModule() only supports https:// URLs',
+    );
   });
 });

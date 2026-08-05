@@ -107,6 +107,22 @@ function validToolResult(
   };
 }
 
+function failedToolResult(finishReason: string, toolName = 'read') {
+  return {
+    finishReason,
+    toolCalls: [{ toolName }],
+    toolResults: [],
+    content: [
+      {
+        type: 'tool-error',
+        toolCallId: 'tool-1',
+        toolName,
+        error: new Error('Sandbox capability is unavailable'),
+      },
+    ],
+  };
+}
+
 async function trustedInvalidToolResult(input: string) {
   const error = new Error('provider schema error');
   await repairToolCall({
@@ -322,8 +338,19 @@ describe('BaseAgent bounded tool-call recovery', () => {
     expect(agent.shouldRunNewStep(validToolResult('stop'), true)).toBe(true);
     expect(agent.host.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Continuing after completed tool activity despite provider finishReason="stop"',
+        'Continuing after terminal tool activity despite provider finishReason="stop"',
       ),
+    );
+    expect(agent._toolCallRecoveryAttempts).toBe(0);
+    expect(agent._pendingSyntheticContinuation).toBeNull();
+  });
+
+  it('continues after a terminal tool error when the provider mislabels it as stop', () => {
+    const { agent } = createRecoveryHarness();
+
+    expect(agent.shouldRunNewStep(failedToolResult('stop'), true)).toBe(true);
+    expect(agent.host.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('toolErrors=1'),
     );
     expect(agent._toolCallRecoveryAttempts).toBe(0);
     expect(agent._pendingSyntheticContinuation).toBeNull();
@@ -334,6 +361,9 @@ describe('BaseAgent bounded tool-call recovery', () => {
 
     expect(
       agent.shouldRunNewStep(validToolResult('content-filter'), true),
+    ).toBe(false);
+    expect(
+      agent.shouldRunNewStep(failedToolResult('content-filter'), true),
     ).toBe(false);
     expect(
       agent.shouldRunNewStep(

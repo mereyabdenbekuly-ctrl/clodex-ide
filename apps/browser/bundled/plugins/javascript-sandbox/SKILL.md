@@ -1,6 +1,6 @@
 ---
 name: javascript-sandbox
-description: Best practices for using the clodex built-in JavaScript sandbox. Explains how to access APIs for browser debugging/interaction, use external dependencies, file system access, running mini-apps, etc.
+description: Best practices for using the clodex built-in JavaScript sandbox for browser debugging, fetched-data processing, attachments, and mini-app orchestration within its bundled capability boundary.
 ---
 
 # JavaScript Sandbox
@@ -46,16 +46,13 @@ Send commands via `API.sendCDP(tabId, method, params?): Promise<any>`. Listen to
 
 ---
 
-## Filesystem Access
+## Files and Existing Attachments
 
-Sandboxed `fs` and `fsPromises` globals are available directly (also via `require('fs')`). Scoped to mounted workspaces.
+Host filesystem access is intentionally disabled. `fs`, `fsPromises`, and `require('fs')` are unavailable inside the sandbox.
 
-- Paths use mount prefixes: `w1/src/index.ts`, `w2/package.json`. Optional if one workspace mounted.
-- All mounts (`w1/`, `att/`, `apps/`, `plugins/`) share the same API — cross-mount copy/move works.
-- All standard `fs` methods available (callback, sync, and promise APIs).
-- **`att/`** — read-only access to attachments. Create with `API.createAttachment()`.
-- **`plugins/`** — read-only access to plugin files.
-- Sandbox `fs` is well-suited for binary operations and cross-mount copies.
+- Use native Clodex tools (`read`, `write`, `multiEdit`, `ls`, `glob`, `grepSearch`, `copy`, `delete`) for workspace files.
+- Use the native `read` tool to load an existing attachment, image, or PDF into model context. Do not try to decode host files in the sandbox.
+- `API.createAttachment()` creates a new output attachment from data already produced by the script. It does not read host files or existing attachments.
 
 ---
 
@@ -77,14 +74,13 @@ Mini apps are interactive web UIs rendered in dedicated browser tabs. Use `API.o
 
 **Node.js built-ins** (via `require()`): `buffer`, `crypto`, `events`, `path`, `querystring`, `stream`, `string_decoder`, `url`, `util`, `zlib`, `assert`. Blocked: `net`, `http`, `https`, `child_process`, `worker_threads`, `vm`.
 
-**Dynamic imports** (via `importModule(url)`): HTTPS only, prefer `https://esm.sh/{package}?target=node`. Modules cached per session. Do NOT use `await import()`.
+**Remote module imports are disabled.** Neither `await import()` nor `importModule()` may load fetched JavaScript. External npm/CDN packages are unavailable. Do not retry remote imports or evaluate JavaScript returned by `fetch()`. Use the allowed built-ins above, pure JavaScript, or a native Clodex tool. `fetch()` is for data only.
 
 ---
 
 ## Important Rules
 
-- Check docs of imported modules BEFORE using them.
-- Handle both default and named exports when format is unknown.
+- Do not load or evaluate remote JavaScript.
 - Use `API.output()` instead of console logging.
 - Use `fetch` for all network requests.
 - Implement error handling with fallbacks and sensible retries.
@@ -94,4 +90,4 @@ Mini apps are interactive web UIs rendered in dedicated browser tabs. Use `API.o
 ## References
 
 For detailed usage examples, see:
-- `references/examples.md` — Common sandbox patterns (filesystem, CDP, attachments, data processing, long-running tasks)
+- `references/examples.md` — Common sandbox patterns (CDP, attachments, fetched-data processing, and long-running tasks)
