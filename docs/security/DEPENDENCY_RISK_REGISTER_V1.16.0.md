@@ -103,3 +103,46 @@ their retained GitHub Actions run is the compatibility evidence for this
 bridge. CLODEx does not currently produce a universal macOS artifact, so the
 Universal 3 implementation path is outside the v1.16.0 artifact set. The final
 packaged SBOM and release-owner review remain separate release gates.
+
+## DR-004: August 3 dependency advisory refresh
+
+| Field | Value |
+| --- | --- |
+| Status | Dependency advisories closed in the locked graph; merge gated on cross-platform packaging CI |
+| Recorded | 2026-08-05 |
+| Advisories | `GHSA-rgw5-rvv9-x895`, `GHSA-7p8r-x3mc-p8w7`, `GHSA-8j4g-w8fx-2239`, `GHSA-22jq-vg5j-6vgg`, `GHSA-4xrf-jv44-h6hh`, `GHSA-mwp4-54f8-5fhr`, `GHSA-fxqj-rqcc-2cmp`, `GHSA-4cwx-7wf7-3272`, `GHSA-8xcm-r25x-g524`, `GHSA-jr45-8vmc-qm54`, `GHSA-m8rv-5g2x-5cg5`, `GHSA-v3r7-h72x-cjcm` |
+| Runtime | Repository-pinned Node `22.23.1` and pnpm `10.30.3` |
+| Resolution | Updated six affected package lines to patched registry releases without adding an advisory exception |
+
+The live npm advisory gate detected the advisories published on 2026-08-03
+against the previously frozen graph. The refreshed lock now resolves only the
+patched versions below:
+
+- `brace-expansion@5.0.9`, through `minimatch@9.0.8` and `10.2.5`;
+- `fast-uri@3.1.5`, through `ajv@8.18.0`;
+- `hono@4.12.34`, through `@modelcontextprotocol/sdk@1.29.0`;
+- `ip-address@10.3.1`, through `express-rate-limit@8.5.2` and `socks@2.8.7`;
+- `postcss@8.5.23`, including the four direct browser, website, Stage UI, and
+  Tailwind modifier development pins;
+- `undici@7.29.0`, through `@electron/get@5.0.0`.
+
+Root overrides remain limited to the affected compatible major lines. In
+particular, the `ip-address` floor is `10.3.1` because `10.2.1` and `10.2.2`
+do not close all three published advisories. The PostCSS override continues an
+existing reviewed compatibility policy for the Vite, Next.js, Tailwind, and
+test build graph; this refresh changes its floor from `8.5.18` to `8.5.23`.
+
+The schema-v3 dependency audit recorded at `2026-08-05T07:57:17.836Z` covers
+33 importers, 461 lock direct records, 460 manifest records, 70 validated
+workspace links, 1,821 package names, 2,116 exact registry package locators,
+and 2,138 snapshot/path variants. It reports `sourceLocatorCount=0`, zero
+findings, zero blockers, and zero residual exceptions. The former vulnerable
+versions are absent from `pnpm-lock.yaml`.
+
+This closure does not replace compatibility evidence. Required pull-request
+jobs must perform clean frozen-lock installs and real Forge builds on macOS
+arm64/x64, Windows x64, and Linux x64. Those jobs cover the Electron download
+path affected by Undici, installer/build traversal affected by brace-expansion
+and ip-address, MCP HTTP/CORS behavior affected by Hono, and the Vite/Next.js
+CSS graph affected by PostCSS. The final packaged SBOM and release-owner review
+remain separate release gates.
