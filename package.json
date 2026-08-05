@@ -53,7 +53,7 @@
     "check:update-server-deploy": "node scripts/ci/check-update-server-deploy.mjs"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.15",
+    "@biomejs/biome": "2.5.6",
     "@commitlint/cli": "^19.8.1",
     "@commitlint/config-conventional": "^19.8.1",
     "@commitlint/config-pnpm-scopes": "^20.1.0",
