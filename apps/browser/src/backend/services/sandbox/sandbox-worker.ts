@@ -414,15 +414,9 @@ function getContextGlobals(agentId: string) {
       return mod;
     },
 
-    async importModule(url: string) {
-      if (typeof url !== 'string' || !url.startsWith('https://')) {
-        throw new Error(
-          'importModule() only supports https:// URLs. ' +
-            'For Node.js built-ins, use require() instead.',
-        );
-      }
+    async importModule(_url: string) {
       throw new Error(
-        'Remote module imports are disabled because fetched JavaScript cannot execute inside the host worker authority boundary. Use bundled sandbox APIs instead.',
+        'Remote module imports are disabled because fetched JavaScript cannot execute inside the host worker authority boundary. Do not retry importModule(). Use allowlisted require() built-ins, fetch data without evaluating it, or native Clodex tools outside the sandbox.',
       );
     },
   };

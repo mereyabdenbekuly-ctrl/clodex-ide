@@ -12,7 +12,8 @@ import type {
 } from '@shared/guardian';
 import { createSandboxGuardianRequest } from '@/services/guardian/requests';
 
-export const DESCRIPTION = `Execute JavaScript in your persistent, sandboxed Node.js VM context.
+export const DESCRIPTION = `Execute JavaScript in your persistent, sandboxed Node.js VM context for CDP/browser tasks, fetched-data processing, attachments, and bounded async workflows.
+Remote/dynamic module imports and host filesystem access are disabled. Do not retry importModule(). Use fetch only for data, allowlisted require() built-ins for bundled modules, and native Clodex tools for files or existing attachments.
 `;
 
 export interface SandboxGuardianDeps {

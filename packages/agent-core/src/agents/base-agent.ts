@@ -5652,16 +5652,22 @@ export abstract class BaseAgent<
     // pauses, model-invalid calls, explicit `finish`, and agent-specific vetoes
     // were all handled above. Other reasons (for example content filtering)
     // remain terminal rather than broadening autonomous execution.
+    const terminalToolErrorCount = r.content.filter(
+      (part) => part.type === 'tool-error',
+    ).length;
     const hasCompletedToolActivity =
-      r.toolCalls.length > 0 || r.toolResults.length > 0;
+      r.toolCalls.length > 0 ||
+      r.toolResults.length > 0 ||
+      terminalToolErrorCount > 0;
     const providerAllowsToolContinuation =
       r.finishReason === 'tool-calls' ||
       r.finishReason === 'length' ||
-      (r.finishReason === 'stop' && r.toolResults.length > 0);
+      (r.finishReason === 'stop' &&
+        (r.toolResults.length > 0 || terminalToolErrorCount > 0));
     if (hasCompletedToolActivity && providerAllowsToolContinuation) {
       if (r.finishReason !== 'tool-calls') {
         this.host.logger.warn(
-          `[BaseAgent:${this.instanceId}] Continuing after completed tool activity despite provider finishReason="${r.finishReason}". toolCalls=${r.toolCalls.length}, toolResults=${r.toolResults.length}`,
+          `[BaseAgent:${this.instanceId}] Continuing after terminal tool activity despite provider finishReason="${r.finishReason}". toolCalls=${r.toolCalls.length}, toolResults=${r.toolResults.length}, toolErrors=${terminalToolErrorCount}`,
         );
       }
       return true;
