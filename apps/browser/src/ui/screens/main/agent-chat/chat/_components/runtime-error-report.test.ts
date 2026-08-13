@@ -31,9 +31,9 @@ describe('formatRuntimeErrorReport', () => {
     expect(report).toContain(
       'Error: Automatic tool-call recovery stopped after 2 attempts',
     );
-    expect(report).toContain('Rejected tool calls (not executed):');
-    expect(report).toContain('Rejected tool call 1:');
-    expect(report).toContain('Rejected tool call 2:');
+    expect(report).toContain('Recovery diagnostics:');
+    expect(report).toContain('Diagnostic 1:');
+    expect(report).toContain('Diagnostic 2:');
     expect(report).toContain(TESTER_DIAGNOSTIC);
   });
 
@@ -48,7 +48,7 @@ describe('formatRuntimeErrorReport', () => {
       recoveryDiagnostics,
     });
 
-    expect(report).not.toContain('Rejected tool call 7:');
+    expect(report).not.toContain('Diagnostic 7:');
     expect(report).not.toContain('0:');
     expect(report).toContain('3:');
     expect(report).toContain('[diagnostic truncated]');

@@ -1356,6 +1356,25 @@ describe('generateDeterministicCompressedHistory', () => {
       maxUtf8Bytes,
     });
 
+  const observationInput = (partType: string, index: number) => {
+    const suffix = `${index}-${'observation-path-segment-'.repeat(4)}`;
+    switch (partType) {
+      case 'tool-read':
+      case 'tool-getFileSkeleton':
+        return { path: `w1/src/${suffix}.ts` };
+      case 'tool-getSymbolBody':
+        return { path: `w1/src/${suffix}.ts`, symbolName: `symbol_${index}` };
+      case 'tool-searchProjectSymbols':
+        return { query: `project symbol ${suffix}` };
+      case 'tool-grepSearch':
+        return { query: `needle ${suffix}`, include_file_pattern: '**/*.ts' };
+      case 'tool-glob':
+        return { pattern: `**/${suffix}/*.ts` };
+      default:
+        throw new Error(`Unexpected observation type: ${partType}`);
+    }
+  };
+
   it('fails closed when the safety envelope would make a small prefix larger', () => {
     const messages = makeMessages(4);
     messages[0]!.parts = [
@@ -1472,6 +1491,140 @@ describe('generateDeterministicCompressedHistory', () => {
     expect(new TextEncoder().encode(result).length).toBeLessThanOrEqual(4_000);
   });
 
+  it('recovers an exact-like tool-heavy history with compact mandatory receipts and a nonexecuted malformed edit', () => {
+    const observationTypes = [
+      ...Array.from({ length: 69 }, () => 'tool-read'),
+      ...Array.from({ length: 46 }, () => 'tool-grepSearch'),
+      ...Array.from({ length: 7 }, () => 'tool-searchProjectSymbols'),
+      ...Array.from({ length: 6 }, () => 'tool-getSymbolBody'),
+      ...Array.from({ length: 6 }, () => 'tool-getFileSkeleton'),
+      ...Array.from({ length: 5 }, () => 'tool-glob'),
+    ];
+    const messages = [
+      {
+        id: 'tool-heavy-assistant-tail',
+        role: 'assistant',
+        parts: [
+          ...observationTypes.map((type, index) => ({
+            type,
+            toolCallId: `observation-${index}-${'receipt-id-'.repeat(8)}`,
+            state: 'output-available',
+            input: observationInput(type, index),
+            output: { ok: true },
+          })),
+          {
+            type: 'tool-multiEdit',
+            toolCallId: 'malformed-multi-edit',
+            state: 'output-error',
+            rawInput: '{"path":"w1/src/file.ts","edits":',
+            providerExecuted: false,
+            preliminary: false,
+            errorText:
+              'Invalid tool input: Unexpected end of JSON input\ninternal parser detail',
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = generateEmergency(messages, 61_730);
+
+    expect(result).toContain('## Terminal tool-effect ledger');
+    expect(result).toContain('toolCallId=malformed-multi-edit');
+    expect(result).toContain('state=output-error');
+    expect(result).toContain(
+      '[tool-multiEdit: invalid-input ✗ Invalid tool input: Unexpected end of JSON input]',
+    );
+    expect(result).not.toContain('internal parser detail');
+    expect(result).not.toContain('toolCallId=observation-0-');
+    expect(result).not.toContain('toolCallId=observation-138-');
+    expect(result).toContain('#sha256-128:');
+    expect(result).toContain('- read#sha256-128:');
+    expect(result).toContain('- grepSearch#sha256-128:');
+    expect(result.match(/^- /gmu)).toHaveLength(140);
+    expect(result.length).toBeLessThanOrEqual(COMPRESSION_TARGET_CHARS);
+    expect(new TextEncoder().encode(result).length).toBeLessThanOrEqual(61_730);
+  });
+
+  it('preserves an explicitly nonexecuted denied call with no parsed input as invalid input', () => {
+    const messages = [
+      {
+        id: 'denied-prefix',
+        role: 'user',
+        parts: [
+          {
+            type: 'text',
+            text: `DENIED_CONTEXT ${'context '.repeat(8_000)}`,
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+      {
+        id: 'denied-malformed-effect',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-multiEdit',
+            toolCallId: 'denied-malformed-edit',
+            state: 'output-denied',
+            rawInput: '{"path":',
+            providerExecuted: false,
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = generateEmergency(messages, 4_000);
+
+    expect(result).toContain('toolCallId=denied-malformed-edit');
+    expect(result).toContain('state=output-denied');
+    expect(result).toContain('[tool-multiEdit: invalid-input ✗ denied]');
+  });
+
+  it('preserves static core observations in the mandatory ledger', () => {
+    const observationTypes = [
+      'tool-read',
+      'tool-glob',
+      'tool-grepSearch',
+      'tool-searchProjectSymbols',
+      'tool-getFileSkeleton',
+      'tool-getSymbolBody',
+    ];
+    const messages = [
+      {
+        id: 'observation-prefix',
+        role: 'user',
+        parts: [
+          {
+            type: 'text',
+            text: `OBSERVATION_PREFIX ${'context '.repeat(10_000)}`,
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+      {
+        id: 'static-observations',
+        role: 'assistant',
+        parts: observationTypes.map((type, index) => ({
+          type,
+          toolCallId: `static-observation-${index}`,
+          state: 'output-available',
+          input: observationInput(type, index),
+          output: { ok: true },
+        })),
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = generateEmergency(messages, 6_000);
+
+    expect(result).toContain('## Terminal tool-effect ledger');
+    for (let index = 0; index < observationTypes.length; index += 1) {
+      expect(result).toContain(`toolCallId=static-observation-${index}`);
+    }
+  });
+
   it('refuses to discard history when nothing can be serialized', () => {
     const messages = [
       {
@@ -1514,6 +1667,35 @@ describe('generateDeterministicCompressedHistory', () => {
   });
 
   it.each([
+    ['nonterminal', 'input-available', false],
+    ['preliminary', 'output-available', true],
+  ])('rejects a static read observation with an ambiguous %s outcome', (_label, state, preliminary) => {
+    const messages = [
+      {
+        id: 'assistant-with-ambiguous-observation',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-read',
+            toolCallId: 'read-ambiguous',
+            state,
+            preliminary,
+            input: { path: 'w1/src/file.ts' },
+            ...(state === 'output-available'
+              ? { output: { content: 'possibly incomplete' } }
+              : {}),
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    expect(() => generateEmergency(messages)).toThrow(
+      'refused ambiguous tool outcome',
+    );
+  });
+
+  it.each([
     ['missing toolCallId', { type: 'tool-write' }],
     ['blank toolCallId', { type: 'tool-write', toolCallId: '   ' }],
     ['NUL toolCallId', { type: 'tool-write', toolCallId: 'write\0id' }],
@@ -1533,6 +1715,35 @@ describe('generateDeterministicCompressedHistory', () => {
             state: 'output-available',
             input: { path: 'w1/src/file.ts', content: 'changed' },
             output: { ok: true },
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    expect(() => generateEmergency(messages)).toThrow(
+      'refused ambiguous tool outcome',
+    );
+  });
+
+  it.each([
+    ['available output', 'output-available', false],
+    ['executed error', 'output-error', true],
+    ['missing execution evidence', 'output-error', undefined],
+  ])('fails closed for missing parsed input with %s', (_label, state, providerExecuted) => {
+    const messages = [
+      {
+        id: 'assistant-with-missing-parsed-input',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-multiEdit',
+            toolCallId: 'malformed-edit-ambiguous',
+            state,
+            rawInput: '{"path":',
+            ...(providerExecuted === undefined ? {} : { providerExecuted }),
+            ...(state === 'output-available' ? { output: { ok: true } } : {}),
+            errorText: 'Invalid tool input',
           },
         ],
         metadata: { createdAt: new Date(), partsMetadata: [] },
@@ -1616,6 +1827,76 @@ describe('generateDeterministicCompressedHistory', () => {
 
     expect(result).toContain('[dynamic-tool: mcp_write_record]');
     expect(result).toContain('toolCallId=dynamic-1');
+  });
+
+  it('keeps static effects, unknown tools, and dynamic read tools in the mandatory ledger', () => {
+    const host = makeEmergencyHost({
+      executeShellCommand: ({ output }) =>
+        `[shell: test → ${output?.exit_code === 0 ? '✓' : 'failed'}]`,
+    });
+    const messages = [
+      {
+        id: 'effectful-prefix',
+        role: 'user',
+        parts: [
+          {
+            type: 'text',
+            text: `EFFECTFUL_PREFIX ${'context '.repeat(10_000)}`,
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+      {
+        id: 'effectful-tools',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-multiEdit',
+            toolCallId: 'multi-edit-effect',
+            state: 'output-available',
+            input: {
+              path: 'w1/src/file.ts',
+              edits: [{ old_string: 'before', new_string: 'after' }],
+            },
+            output: { ok: true },
+          },
+          {
+            type: 'tool-executeShellCommand',
+            toolCallId: 'shell-effect',
+            state: 'output-available',
+            input: { command: 'pnpm test' },
+            output: { exit_code: 0 },
+          },
+          {
+            type: 'tool-futureUnknownEffect',
+            toolCallId: 'unknown-effect',
+            state: 'output-available',
+            input: { target: 'external-record' },
+            output: { ok: true },
+          },
+          {
+            type: 'dynamic-tool',
+            toolName: 'read',
+            toolCallId: 'dynamic-read-effect',
+            state: 'output-available',
+            input: { target: 'remote-authority' },
+            output: { value: 'observed' },
+          },
+        ],
+        metadata: { createdAt: new Date(), partsMetadata: [] },
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = generateEmergency(messages, 7_000, host);
+
+    expect(result).toContain('toolCallId=multi-edit-effect');
+    expect(result).toContain('[edited: w1/src/file.ts (1 edits)]');
+    expect(result).toContain('toolCallId=shell-effect');
+    expect(result).toContain('[shell: test → ✓]');
+    expect(result).toContain('toolCallId=unknown-effect');
+    expect(result).toContain('[tool-futureUnknownEffect]');
+    expect(result).toContain('toolCallId=dynamic-read-effect');
+    expect(result).toContain('[dynamic-tool: read]');
   });
 
   it('keeps every write, shell, and MCP receipt even when their messages fall in the omitted middle', () => {

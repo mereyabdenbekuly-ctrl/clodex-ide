@@ -35,10 +35,8 @@ export function formatRuntimeErrorReport(
   if (diagnostics.length === 0) return baseReport;
 
   const diagnosticReport = diagnostics
-    .map(
-      (diagnostic, index) => `Rejected tool call ${index + 1}:\n${diagnostic}`,
-    )
+    .map((diagnostic, index) => `Diagnostic ${index + 1}:\n${diagnostic}`)
     .join('\n\n');
 
-  return `${baseReport}\n\nRejected tool calls (not executed):\n\n${diagnosticReport}`;
+  return `${baseReport}\n\nRecovery diagnostics:\n\n${diagnosticReport}`;
 }

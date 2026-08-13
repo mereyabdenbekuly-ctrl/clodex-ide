@@ -183,6 +183,7 @@ function makeFinishedStepResult() {
 function createOnFinishDisconnectHarness() {
   const state = {
     activeModelId: 'gpt-test',
+    usedTokens: 0,
     queuedMessages: [],
     history: [
       {
@@ -248,6 +249,7 @@ function createOnFinishDisconnectHarness() {
   agent.updateTitle = vi.fn(async () => {});
   agent.handleUiStream = vi.fn(async () => {});
   agent.handlePostStep = vi.fn(async () => false);
+  agent.populatePathReferencesOnUserMessages = vi.fn(async () => {});
   agent.report = vi.fn();
   agent.emitNotificationEvent = vi.fn();
 

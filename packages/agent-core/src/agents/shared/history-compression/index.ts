@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { generateText, type UITools } from 'ai';
 import type { AgentMessage } from '../../../types/agent';
 import type { AgentHost } from '../../../host/host';
@@ -101,9 +102,11 @@ const EMERGENCY_TRANSCRIPT_HEADING = '## Retained transcript excerpts';
 const EMERGENCY_TOOL_LEDGER_HEADING = '## Terminal tool-effect ledger';
 const EMERGENCY_CHUNK_CHARS = 2_048;
 const EMERGENCY_MAX_TOOL_CALL_ID_CHARS = 1_024;
+const EMERGENCY_INLINE_TOOL_CALL_ID_CHARS = 64;
+const EMERGENCY_TOOL_CALL_ID_DIGEST_HEX_CHARS = 32;
 const EMERGENCY_MAX_TOOL_NAME_CHARS = 256;
-const EMERGENCY_MAX_TOOL_SUMMARY_CHARS = 768;
-const EMERGENCY_MAX_TOOL_SUMMARY_BYTES = 1_024;
+const EMERGENCY_MAX_TOOL_SUMMARY_CHARS = 384;
+const EMERGENCY_MAX_TOOL_SUMMARY_BYTES = 512;
 
 export type DeterministicCompressionBudget = {
   /** Strict UTF-8 byte ceiling supplied by the caller's context budget. */
@@ -176,6 +179,12 @@ function assertEmergencyTerminalToolIdentity(
     !toolCallId.includes('\0');
   const hasSafeInput =
     typeof input === 'object' && input !== null && !Array.isArray(input);
+  const isExplicitlyNotProviderExecuted =
+    'providerExecuted' in part && part.providerExecuted === false;
+  const permitsMissingParsedInput =
+    !hasSafeInput &&
+    (state === 'output-error' || state === 'output-denied') &&
+    isExplicitlyNotProviderExecuted;
   const rawToolName =
     part.type === 'dynamic-tool'
       ? 'toolName' in part && typeof part.toolName === 'string'
@@ -193,7 +202,7 @@ function assertEmergencyTerminalToolIdentity(
     typeof state !== 'string' ||
     !TERMINAL_TOOL_STATES.has(state) ||
     !hasSafeToolCallId ||
-    !hasSafeInput ||
+    (!hasSafeInput && !permitsMissingParsedInput) ||
     !hasSafeToolName ||
     isPreliminary
   ) {
@@ -312,6 +321,33 @@ function boundedTerminalToolSummary(value: string): string {
   return `${head}${marker}${tail}`;
 }
 
+/**
+ * Preserve short provider IDs exactly for diagnostics. Long IDs are replaced
+ * by a stable 128-bit SHA-256 prefix so untrusted/provider-generated identity
+ * strings cannot consume the entire mandatory receipt ledger. The digest is
+ * evidence of identity only; the complete terminal outcome remains in the
+ * persisted pre-compression history.
+ */
+function boundedTerminalToolCallIdentity(toolCallId: string): {
+  value: string;
+  compacted: boolean;
+} {
+  if (
+    toolCallId.length <= EMERGENCY_INLINE_TOOL_CALL_ID_CHARS &&
+    utf8Length(toolCallId) <= EMERGENCY_INLINE_TOOL_CALL_ID_CHARS
+  ) {
+    return {
+      value: escapeTextForCompactHistory(toolCallId),
+      compacted: false,
+    };
+  }
+  const digest = createHash('sha256')
+    .update(toolCallId)
+    .digest('hex')
+    .slice(0, EMERGENCY_TOOL_CALL_ID_DIGEST_HEX_CHARS);
+  return { value: `sha256-128:${digest}`, compacted: true };
+}
+
 function collectTerminalEffectLedger(
   messages: WideAgentMessage[],
   startIndex: number,
@@ -342,7 +378,14 @@ function collectTerminalEffectLedger(
           `Emergency history compression could not preserve terminal tool effect (${part.type}, toolCallId=${identity.toolCallId})`,
         );
       }
-      const receipt = `- name=${escapeTextForCompactHistory(identity.toolName)} | toolCallId=${escapeTextForCompactHistory(identity.toolCallId)} | state=${identity.state} | summary=${boundedTerminalToolSummary(serialized)}`;
+      const boundedIdentity = boundedTerminalToolCallIdentity(
+        identity.toolCallId,
+      );
+      const escapedToolName = escapeTextForCompactHistory(identity.toolName);
+      const boundedSummary = boundedTerminalToolSummary(serialized);
+      const receipt = boundedIdentity.compacted
+        ? `- ${escapedToolName}#${boundedIdentity.value} ${identity.state} ${boundedSummary}`
+        : `- name=${escapedToolName} | toolCallId=${boundedIdentity.value} | state=${identity.state} | summary=${boundedSummary}`;
       const separatorChars = receipts.length === 0 ? 0 : 1;
       const separatorBytes = separatorChars;
       const nextChars = ledgerChars + separatorChars + receipt.length;
@@ -358,6 +401,53 @@ function collectTerminalEffectLedger(
     }
   }
   return receipts.join('\n');
+}
+
+function estimateEffectivePrefixSerialization(
+  messages: WideAgentMessage[],
+  startIndex: number,
+  host: AgentHost | undefined,
+): DualBudget {
+  const compactHistory = convertAgentMessagesToCompactMessageHistoryString(
+    messages,
+    host,
+  );
+  let chars = compactHistory.length;
+  let bytes = utf8Length(compactHistory);
+
+  // The semantic-compression representation intentionally replaces tool
+  // payloads with one-line labels. A provider request, however, carries the
+  // tool identity/input/result structures. Add only that omitted expansion so
+  // text-only histories still use the exact compact representation while
+  // tool-heavy histories are measured against their real reduction surface.
+  for (
+    let messageIndex = startIndex;
+    messageIndex < messages.length;
+    messageIndex += 1
+  ) {
+    const message = messages[messageIndex];
+    if (!message || !Array.isArray(message.parts)) continue;
+    for (const part of message.parts) {
+      if (
+        !part ||
+        !(part.type === 'dynamic-tool' || part.type.startsWith('tool-'))
+      ) {
+        continue;
+      }
+      let rawPart: string;
+      try {
+        rawPart = JSON.stringify(part);
+      } catch {
+        throw new Error(
+          `Emergency history compression could not measure tool payload (${part.type})`,
+        );
+      }
+      const compactPart = serializeToolPartForCompactHistory(part, host) ?? '';
+      chars += Math.max(0, rawPart.length - compactPart.length);
+      bytes += Math.max(0, utf8Length(rawPart) - utf8Length(compactPart));
+    }
+  }
+  return { chars, bytes };
 }
 
 function* boundedCodePointChunks(value: string): Generator<string> {
@@ -763,10 +853,17 @@ export const generateDeterministicCompressedHistory = (
       `Emergency continuity snapshot exceeded its budget (${boundedSnapshot.length}/${COMPRESSION_TARGET_CHARS} chars, ${boundedBytes}/${budget.maxUtf8Bytes} UTF-8 bytes)`,
     );
   }
-  const effectivePrefixChars =
-    priorCollector.totalChars + transcriptCollector.totalChars;
-  const effectivePrefixBytes =
-    priorCollector.totalBytes + transcriptCollector.totalBytes;
+  // Compare against compact text plus the raw tool-payload expansion omitted
+  // by that compact representation. Transcript-only or compact-only checks
+  // both falsely reject tool-heavy recovery, while a whole-message JSON size
+  // would count metadata that never reaches the model.
+  const effectivePrefix = estimateEffectivePrefixSerialization(
+    messages,
+    boundaryIndex,
+    host,
+  );
+  const effectivePrefixChars = effectivePrefix.chars;
+  const effectivePrefixBytes = effectivePrefix.bytes;
   if (
     boundedSnapshot.length >= effectivePrefixChars ||
     boundedBytes >= effectivePrefixBytes

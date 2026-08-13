@@ -188,9 +188,11 @@ export function storeCompressedHistory(
     boundaryMessageId: string;
     compactedMessageIds: readonly string[];
     compressedHistory: string;
+    expectedUsedTokens: number;
+    postCompressionUsedTokens: number;
   },
-): 'missing' | 'stale' | 'written' {
-  let result: 'missing' | 'stale' | 'written' = 'missing';
+): 'missing' | 'stale' | 'usage-stale' | 'written' {
+  let result: 'missing' | 'stale' | 'usage-stale' | 'written' = 'missing';
   updateAgentInstanceState(store, agentInstanceId, (state) => {
     const boundaryIndex = state.history.findIndex(
       (message) => message.id === args.boundaryMessageId,
@@ -207,6 +209,11 @@ export function storeCompressedHistory(
       return;
     }
 
+    if (state.usedTokens !== args.expectedUsedTokens) {
+      result = 'usage-stale';
+      return;
+    }
+
     const boundaryMessage = state.history[boundaryIndex];
     if (!boundaryMessage) return;
     boundaryMessage.metadata ??= {
@@ -215,6 +222,7 @@ export function storeCompressedHistory(
     } as unknown as UserMessageMetadata;
     const bm = boundaryMessage.metadata as UserMessageMetadata;
     bm.compressedHistory = args.compressedHistory;
+    state.usedTokens = args.postCompressionUsedTokens;
     result = 'written';
   });
   return result;
@@ -232,9 +240,12 @@ export function restoreCompressedHistory(
     boundaryMessageId: string;
     expectedCompressedHistory: string;
     previousCompressedHistory: string | undefined;
+    expectedUsedTokens: number;
+    previousUsedTokens: number;
   },
-): 'missing' | 'mismatch' | 'restored' {
-  let result: 'missing' | 'mismatch' | 'restored' = 'missing';
+): 'missing' | 'mismatch' | 'usage-mismatch' | 'restored' {
+  let result: 'missing' | 'mismatch' | 'usage-mismatch' | 'restored' =
+    'missing';
   updateAgentInstanceState(store, agentInstanceId, (state) => {
     const boundaryMessage = state.history.find(
       (message) => message.id === args.boundaryMessageId,
@@ -245,6 +256,11 @@ export function restoreCompressedHistory(
       boundaryMessage.metadata?.compressedHistory;
     if (currentCompressedHistory !== args.expectedCompressedHistory) {
       result = 'mismatch';
+      return;
+    }
+
+    if (state.usedTokens !== args.expectedUsedTokens) {
+      result = 'usage-mismatch';
       return;
     }
 
@@ -260,6 +276,7 @@ export function restoreCompressedHistory(
       boundaryMessage.metadata.compressedHistory =
         args.previousCompressedHistory;
     }
+    state.usedTokens = args.previousUsedTokens;
     result = 'restored';
   });
   return result;

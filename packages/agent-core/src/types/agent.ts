@@ -69,7 +69,10 @@ export type AgentRuntimeError =
        * already committed before this post-step failure surfaced.
        */
       retryable?: boolean;
-      /** Bounded host-generated diagnostics for rejected, non-executed calls. */
+      /**
+       * Bounded host-generated diagnostics for recovery failures, including
+       * rejected non-executed calls and internal compression phases.
+       */
       recoveryDiagnostics?: string[];
     }
   | {

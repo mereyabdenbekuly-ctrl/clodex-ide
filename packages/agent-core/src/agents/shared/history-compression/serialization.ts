@@ -73,11 +73,16 @@ export const serializeToolPartForCompactHistory = (
   const isToolPart =
     part.type === 'dynamic-tool' || part.type.startsWith('tool-');
   if (!isToolPart) return undefined;
-  if (!('input' in part) || !part.input) {
-    return `[${part.type}: invalid-input]`;
+  const err = getErrorSuffix(part);
+  const hasParsedInput =
+    'input' in part &&
+    typeof part.input === 'object' &&
+    part.input !== null &&
+    !Array.isArray(part.input);
+  if (!hasParsedInput) {
+    return `[${part.type}: invalid-input${err ?? ''}]`;
   }
 
-  const err = getErrorSuffix(part);
   // Tool inputs/outputs vary per tool. Since we narrow on `part.type`
   // below, casting through `unknown` to a permissive record here is safe
   // and avoids threading per-tool schemas through the core.

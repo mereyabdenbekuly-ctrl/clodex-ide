@@ -78,6 +78,97 @@ type ProviderApiError = {
   providerCode?: string;
 };
 
+const MAX_COMPRESSION_RECOVERY_DIAGNOSTICS = 2;
+const MAX_COMPRESSION_RECOVERY_DIAGNOSTIC_CHARS = 600;
+const MAX_COMPRESSION_RECOVERY_DIAGNOSTIC_SOURCE_CHARS = 2_400;
+
+const COMPRESSION_RECOVERY_CREDENTIAL_ASSIGNMENT_PATTERN =
+  /(["']?)((?:authorization|proxy[-_ ]?authorization|[A-Za-z0-9_-]*api[-_ ]?key|[A-Za-z0-9_-]*(?:access|refresh)[-_ ]?token|[A-Za-z0-9_-]*client[-_ ]?secret))\1(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|(?:Basic|Bearer)\s+[^\s,;&]+|[^\s,;&]+)/giu;
+
+const COMPRESSION_RECOVERY_SECRET_SHAPE_PATTERN =
+  /\b(?:sk-[A-Za-z0-9_-]{8,}|key-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|AIza[A-Za-z0-9_-]{16,})\b/gu;
+
+class HistoryCompressionRecoveryError extends AggregateError {
+  public constructor(
+    generationError: Error,
+    fallbackError: unknown,
+    occupancyDescription: string,
+  ) {
+    super(
+      [generationError, fallbackError],
+      `History compression generation and emergency fallback failed at ${occupancyDescription}`,
+    );
+    this.name = 'HistoryCompressionRecoveryError';
+  }
+}
+
+class HistoryCompressionUnsafeProjectionError extends Error {
+  public constructor(projectedTokens: number, admissionLimitTokens: number) {
+    super(
+      `Model-generated history compression remained above the safe provider admission limit (${projectedTokens}/${admissionLimitTokens} tokens)`,
+    );
+    this.name = 'HistoryCompressionUnsafeProjectionError';
+  }
+}
+
+function replaceControlCharacters(value: string): string {
+  let result = '';
+  for (const codePoint of value) {
+    const scalar = codePoint.codePointAt(0) ?? 0;
+    result += scalar <= 0x1f || scalar === 0x7f ? ' ' : codePoint;
+  }
+  return result;
+}
+
+function boundedCompressionRecoveryDiagnostic(value: unknown): string {
+  const error = value instanceof Error ? value : new Error(String(value));
+  const errorName =
+    typeof error.name === 'string' ? error.name : String(error.name);
+  const errorMessage =
+    typeof error.message === 'string' ? error.message : String(error.message);
+  const prefix = `${errorName}: `.slice(
+    0,
+    MAX_COMPRESSION_RECOVERY_DIAGNOSTIC_SOURCE_CHARS,
+  );
+  const source = `${prefix}${errorMessage.slice(
+    0,
+    MAX_COMPRESSION_RECOVERY_DIAGNOSTIC_SOURCE_CHARS - prefix.length,
+  )}`;
+  return replaceControlCharacters(source)
+    .replace(
+      COMPRESSION_RECOVERY_CREDENTIAL_ASSIGNMENT_PATTERN,
+      '$2$3[redacted]',
+    )
+    .replace(/Bearer\s+[^\s,;]+/giu, 'Bearer [redacted]')
+    .replace(COMPRESSION_RECOVERY_SECRET_SHAPE_PATTERN, '[redacted-secret]')
+    .replace(
+      /\b[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\b/gu,
+      '[redacted-secret]',
+    )
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, MAX_COMPRESSION_RECOVERY_DIAGNOSTIC_CHARS);
+}
+
+function compressionRecoveryDiagnostics(error: Error): string[] | undefined {
+  // Other AggregateErrors in this path represent persistence/rollback or
+  // unrelated lifecycle failures. Only this typed recovery failure has the
+  // generation/fallback child ordering described by the labels below.
+  if (!(error instanceof HistoryCompressionRecoveryError)) return undefined;
+  const labels = ['generation', 'emergency-fallback'];
+  const diagnostics = error.errors
+    .slice(0, MAX_COMPRESSION_RECOVERY_DIAGNOSTICS)
+    .map((child, index) => {
+      const phase = labels[index] ?? `phase-${index + 1}`;
+      return `${phase}: ${boundedCompressionRecoveryDiagnostic(child)}`.slice(
+        0,
+        MAX_COMPRESSION_RECOVERY_DIAGNOSTIC_CHARS,
+      );
+    })
+    .filter((diagnostic) => diagnostic.length > 0);
+  return diagnostics.length > 0 ? diagnostics : undefined;
+}
+
 /**
  * Marks a failure that happened after the visible model/tool step already
  * completed. Replaying the last user message could repeat committed effects,
@@ -85,6 +176,17 @@ type ProviderApiError = {
  */
 class NonRetryablePostStepError extends Error {
   public readonly retryable = false;
+
+  public readonly recoveryDiagnostics: string[] | undefined;
+
+  public constructor(
+    message: string,
+    options?: ErrorOptions & { recoveryDiagnostics?: string[] },
+  ) {
+    super(message, options);
+    this.name = 'NonRetryablePostStepError';
+    this.recoveryDiagnostics = options?.recoveryDiagnostics;
+  }
 }
 
 class UpstreamReconnectReplayBlockedError extends Error {
@@ -3545,7 +3647,12 @@ export abstract class BaseAgent<
             message: `Internal error: ${error.message}`,
             stack: error.stack,
             ...(error instanceof NonRetryablePostStepError
-              ? { retryable: false }
+              ? {
+                  retryable: false,
+                  ...(error.recoveryDiagnostics
+                    ? { recoveryDiagnostics: error.recoveryDiagnostics }
+                    : {}),
+                }
               : {}),
           },
           markUnread: 'mark-unread',
@@ -3827,6 +3934,37 @@ export abstract class BaseAgent<
     let tools: Awaited<ReturnType<typeof this.getToolsForStep>>;
     let resolvedConfig: BaseAgentConfig<TFinishToolOutputSchema>;
     try {
+      resolvedConfig = {
+        ...this.config,
+        ...(await this.getModelSettings(this.messages)),
+      };
+      if (this._stepGeneration !== stepGen) return 'superseded';
+      this._stepResolvedMaxOutputTokens = resolvedConfig.maxOutputTokens;
+
+      // File/attachment mentions become provider-visible injected content.
+      // Resolve their path references before admission accounting so a small
+      // user message cannot hide a large file injection until context
+      // generation, after compression has already been accepted.
+      await this.populatePathReferencesOnUserMessages(stepGen);
+      if (this._stepGeneration !== stepGen) return 'superseded';
+
+      const admissionUsedTokens = this.estimateProviderAdmissionUsedTokens(
+        queueFlushIndex >= 0 ? queueFlushIndex : undefined,
+        modelWithOptions.contextWindowSize,
+      );
+
+      // A recovered/persisted task can already be above the safe admission
+      // threshold before this step starts. Gate every entry path here —
+      // normal, queued, approval, and recovery continuations — before
+      // context/tool preparation or provider execution observes the stale
+      // oversized transcript. `beginStep()` has already admitted any queued
+      // user message, so it can serve as the fresh compression boundary.
+      await this.maybeCompressHistoryForStepAdmission(
+        stepGen,
+        modelWithOptions.contextWindowSize,
+        admissionUsedTokens,
+      );
+      if (this._stepGeneration !== stepGen) return 'superseded';
       modelMessages = await this.generateContextForNewStep(
         queueFlushIndex >= 0 ? queueFlushIndex : undefined,
         modelWithOptions.reasoningSignatureSource,
@@ -3841,11 +3979,6 @@ export abstract class BaseAgent<
       if (modelWithOptions.stripStrictFromTools) {
         tools = this.stripStrictFromTools(tools);
       }
-      resolvedConfig = {
-        ...this.config,
-        ...(await this.getModelSettings(this.messages)),
-      };
-      this._stepResolvedMaxOutputTokens = resolvedConfig.maxOutputTokens;
     } catch (e) {
       if (this._stepGeneration !== stepGen) return 'superseded';
       const error = e as Error;
@@ -3858,6 +3991,14 @@ export abstract class BaseAgent<
         error: {
           message: `Internal error: ${error.message}`,
           stack: error.stack,
+          ...(error instanceof NonRetryablePostStepError
+            ? {
+                retryable: false,
+                ...(error.recoveryDiagnostics
+                  ? { recoveryDiagnostics: error.recoveryDiagnostics }
+                  : {}),
+              }
+            : {}),
         },
         markUnread: 'always',
       });
@@ -4478,7 +4619,12 @@ export abstract class BaseAgent<
           message: `Internal error: ${error.message}`,
           stack: error.stack,
           ...(error instanceof NonRetryablePostStepError
-            ? { retryable: false }
+            ? {
+                retryable: false,
+                ...(error.recoveryDiagnostics
+                  ? { recoveryDiagnostics: error.recoveryDiagnostics }
+                  : {}),
+              }
             : {}),
         },
         markUnread: 'mark-unread',
@@ -4534,6 +4680,71 @@ export abstract class BaseAgent<
    * represented by persisted history token estimates.
    */
   private static readonly HISTORY_COMPRESSION_GENERAL_RESERVE_FRACTION = 0.1;
+
+  private historyCompressionOutputReserveTokens(
+    contextWindowSize: number,
+  ): number {
+    const resolvedMaxOutputTokens =
+      this._stepResolvedMaxOutputTokens ?? this.config.maxOutputTokens;
+    const configuredOutputReserveTokens =
+      typeof resolvedMaxOutputTokens === 'number' &&
+      Number.isFinite(resolvedMaxOutputTokens) &&
+      resolvedMaxOutputTokens > 0
+        ? Math.ceil(resolvedMaxOutputTokens)
+        : 0;
+    return Math.max(
+      configuredOutputReserveTokens,
+      Math.floor(
+        contextWindowSize *
+          BaseAgent.HISTORY_COMPRESSION_MIN_OUTPUT_RESERVE_FRACTION,
+      ),
+    );
+  }
+
+  private historyCompressionAdmissionLimitTokens(
+    contextWindowSize: number,
+  ): number {
+    return Math.max(
+      0,
+      contextWindowSize -
+        this.historyCompressionOutputReserveTokens(contextWindowSize),
+    );
+  }
+
+  private isUnsafeHistoryCompressionOccupancy(
+    usedTokens: number,
+    contextWindowSize: number,
+  ): boolean {
+    const criticalTokens =
+      contextWindowSize * BaseAgent.HISTORY_COMPRESSION_CRITICAL_FRACTION;
+    return (
+      usedTokens >= criticalTokens ||
+      usedTokens >
+        this.historyCompressionAdmissionLimitTokens(contextWindowSize)
+    );
+  }
+
+  private exceedsHistoryCompressionAdmissionLimit(
+    usedTokens: number,
+    contextWindowSize: number,
+  ): boolean {
+    return (
+      usedTokens >
+      this.historyCompressionAdmissionLimitTokens(contextWindowSize)
+    );
+  }
+
+  private historyCompressionOccupancyDescription(
+    usedTokens: number,
+    contextWindowSize: number,
+  ): string {
+    const criticalTokens =
+      contextWindowSize * BaseAgent.HISTORY_COMPRESSION_CRITICAL_FRACTION;
+    if (usedTokens >= criticalTokens) {
+      return `critical context occupancy (${usedTokens}/${contextWindowSize} tokens)`;
+    }
+    return `unsafe provider admission occupancy (${usedTokens}/${contextWindowSize} tokens; safe input limit ${this.historyCompressionAdmissionLimitTokens(contextWindowSize)})`;
+  }
 
   private static estimateKeptHistoryTokensAfterCompression(
     history: readonly AgentMessage[],
@@ -4663,9 +4874,142 @@ export abstract class BaseAgent<
     return estimatedTokens;
   }
 
+  /**
+   * Provider usage describes the previous request and therefore excludes any
+   * user messages flushed by `beginStep()`. Preserve that prior occupancy and
+   * add a conservative byte/token upper bound for the newly admitted tail so
+   * it cannot evade the pre-provider compression gate. On a retry after model
+   * setup failed, the trailing user tail is rediscovered from history.
+   */
+  private estimateProviderAdmissionUsedTokens(
+    queueFlushIndex: number | undefined,
+    contextWindowSize: number,
+  ): number {
+    const state = this.state.get();
+    let admissionStartIndex = queueFlushIndex;
+    if (admissionStartIndex === undefined) {
+      let lastAssistantIndex = -1;
+      for (let index = state.history.length - 1; index >= 0; index -= 1) {
+        if (state.history[index]?.role === 'assistant') {
+          lastAssistantIndex = index;
+          break;
+        }
+      }
+      admissionStartIndex = lastAssistantIndex + 1;
+
+      // A pre-provider compression already recalculated occupancy for its
+      // boundary and every retained message after it. Only a later trailing
+      // tail can still be absent from provider usage on retry.
+      for (let index = state.history.length - 1; index >= 0; index -= 1) {
+        if (state.history[index]?.metadata?.compressedHistory !== undefined) {
+          admissionStartIndex = Math.max(admissionStartIndex, index + 1);
+          break;
+        }
+      }
+    }
+    if (
+      admissionStartIndex < 0 ||
+      admissionStartIndex >= state.history.length
+    ) {
+      return state.usedTokens;
+    }
+
+    let admittedTokens = 0;
+    const addTokens = (tokens: number): void => {
+      admittedTokens = Math.min(
+        Number.MAX_SAFE_INTEGER,
+        admittedTokens + Math.max(0, Math.ceil(tokens)),
+      );
+    };
+    for (
+      let index = admissionStartIndex;
+      index < state.history.length;
+      index += 1
+    ) {
+      const message = state.history[index];
+      if (!message) continue;
+      addTokens(
+        Math.max(
+          estimateMessageTokens(message),
+          BaseAgent.estimateMessageUtf8Bytes(message),
+        ),
+      );
+    }
+    addTokens(
+      BaseAgent.estimateRetainedFileInjectionTokens(
+        state.history,
+        admissionStartIndex,
+        contextWindowSize,
+      ),
+    );
+    return Math.min(Number.MAX_SAFE_INTEGER, state.usedTokens + admittedTokens);
+  }
+
+  /**
+   * Conservative local occupancy estimate after a summary replaces the
+   * compacted prefix. Persisted provider occupancy beyond the currently
+   * visible history is retained as inferred system/tool/env cost; UTF-8 bytes
+   * upper-bound summary tokens, and the general reserve covers request-shape
+   * growth before the next provider call.
+   */
+  private static estimatePostCompressionUsedTokens(
+    history: readonly AgentMessage[],
+    boundaryIndex: number,
+    compressedHistory: string,
+    contextWindowSize: number,
+    preCompressionUsedTokens: number,
+  ): number {
+    const inferredNonHistoryTokens = Math.max(
+      0,
+      preCompressionUsedTokens - estimateEffectiveHistoryTokens(history),
+    );
+    const keptHistoryTokens =
+      BaseAgent.estimateKeptHistoryTokensAfterCompression(
+        history,
+        boundaryIndex,
+      );
+    const retainedFileInjectionTokens =
+      BaseAgent.estimateRetainedFileInjectionTokens(
+        history,
+        boundaryIndex,
+        contextWindowSize,
+      );
+    const summaryTokenUpperBound = BaseAgent.utf8Length(compressedHistory);
+    const generalReserveTokens = Math.floor(
+      contextWindowSize *
+        BaseAgent.HISTORY_COMPRESSION_GENERAL_RESERVE_FRACTION,
+    );
+    return Math.min(
+      Number.MAX_SAFE_INTEGER,
+      generalReserveTokens +
+        inferredNonHistoryTokens +
+        keptHistoryTokens +
+        retainedFileInjectionTokens +
+        summaryTokenUpperBound,
+    );
+  }
+
   private async maybeCompressHistoryAfterStep(
     expectedStepGeneration: number,
     contextWindowSize: number,
+  ): Promise<void> {
+    await this.maybeCompressHistoryForStepAdmission(
+      expectedStepGeneration,
+      contextWindowSize,
+    );
+  }
+
+  /**
+   * Ensures the current history is safe to admit to another provider step.
+   *
+   * This is shared by the pre-step recovery gate and the existing post-step
+   * barrier so every lifecycle entry path preserves the same threshold,
+   * retry/backoff, cancellation, and fail-closed behavior.
+   */
+  private async maybeCompressHistoryForStepAdmission(
+    expectedStepGeneration: number,
+    contextWindowSize: number,
+    admissionUsedTokensOverride?: number,
   ): Promise<void> {
     const compactionThreshold = this.config.historyCompressionThreshold ?? 0.65;
     if (compactionThreshold < 0) return;
@@ -4676,13 +5020,20 @@ export abstract class BaseAgent<
       fractionalTriggerTokens,
       BaseAgent.HISTORY_COMPRESSION_HARD_CAP_TOKENS,
     );
-    const usedTokens = this.state.get().usedTokens;
-    if (usedTokens <= effectiveTriggerTokens) return;
+    const usedTokens = Math.max(
+      this.state.get().usedTokens,
+      admissionUsedTokensOverride ?? 0,
+    );
+    const requiresImmediateRecovery = this.isUnsafeHistoryCompressionOccupancy(
+      usedTokens,
+      contextWindowSize,
+    );
+    if (usedTokens <= effectiveTriggerTokens && !requiresImmediateRecovery) {
+      return;
+    }
 
-    const criticalTokens =
-      contextWindowSize * BaseAgent.HISTORY_COMPRESSION_CRITICAL_FRACTION;
     if (
-      usedTokens < criticalTokens &&
+      !requiresImmediateRecovery &&
       Date.now() < this._historyCompressionRetryNotBefore
     ) {
       this.host.logger.debug(
@@ -4694,12 +5045,27 @@ export abstract class BaseAgent<
     await this.compressHistoryInternal(
       expectedStepGeneration,
       contextWindowSize,
+      admissionUsedTokensOverride,
     );
+    if (this._stepGeneration !== expectedStepGeneration) return;
+
+    const postCompressionUsedTokens = this.state.get().usedTokens;
+    if (
+      this.exceedsHistoryCompressionAdmissionLimit(
+        postCompressionUsedTokens,
+        contextWindowSize,
+      )
+    ) {
+      throw new NonRetryablePostStepError(
+        `Context compression failed before the next step: History compression did not establish safe provider admission at ${this.historyCompressionOccupancyDescription(postCompressionUsedTokens, contextWindowSize)}`,
+      );
+    }
   }
 
   private async compressHistoryInternal(
     expectedStepGeneration?: number,
     contextWindowSizeOverride?: number,
+    admissionUsedTokensOverride?: number,
   ): Promise<void> {
     // Prevent concurrent compression runs — a second trigger while
     // compression is in-flight would see stale history and produce
@@ -4708,6 +5074,20 @@ export abstract class BaseAgent<
       this.host.logger.debug(
         `[BaseAgent:${this.instanceId}] Skipping history compression — already in progress.`,
       );
+      const currentUsedTokens = Math.max(
+        this.state.get().usedTokens,
+        admissionUsedTokensOverride ?? 0,
+      );
+      if (
+        this.isUnsafeHistoryCompressionOccupancy(
+          currentUsedTokens,
+          contextWindowSizeOverride ?? 100_000,
+        )
+      ) {
+        throw new NonRetryablePostStepError(
+          `Context compression failed before the next step: Concurrent history compression did not establish safe provider admission at ${this.historyCompressionOccupancyDescription(currentUsedTokens, contextWindowSizeOverride ?? 100_000)}`,
+        );
+      }
       return;
     }
     this._isCompressingHistory = true;
@@ -4716,6 +5096,11 @@ export abstract class BaseAgent<
     try {
       const state = this.state.get();
       const { history } = state;
+      const storedPreCompressionUsedTokens = state.usedTokens;
+      const preCompressionUsedTokens = Math.max(
+        storedPreCompressionUsedTokens,
+        admissionUsedTokensOverride ?? 0,
+      );
 
       // ── Compute token budget for kept messages ────────────────────
       let contextWindowSize: number;
@@ -4807,12 +5192,15 @@ export abstract class BaseAgent<
       }
 
       if (boundaryIndex < 1 || boundaryIndex >= history.length) {
-        const usedTokens = state.usedTokens;
-        const criticalTokens =
-          contextWindowSize * BaseAgent.HISTORY_COMPRESSION_CRITICAL_FRACTION;
-        if (usedTokens >= criticalTokens) {
+        const usedTokens = preCompressionUsedTokens;
+        if (
+          this.isUnsafeHistoryCompressionOccupancy(
+            usedTokens,
+            contextWindowSize,
+          )
+        ) {
           throw new Error(
-            `History compression found no newer reducible history at critical context occupancy (${usedTokens}/${contextWindowSize} tokens)`,
+            `History compression found no newer reducible history at ${this.historyCompressionOccupancyDescription(usedTokens, contextWindowSize)}`,
           );
         }
         return;
@@ -4862,6 +5250,30 @@ export abstract class BaseAgent<
           messagesToCompact,
           compressionAbortController.signal,
         );
+        const semanticProjection = BaseAgent.estimatePostCompressionUsedTokens(
+          history,
+          boundaryIndex,
+          compressedHistory,
+          contextWindowSize,
+          preCompressionUsedTokens,
+        );
+        const admissionLimitTokens =
+          this.historyCompressionAdmissionLimitTokens(contextWindowSize);
+        const projectedPostCompressionUsedTokens = Math.max(
+          0,
+          Math.ceil(semanticProjection),
+        );
+        if (
+          this.exceedsHistoryCompressionAdmissionLimit(
+            projectedPostCompressionUsedTokens,
+            contextWindowSize,
+          )
+        ) {
+          throw new HistoryCompressionUnsafeProjectionError(
+            projectedPostCompressionUsedTokens,
+            admissionLimitTokens,
+          );
+        }
       } catch (generationError) {
         // A priority lifecycle action owns the turn once it changes the step
         // generation. Its dedicated abort is cancellation, not a provider or
@@ -4892,15 +5304,25 @@ export abstract class BaseAgent<
           // failure even when there is still context headroom.
           throw normalizedGenerationError;
         }
-        const usedTokens = this.state.get().usedTokens;
-        const criticalTokens =
-          contextWindowSize * BaseAgent.HISTORY_COMPRESSION_CRITICAL_FRACTION;
-
+        const usedTokens = Math.max(
+          this.state.get().usedTokens,
+          admissionUsedTokensOverride ?? 0,
+        );
         this._historyCompressionGenerationFailures += 1;
         compressionGenerationFailureCount =
           this._historyCompressionGenerationFailures;
 
-        if (usedTokens >= criticalTokens) {
+        if (
+          this.isUnsafeHistoryCompressionOccupancy(
+            usedTokens,
+            contextWindowSize,
+          )
+        ) {
+          const occupancyDescription =
+            this.historyCompressionOccupancyDescription(
+              usedTokens,
+              contextWindowSize,
+            );
           try {
             const fallbackState = this.state.get();
             const fallbackHistory = fallbackState.history;
@@ -4940,21 +5362,8 @@ export abstract class BaseAgent<
                 fallbackBoundaryIndex,
                 contextWindowSize,
               );
-            const resolvedMaxOutputTokens =
-              this._stepResolvedMaxOutputTokens ?? this.config.maxOutputTokens;
-            const configuredOutputReserveTokens =
-              typeof resolvedMaxOutputTokens === 'number' &&
-              Number.isFinite(resolvedMaxOutputTokens) &&
-              resolvedMaxOutputTokens > 0
-                ? Math.ceil(resolvedMaxOutputTokens)
-                : 0;
-            const outputReserveTokens = Math.max(
-              configuredOutputReserveTokens,
-              Math.floor(
-                contextWindowSize *
-                  BaseAgent.HISTORY_COMPRESSION_MIN_OUTPUT_RESERVE_FRACTION,
-              ),
-            );
+            const outputReserveTokens =
+              this.historyCompressionOutputReserveTokens(contextWindowSize);
             const generalReserveTokens = Math.floor(
               contextWindowSize *
                 BaseAgent.HISTORY_COMPRESSION_GENERAL_RESERVE_FRACTION,
@@ -5005,13 +5414,14 @@ export abstract class BaseAgent<
             };
             compressionStrategy = 'deterministic-emergency';
           } catch (fallbackError) {
-            throw new AggregateError(
-              [normalizedGenerationError, fallbackError],
-              `History compression generation and emergency fallback failed at critical context occupancy (${usedTokens}/${contextWindowSize} tokens)`,
+            throw new HistoryCompressionRecoveryError(
+              normalizedGenerationError,
+              fallbackError,
+              occupancyDescription,
             );
           }
           this.host.logger.warn(
-            `[BaseAgent:${this.instanceId}] History compression generation failed at critical context occupancy (${usedTokens}/${contextWindowSize} tokens); stored a bounded deterministic continuity snapshot instead (projected input ${emergencyCompressionProjection?.projectedInputTokens}/${emergencyCompressionProjection?.targetInputTokens} tokens): ${normalizedGenerationError.message}`,
+            `[BaseAgent:${this.instanceId}] History compression generation failed at ${occupancyDescription}; stored a bounded deterministic continuity snapshot instead (projected input ${emergencyCompressionProjection?.projectedInputTokens}/${emergencyCompressionProjection?.targetInputTokens} tokens): ${normalizedGenerationError.message}`,
           );
           this.report(
             normalizedGenerationError,
@@ -5041,33 +5451,61 @@ export abstract class BaseAgent<
       ) {
         return;
       }
+      const estimatedPostCompressionUsedTokens =
+        emergencyCompressionProjection?.projectedInputTokens ??
+        BaseAgent.estimatePostCompressionUsedTokens(
+          history,
+          boundaryIndex,
+          compressedHistory,
+          contextWindowSize,
+          preCompressionUsedTokens,
+        );
+      const postCompressionUsedTokens = Math.max(
+        0,
+        Math.min(
+          preCompressionUsedTokens,
+          Math.ceil(estimatedPostCompressionUsedTokens),
+        ),
+      );
       // Re-fetch by id inside the command — user could've undone/
       // manipulated messages while we were busy compressing.
       const writeResult = this.state.commands.storeCompressedHistory({
         boundaryMessageId,
         compactedMessageIds,
         compressedHistory,
+        expectedUsedTokens: storedPreCompressionUsedTokens,
+        postCompressionUsedTokens,
       });
       if (writeResult !== 'written') {
         const conflictReason =
           writeResult === 'missing'
             ? 'boundary message missing'
-            : 'history prefix changed';
+            : writeResult === 'stale'
+              ? 'history prefix changed'
+              : 'context occupancy changed';
         this.host.logger.warn(
           writeResult === 'missing'
             ? `[BaseAgent:${this.instanceId}] Boundary message not found in history after compression. The user may have undone or manipulated messages.`
-            : `[BaseAgent:${this.instanceId}] History changed while compression was running; discarding stale summary.`,
+            : writeResult === 'stale'
+              ? `[BaseAgent:${this.instanceId}] History changed while compression was running; discarding stale summary.`
+              : `[BaseAgent:${this.instanceId}] Context occupancy changed while compression was running; discarding stale summary.`,
         );
-        const currentUsedTokens = this.state.get().usedTokens;
+        const currentUsedTokens = Math.max(
+          this.state.get().usedTokens,
+          admissionUsedTokensOverride ?? 0,
+        );
         if (
           expectedStepGeneration === undefined ||
           this._stepGeneration === expectedStepGeneration
         ) {
-          const criticalTokens =
-            contextWindowSize * BaseAgent.HISTORY_COMPRESSION_CRITICAL_FRACTION;
-          if (currentUsedTokens >= criticalTokens) {
+          if (
+            this.isUnsafeHistoryCompressionOccupancy(
+              currentUsedTokens,
+              contextWindowSize,
+            )
+          ) {
             throw new Error(
-              `History compression could not establish an exact boundary at critical context occupancy (${currentUsedTokens}/${contextWindowSize} tokens): ${conflictReason}`,
+              `History compression could not establish an exact boundary at ${this.historyCompressionOccupancyDescription(currentUsedTokens, contextWindowSize)}: ${conflictReason}`,
             );
           }
         }
@@ -5095,6 +5533,8 @@ export abstract class BaseAgent<
             boundaryMessageId,
             expectedCompressedHistory: compressedHistory,
             previousCompressedHistory,
+            expectedUsedTokens: postCompressionUsedTokens,
+            previousUsedTokens: storedPreCompressionUsedTokens,
           });
           if (rollbackResult !== 'restored') {
             throw new AggregateError(
@@ -5131,6 +5571,7 @@ export abstract class BaseAgent<
           compressedCharacters: compressedHistory.length,
           strategy: compressionStrategy,
           generationFailureCount: compressionGenerationFailureCount,
+          postCompressionUsedTokens,
           ...(emergencyCompressionProjection
             ? { emergencyProjection: emergencyCompressionProjection }
             : {}),
@@ -5151,7 +5592,10 @@ export abstract class BaseAgent<
       this.report(normalizedError, 'compressHistory');
       throw new NonRetryablePostStepError(
         `Context compression failed before the next step: ${normalizedError.message}`,
-        { cause: normalizedError },
+        {
+          cause: normalizedError,
+          recoveryDiagnostics: compressionRecoveryDiagnostics(normalizedError),
+        },
       );
     } finally {
       if (
@@ -5839,11 +6283,13 @@ export abstract class BaseAgent<
       });
     }
 
-    // ─── Populate pathReferences on the last user message ─────────────
-    // Extracts path: links, attachment paths, and mention paths, then
-    // hashes each file/directory so the conversion pipeline can track
-    // content state and deduplicate injections.
-    await this.populatePathReferencesOnUserMessages(expectedStepGeneration);
+    // ─── Refresh admitted pathReferences on user messages ─────────────
+    // Admission already discovered every injectable path before compression.
+    // Refresh hashes for those paths, but do not add a newly resolvable path
+    // after the provider-input budget has been accepted.
+    await this.populatePathReferencesOnUserMessages(expectedStepGeneration, {
+      allowNewPaths: false,
+    });
     if (
       expectedStepGeneration !== undefined &&
       this._stepGeneration !== expectedStepGeneration
@@ -5995,9 +6441,12 @@ export abstract class BaseAgent<
    * the current file state at step start. Earlier user messages that were
    * never populated (e.g. messages sent while a step was in-flight) are
    * also processed so their file content is injected during conversion.
+   * `allowNewPaths: false` is used only for the post-admission hash refresh;
+   * it prevents a newly resolvable attachment from bypassing the budget gate.
    */
   private async populatePathReferencesOnUserMessages(
     expectedStepGeneration?: number,
+    options?: { allowNewPaths?: boolean },
   ): Promise<void> {
     const history = this.state.get().history;
     const mountPaths = this.toolbox.getMountedPathsForAgent(this.instanceId);
@@ -6035,6 +6484,7 @@ export abstract class BaseAgent<
     const results = await Promise.all(
       indicesToPopulate.map(async (idx) => {
         const message = history[idx]!;
+        const existingPathReferences = message.metadata?.pathReferences;
         const messageCopy = {
           ...message,
           metadata: message.metadata
@@ -6051,7 +6501,20 @@ export abstract class BaseAgent<
           this.host.protectedFiles,
         );
 
-        return { idx, pathReferences: messageCopy.metadata?.pathReferences };
+        let pathReferences = messageCopy.metadata?.pathReferences;
+        if (options?.allowNewPaths === false && pathReferences) {
+          const existingPaths = Object.keys(existingPathReferences ?? {});
+          pathReferences =
+            existingPaths.length === 0
+              ? existingPathReferences
+              : Object.fromEntries(
+                  Object.entries(pathReferences).filter(([path]) =>
+                    existingPaths.includes(path),
+                  ),
+                );
+        }
+
+        return { idx, pathReferences };
       }),
     );
 

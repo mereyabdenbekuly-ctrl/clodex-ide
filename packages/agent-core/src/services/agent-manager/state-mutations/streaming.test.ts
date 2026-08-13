@@ -262,6 +262,8 @@ describe('state-mutations/streaming', () => {
       boundaryMessageId: 'never-existed',
       compactedMessageIds: [],
       compressedHistory: 'blob',
+      expectedUsedTokens: 0,
+      postCompressionUsedTokens: 1,
     });
 
     expect(result).toBe('missing');
@@ -281,11 +283,14 @@ describe('state-mutations/streaming', () => {
       boundaryMessageId: 'b-1',
       compactedMessageIds: [],
       compressedHistory: 'blob',
+      expectedUsedTokens: 0,
+      postCompressionUsedTokens: 42,
     });
 
     expect(result).toBe('written');
     const after = store.get().agents.instances.a1!.state.history[0]!;
     expect(after.metadata?.compressedHistory).toBe('blob');
+    expect(store.get().agents.instances.a1!.state.usedTokens).toBe(42);
   });
 
   it('storeCompressedHistory rejects a stale compacted prefix', () => {
@@ -312,11 +317,40 @@ describe('state-mutations/streaming', () => {
       boundaryMessageId: 'b-1',
       compactedMessageIds: ['original-prefix'],
       compressedHistory: 'must not be attached',
+      expectedUsedTokens: 0,
+      postCompressionUsedTokens: 42,
     });
 
     expect(result).toBe('stale');
     const after = store.get().agents.instances.a1!.state.history[1]!;
     expect(after.metadata?.compressedHistory).toBeUndefined();
+    expect(store.get().agents.instances.a1!.state.usedTokens).toBe(0);
+  });
+
+  it('storeCompressedHistory rejects a stale occupancy without partial mutation', () => {
+    const store = new AgentStore(emptySystemState());
+    const boundary: AgentMessage = {
+      id: 'b-1',
+      role: 'assistant',
+      parts: [{ type: 'text', text: '', state: 'done' }],
+      metadata: { createdAt: new Date(), partsMetadata: [{}] },
+    };
+    const state = baseState([boundary]);
+    state.usedTokens = 7;
+    upsertAgentInstance(store, 'a1', makeEnvelope(state));
+
+    const result = storeCompressedHistory(store, 'a1', {
+      boundaryMessageId: 'b-1',
+      compactedMessageIds: [],
+      compressedHistory: 'must not be attached',
+      expectedUsedTokens: 6,
+      postCompressionUsedTokens: 2,
+    });
+
+    expect(result).toBe('usage-stale');
+    const after = store.get().agents.instances.a1!.state;
+    expect(after.history[0]?.metadata?.compressedHistory).toBeUndefined();
+    expect(after.usedTokens).toBe(7);
   });
 
   it('storeCompressedHistory permits messages appended after the boundary', () => {
@@ -349,11 +383,14 @@ describe('state-mutations/streaming', () => {
       boundaryMessageId: 'b-1',
       compactedMessageIds: ['prefix-1'],
       compressedHistory: 'durable summary',
+      expectedUsedTokens: 0,
+      postCompressionUsedTokens: 33,
     });
 
     expect(result).toBe('written');
     const after = store.get().agents.instances.a1!.state.history[1]!;
     expect(after.metadata?.compressedHistory).toBe('durable summary');
+    expect(store.get().agents.instances.a1!.state.usedTokens).toBe(33);
   });
 
   it('restoreCompressedHistory rolls back only the expected in-memory value', () => {
@@ -368,13 +405,17 @@ describe('state-mutations/streaming', () => {
         compressedHistory: 'new summary',
       },
     };
-    upsertAgentInstance(store, 'a1', makeEnvelope(baseState([boundary])));
+    const state = baseState([boundary]);
+    state.usedTokens = 50;
+    upsertAgentInstance(store, 'a1', makeEnvelope(state));
 
     expect(
       restoreCompressedHistory(store, 'a1', {
         boundaryMessageId: 'b-1',
         expectedCompressedHistory: 'different summary',
         previousCompressedHistory: undefined,
+        expectedUsedTokens: 50,
+        previousUsedTokens: 100,
       }),
     ).toBe('mismatch');
     expect(
@@ -387,12 +428,45 @@ describe('state-mutations/streaming', () => {
         boundaryMessageId: 'b-1',
         expectedCompressedHistory: 'new summary',
         previousCompressedHistory: 'previous summary',
+        expectedUsedTokens: 50,
+        previousUsedTokens: 100,
       }),
     ).toBe('restored');
     expect(
       store.get().agents.instances.a1!.state.history[0]!.metadata
         ?.compressedHistory,
     ).toBe('previous summary');
+    expect(store.get().agents.instances.a1!.state.usedTokens).toBe(100);
+  });
+
+  it('restoreCompressedHistory refuses to overwrite newer occupancy', () => {
+    const store = new AgentStore(emptySystemState());
+    const boundary: AgentMessage = {
+      id: 'b-1',
+      role: 'assistant',
+      parts: [{ type: 'text', text: '', state: 'done' }],
+      metadata: {
+        createdAt: new Date(),
+        partsMetadata: [{}],
+        compressedHistory: 'new summary',
+      },
+    };
+    const state = baseState([boundary]);
+    state.usedTokens = 51;
+    upsertAgentInstance(store, 'a1', makeEnvelope(state));
+
+    expect(
+      restoreCompressedHistory(store, 'a1', {
+        boundaryMessageId: 'b-1',
+        expectedCompressedHistory: 'new summary',
+        previousCompressedHistory: 'previous summary',
+        expectedUsedTokens: 50,
+        previousUsedTokens: 100,
+      }),
+    ).toBe('usage-mismatch');
+    const after = store.get().agents.instances.a1!.state;
+    expect(after.history[0]?.metadata?.compressedHistory).toBe('new summary');
+    expect(after.usedTokens).toBe(51);
   });
 
   it('restoreCompressedHistory removes a newly-created summary', () => {
@@ -407,19 +481,24 @@ describe('state-mutations/streaming', () => {
         compressedHistory: 'new summary',
       },
     };
-    upsertAgentInstance(store, 'a1', makeEnvelope(baseState([boundary])));
+    const state = baseState([boundary]);
+    state.usedTokens = 50;
+    upsertAgentInstance(store, 'a1', makeEnvelope(state));
 
     expect(
       restoreCompressedHistory(store, 'a1', {
         boundaryMessageId: 'b-1',
         expectedCompressedHistory: 'new summary',
         previousCompressedHistory: undefined,
+        expectedUsedTokens: 50,
+        previousUsedTokens: 100,
       }),
     ).toBe('restored');
     expect(
       store.get().agents.instances.a1!.state.history[0]!.metadata
         ?.compressedHistory,
     ).toBeUndefined();
+    expect(store.get().agents.instances.a1!.state.usedTokens).toBe(100);
   });
 
   it('setAssistantOwnedReasoningDetails replaces the array on the target message', () => {
