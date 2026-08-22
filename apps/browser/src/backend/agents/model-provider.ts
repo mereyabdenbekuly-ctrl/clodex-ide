@@ -1,31 +1,27 @@
 import type { TelemetryService } from '@/services/telemetry';
-import { createHash } from 'node:crypto';
 import type { ModelAlias, ModelId } from '@shared/available-models';
+import {
+  availableModels,
+  getAvailableModel,
+  getModelAlias,
+} from '@shared/available-models';
 import type {
   ModelProvider,
   ApiSpec,
   CustomModel,
   CustomEndpoint,
-  ModelThinkingOverride,
   ProviderProfile,
-  UserPreferences,
 } from '@shared/karton-contracts/ui/shared-types';
 import {
   CLODEX_ACCOUNT_PROVIDER_PROFILE_ID,
   isClodexAccountProviderCredentialAlias,
 } from '@shared/karton-contracts/ui/shared-types';
-import type { ReasoningSignatureSource } from '@shared/karton-contracts/ui/agent/metadata';
 import {
   createReasoningSignatureSource,
   getSemanticProviderForApiSpec,
   type ProviderMode,
 } from './reasoning-signatures';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
-import {
-  availableModels,
-  getAvailableModel,
-  getModelAlias,
-} from '@shared/available-models';
 import { CODING_PLANS } from '@shared/coding-plans';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -35,445 +31,73 @@ import { createAzure } from '@ai-sdk/azure';
 import { createVertex } from '@ai-sdk/google-vertex';
 import { createClodex } from './clodex-provider';
 import { createBedrockProvider } from './bedrock-provider';
-import type { AuthService, AuthState } from '@/services/auth';
+import type { AuthService } from '@/services/auth';
 import type { PreferencesService } from '@/services/preferences';
 import type { CredentialsService } from '@/services/credentials';
 import { AIProviderRegistry, type AIModelInfo } from '@shared/ai-provider';
 import { createBuiltInProviderAdapters } from './providers/built-in-adapters';
-import type { streamText, LanguageModelMiddleware } from 'ai';
+import type { streamText } from 'ai';
 import { wrapLanguageModel } from 'ai';
 import {
   MODEL_REQUEST_PURPOSE_METADATA_KEY,
-  MODEL_TASK_ROLE_METADATA_KEY,
   type ModelTaskRole,
   type ModelTaskRoutingRequest,
 } from '@clodex/agent-core/host';
-import {
-  createThinkingProviderOptionsPatch,
-  supportsNativeThinkingProviderProfile,
-  type ThinkingCapableModel,
-} from '@shared/model-thinking-capabilities';
+import { supportsNativeThinkingProviderProfile } from '@shared/model-thinking-capabilities';
 import { getModelThinkingOverride } from '@shared/model-effort-routing';
 import { resolveModelContextWindow } from '@shared/model-context-window';
+import {
+  getBareModelId,
+  getUnambiguousAvailableModelByBareId,
+  getExplicitQualifiedRouteProvider,
+  parseQualifiedModelId,
+  getDynamicGpt5ThinkingModel,
+  toSemanticProvider,
+  toNativeAnthropicModelId,
+  toClodexGatewayModelId,
+  toNativeMiniMaxModelId,
+} from './model-provider-catalog';
+import {
+  getClodexLlmRelayUrl,
+  clodexUrlPassthroughMiddleware,
+  CLODEX_UNKNOWN_MODEL_CONTEXT_WINDOW_BUDGET,
+  PROVIDER_PROFILE_UNKNOWN_CONTEXT_WINDOW_BUDGET,
+  CLODEX_BUILT_IN_SAME_PROVIDER_FALLBACKS,
+  resolveProviderProfileBaseUrl,
+} from './model-provider-gateway';
+import {
+  sanitizeClodexProviderOptions,
+  resolveThinkingProviderOptions,
+  omitModelRequestMetadata,
+} from './model-provider-options';
+import {
+  guardRevocableModelRoute,
+  getPreferencesRouteAuthorityFingerprint,
+  getAuthRouteAuthorityFingerprint,
+  fingerprintManagedCredential,
+  guardManagedModelCredential,
+} from './model-provider-route-guards';
+import {
+  scoreClodexModelMetadataForTask,
+  scoreClodexModelForTask,
+  getClodexModelLabel,
+} from './model-provider-scoring';
+import type {
+  BuiltInModelSettings,
+  ClodexAuthModel,
+  ManagedCredentialState,
+  ModelWithOptions,
+  OfficialOpenAIRealtimeEndpoint,
+} from './model-provider-types';
 
-type ProviderOptions = Parameters<typeof streamText>[0]['providerOptions'];
-type BuiltInModelSettings = (typeof availableModels)[number];
-type ThinkingModelSettings = ThinkingCapableModel;
-type ClodexAuthModel = NonNullable<AuthState['models']>[number];
-type ManagedCredentialState = { rejected: boolean };
-
-const DEFAULT_CLODEX_LLM_RELAY_URL = 'https://clodex.xyz/v1';
-
-function getClodexLlmRelayUrl(): string {
-  return (
-    process.env.CLODEX_LLM_RELAY_URL ||
-    process.env.LLM_PROXY_URL ||
-    DEFAULT_CLODEX_LLM_RELAY_URL
-  );
-}
-
-// Conservative internal budgets only. The UI deliberately reports unknown
-// when no provider/catalog capability is available instead of presenting
-// either fallback as a model-declared context window.
-const CLODEX_UNKNOWN_MODEL_CONTEXT_WINDOW_BUDGET = 200_000;
-const PROVIDER_PROFILE_UNKNOWN_CONTEXT_WINDOW_BUDGET = 128_000;
-const CLODEX_BUILT_IN_SAME_PROVIDER_FALLBACKS: Partial<
-  Record<ModelProvider, readonly string[]>
-> = {
-  google: ['gemini-3.5-flash'],
-};
-
-function getBareModelId(modelId: string): string {
-  return modelId.split('/').pop() ?? modelId;
-}
-
-export function resolveProviderProfileBaseUrl(
-  profile: Pick<ProviderProfile, 'id' | 'providerType' | 'baseUrl'>,
-): string | undefined {
-  if (profile.id === CLODEX_ACCOUNT_PROVIDER_PROFILE_ID) {
-    return getClodexLlmRelayUrl();
-  }
-  if (profile.providerType === 'ollama') {
-    return `${(profile.baseUrl || 'http://localhost:11434').replace(/\/+$/, '')}/v1`;
-  }
-  return profile.baseUrl;
-}
-
-function getUnambiguousAvailableModelByBareId(
-  modelId: string,
-): BuiltInModelSettings | undefined {
-  const bareModelId = getBareModelId(modelId);
-  const matches = availableModels.filter(
-    (candidate) => getBareModelId(candidate.modelId) === bareModelId,
-  );
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
-function getExplicitQualifiedRouteProvider(
-  modelId: string,
-): ModelProvider | undefined {
-  const separator = modelId.indexOf('/');
-  if (separator <= 0) return undefined;
-  const prefix = modelId.slice(0, separator).toLowerCase();
-  switch (prefix) {
-    case 'anthropic':
-      return 'anthropic';
-    case 'openai':
-      return 'openai';
-    case 'google':
-    case 'gemini':
-      return 'google';
-    case 'moonshotai':
-    case 'moonshot':
-    case 'kimi':
-      return 'moonshotai';
-    case 'alibaba':
-    case 'qwen':
-    case 'dashscope':
-      return 'alibaba';
-    case 'deepseek':
-      return 'deepseek';
-    case 'z-ai':
-    case 'zai':
-    case 'glm':
-      return 'z-ai';
-    case 'minimax':
-      return 'minimax';
-    case 'xiaomi-mimo':
-    case 'xiaomi':
-    case 'mimo':
-      return 'xiaomi-mimo';
-    case 'mistral':
-    case 'mistralai':
-      return 'mistral';
-    default:
-      return undefined;
-  }
-}
-
-export function parseQualifiedModelId(
-  value: string,
-): { providerProfileId: string; modelId: string } | null {
-  const separator = value.indexOf(':');
-  if (separator <= 0 || separator === value.length - 1) return null;
-  return {
-    providerProfileId: value.slice(0, separator),
-    modelId: value.slice(separator + 1),
-  };
-}
-
-function getDynamicGpt5ThinkingModel(
-  modelId: string,
-  semanticProvider: ModelProvider,
-): ThinkingModelSettings | undefined {
-  const bareModelId = getBareModelId(modelId).toLowerCase();
-  if (semanticProvider !== 'openai' || !/^gpt-5(?:\.|$)/.test(bareModelId)) {
-    return undefined;
-  }
-
-  return {
-    modelId,
-    officialProvider: 'openai',
-    thinkingEnabled: true,
-    providerOptions: {
-      clodex: { reasoning: { effort: 'medium' } },
-      openai: { reasoningEffort: 'medium', reasoningSummary: 'auto' },
-    },
-  };
-}
-
-function sanitizeClodexProviderOptions(
-  providerOptions: ProviderOptions,
-): ProviderOptions {
-  if (!providerOptions || typeof providerOptions !== 'object') {
-    return providerOptions;
-  }
-
-  const clodex = providerOptions.clodex;
-  if (!isPlainObject(clodex)) return providerOptions;
-  const reasoning = clodex.reasoning;
-  if (!isPlainObject(reasoning) || !('enabled' in reasoning)) {
-    return providerOptions;
-  }
-
-  const { enabled: _enabled, ...safeReasoning } = reasoning;
-  return {
-    ...providerOptions,
-    clodex: {
-      ...clodex,
-      ...(Object.keys(safeReasoning).length > 0
-        ? { reasoning: safeReasoning }
-        : { reasoning: undefined }),
-    },
-  } as ProviderOptions;
-}
-
-function normalizeProviderName(provider: string | undefined): string {
-  return (
-    provider
-      ?.trim()
-      .toLowerCase()
-      .replace(/[_\s]+/g, '-') ?? ''
-  );
-}
-
-function toSemanticProvider(
-  provider: string | undefined,
-  modelId: string,
-): ModelProvider {
-  switch (normalizeProviderName(provider)) {
-    case 'anthropic':
-    case 'anthropic-compatible':
-    case 'claude':
-      return 'anthropic';
-    case 'google':
-    case 'google-compatible':
-    case 'gemini':
-      return 'google';
-    case 'moonshotai':
-    case 'moonshot':
-    case 'kimi':
-      return 'moonshotai';
-    case 'alibaba':
-    case 'qwen':
-    case 'dashscope':
-      return 'alibaba';
-    case 'deepseek':
-      return 'deepseek';
-    case 'z-ai':
-    case 'zai':
-    case 'glm':
-      return 'z-ai';
-    case 'minimax':
-      return 'minimax';
-    case 'xiaomi-mimo':
-    case 'xiaomi':
-    case 'mimo':
-      return 'xiaomi-mimo';
-    case 'mistral':
-    case 'mistralai':
-      return 'mistral';
-    case 'openai':
-    case 'openai-compatible':
-    default:
-      break;
-  }
-
-  const bareModelId = getBareModelId(modelId).toLowerCase();
-  if (bareModelId.startsWith('claude-')) return 'anthropic';
-  if (bareModelId.startsWith('gemini-')) return 'google';
-  if (bareModelId.startsWith('kimi-')) return 'moonshotai';
-  if (bareModelId.startsWith('qwen')) return 'alibaba';
-  if (bareModelId.startsWith('deepseek-')) return 'deepseek';
-  if (bareModelId.startsWith('glm-')) return 'z-ai';
-  if (bareModelId.startsWith('minimax-')) return 'minimax';
-  if (bareModelId.startsWith('mimo-')) return 'xiaomi-mimo';
-  if (bareModelId.startsWith('mistral-')) return 'mistral';
-  return 'openai';
-}
-
-/**
- * Converts an OpenRouter-style Anthropic model ID (dots in version, e.g.
- * `claude-opus-4.8`) to the native Anthropic API format (hyphens, e.g.
- * `claude-opus-4-8`). Idempotent on IDs that already use hyphens.
- */
-function toNativeAnthropicModelId(modelId: string): string {
-  return modelId.replace(/\./g, '-');
-}
-
-function toClodexGatewayModelId(
-  provider: ModelProvider | undefined,
-  modelId: string,
-): string {
-  if (provider === 'anthropic') return toNativeAnthropicModelId(modelId);
-  return modelId;
-}
-
-function toNativeMiniMaxModelId(modelId: string): string {
-  if (modelId === 'minimax-m3') return 'MiniMax-M3';
-  return modelId;
-}
-
-function guardRevocableModelRoute(
-  model: LanguageModelV3,
-  isValid: () => boolean,
-): LanguageModelV3 {
-  const assertValid = () => {
-    if (!isValid()) {
-      throw new Error('Model route was revoked before request dispatch');
-    }
-  };
-  const doGenerate: LanguageModelV3['doGenerate'] = (options) => {
-    assertValid();
-    return model.doGenerate(options);
-  };
-  const doStream: LanguageModelV3['doStream'] = (options) => {
-    assertValid();
-    return model.doStream(options);
-  };
-  return new Proxy(model, {
-    get(target, property, receiver) {
-      if (property === 'doGenerate') return doGenerate;
-      if (property === 'doStream') return doStream;
-      return Reflect.get(target, property, receiver);
-    },
-  });
-}
-
-function getPreferencesRouteAuthorityFingerprint(
-  preferences: UserPreferences,
-): string {
-  return JSON.stringify({
-    providerConfigs: preferences.providerConfigs,
-    providerProfiles: preferences.providerProfiles,
-    defaultProviderProfileId: preferences.defaultProviderProfileId,
-    customEndpoints: preferences.customEndpoints,
-    customModels: preferences.customModels,
-  });
-}
-
-function getAuthRouteAuthorityFingerprint(authState: AuthState): string {
-  return JSON.stringify({
-    models: authState.models ?? [],
-    keys: (authState.keys ?? []).map((key) => ({
-      id: key.id,
-      name: key.name,
-      group: key.group,
-      status: key.status,
-      isDefault: key.isDefault,
-      modelLimitsEnabled: key.modelLimitsEnabled,
-      modelLimits: key.modelLimits,
-      protocols: key.protocols,
-      baseUrls: key.baseUrls,
-    })),
-    activeKeyId: authState.activeKeyId,
-    ideTokenKeyIdentity: authState.ideToken
-      ? {
-          keyId: authState.ideToken.keyId,
-          group: authState.ideToken.group,
-        }
-      : undefined,
-  });
-}
-
-function isManagedCredentialRejection(error: unknown): boolean {
-  const pending: Array<{ value: unknown; depth: number }> = [
-    { value: error, depth: 0 },
-  ];
-  const seen = new Set<object>();
-
-  while (pending.length > 0) {
-    const { value: current, depth } = pending.shift()!;
-    if (!(current instanceof Error) && !isPlainObject(current)) continue;
-    if (seen.has(current)) continue;
-    seen.add(current);
-
-    const frame = current as Record<string, unknown>;
-    const statusCode = frame.statusCode ?? frame.status;
-    if (statusCode === 401) return true;
-
-    const errorText = [frame.message, frame.code, frame.responseBody]
-      .filter((value): value is string => typeof value === 'string')
-      .join(' ')
-      .toLowerCase();
-    if (
-      errorText.includes('invalid api key') ||
-      errorText.includes('invalid_api_key')
-    ) {
-      return true;
-    }
-
-    if (depth >= 3) continue;
-    for (const nested of [
-      frame.lastError,
-      frame.cause,
-      frame.responseBody,
-      frame.error,
-    ]) {
-      if (nested instanceof Error || isPlainObject(nested)) {
-        pending.push({ value: nested, depth: depth + 1 });
-      }
-    }
-  }
-  return false;
-}
-
-function fingerprintManagedCredential(token: string): string {
-  return createHash('sha256').update(token, 'utf8').digest('hex');
-}
-
-function guardManagedModelCredential(
-  model: LanguageModelV3,
-  onCredentialRejected: () => void,
-): LanguageModelV3 {
-  const doGenerate: LanguageModelV3['doGenerate'] = async (options) => {
-    try {
-      return await model.doGenerate(options);
-    } catch (error) {
-      if (isManagedCredentialRejection(error)) onCredentialRejected();
-      throw error;
-    }
-  };
-  const doStream: LanguageModelV3['doStream'] = async (options) => {
-    try {
-      return await model.doStream(options);
-    } catch (error) {
-      if (isManagedCredentialRejection(error)) onCredentialRejected();
-      throw error;
-    }
-  };
-  return new Proxy(model, {
-    get(target, property, receiver) {
-      if (property === 'doGenerate') return doGenerate;
-      if (property === 'doStream') return doStream;
-      return Reflect.get(target, property, receiver);
-    },
-  });
-}
-
-/**
- * Middleware that tells the SDK all HTTP(S) URLs are natively supported by the
- * clodex gateway. Without this the SDK downloads every image/file URL and
- * inlines the content as base64, causing "payload too large" errors.
- */
-const clodexUrlPassthroughMiddleware: LanguageModelMiddleware = {
-  specificationVersion: 'v3',
-  overrideSupportedUrls: () => ({
-    '*': [/^https?:\/\//i],
-  }),
-};
-
+export { resolveProviderProfileBaseUrl } from './model-provider-gateway';
+export { parseQualifiedModelId } from './model-provider-catalog';
+export { deepMergeProviderOptions } from './model-provider-options';
+export type {
+  ModelWithOptions,
+  OfficialOpenAIRealtimeEndpoint,
+} from './model-provider-types';
 export type { ProviderMode } from './reasoning-signatures';
-
-export type ModelWithOptions = {
-  model: LanguageModelV3;
-  providerOptions: Parameters<typeof streamText>[0]['providerOptions'];
-  headers: Record<string, string>;
-  contextWindowSize: number;
-  providerMode: ProviderMode;
-  connectedCodingPlanId?: string;
-  reasoningSignatureSource: ReasoningSignatureSource;
-  /**
-   * When true, the agent must strip the `strict` field from every tool
-   * definition before passing them to `streamText`. Required for providers
-   * whose backend rejects unknown fields on the tool payload — notably
-   * Bedrock-on-Anthropic, where `strict` surfaces as
-   * `tools.0.custom.strict: Extra inputs are not permitted`.
-   */
-  stripStrictFromTools?: boolean;
-  routeLease?: {
-    isValid(): boolean;
-    forkTrace?(
-      traceId: string,
-      metadata?: Record<string, unknown>,
-    ): ModelWithOptions;
-  };
-};
-
-export interface OfficialOpenAIRealtimeEndpoint {
-  apiKey: string;
-  baseURL: 'https://api.openai.com/v1';
-}
 
 /**
  * This class offers a getter for a model that is traced with the telemetry service.
@@ -2410,237 +2034,4 @@ export class ModelProviderService {
       }
     }
   }
-}
-
-// =============================================================================
-// Thinking override utilities
-// =============================================================================
-
-type ThinkingProviderOptionsInput = {
-  baseProviderOptions: Record<string, unknown>;
-  modelSettings: ThinkingModelSettings;
-  override?: ModelThinkingOverride;
-  providerMode: ProviderMode;
-  semanticProvider: ModelProvider;
-  customEndpointApiSpec?: ApiSpec;
-  requestMetadata?: Record<string, unknown>;
-};
-
-function resolveThinkingProviderOptions({
-  baseProviderOptions,
-  modelSettings,
-  override,
-  providerMode,
-  semanticProvider,
-  customEndpointApiSpec,
-  requestMetadata,
-}: ThinkingProviderOptionsInput): ProviderOptions {
-  if (requestMetadata?.[MODEL_REQUEST_PURPOSE_METADATA_KEY] !== 'agent-step') {
-    return baseProviderOptions as ProviderOptions;
-  }
-
-  if (!modelSettings.thinkingEnabled || !override) {
-    return baseProviderOptions as ProviderOptions;
-  }
-
-  const patch = createThinkingProviderOptionsPatch({
-    model: modelSettings,
-    override,
-    route: {
-      providerMode,
-      modelProvider: semanticProvider,
-      customEndpointApiSpec,
-    },
-  });
-
-  if (!patch) return baseProviderOptions as ProviderOptions;
-
-  return deepMergeProviderOptions(baseProviderOptions, patch);
-}
-
-function omitModelRequestMetadata(
-  metadata: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  if (
-    !metadata ||
-    (!(MODEL_REQUEST_PURPOSE_METADATA_KEY in metadata) &&
-      !(MODEL_TASK_ROLE_METADATA_KEY in metadata))
-  ) {
-    return metadata;
-  }
-
-  const {
-    [MODEL_REQUEST_PURPOSE_METADATA_KEY]: _purpose,
-    [MODEL_TASK_ROLE_METADATA_KEY]: _taskRole,
-    ...telemetry
-  } = metadata;
-  return telemetry;
-}
-
-function getClodexModelLabel(model: ClodexAuthModel): string {
-  return `${model.provider ?? ''} ${model.id} ${model.name ?? ''}`.toLowerCase();
-}
-
-function getKnownPriceRank(model: ClodexAuthModel): number | undefined {
-  const builtIn =
-    getAvailableModel(model.id) ?? getAvailableModel(getBareModelId(model.id));
-  return builtIn?.pricing?.relativeMultiplier;
-}
-
-function scoreClodexModelMetadataForTask(
-  model: ClodexAuthModel,
-  taskRole: ModelTaskRole,
-  currentModelId: string,
-): number {
-  if (!model.taskRoles?.includes(taskRole)) return Number.NEGATIVE_INFINITY;
-
-  const currentBonus =
-    model.id === currentModelId ||
-    getBareModelId(model.id) === getBareModelId(currentModelId)
-      ? 3
-      : 0;
-  const contextBonus =
-    typeof model.contextWindow === 'number'
-      ? Math.min(10, Math.floor(model.contextWindow / 200_000))
-      : 0;
-
-  if (taskRole === 'coding') {
-    const tierScore = tierScoreForStrongModel(model.costTier);
-    return 100 + tierScore + contextBonus + currentBonus;
-  }
-
-  const tierScore = tierScoreForEfficientModel(model.costTier);
-  return 100 + tierScore + currentBonus;
-}
-
-function tierScoreForStrongModel(
-  tier: ClodexAuthModel['costTier'] | undefined,
-): number {
-  switch (tier) {
-    case 'high':
-      return 40;
-    case 'medium':
-      return 25;
-    case 'low':
-      return 10;
-    case 'free':
-      return 5;
-    default:
-      return 15;
-  }
-}
-
-function tierScoreForEfficientModel(
-  tier: ClodexAuthModel['costTier'] | undefined,
-): number {
-  switch (tier) {
-    case 'free':
-      return 45;
-    case 'low':
-      return 40;
-    case 'medium':
-      return 20;
-    case 'high':
-      return 5;
-    default:
-      return 15;
-  }
-}
-
-function scoreClodexModelForTask(
-  model: ClodexAuthModel,
-  taskRole: ModelTaskRole,
-  currentModelId: string,
-): number {
-  const label = getClodexModelLabel(model);
-  const priceRank = getKnownPriceRank(model);
-  const lowerPriceBonus =
-    priceRank === undefined ? 0 : Math.max(-30, 30 - priceRank * 8);
-  const higherPriceBonus =
-    priceRank === undefined ? 0 : Math.min(30, priceRank * 6);
-  const currentBonus =
-    model.id === currentModelId ||
-    getBareModelId(model.id) === getBareModelId(currentModelId)
-      ? 3
-      : 0;
-  const hasAny = (...needles: string[]) =>
-    needles.some((needle) => label.includes(needle));
-
-  if (taskRole === 'analysis') {
-    let score = 50 + lowerPriceBonus + currentBonus;
-    if (hasAny('flash', 'lite', 'mini', 'haiku', 'quick', 'fast')) score += 35;
-    if (hasAny('deepseek', 'qwen', 'glm', 'gemini')) score += 12;
-    if (hasAny('opus', 'fable', 'sonnet', 'pro', 'max')) score -= 18;
-    return score;
-  }
-
-  if (taskRole === 'review') {
-    let score = 45 + lowerPriceBonus + currentBonus;
-    if (hasAny('flash', 'lite', 'mini', 'haiku', 'quick', 'fast')) score += 30;
-    if (hasAny('deepseek', 'qwen', 'glm', 'gemini')) score += 10;
-    if (hasAny('opus', 'fable')) score -= 15;
-    return score;
-  }
-
-  let score = 55 + higherPriceBonus + currentBonus;
-  if (
-    hasAny(
-      'opus',
-      'fable',
-      'sonnet',
-      'gpt-5',
-      'gpt-4.1',
-      'glm-5',
-      'deepseek-v4-pro',
-    )
-  ) {
-    score += 35;
-  }
-  if (hasAny('mini', 'lite', 'haiku', 'flash')) score -= 20;
-  if (hasAny('coding', 'coder', 'code')) score += 18;
-  return score;
-}
-
-// =============================================================================
-// Deep-merge utility for provider options
-// =============================================================================
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
- * Recursively deep-merges multiple plain objects. Later sources win on
- * primitive conflicts; nested objects are merged recursively.
- *
- * Exported so call-sites (streamText / generateText) can layer overrides:
- * ```ts
- * streamText({
- *   providerOptions: deepMergeProviderOptions(
- *     modelWithOptions.providerOptions,
- *     { anthropic: { thinking: { type: 'disabled' } } },
- *   ),
- * })
- * ```
- */
-export function deepMergeProviderOptions(
-  ...sources: (Record<string, unknown> | undefined | null)[]
-): ProviderOptions {
-  const result: Record<string, unknown> = {};
-  for (const source of sources) {
-    if (!source) continue;
-    for (const [key, value] of Object.entries(source)) {
-      if (value === undefined) {
-        delete result[key];
-      } else if (isPlainObject(value) && isPlainObject(result[key])) {
-        result[key] = deepMergeProviderOptions(
-          result[key] as Record<string, unknown>,
-          value,
-        );
-      } else {
-        result[key] = value;
-      }
-    }
-  }
-  return result as ProviderOptions;
 }

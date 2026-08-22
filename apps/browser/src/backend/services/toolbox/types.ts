@@ -1,3 +1,4 @@
+import type { UniversalToolboxMountManager } from '@clodex/agent-core';
 import type { MountPermission } from '@shared/karton-contracts/ui/agent/metadata';
 
 /**
@@ -30,3 +31,13 @@ export type WorkspaceSnapshot = {
     permissions?: MountPermission[];
   }>;
 };
+
+export type UniversalToolboxMountPermission = NonNullable<
+  ReturnType<
+    NonNullable<UniversalToolboxMountManager['getMountPermissionsForPrefix']>
+  >
+>[number];
+
+export type MountedPrefix = string;
+
+export type MountedPath = string;

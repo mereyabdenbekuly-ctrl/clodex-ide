@@ -10,7 +10,6 @@ import {
   artifactBridgeRequestSchema,
   artifactBridgeRuntimeInspectorSnapshotSchema,
   artifactBridgeRuntimeQuotaSnapshotSchema,
-  matchesArtifactBridgeToolPolicy,
   type ArtifactBridgeCapability,
   type ArtifactBridgeContext,
   type ArtifactBridgeGrant,
@@ -25,20 +24,13 @@ import {
   type ArtifactBridgeSensitiveEgressReason,
   type ArtifactBridgeSensitiveMcpApproval,
   type ArtifactBridgeSensitiveMcpProposal,
-  type ArtifactBridgeSessionBinding,
   type ArtifactBridgeSessionSnapshot,
   type ArtifactBridgeWriteApproval,
   type ArtifactBridgeWriteProposal,
 } from '@shared/artifact-bridge';
-import {
-  generatedAppIdentitySchema,
-  generatedAppManifestSchema,
-  getManifestAutomationIds,
-  getManifestCapabilityTypes,
-  getManifestMcpTools,
-  getManifestMcpWriteTools,
-  type GeneratedAppIdentity,
-  type GeneratedAppManifest,
+import type {
+  GeneratedAppIdentity,
+  GeneratedAppManifest,
 } from '@shared/generated-app-manifest';
 import type {
   ArtifactBridgeGrantReviewSelection,
@@ -59,7 +51,6 @@ import {
   evaluateTrustedRegistryMcpTool,
 } from '../mcp/trusted-dispatch-gateway';
 import { DisposableService } from '../disposable';
-import { TRUSTED_UI_REVIEWER_CONNECTION_ID } from '../trusted-ui-karton-transport';
 import {
   artifactBridgeAuditResource,
   auditContext,
@@ -98,142 +89,63 @@ import {
   type ArtifactBridgeEffectWalPersistence,
   type ArtifactBridgeEffectWalRecord,
 } from './effect-wal';
+import {
+  MAX_CALLS_PER_MINUTE,
+  MAX_RESULT_BYTES,
+  PROCEDURES,
+  agentAskModelAdapterIdentitySchema,
+  grantStoreSchema,
+  legacyGrantStoreSchema,
+  resolvedArtifactBridgeAppSchema,
+  v2GrantStoreSchema,
+  v3GrantStoreSchema,
+  v4GrantStoreSchema,
+  type GrantStore,
+  type ResolvedArtifactBridgeApp,
+  type ValidatedArtifactBridgeHostSessionBinding,
+  type ValidatedGrantBinding,
+} from './bridge-schemas';
+import { PersistedGrantStore } from './persisted-grant-store';
+import {
+  artifactBridgeContextsEqual,
+  assertCapabilityAllowedByPolicy,
+  assertGrantMatchesManifest,
+  assertGrantMatchesPolicy,
+  assertPolicyEnabled,
+  assertSensitiveToolAllowedByPolicy,
+  assertToolAllowedByPolicy,
+  assertTrustedReviewer,
+  capabilityKindForRequest,
+  createArgumentsPreview,
+  effectTicketHash,
+  hashAuditIdentifier,
+  hashJson,
+  identitiesMatch,
+  isAuthorizationError,
+  isTerminalEffectFailureStatus,
+  isTerminalOperation,
+  safeMcpAuditResource,
+  sameSensitiveReasons,
+  throwTerminalEffectFailure,
+  universalEffectId,
+  universalEffectTicketHash,
+  type ArtifactBridgeOperation,
+  type PreparedEffect,
+  type PreparedSensitiveMcpCall,
+  type PreparedWrite,
+  type UniversalEffectPlan,
+} from './effect-plan';
 
-const MAX_RESULT_BYTES = 1_000_000;
-const MAX_CALLS_PER_MINUTE = 30;
-const agentAskModelAdapterIdentitySchema = z
-  .object({
-    modelId: z.string().trim().min(1).max(256),
-    resolvedProviderId: z.string().trim().min(1).max(256),
-    resolvedModelId: z.string().trim().min(1).max(256),
-    adapterId: z.literal('clodex.artifact-bridge.ai-sdk.generate-text'),
-    adapterVersion: z.literal(1),
-    maxOutputTokens: z.literal(1_024),
-    timeoutMs: z.literal(30_000),
-    maxRetries: z.literal(0),
-  })
-  .strict();
-type ParsedArtifactBridgeGrantInput = z.output<
-  typeof artifactBridgeGrantInputSchema
->;
-const resolvedArtifactBridgeAppSchema = z
-  .object({
-    identity: generatedAppIdentitySchema,
-    manifest: generatedAppManifestSchema,
-  })
-  .strict();
-type ResolvedArtifactBridgeApp = z.output<
-  typeof resolvedArtifactBridgeAppSchema
->;
-const PROCEDURES = [
-  'artifactBridge.getGrant',
-  'artifactBridge.getActiveSessions',
-  'artifactBridge.getRuntimeInspector',
-  'artifactBridge.openGrantReview',
-  'artifactBridge.submitGrantReview',
-  'artifactBridge.revokeGrant',
-  'artifactBridge.getPolicy',
-  'artifactBridge.approveWrite',
-  'artifactBridge.rejectWrite',
-  'artifactBridge.approveSensitiveMcpCall',
-  'artifactBridge.rejectSensitiveMcpCall',
-] as const;
-
-const pendingGrantMutationSchema = z
-  .object({
-    mutationId: z.string().uuid(),
-    kind: z.enum(['set', 'revoke']),
-    context: artifactBridgeContextSchema,
-    startedAt: z.string().datetime(),
-  })
-  .strict();
-const grantStoreSchema = z
-  .object({
-    version: z.literal(5),
-    grants: z.record(z.string(), artifactBridgeGrantSchema),
-    pendingMutations: z
-      .record(z.string(), pendingGrantMutationSchema)
-      .optional(),
-  })
-  .strict();
-type GrantStore = z.infer<typeof grantStoreSchema>;
-
-const legacyAgentContextSchema = z.object({
-  agentId: z.string().min(1).max(256),
-  appId: z.string().min(1).max(256),
-  pluginId: z.string().min(1).max(256).optional(),
-});
-const v4GrantSchema = artifactBridgeGrantSchema
-  .omit({ schemaVersion: true, scope: true })
-  .extend({ schemaVersion: z.literal(4) });
-const v4GrantStoreSchema = z.object({
-  version: z.literal(4),
-  grants: z.record(z.string(), v4GrantSchema),
-});
-const v3GrantSchema = v4GrantSchema
-  .omit({ schemaVersion: true, context: true })
-  .extend({
-    schemaVersion: z.literal(3),
-    context: legacyAgentContextSchema,
-  });
-const v3GrantStoreSchema = z.object({
-  version: z.literal(3),
-  grants: z.record(z.string(), v3GrantSchema),
-});
-const v2GrantSchema = v3GrantSchema
-  .omit({ schemaVersion: true, mcpWriteTools: true })
-  .extend({ schemaVersion: z.literal(2) });
-const v2GrantStoreSchema = z.object({
-  version: z.literal(2),
-  grants: z.record(z.string(), v2GrantSchema),
-});
-
-const legacyGrantStoreSchema = z.object({
-  version: z.literal(1),
-  grants: z.record(z.string(), z.unknown()),
-});
-
-export interface ArtifactBridgePersistence {
-  load(): Promise<unknown>;
-  save(store: GrantStore): Promise<void>;
-}
-
-/**
- * Backend-issued identity for one generated-app document lifetime.
- *
- * The context is deliberately not repeated in the value returned to the
- * caller: it remains an independent, trusted argument at every backend
- * boundary and is checked against the stored session record.
- */
-export interface ArtifactBridgeHostSessionBinding
-  extends ArtifactBridgeSessionBinding {
-  documentSlotId: string;
-  openedAt: string;
-  assetHash: string;
-}
-
-interface ValidatedArtifactBridgeHostSessionBinding
-  extends ArtifactBridgeHostSessionBinding {
-  identity: GeneratedAppIdentity;
-  dispatchFence: HostDispatchFence;
-}
-
-interface HostDispatchFence {
-  readonly generationId: string;
-  revoked: boolean;
-}
-
-interface GrantDispatchFence {
-  readonly grantId: string;
-  readonly revision: number;
-  revoked: boolean;
-}
-
-interface ValidatedGrantBinding {
-  readonly key: string;
-  readonly grant: ArtifactBridgeGrant;
-  readonly dispatchFence: GrantDispatchFence;
-}
+export type {
+  ArtifactBridgeHostSessionBinding,
+  ArtifactBridgePersistence,
+} from './bridge-schemas';
+import type {
+  ArtifactBridgeHostSessionBinding,
+  ArtifactBridgePersistence,
+  GrantDispatchFence,
+  HostDispatchFence,
+} from './bridge-schemas';
 
 export interface ArtifactBridgeServiceOptions {
   logger: Logger;
@@ -297,41 +209,6 @@ export interface ArtifactBridgeServiceOptions {
   persistence?: ArtifactBridgePersistence;
   effectWalPersistence?: ArtifactBridgeEffectWalPersistence;
   now?: () => number;
-}
-
-class PersistedGrantStore implements ArtifactBridgePersistence {
-  async load(): Promise<unknown> {
-    const { readPersistedData } = await import('@/utils/persisted-data');
-    return await readPersistedData(
-      'artifact-capability-grants',
-      z.union([
-        grantStoreSchema,
-        v4GrantStoreSchema,
-        v3GrantStoreSchema,
-        v2GrantStoreSchema,
-        legacyGrantStoreSchema,
-      ]),
-      { version: 5, grants: {} },
-      {
-        encrypt: true,
-        requireEncryption: true,
-        allowPlaintextMigration: true,
-      },
-    );
-  }
-
-  async save(store: GrantStore): Promise<void> {
-    const { writePersistedData } = await import('@/utils/persisted-data');
-    await writePersistedData(
-      'artifact-capability-grants',
-      grantStoreSchema,
-      store,
-      {
-        encrypt: true,
-        requireEncryption: true,
-      },
-    );
-  }
 }
 
 export class ArtifactBridgeService extends DisposableService {
@@ -5647,430 +5524,5 @@ export class ArtifactBridgeService extends DisposableService {
       await Promise.all([...this.pendingUniversalEffectClosures]);
     }
     await this.effectWal.flush();
-  }
-}
-
-function isAuthorizationError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return /grant|granted|capability|requested|allowed|policy|quota|rate limit|concurrent|read-only|destructive/i.test(
-    error.message,
-  );
-}
-
-type PreparedWrite = {
-  proposal: ArtifactBridgeWriteProposal;
-  sessionId: string | null;
-  identity: GeneratedAppIdentity;
-  arguments: Record<string, unknown>;
-  argumentsHash: string;
-  grantBinding: ValidatedGrantBinding;
-  effectCommitment: ArtifactBridgeMcpEffectCommitment;
-  classification: ArtifactBridgeTrustedMcpClassification;
-  dispatchAuthorized: boolean;
-  status:
-    | 'prepared'
-    | 'approved'
-    | 'committing'
-    | 'committed'
-    | 'result-unavailable'
-    | 'uncertain'
-    | 'failed-pre-effect';
-  commitToken: string | null;
-  approvalAuditRecorded: boolean;
-  approvalAuditPromise: Promise<void> | null;
-  commitPromise: Promise<unknown> | null;
-  result: unknown;
-};
-
-type PreparedSensitiveMcpCall = {
-  proposal: ArtifactBridgeSensitiveMcpProposal;
-  sessionId: string | null;
-  identity: GeneratedAppIdentity;
-  arguments: Record<string, unknown>;
-  argumentsHash: string;
-  grantBinding: ValidatedGrantBinding;
-  effectCommitment: ArtifactBridgeMcpEffectCommitment;
-  classification: ArtifactBridgeTrustedMcpClassification;
-  dispatchAuthorized: boolean;
-  status:
-    | 'prepared'
-    | 'approved'
-    | 'committing'
-    | 'committed'
-    | 'result-unavailable'
-    | 'uncertain'
-    | 'failed-pre-effect';
-  commitToken: string | null;
-  approvalAuditRecorded: boolean;
-  approvalAuditPromise: Promise<void> | null;
-  commitPromise: Promise<unknown> | null;
-  operationId: string | null;
-  result: unknown;
-};
-
-type PreparedEffect = PreparedWrite | PreparedSensitiveMcpCall;
-
-type ArtifactBridgeOperation = {
-  snapshot: ArtifactBridgeOperationSnapshot;
-  sessionId: string | null;
-  exactHostBinding?: ValidatedArtifactBridgeHostSessionBinding;
-  grantBinding: ValidatedGrantBinding;
-  controller: AbortController;
-  active: boolean;
-  finalDispatchPassed: boolean;
-  retentionSeconds: number;
-  result: unknown;
-  timeout: ReturnType<typeof setTimeout> | null;
-  effectId: string | null;
-};
-
-type UniversalEffectPlan = {
-  effectId: string;
-  kind: Extract<
-    ArtifactBridgeEffectWalRecord['kind'],
-    'agent-ask' | 'automation' | 'mcp-read-async'
-  >;
-  commitment: ArtifactBridgeUniversalEffectCommitment;
-  ticketHash: string;
-};
-
-function isTerminalOperation(
-  status: ArtifactBridgeOperationSnapshot['status'],
-): boolean {
-  return (
-    status === 'completed' ||
-    status === 'failed' ||
-    status === 'cancelled' ||
-    status === 'timed-out' ||
-    status === 'uncertain'
-  );
-}
-
-function isTerminalEffectFailureStatus(
-  status: PreparedEffect['status'],
-): status is 'result-unavailable' | 'uncertain' | 'failed-pre-effect' {
-  return (
-    status === 'result-unavailable' ||
-    status === 'uncertain' ||
-    status === 'failed-pre-effect'
-  );
-}
-
-function throwTerminalEffectFailure(
-  status: 'result-unavailable' | 'uncertain' | 'failed-pre-effect',
-): never {
-  switch (status) {
-    case 'result-unavailable':
-      throw new Error(
-        'Effect completed but its result is unavailable; retry is forbidden',
-      );
-    case 'uncertain':
-      throw new Error('Effect outcome is uncertain; retry is forbidden');
-    case 'failed-pre-effect':
-      throw new Error(
-        'Execution ticket failed before effect dispatch; a new review is required',
-      );
-  }
-}
-
-function artifactBridgeContextsEqual(
-  left: ArtifactBridgeContext,
-  right: ArtifactBridgeContext,
-): boolean {
-  if (left.kind !== right.kind || left.appId !== right.appId) return false;
-  if (left.kind === 'package' && right.kind === 'package') {
-    return left.packageId === right.packageId;
-  }
-  if (left.kind === 'agent' && right.kind === 'agent') {
-    return (
-      left.agentId === right.agentId &&
-      (left.pluginId ?? null) === (right.pluginId ?? null)
-    );
-  }
-  return false;
-}
-
-function assertPolicyEnabled(policy: ArtifactBridgePolicy): void {
-  if (!policy.enabled) {
-    throw new Error('Generated app capabilities are disabled by policy');
-  }
-}
-
-function assertCapabilityAllowedByPolicy(
-  policy: ArtifactBridgePolicy,
-  capability: ArtifactBridgeCapability,
-): void {
-  if (!policy.allowedCapabilities.includes(capability)) {
-    throw new Error(
-      `Capability "${capability}" is disabled by organization policy`,
-    );
-  }
-}
-
-function assertGrantMatchesPolicy(
-  input: ParsedArtifactBridgeGrantInput,
-  policy: ArtifactBridgePolicy,
-  now: number,
-): void {
-  for (const capability of input.capabilities) {
-    if (!policy.allowedCapabilities.includes(capability)) {
-      throw new Error(
-        `Capability "${capability}" is disabled by organization policy`,
-      );
-    }
-  }
-  for (const tool of input.mcpTools) {
-    assertToolAllowedByPolicy(
-      policy.allowedMcpReadTools,
-      tool.serverId,
-      tool.toolName,
-      'read',
-    );
-  }
-  for (const tool of input.mcpWriteTools) {
-    assertToolAllowedByPolicy(
-      policy.allowedMcpWriteTools,
-      tool.serverId,
-      tool.toolName,
-      'write',
-    );
-  }
-  if (!input.expiresAt) {
-    if (!policy.allowNeverExpiringGrants) {
-      throw new Error('Never-expiring grants are disabled by policy');
-    }
-    return;
-  }
-  if (
-    Date.parse(input.expiresAt) - now >
-    policy.maxGrantDurationHours * 3_600_000
-  ) {
-    throw new Error('Grant expiry exceeds the organization policy limit');
-  }
-}
-
-function assertToolAllowedByPolicy(
-  patterns: string[],
-  serverId: string,
-  toolName: string,
-  mode: 'read' | 'write',
-): void {
-  if (!matchesArtifactBridgeToolPolicy(patterns, serverId, toolName)) {
-    throw new Error(
-      `MCP ${mode} tool "${serverId}/${toolName}" is disabled by organization policy`,
-    );
-  }
-}
-
-function assertSensitiveToolAllowedByPolicy(
-  policy: ArtifactBridgePolicy,
-  serverId: string,
-  toolName: string,
-): void {
-  if (
-    matchesArtifactBridgeToolPolicy(
-      policy.deniedSensitiveMcpTools,
-      serverId,
-      toolName,
-    ) ||
-    !matchesArtifactBridgeToolPolicy(
-      policy.allowedSensitiveMcpTools,
-      serverId,
-      toolName,
-    )
-  ) {
-    throw new Error(
-      `Sensitive MCP tool "${serverId}/${toolName}" is disabled by organization policy`,
-    );
-  }
-}
-
-function sameSensitiveReasons(
-  left: ArtifactBridgeSensitiveEgressReason[],
-  right: ArtifactBridgeSensitiveEgressReason[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((reason) => right.includes(reason))
-  );
-}
-
-function capabilityKindForRequest(
-  method: ArtifactBridgeRequest['method'],
-): NonNullable<AgenticAppRuntimeDogfoodTelemetry['capability_kind']> {
-  switch (method) {
-    case 'getCapabilities':
-      return 'discovery';
-    case 'callMcpTool':
-    case 'startMcpOperation':
-      return 'mcp-read';
-    case 'prepareSensitiveMcpCall':
-    case 'commitSensitiveMcpCall':
-      return 'mcp-sensitive';
-    case 'prepareMcpWrite':
-    case 'commitMcpWrite':
-      return 'mcp-write';
-    case 'askAgent':
-      return 'agent-ask';
-    case 'runAutomation':
-    case 'startAutomationOperation':
-      return 'automation';
-    case 'getOperation':
-    case 'getOperationResult':
-    case 'cancelOperation':
-      return 'async-control';
-  }
-}
-
-function hashJson(value: unknown): string {
-  return hashArtifactBridgeJson(
-    'clodex.artifact-bridge.arguments-integrity.v1',
-    value,
-  );
-}
-
-function effectTicketHash(commitToken: string): string {
-  return hashArtifactBridgeJson(
-    'clodex.artifact-bridge.execution-ticket.v1',
-    commitToken,
-  );
-}
-
-function universalEffectId(
-  context: ArtifactBridgeContext,
-  requestId: string,
-): string {
-  // This is deliberately a context-global request-ID reservation. Mutable
-  // authority lineage (session, host generation, grant revision, policy) is
-  // bound by the exact commitment stored under the reservation, not by minting
-  // a new effect ID. Including those values here would let a navigation or
-  // regrant turn the same logical retry into a second dispatch. The preload
-  // generates cryptographically random request IDs, so accidental cross-session
-  // collisions are negligible; an intentional collision fails closed on the
-  // commitment mismatch and cannot cross authority lineages.
-  const digest = hashArtifactBridgeJson(
-    'clodex.artifact-bridge.universal-effect.request-id.v1',
-    { context, requestId },
-  );
-  const variant = ((Number.parseInt(digest[16] ?? '0', 16) & 0x3) | 0x8)
-    .toString(16)
-    .slice(0, 1);
-  return [
-    digest.slice(0, 8),
-    digest.slice(8, 12),
-    `5${digest.slice(13, 16)}`,
-    `${variant}${digest.slice(17, 20)}`,
-    digest.slice(20, 32),
-  ].join('-');
-}
-
-function universalEffectTicketHash(
-  effectId: string,
-  commitmentHash: string,
-): string {
-  return hashArtifactBridgeJson(
-    'clodex.artifact-bridge.universal-effect.execution-ticket.v1',
-    { effectId, commitmentHash },
-  );
-}
-
-function hashAuditIdentifier(value: string): string {
-  return `sha256:${createHash('sha256').update(value).digest('hex').slice(0, 16)}`;
-}
-
-function safeMcpAuditResource(serverId: string, toolName: string): string {
-  return redactSensitiveText(`${serverId}/${toolName}`).slice(0, 513);
-}
-
-function createArgumentsPreview(arguments_: Record<string, unknown>): string {
-  const redacted = sanitizeSensitiveValue(arguments_);
-  const encoded = JSON.stringify(redacted, null, 2);
-  return encoded.length <= 20_000
-    ? encoded
-    : `${encoded.slice(0, 19_980)}\n…[truncated]`;
-}
-
-function assertTrustedReviewer(clientId: string): void {
-  if (clientId !== TRUSTED_UI_REVIEWER_CONNECTION_ID) {
-    throw new Error('Artifact capability grants require a trusted UI client');
-  }
-}
-
-function identitiesMatch(
-  granted: GeneratedAppIdentity,
-  current: GeneratedAppIdentity,
-): boolean {
-  return (
-    granted.manifestSchemaVersion === current.manifestSchemaVersion &&
-    granted.appVersion === current.appVersion &&
-    granted.manifestHash === current.manifestHash &&
-    granted.executableHash === current.executableHash &&
-    granted.assetHash === current.assetHash
-  );
-}
-
-function assertGrantMatchesManifest(
-  input: ParsedArtifactBridgeGrantInput,
-  manifest: GeneratedAppManifest,
-): void {
-  const requestedCapabilities = new Set(getManifestCapabilityTypes(manifest));
-  for (const capability of input.capabilities) {
-    if (!requestedCapabilities.has(capability)) {
-      throw new Error(
-        `Capability "${capability}" was not requested by the generated app manifest`,
-      );
-    }
-  }
-
-  const requestedMcpTools = new Set(
-    getManifestMcpTools(manifest).map(
-      (tool) => `${tool.serverId}\0${tool.toolName}`,
-    ),
-  );
-  for (const tool of input.mcpTools) {
-    if (!requestedMcpTools.has(`${tool.serverId}\0${tool.toolName}`)) {
-      throw new Error(
-        `MCP tool "${tool.serverId}/${tool.toolName}" was not requested by the generated app manifest`,
-      );
-    }
-  }
-  if (input.mcpTools.length > 0 && !input.capabilities.includes('mcp:call')) {
-    throw new Error('MCP tools require the "mcp:call" capability');
-  }
-
-  const requestedMcpWriteTools = new Set(
-    getManifestMcpWriteTools(manifest).map(
-      (tool) => `${tool.serverId}\0${tool.toolName}`,
-    ),
-  );
-  for (const tool of input.mcpWriteTools) {
-    if (!requestedMcpWriteTools.has(`${tool.serverId}\0${tool.toolName}`)) {
-      throw new Error(
-        `MCP write tool "${tool.serverId}/${tool.toolName}" was not requested by the generated app manifest`,
-      );
-    }
-  }
-  if (
-    input.mcpWriteTools.length > 0 &&
-    !input.capabilities.includes('mcp:write')
-  ) {
-    throw new Error('MCP write tools require the "mcp:write" capability');
-  }
-
-  const requestedAutomationIds = new Set(getManifestAutomationIds(manifest));
-  for (const automationId of input.automationIds) {
-    if (!requestedAutomationIds.has(automationId)) {
-      throw new Error(
-        `Automation "${automationId}" was not requested by the generated app manifest`,
-      );
-    }
-  }
-  if (
-    input.automationIds.length > 0 &&
-    !input.capabilities.includes('automation:run')
-  ) {
-    throw new Error(
-      'Automation identifiers require the "automation:run" capability',
-    );
   }
 }

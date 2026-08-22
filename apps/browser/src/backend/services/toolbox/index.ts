@@ -117,7 +117,13 @@ import type { MountedClientRuntimes } from './utils';
 import path from 'node:path';
 import type { QuestionAnswerValue } from '@shared/karton-contracts/ui/agent/tools/types';
 import type { TabState } from '@shared/karton-contracts/ui';
-import type { BrowserSnapshot, WorkspaceSnapshot } from './types';
+import type {
+  BrowserSnapshot,
+  MountedPath,
+  MountedPrefix,
+  UniversalToolboxMountPermission,
+  WorkspaceSnapshot,
+} from './types';
 import type { MountPermission } from '@shared/karton-contracts/ui/agent/metadata';
 import type { WorkspaceInfo } from '@/agents/shared/prompts/utils/workspace-info';
 import { getWorkspaceInfo as getWorkspaceInfoUtil } from '@/agents/shared/prompts/utils/workspace-info';
@@ -160,14 +166,6 @@ import type {
 import { createShellGuardianRequest } from '@/services/guardian/requests';
 import type { DesktopAutomationService } from '@/services/agent-os/desktop-automation';
 export { getGlobalSkillsMounts, getEnabledGlobalSkillsMounts };
-
-type UniversalToolboxMountPermission = NonNullable<
-  ReturnType<
-    NonNullable<UniversalToolboxMountManager['getMountPermissionsForPrefix']>
-  >
->[number];
-type MountedPrefix = string;
-type MountedPath = string;
 
 export class ToolboxService
   extends DisposableService

@@ -45,7 +45,22 @@ import {
 import { HOME_PAGE_URL } from '@shared/internal-urls';
 import { MACOS_TRAFFIC_LIGHT_X, MACOS_TRAFFIC_LIGHT_Y } from '@shared/titlebar';
 import { SessionPermissionRegistry } from './tab-permission-handler/session-registry';
-import { z } from 'zod';
+import {
+  type PersistedTabState,
+  type TabEntry,
+  type WindowState,
+  tabStateSchema,
+  windowStateSchema,
+} from './tab-state-schemas';
+import { classifyTabUrl } from './classify-tab-url';
+import {
+  addToTabOrder,
+  cleanupTabOrders,
+  getAllOrderedTabIds,
+  getTabOrderForAgent,
+  getTabOrderIndex,
+  removeFromTabOrders,
+} from './tab-orders';
 import {
   readPersistedDataSync,
   writePersistedDataSync,
@@ -62,97 +77,6 @@ import {
   parseGenericKartonConnectionKind,
 } from '../trusted-ui-karton-transport';
 import { registerBeforeSendHeadersMutator } from '../web-request-before-send-headers';
-
-const windowStateSchema = z.object({
-  width: z.number(),
-  height: z.number(),
-  x: z.number().optional(),
-  y: z.number().optional(),
-  isMaximized: z.boolean(),
-  isFullScreen: z.boolean(),
-});
-
-type WindowState = z.infer<typeof windowStateSchema>;
-
-const fileTabMetadataSchema = z.object({
-  workspaceKey: z.string(),
-  relativePath: z.string(),
-  absolutePath: z.string(),
-  kind: z.enum(['text', 'image', 'svg', 'binary']),
-  mimeType: z.string(),
-  size: z.number(),
-  displayName: z.string().optional(),
-  readOnly: z.boolean().optional(),
-  showDiff: z.boolean().optional(),
-  diffStaged: z.boolean().optional(),
-  diffOldPath: z.string().optional(),
-});
-
-const tabEntrySchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('browser'),
-    url: z.string(),
-    agentInstanceId: z.string().nullable(),
-  }),
-  z.object({
-    type: z.literal('terminal'),
-    id: z.string(),
-    cwd: z.string(),
-    title: z.string(),
-    agentInstanceId: z.string().nullable(),
-  }),
-  z.object({
-    type: z.literal('file'),
-    id: z.string(),
-    title: z.string(),
-    file: fileTabMetadataSchema,
-    agentInstanceId: z.string().nullable(),
-  }),
-]);
-
-const tabStateSchema = z.object({
-  /** Ordered list of tabs that were open */
-  tabs: z.array(
-    z.preprocess((val) => {
-      // Normalize legacy entries (no `type` field) to `type: 'browser'`.
-      if (typeof val === 'object' && val !== null && !('type' in val)) {
-        return { type: 'browser', ...(val as Record<string, unknown>) };
-      }
-      return val;
-    }, tabEntrySchema),
-  ),
-  /** Index into `tabs` of the active tab, or -1 if none */
-  activeTabIndex: z.number().int().min(-1),
-  /** Last active tab per agent instance */
-  lastActiveTabPerAgent: z.record(z.string(), z.string()),
-  /** ID of the agent instance that was last open, for restoration on restart */
-  lastOpenAgentId: z.string().nullable(),
-});
-
-type PersistedTabState = z.infer<typeof tabStateSchema>;
-
-/**
- * Anonymous URL classification for telemetry. Returns coarse booleans
- * (`isLocal`, `isHttps`) without exposing the host or path, so events can
- * be segmented (e.g. prod-domain vs local-dev devtools usage) without
- * leaking PII. Malformed URLs and non-http(s) schemes (about:, file:,
- * internal://) all resolve to `{ isLocal: false, isHttps: false }`.
- */
-function classifyTabUrl(url: string): {
-  isLocal: boolean;
-  isHttps: boolean;
-} {
-  if (!url) return { isLocal: false, isHttps: false };
-  try {
-    const parsed = new URL(url);
-    const isLocal =
-      parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
-    const isHttps = parsed.protocol === 'https:';
-    return { isLocal, isHttps };
-  } catch {
-    return { isLocal: false, isHttps: false };
-  }
-}
 
 export class WindowLayoutService extends DisposableService {
   private readonly logger: Logger;
@@ -184,10 +108,7 @@ export class WindowLayoutService extends DisposableService {
   private saveStateTimeout: NodeJS.Timeout | null = null;
   /** Tabs deferred at startup, grouped by agentInstanceId. Populated during
    *  loadTabState(); consumed and cleared lazily by ensureAgentTabsCreated(). */
-  private deferredTabConfigs = new Map<
-    string | null,
-    z.infer<typeof tabEntrySchema>[]
-  >();
+  private deferredTabConfigs = new Map<string | null, TabEntry[]>();
   /** Tracks the last active tab per agent instance for persistence & restore. */
   private lastActiveTabPerAgent: Record<string, string> = {};
   /** Callback wired by ToolboxService — invoked when a terminal tab is
@@ -226,76 +147,27 @@ export class WindowLayoutService extends DisposableService {
     agentInstanceId: string | null = this.uiKarton.state.browser
       .lastOpenAgentId ?? null,
   ): string[] {
-    const globalIds = contentTabs.globalOrder.filter((id) => {
-      const tab = contentTabs.tabs[id];
-      return tab && tab.agentInstanceId === null;
-    });
-    const agentIds = agentInstanceId
-      ? (contentTabs.agentOrders[agentInstanceId] ?? []).filter((id) => {
-          const tab = contentTabs.tabs[id];
-          return tab && tab.agentInstanceId === agentInstanceId;
-        })
-      : [];
-    return [...globalIds, ...agentIds];
+    return getTabOrderForAgent(contentTabs, agentInstanceId);
   }
 
   private getAllOrderedTabIds(
     contentTabs: AppState['contentTabs'] = this.uiKarton.state.contentTabs,
   ): string[] {
-    const orderedIds: string[] = [];
-    const seen = new Set<string>();
-    const pushIfValid = (id: string) => {
-      if (seen.has(id)) return;
-      if (!contentTabs.tabs[id]) return;
-      seen.add(id);
-      orderedIds.push(id);
-    };
-
-    for (const id of contentTabs.globalOrder) pushIfValid(id);
-    for (const agentId of Object.keys(contentTabs.agentOrders).sort()) {
-      for (const id of contentTabs.agentOrders[agentId] ?? []) {
-        pushIfValid(id);
-      }
-    }
-    for (const id of Object.keys(contentTabs.tabs).sort()) pushIfValid(id);
-    return orderedIds;
+    return getAllOrderedTabIds(contentTabs);
   }
 
   private cleanupTabOrders(
     contentTabs: AppState['contentTabs'],
     removedTabId?: string,
   ): void {
-    const seen = new Set<string>();
-    contentTabs.globalOrder = contentTabs.globalOrder.filter((id) => {
-      if (id === removedTabId || seen.has(id)) return false;
-      const tab = contentTabs.tabs[id];
-      if (!tab || tab.agentInstanceId !== null) return false;
-      seen.add(id);
-      return true;
-    });
-
-    for (const agentId of Object.keys(contentTabs.agentOrders)) {
-      const agentSeen = new Set<string>();
-      contentTabs.agentOrders[agentId] = contentTabs.agentOrders[
-        agentId
-      ]!.filter((id) => {
-        if (id === removedTabId || agentSeen.has(id)) return false;
-        const tab = contentTabs.tabs[id];
-        if (!tab || tab.agentInstanceId !== agentId) return false;
-        agentSeen.add(id);
-        return true;
-      });
-      if (contentTabs.agentOrders[agentId]!.length === 0) {
-        delete contentTabs.agentOrders[agentId];
-      }
-    }
+    cleanupTabOrders(contentTabs, removedTabId);
   }
 
   private removeFromTabOrders(
     contentTabs: AppState['contentTabs'],
     tabId: string,
   ): void {
-    this.cleanupTabOrders(contentTabs, tabId);
+    removeFromTabOrders(contentTabs, tabId);
   }
 
   private addToTabOrder(
@@ -304,17 +176,7 @@ export class WindowLayoutService extends DisposableService {
     agentInstanceId: string | null,
     index?: number,
   ): void {
-    this.removeFromTabOrders(contentTabs, tabId);
-    let order = contentTabs.globalOrder;
-    if (agentInstanceId) {
-      contentTabs.agentOrders[agentInstanceId] ??= [];
-      order = contentTabs.agentOrders[agentInstanceId];
-    }
-    const insertIndex = Math.max(
-      0,
-      Math.min(index ?? order.length, order.length),
-    );
-    order.splice(insertIndex, 0, tabId);
+    addToTabOrder(contentTabs, tabId, agentInstanceId, index);
   }
 
   private getTabOrderIndex(
@@ -322,10 +184,7 @@ export class WindowLayoutService extends DisposableService {
     tabId: string,
     agentInstanceId: string | null,
   ): number {
-    const order = agentInstanceId
-      ? (contentTabs.agentOrders[agentInstanceId] ?? [])
-      : contentTabs.globalOrder;
-    return order.indexOf(tabId);
+    return getTabOrderIndex(contentTabs, tabId, agentInstanceId);
   }
 
   /** Called by TerminalService after inserting a terminal tab into

@@ -1,10 +1,4 @@
-import {
-  type MessagePortMain,
-  type NativeImage,
-  WebContentsView,
-  shell,
-} from 'electron';
-import type { Protocol } from 'devtools-protocol';
+import { type MessagePortMain, WebContentsView, shell } from 'electron';
 import { getHotkeyDefinitionForEvent } from '@shared/hotkeys';
 import type { BaseWindow, Input } from 'electron';
 import type { Logger } from '../logger';
@@ -18,7 +12,6 @@ import {
 import {
   defaultState,
   type TabKartonContract,
-  type SerializableKeyboardEvent,
 } from '@shared/karton-contracts/web-contents-preload';
 import type { ColorScheme } from '@shared/karton-contracts/ui';
 import type { SelectedElement } from '@shared/selected-elements';
@@ -56,107 +49,31 @@ import { TabPermissionHandler } from './tab-permission-handler';
 import { SessionPermissionRegistry } from './tab-permission-handler/session-registry';
 import { TabAuthenticationHandler } from './tab-authentication-handler';
 import type {
-  PermissionRequest,
-  AuthenticationRequest,
-} from '@shared/karton-contracts/ui';
+  ConsoleLogEntry,
+  ConsoleLogLevel,
+  GetConsoleLogsOptions,
+  TabControllerEventMap,
+  TabState,
+} from './browsing-tab-types';
+import {
+  ConsoleLogStore,
+  consoleAPICalledToEntry,
+  consoleMessageToEntry,
+  exceptionThrownToEntry,
+  logEntryAddedToEntry,
+} from './console-log-store';
+import {
+  compressImageToTargetSize,
+  getDomainFromUrl,
+} from './utils/image-compression';
 
-export interface TabState {
-  title: string;
-  url: string;
-  /** Agent instance this tab is attached to, or null if globally visible */
-  agentInstanceId: string | null;
-  faviconUrls: string[];
-  isLoading: boolean;
-  isResponsive: boolean;
-  isPlayingAudio: boolean;
-  isMuted: boolean;
-  colorScheme: ColorScheme;
-  error: {
-    code: number;
-    message?: string;
-    /** The original URL that failed to load (for reload behavior) */
-    originalFailedUrl?: string;
-    /** Whether an error page is currently displayed */
-    isErrorPageDisplayed?: boolean;
-  } | null;
-  navigationHistory: {
-    canGoBack: boolean;
-    canGoForward: boolean;
-  };
-  devTools: {
-    open: boolean;
-    chromeOpen: boolean;
-  };
-  screenshot: string | null; // Data URL of the tab screenshot
-  search: {
-    text: string;
-    resultsCount: number;
-    activeMatchIndex: number;
-  } | null;
-  isSearchBarActive: boolean; // Whether the search bar UI is active for this tab
-  zoomPercentage: number; // Page zoom level as percentage (100 = default)
-  lastFocusedAt: number; // Timestamp (Date.now()) of when this tab was last focused
-  consoleLogCount: number; // Total number of console logs captured since page load
-  consoleErrorCount: number; // Number of error-level console logs
-  permissionRequests: PermissionRequest[]; // Pending permission requests for this tab
-  isContentFullscreen: boolean; // Whether the tab's web content is in HTML5 fullscreen mode
-  authenticationRequest: AuthenticationRequest | null; // Pending HTTP Basic Auth request
-}
-
-/**
- * Console log levels from the CDP Runtime.consoleAPICalled event.
- * Extracted from the official devtools-protocol types.
- */
-export type ConsoleLogLevel = Protocol.Runtime.ConsoleAPICalledEvent['type'];
-
-/**
- * Represents a single console log entry captured from the page.
- */
-export interface ConsoleLogEntry {
-  /** Timestamp when the log was captured (Date.now()) */
-  timestamp: number;
-  /** The log level (log, warn, error, etc.) */
-  level: ConsoleLogLevel;
-  /** The stringified log message/arguments */
-  message: string;
-  /** The URL of the page when the log was captured */
-  pageUrl: string;
-  /** Stack trace if available (for errors) */
-  stackTrace?: string;
-}
-
-/**
- * Options for filtering console logs.
- */
-export interface GetConsoleLogsOptions {
-  /** Filter logs containing this string (case-insensitive) */
-  filter?: string;
-  /** Maximum number of logs to return (most recent first) */
-  limit?: number;
-  /** Filter by log level(s) */
-  levels?: ConsoleLogLevel[];
-}
-
-export interface TabControllerEventMap {
-  stateUpdated: [state: Partial<TabState>];
-  movePanelToForeground: [panel: 'clodex-ui' | 'tab-content'];
-  handleKeyDown: [keyDownEvent: SerializableKeyboardEvent];
-  elementHovered: [element: SelectedElement | null];
-  elementSelected: [element: SelectedElement];
-  tabFocused: [tabId: string];
-  viewportSizeChanged: [
-    size: {
-      width: number;
-      height: number;
-      scale: number;
-      top: number;
-      left: number;
-    },
-  ];
-  contentFullscreenChanged: [isFullscreen: boolean];
-  devtoolsOpened: [tabId: string];
-  devtoolsClosed: [tabId: string];
-}
+export type {
+  ConsoleLogEntry,
+  ConsoleLogLevel,
+  GetConsoleLogsOptions,
+  TabControllerEventMap,
+  TabState,
+} from './browsing-tab-types';
 
 export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
   public readonly id: string;
@@ -241,8 +158,7 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
   private currentSearchText: string | null = null;
 
   // Console log capturing
-  private consoleLogs: ConsoleLogEntry[] = [];
-  private readonly MAX_CONSOLE_LOGS = 1000; // Ring buffer max size
+  private readonly consoleLogStore = new ConsoleLogStore(1000);
   private isConsoleLogListenerSetup = false;
   private isRuntimeEnabled = false;
   private isEnablingCdpDomains = false; // Prevents concurrent enableCdpDomainsForConsole calls
@@ -901,45 +817,8 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
     }
   }
 
-  // Maximum file size for images (5MB - Claude API limit)
-  private readonly MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
-
-  /**
-   * Compresses a NativeImage to stay under the target size using JPEG with progressive quality reduction.
-   * If quality reduction alone isn't enough, it will resize the image and retry.
-   *
-   * @param image - The NativeImage to compress
-   * @param maxSizeBytes - Maximum file size in bytes (default: 5MB)
-   * @returns Data URL of the compressed JPEG image
-   */
-  private compressImageToTargetSize(
-    image: NativeImage,
-    maxSizeBytes: number = this.MAX_IMAGE_SIZE_BYTES,
-  ): string {
-    // Try different quality levels, starting high and decreasing
-    const qualities = [85, 70, 50, 30];
-
-    for (const quality of qualities) {
-      const buffer = image.toJPEG(quality);
-      if (buffer.length <= maxSizeBytes)
-        return `data:image/jpeg;base64,${buffer.toString('base64')}`;
-    }
-
-    // If still too large at lowest quality, resize to 50% and retry
-    const size = image.getSize();
-    if (size.width <= 100 || size.height <= 100) {
-      // Image is already very small, return it at lowest quality
-      const buffer = image.toJPEG(30);
-      return `data:image/jpeg;base64,${buffer.toString('base64')}`;
-    }
-
-    const scaledImage = image.resize({
-      width: Math.floor(size.width * 0.5),
-      height: Math.floor(size.height * 0.5),
-    });
-
-    return this.compressImageToTargetSize(scaledImage, maxSizeBytes);
-  }
+  // Maximum file size for images (5MB - Claude API limit) is defined in
+  // utils/image-compression.ts together with the compression helper.
 
   /**
    * Capture a screenshot of a specific element region with padding.
@@ -1070,7 +949,7 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
       });
 
       // Compress to JPEG and ensure size is under 5MB (Claude API limit)
-      const dataUrl = this.compressImageToTargetSize(image);
+      const dataUrl = compressImageToTargetSize(image);
 
       this.logger.debug(
         `[TabController] Captured element screenshot: ${width}x${height}, size: ${Math.round(dataUrl.length / 1024)}KB`,
@@ -1432,7 +1311,7 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
       // Reset title and favicon for the new page (show domain + globe while loading)
       const resetTitle = isErrorPage
         ? this.currentState.title
-        : this.getDomainFromUrl(url);
+        : getDomainFromUrl(url);
       this.pageTitleWasSet = false;
 
       this.updateState({
@@ -1503,7 +1382,7 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
 
         // If no title was set by the page, use domain as fallback
         const titleUpdate = !this.pageTitleWasSet
-          ? { title: this.getDomainFromUrl(this.currentState.url) }
+          ? { title: getDomainFromUrl(this.currentState.url) }
           : {};
 
         // Single batched state push to avoid UI flicker
@@ -1862,7 +1741,7 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
       // Capture the page as a NativeImage
       const image = await wc.capturePage();
       // Compress to JPEG and ensure size is under 5MB (Claude API limit)
-      const dataUrl = this.compressImageToTargetSize(image);
+      const dataUrl = compressImageToTargetSize(image);
       // Update state with screenshot
       this.updateState({ screenshot: dataUrl });
     } catch (err) {
@@ -2716,46 +2595,17 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
 
   /**
    * Adds a console log entry to the ring buffer with deduplication.
-   * Multiple CDP events (Runtime.consoleAPICalled, Console.messageAdded) can fire
-   * for the same console message, so we deduplicate within a short time window.
    *
    * @param entry - The log entry to add
    * @returns true if the entry was added, false if it was a duplicate
    */
   private addConsoleLogEntry(entry: ConsoleLogEntry): boolean {
-    // Drop Electron-internal logs (e.g., security warnings from sandbox_bundle)
-    if (entry.stackTrace?.includes('node:electron/')) return false;
-
-    // Check for duplicates in recent logs (same message and level within 50ms)
-    const isDuplicate = this.consoleLogs.slice(-30).some((log) => {
-      // Check if levels are equivalent ('log' and 'info' are functionally identical)
-      const levelsMatch =
-        log.level === entry.level ||
-        (log.level === 'log' && entry.level === 'info') ||
-        (log.level === 'info' && entry.level === 'log');
-      if (!levelsMatch) return false;
-
-      // Must be within 50ms time window
-      if (Math.abs(log.timestamp - entry.timestamp) > 50) return false;
-
-      // Check if messages match (first 200 chars)
-      const existingMsg = log.message.trim().substring(0, 200);
-      const newMsg = entry.message.trim().substring(0, 200);
-      return existingMsg === newMsg;
-    });
-
-    if (isDuplicate) return false;
-
-    // Add to ring buffer (remove oldest if at capacity)
-    if (this.consoleLogs.length >= this.MAX_CONSOLE_LOGS)
-      this.consoleLogs.shift();
-
-    this.consoleLogs.push(entry);
+    const added = this.consoleLogStore.add(entry);
 
     // Update state with new counts (debounced)
-    this.scheduleConsoleLogCountUpdate();
+    if (added) this.scheduleConsoleLogCountUpdate();
 
-    return true;
+    return added;
   }
 
   /**
@@ -2772,40 +2622,8 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
     };
   }) {
     try {
-      const msg = params.message;
-      if (!msg) return;
-
-      // Map Console.message level to ConsoleLogLevel
-      let level: ConsoleLogLevel;
-      switch (msg.level) {
-        case 'error':
-          level = 'error';
-          break;
-        case 'warning':
-          level = 'warning';
-          break;
-        case 'info':
-          level = 'info';
-          break;
-        case 'debug':
-          level = 'debug';
-          break;
-        default:
-          level = 'log';
-      }
-
-      const logEntry: ConsoleLogEntry = {
-        timestamp: Date.now(),
-        level,
-        message: msg.text,
-        pageUrl: msg.url || this.currentState.url,
-        stackTrace: msg.line
-          ? `  at ${msg.url}:${msg.line}:${msg.column || 0}`
-          : undefined,
-      };
-
-      // Add with deduplication
-      this.addConsoleLogEntry(logEntry);
+      const entry = consoleMessageToEntry(params, this.currentState.url);
+      if (entry) this.addConsoleLogEntry(entry);
     } catch (err) {
       this.logger.debug(
         `[TabController] Error parsing console message: ${err}`,
@@ -2837,49 +2655,8 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
     };
   }) {
     try {
-      const entry = params.entry;
-      if (!entry) return;
-
-      // Map Log.entry level to ConsoleLogLevel
-      let level: ConsoleLogLevel;
-      switch (entry.level) {
-        case 'error':
-          level = 'error';
-          break;
-        case 'warning':
-          level = 'warning';
-          break;
-        case 'info':
-          level = 'info';
-          break;
-        case 'verbose':
-          level = 'debug';
-          break;
-        default:
-          level = 'log';
-      }
-
-      // Format stack trace if available
-      let stackTrace: string | undefined;
-      if (entry.stackTrace?.callFrames.length) {
-        stackTrace = entry.stackTrace.callFrames
-          .map(
-            (frame) =>
-              `  at ${frame.functionName || '(anonymous)'} (${frame.url}:${frame.lineNumber + 1}:${frame.columnNumber + 1})`,
-          )
-          .join('\n');
-      }
-
-      const logEntry: ConsoleLogEntry = {
-        timestamp: entry.timestamp || Date.now(),
-        level,
-        message: entry.text,
-        pageUrl: entry.url || this.currentState.url,
-        stackTrace,
-      };
-
-      // Add with deduplication
-      this.addConsoleLogEntry(logEntry);
+      const entry = logEntryAddedToEntry(params, this.currentState.url);
+      if (entry) this.addConsoleLogEntry(entry);
     } catch (err) {
       this.logger.debug(`[TabController] Error parsing log entry: ${err}`);
     }
@@ -2918,37 +2695,8 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
     };
   }) {
     try {
-      const details = params.exceptionDetails;
-
-      // Build message from exception details
-      let message = details.text || 'Uncaught exception';
-      if (details.exception?.description) {
-        message = details.exception.description;
-      } else if (details.exception?.value !== undefined) {
-        message = `${details.text}: ${JSON.stringify(details.exception.value)}`;
-      }
-
-      // Format stack trace if available
-      let stackTrace: string | undefined;
-      if (details.stackTrace?.callFrames.length) {
-        stackTrace = details.stackTrace.callFrames
-          .map(
-            (frame) =>
-              `  at ${frame.functionName || '(anonymous)'} (${frame.url}:${frame.lineNumber + 1}:${frame.columnNumber + 1})`,
-          )
-          .join('\n');
-      }
-
-      const logEntry: ConsoleLogEntry = {
-        timestamp: params.timestamp || Date.now(),
-        level: 'error',
-        message,
-        pageUrl: this.currentState.url,
-        stackTrace,
-      };
-
-      // Add with deduplication
-      this.addConsoleLogEntry(logEntry);
+      const entry = exceptionThrownToEntry(params, this.currentState.url);
+      if (entry) this.addConsoleLogEntry(entry);
     } catch (err) {
       this.logger.debug(`[TabController] Error parsing exception: ${err}`);
     }
@@ -2980,48 +2728,8 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
     };
   }) {
     try {
-      // Convert args to a readable string
-      const messageParts: string[] = [];
-      for (const arg of params.args) {
-        if (arg.value !== undefined) {
-          // Primitive values
-          if (typeof arg.value === 'string') messageParts.push(arg.value);
-          else messageParts.push(JSON.stringify(arg.value));
-        } else if (arg.description) {
-          // Objects, functions, etc.
-          messageParts.push(arg.description);
-        } else if (arg.preview?.description) {
-          // Preview for complex objects
-          messageParts.push(arg.preview.description);
-        } else if (arg.type) {
-          // Fallback to type
-          messageParts.push(`[${arg.type}]`);
-        }
-      }
-
-      const message = messageParts.join(' ');
-
-      // Format stack trace if available
-      let stackTrace: string | undefined;
-      if (params.stackTrace?.callFrames.length) {
-        stackTrace = params.stackTrace.callFrames
-          .map(
-            (frame) =>
-              `  at ${frame.functionName || '(anonymous)'} (${frame.url}:${frame.lineNumber + 1}:${frame.columnNumber + 1})`,
-          )
-          .join('\n');
-      }
-
-      const logEntry: ConsoleLogEntry = {
-        timestamp: params.timestamp || Date.now(),
-        level: params.type,
-        message,
-        pageUrl: this.currentState.url,
-        stackTrace,
-      };
-
-      // Add with deduplication
-      this.addConsoleLogEntry(logEntry);
+      const entry = consoleAPICalledToEntry(params, this.currentState.url);
+      this.addConsoleLogEntry(entry);
     } catch (err) {
       // Don't let console log parsing errors break anything
       this.logger.debug(`[TabController] Error parsing console log: ${err}`);
@@ -3043,12 +2751,10 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
 
     this.consoleLogCountUpdateTimeout = setTimeout(() => {
       this.consoleLogCountUpdateTimeout = null;
-      const errorCount = this.consoleLogs.filter(
-        (log) => log.level === 'error',
-      ).length;
+      const counts = this.consoleLogStore.counts();
       this.updateState({
-        consoleLogCount: this.consoleLogs.length,
-        consoleErrorCount: errorCount,
+        consoleLogCount: counts.total,
+        consoleErrorCount: counts.errors,
       });
     }, this.CONSOLE_LOG_COUNT_UPDATE_DEBOUNCE_MS);
   }
@@ -3058,7 +2764,7 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
    * Called on page navigation to start fresh.
    */
   public clearConsoleLogs() {
-    this.consoleLogs = [];
+    this.consoleLogStore.clear();
 
     // Clear any pending count update
     if (this.consoleLogCountUpdateTimeout) {
@@ -3084,40 +2790,14 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
    * @returns Array of console log entries (most recent first)
    */
   public getConsoleLogs(options?: GetConsoleLogsOptions): ConsoleLogEntry[] {
-    let logs = [...this.consoleLogs];
-
-    // Filter by level if specified
-    if (options?.levels && options.levels.length > 0) {
-      const levelSet = new Set(options.levels);
-      logs = logs.filter((log) => levelSet.has(log.level));
-    }
-
-    // Filter by search string if specified (case-insensitive)
-    if (options?.filter) {
-      const filterLower = options.filter.toLowerCase();
-      logs = logs.filter(
-        (log) =>
-          log.message.toLowerCase().includes(filterLower) ||
-          (log.stackTrace?.toLowerCase().includes(filterLower) ?? false),
-      );
-    }
-
-    // Reverse to get most recent first
-    logs.reverse();
-
-    // Apply limit if specified
-    if (options?.limit && options.limit > 0) {
-      logs = logs.slice(0, options.limit);
-    }
-
-    return logs;
+    return this.consoleLogStore.getLogs(options);
   }
 
   /**
    * Gets the total count of stored console logs (before filtering).
    */
   public getConsoleLogCount(): number {
-    return this.consoleLogs.length;
+    return this.consoleLogStore.size;
   }
 
   /*
@@ -3154,19 +2834,6 @@ export class BrowsingTabController extends EventEmitter<TabControllerEventMap> {
     } finally {
       // Clear pending navigation after logging (or if skipped)
       this.pendingNavigation = null;
-    }
-  }
-
-  /**
-   * Extracts the domain (hostname) from a URL for use as a fallback title.
-   * Returns the URL itself if parsing fails.
-   */
-  private getDomainFromUrl(url: string): string {
-    try {
-      const parsed = new URL(url);
-      return parsed.host || url;
-    } catch {
-      return url;
     }
   }
 }
