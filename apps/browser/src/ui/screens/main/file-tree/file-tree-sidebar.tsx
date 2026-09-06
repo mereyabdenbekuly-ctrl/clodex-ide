@@ -12,7 +12,6 @@ import {
 } from '@ui/hooks/use-karton';
 import { useOpenAgent } from '@ui/hooks/use-open-chat';
 import { XIcon, GitBranchIcon } from 'lucide-react';
-import type { MountedWorkspaceGitDiffSummary } from '@shared/karton-contracts/ui';
 import {
   IconFileSearchOutline18,
   IconFolder5Outline18,
@@ -25,6 +24,10 @@ import { useCommandCenter } from '../command-center';
 import { FileTreePreviewCoordinator } from './file-tree-preview-coordinator';
 import { FileTreeWorkspaceView } from './file-tree-workspace-view';
 import { FileTreeDiffView } from './file-tree-diff-view';
+import {
+  getFileTreeDiffViewState,
+  type FileTreeDiffSnapshot,
+} from './file-tree-diff-state';
 import { formatDiffCount } from './format-diff-count';
 import {
   areFileTreeWorkspaceMountsEqual,
@@ -55,21 +58,6 @@ export function FileTreeSidebar() {
     (p) => p.toolbox.getWorkspaceDiffSummary,
   );
   const { open: openCommandCenter } = useCommandCenter();
-  const [previewTargetPath, setPreviewTargetPath] = useState<string | null>(
-    null,
-  );
-  const [isGitRepo, setIsGitRepo] = useState(false);
-  const [diffData, setDiffData] =
-    useState<MountedWorkspaceGitDiffSummary | null>(null);
-  const [diffLoading, setDiffLoading] = useState(false);
-  const diffTotals = useMemo(
-    () => ({
-      added: diffData?.totalAdded ?? 0,
-      deleted: diffData?.totalDeleted ?? 0,
-    }),
-    [diffData],
-  );
-
   const workspaces = useMemo(
     () =>
       workspaceMounts.map((mount) => ({
@@ -88,6 +76,22 @@ export function FileTreeSidebar() {
   const selectedWorkspacePath =
     workspaces.find((ws) => ws.key === selectedWorkspaceKey)?.path ?? null;
 
+  const [diffSnapshot, setDiffSnapshot] = useState<FileTreeDiffSnapshot | null>(
+    null,
+  );
+  const {
+    data: diffData,
+    isGitRepo,
+    loading: diffLoading,
+  } = getFileTreeDiffViewState(diffSnapshot, selectedWorkspaceKey);
+  const diffTotals = useMemo(
+    () => ({
+      added: diffData?.totalAdded ?? 0,
+      deleted: diffData?.totalDeleted ?? 0,
+    }),
+    [diffData],
+  );
+
   // Subscribe to workspace revisions so the diff view re-fetches when
   // files change (agent edits, external writes, etc.).
   const workspaceRevision = useKartonState((s) =>
@@ -105,50 +109,65 @@ export function FileTreeSidebar() {
   // Fetch diff summary when workspace changes
   useEffect(() => {
     let cancelled = false;
-    if (!selectedWorkspacePath) {
-      setIsGitRepo(false);
-      setDiffData(null);
+    if (!selectedWorkspacePath || !selectedWorkspaceKey) {
+      setDiffSnapshot(null);
       return;
     }
-    // Keep stale data visible during re-fetch to prevent flicker.
-    // Only show loading spinner on the initial fetch.
-    if (!diffData) setDiffLoading(true);
     getWorkspaceDiffSummary(selectedWorkspacePath)
       .then((result) => {
         if (cancelled) return;
-        setIsGitRepo(result !== null);
-        setDiffData(result);
+        setDiffSnapshot({ workspaceKey: selectedWorkspaceKey, data: result });
         if (!result) {
           void setViewMode('files');
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setIsGitRepo(false);
-          setDiffData(null);
+          setDiffSnapshot({ workspaceKey: selectedWorkspaceKey, data: null });
         }
-      })
-      .finally(() => {
-        if (!cancelled) setDiffLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [selectedWorkspacePath, workspaceRevision]);
+  }, [
+    getWorkspaceDiffSummary,
+    selectedWorkspaceKey,
+    selectedWorkspacePath,
+    setViewMode,
+    workspaceRevision,
+  ]);
 
+  const [previewTarget, setPreviewTarget] = useState<{
+    workspaceKey: string;
+    relativePath: string;
+  } | null>(null);
   useEffect(() => {
-    setPreviewTargetPath(null);
-  }, []);
+    setPreviewTarget((current) =>
+      current?.workspaceKey === selectedWorkspaceKey ? current : null,
+    );
+  }, [selectedWorkspaceKey]);
+
+  const previewTargetPath =
+    previewTarget?.workspaceKey === selectedWorkspaceKey
+      ? previewTarget.relativePath
+      : null;
 
   const handlePreviewTargetChange = useCallback(
     (relativePath: string | null) => {
-      setPreviewTargetPath(relativePath);
+      if (!relativePath || !selectedWorkspaceKey) {
+        setPreviewTarget(null);
+        return;
+      }
+      setPreviewTarget({
+        workspaceKey: selectedWorkspaceKey,
+        relativePath,
+      });
     },
-    [],
+    [selectedWorkspaceKey],
   );
 
   const handlePreviewTargetClose = useCallback(() => {
-    setPreviewTargetPath(null);
+    setPreviewTarget(null);
   }, []);
 
   const openFileSearch = useCallback(
